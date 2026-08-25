@@ -1,0 +1,115 @@
+! ================================================================
+! Input parameters for fdm-dopamine solver (Fortran namelist format)
+! ================================================================
+
+! Grid dimensions (total face points, including boundaries)
+! Interior cells = nx-2, ny-1, nz-2
+!
+! grid_type controls the vertical (y) grid distribution:
+!   1 = uniform
+!   2 = tanh, fine at both walls, coarse at centre
+!   3 = tanh, fine at bottom wall, coarse at top
+!   4 = tanh, fine at top wall, coarse at bottom
+!   5 = uniform sublayer [0,ks] with nks intervals, then
+!       symmetric tanh: fine at rough interface AND top wall
+!   6 = uniform sublayer [0,ks] with nks intervals, then
+!       tanh: fine at rough interface, coarse at top
+!   7 = uniform sublayer [0,ks] with nks intervals, then
+!       tanh: coarse at rough interface, fine at top wall
+!
+! alpha_grid controls the stretching intensity (larger = stronger clustering).
+! Ignored for grid_type=1. For grid_types 5-7, ks and nks must be set in &IBM.
+&DOMAIN
+  nx         = 66,
+  ny         = 65,
+  nz         = 66,
+  Lx         = 6.0,
+  Ly         = 2.0,
+  Lz         = 2.0,
+  alpha_grid = 2.5,
+  grid_type  = 2,
+/
+
+! Physical parameters
+! Oscillatory forcing is applied independently in x and z:
+!   dP/dx(t) = dPdx + Ub_x * wave_omega_x * cos(wave_omega_x * t)
+!   dP/dz(t) = dPdz + Ub_z * wave_omega_z * cos(wave_omega_z * t)
+! where wave_omega_x = 2*pi / T_wave_x  (derived internally).
+! Set T_wave_x = 0 (or T_wave_z = 0) to disable oscillation in that direction.
+&PHYSICS
+  nu                   = 0.002531645569620253,      ! Re_tau = 395, H = 1.0, u_tau = 1.0, nu = 1/Re_tau
+  dPdx                 = 1.0,                       ! Driving Pressure gradient u_tau**2/H = 1*1/1 = 1.0
+  dPdz                 = 0.0,
+  Ub_x                 = 0.0,
+  Ub_z                 = 0.0,
+  T_wave_x             = 0.0,
+  T_wave_z             = 0.0,
+  phi_wave_x           = 0.0,     ! phase offset [rad] for x-wave forcing
+  phi_wave_z           = 0.0,     ! phase offset [rad] for z-wave forcing
+  sgs_model            = 1,       ! 0=DNS, 1=Vreman
+  Cs_vreman            = 0.17,    ! Vreman tuning coefficient ~ 0.167 for shear flows
+  flat_wall_model_flag = 1,       ! 0=no-slip, 1=log-law EQWM
+/
+
+! Time-stepping and output
+&NUMERICS
+  dt           = 1.0,
+  nsteps       = 120000,
+  nsave        = 1000,
+  nmonitor     = 10,
+  cfl_adaptive = 1,       ! 0=fixed dt, 1=adaptive dt
+  cfl_target   = 0.5,     ! target CFL number (adaptive mode)
+  cfl_safety   = 1.0,     ! safety factor on dt adjustment
+  dt_min       = 1.0e-8,  ! minimum allowed dt
+  dt_max       = 1.0e10,  ! maximum allowed dt
+/
+
+! Wall boundary condition types (1=Dirichlet no-slip, 2=Neumann free-slip)
+! Omit this group to use defaults (both walls no-slip)
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 1,
+  bc_face_yhi = 1,
+/
+
+! Initial conditions
+! ic_type:
+!   1 = log-law profile + white noise  (profile mirrored for no-slip top,
+!       applied from bottom wall only for free-slip top; u_tau estimated
+!       from dPdx and bc_face_yhi)
+!   2 = linear profile  + white noise  (tent function for no-slip top,
+!       linear ramp 0→Utarget for free-slip top)
+!   3 = zero mean + white noise
+!   4 = Reichardt turbulent channel profile + structured perturbation
+!       Builds the composite Reichardt (1951) law-of-the-wall profile scaled
+!       by u_tau = sqrt(|dPdx|*Ly/2), mirrored symmetrically for a two-wall
+!       channel.  Peak centreline velocity ≈ U_cl+ * u_tau (≈18 m/s for
+!       Re_tau≈395 with nu=1e-6).  Perturbations are structured sinusoidal
+!       waves rather than white noise.
+!   5 = Inverse-linear profile + white noise
+!       Anti-tent (closed channel, bc_face_yhi=1):
+!         U = Utarget * (1 - 2*min(y,Ly-y)/Ly)  — Utarget at walls, 0 at centre
+!       Inverted ramp (open channel, bc_face_yhi=2):
+!         U = Utarget * (1 - y/Ly)              — Utarget at bottom, 0 at top
+!       Large |dU/dy| throughout imposes a strong destabilising shear to
+!       promote rapid laminar-to-turbulent transition.
+!
+! noise_percent: white-noise amplitude as % of Utarget (applied to U,V,W
+!               for ic_types 1-3; ignored for ic_type=4)
+&INITIAL_CONDITIONS
+  Utarget      = 15.0,
+  ic_type      = 5,
+  noise_percent  = 5.0,
+  nstep_init     = 0,       ! starting step number (for hot-start)
+  restart        = 0,       ! 0=fresh run, 1=hot-start from filein
+  scalar_restart = 1,       ! 1=read C from restart file (default)
+                            ! 0=initialise C from IC even when restart=1
+                            !   (use this when the restart file contains only
+                            !    velocity/pressure and has no scalar block)
+/
+
+! File paths
+&IO
+  filein  = 'restart/les_chan395.1',
+  fileout = 'les_chan395',
+/
+

@@ -1,0 +1,5 @@
+# Compiled outputs
+gensdf
+gensdf_mpi
+*.o
+*.mod

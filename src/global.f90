@@ -1,0 +1,400 @@
+! Module with all shared global variables
+Module global
+
+  ! General Modules
+  Use iso_fortran_env, Only : error_unit, Int32, Int64
+  Use, Intrinsic :: iso_c_binding
+
+  ! prevent implicit typing
+  Implicit None
+
+  ! FFTW
+  Include 'fftw3-mpi.f03'  
+
+  ! Declarations
+
+  ! step number
+  Integer(Int32) :: istep, rk_step
+  Real   (Int64) :: time1, time2, time_wall_start
+
+  ! constants
+  Real(Int64) :: pi = 4d0*datan(1d0)
+  !$acc declare create(pi)
+
+  ! files
+  Character(200) :: filein, fileout
+  Integer(Int32) :: nsave, nmonitor
+
+  ! domain size
+  Real(Int64) :: Lx, Lz, Ly, Lxp, Lzp
+
+  ! steps
+  Integer(Int32) :: nsteps, nstep_init
+  Real   (Int64) :: dt, t
+
+  ! Time-based stopping/save control: sim_end_time/tsave override nsteps/nsave when negative; tsave_next is the next due save time
+  Real   (Int64) :: sim_end_time = 1d30
+  Real   (Int64) :: tsave        = 1d30
+  Real   (Int64) :: tsave_next   = 0d0
+
+  ! viscosity
+  Real(Int64) :: nu
+  !$acc declare create(nu)
+
+  ! global face points
+  Integer(Int32) :: nx_global, ny_global, nz_global
+
+  ! global roughness points
+  Real(Int64) :: ks
+  Integer(Int32) :: nks_global
+
+  ! restart flag: 0=fresh run, 1=hot-start from filein
+  Integer(Int32) :: restart = 0
+  ! scalar_restart: 1=read C from restart file (default), 0=use IC even when restart=1
+  Integer(Int32) :: scalar_restart = 1
+
+  ! IBM control flags: ibm_input_mode 0=no body,1=SDF ghost-cell IBM; ibm_wall_model_flag 0=DNS no-slip,1=log-law EQWM
+  Integer(Int32) :: ibm_input_mode      = 0            ! default: no IBM body
+  Character(200) :: ibm_sdf_file        = 'SDF_in'     ! cell-centre SDF file
+  Integer(Int32) :: ibm_wall_model_flag = 0             ! default: DNS no-slip
+
+  !  y-wall boundary condition type
+  !    1 = Dirichlet (no-slip)  2 = Neumann (free-slip)
+  Integer(Int32) :: bc_face_ylo = 1, bc_face_yhi = 1
+
+  ! local face points
+  Integer(Int32) :: nx, ny, nz
+  !$acc declare create(nx,ny,nz)
+
+  ! global center points
+  Integer(Int32) :: nxm_global, nym_global, nzm_global
+
+  ! local center points
+  Integer(Int32) :: nxm, nym, nzm
+
+  ! global center points + ghost cells
+  Integer(Int32) :: nxg_global, nyg_global, nzg_global
+
+  ! local center points + ghost cells
+  Integer(Int32) :: nxg, nyg, nzg
+  !$acc declare create(nxg,nyg,nzg)
+
+  ! global grid at face points
+  Real(Int64), Allocatable, Dimension(:) :: x_global, y_global, z_global
+
+  ! local grid at face points
+  Real(Int64), Allocatable, Dimension(:) :: x, y, z
+
+  ! global grid at middle points
+  Real(Int64), Allocatable, Dimension(:) :: xm_global, ym_global, zm_global
+
+  ! local grid at middle points
+  Real(Int64), Allocatable, Dimension(:) :: xm, ym, zm
+
+  ! global grid at middle points + ghost cells
+  Real(Int64), Allocatable, Dimension(:) :: xg_global, yg_global, zg_global
+
+  ! local grid at middle points + ghost cells
+  Real(Int64), Allocatable, Dimension(:) :: xg, yg, zg
+
+  ! middle points for yg->yg_m and yg_m->yg_mm
+  Real(Int64), Allocatable, Dimension(:) :: yg_m, yg_mm
+
+  ! local velocities and pressure
+  Real(Int64), Allocatable, Dimension(:,:,:) :: U,V,W,P
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Uo,Vo,Wo,Po
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Uoo,Voo,Woo,Poo
+
+  ! local auxiliary 
+  Real(Int64), Allocatable, Dimension(:,:,:) :: term_1, term_2, term
+
+  ! local rhs for velocities and pressure
+  Real(Int64), Allocatable, Dimension(:,:,:) :: rhs_p
+  Real(Int64), Allocatable, Dimension(:,:,:) :: rhs_uo, rhs_vo, rhs_wo
+
+  ! local rhs for pressure in Fourier
+  ! rhs_p_hat storage order
+  Complex(Int64), Dimension(:,:,:), Allocatable :: rhs_p_hat
+
+  ! local auxiliary arrays for MPI_sendrev boundary conditions
+  Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_ui, buffer_vi, buffer_ci
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_ue, buffer_ve, buffer_we, buffer_wi, buffer_ce
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_p
+
+  ! local auxiliary arrays for MPI_sendrev interior planes
+  Real(Int64), Allocatable, Dimension(:,:) :: buffer_us, buffer_ur
+  Real(Int64), Allocatable, Dimension(:,:) :: buffer_vs, buffer_vr
+  Real(Int64), Allocatable, Dimension(:,:) :: buffer_ws, buffer_wr
+  Real(Int64), Allocatable, Dimension(:,:) :: buffer_ps, buffer_pr
+  
+  ! local auxiliary planes for FFTW
+  Type(C_PTR) :: cplane_fft
+  Complex(C_DOUBLE_COMPLEX), Pointer, Dimension(:,:) :: plane, plane_hat
+
+  ! Fourier points and wave numbers 
+  Integer(C_INTPTR_T) :: nxp_global, nzp_global, local_k_offset
+  Integer(C_INTPTR_T) :: nxp, nzp
+  Integer(C_INTPTR_T) :: mx_global, mz_global
+  Integer(C_INTPTR_T) :: mx, mz
+  Real   (Int64)      :: dx, dz
+  Real   (Int64), Dimension(:), Allocatable :: kxx, kzz
+
+  ! Mappings for fft modes
+  Integer(Int64), Dimension(:,:), Allocatable :: imode_map_fft, kmode_map_fft
+  
+  ! FFTW plans
+  Integer(C_INTPTR_T) :: alloc_local
+  Type   (C_PTR)      :: plan_d, plan_i
+
+  ! streamwise (x) pressure/velocity BC selector: 0=periodic, 1=inflow/outflow
+  Integer(Int32) :: x_bc_type  = 0
+
+  ! local (non-MPI; x is never domain-decomposed) real work array and plan
+  ! for the streamwise DCT-IV transform, used only when x_bc_type==1
+  Type(C_PTR) :: rplane_fft
+  Real(C_DOUBLE), Pointer, Dimension(:,:) :: xplane
+  Type(C_PTR) :: plan_dct
+
+  ! &INFLOW streamwise inflow condition (x_bc_type==1 only): inflow_type 0=constant, 1=SEM
+  Integer(Int32) :: inflow_type        = 0
+  Real   (Int64) :: inflow_Uconst      = 0d0
+  Character(200) :: inflow_profile_file = 'inflow_profile.dat'
+  Integer(Int32) :: sem_profile_format = 0   ! 0=Reynolds-stress (y U V W uu vv ww uv), 1=wind-tunnel TI (see sem.md)
+  Real   (Int64) :: sem_Lscale_ratio_y = 0.3d0   ! fallback Loy/Lox when only a length scale's x-component is given (sem_profile_format==1)
+  Real   (Int64) :: sem_Lscale_ratio_z = 0.2d0   ! fallback Loz/Lox, same as above
+  Integer(Int32) :: sem_n_eddies       = 200      ! <=0: auto-tuned from sem_length_scale and domain geometry
+  Real   (Int64) :: sem_length_scale   = 0.01d0   ! <=0: auto-tuned from grid resolution and the inflow profile
+  Integer(Int32) :: sem_seed           = 12345
+
+  ! Ensemble SEM (ESEM) config
+  Integer(Int32) :: sem_ensemble_samples = 100
+  Integer(Int32) :: sem_ensemble_periods = 8
+  Character(200) :: sem_sigma_file       = ''
+  Integer(Int32) :: sem_eddy_placement   = 0
+  Integer(Int32) :: sem_use_esem         = 1
+  Integer(Int32) :: sem_divergence_free  = 0
+
+  ! near-wall eddy-size damping (Van Driest form)
+  Integer(Int32) :: sem_wall_damping        = 0
+  Real   (Int64) :: sem_wall_damping_Aplus  = 25d0
+
+  ! device residency for the scalars sem.f90's per-step (!$acc routine seq) call chain reads directly
+  !$acc declare create(inflow_type, inflow_Uconst, sem_n_eddies, sem_length_scale, sem_seed, sem_eddy_placement, sem_use_esem, sem_divergence_free)
+
+  ! finite differences (second derivative)
+  Real(Int64) :: ddx1, ddx2, ddx3
+  Real(Int64) :: ddy1, ddy2, ddy3
+  Real(Int64) :: ddz1, ddz2, ddz3
+
+  ! linear solver
+  Integer (Int32) :: nr, nrhs
+  Integer (Int32), Dimension(:),   Allocatable :: pivot  
+  Complex (Int64), Dimension(:),   Allocatable :: D, DL, DU
+  Complex (Int64), Dimension(:,:), Allocatable :: Dyy
+
+  ! pressure gradients
+  Real(Int64) :: dPdx, dPdy, dPdz, dPdx_ref, dPdx0
+
+  ! Oscillatory pressure gradient (x and z)
+  Real(Int64) :: dPdx_t, dPdz_t
+  Real(Int64) :: Ub_x, Ub_z, waveOmega_x, waveOmega_z, phi_wave_x, phi_wave_z
+
+  ! Constant mass-flux (CMFR) forcing: mode 0 = prescribed dPdx (default), 1 = hold bulk velocity at Ub_target
+  Integer(Int32) :: flow_forcing_mode
+  Real(Int64) :: Ub_target
+  Real(Int64) :: dPdx_cmfr   ! diagnostic-only equivalent forcing under CMFR; never fed back into compute_rhs_u
+
+  ! interpolation weights 
+  Integer(Int32) :: in1, in2
+  Real(Int64), Dimension(:), Allocatable :: weight_y_0, weight_y_1
+
+  ! actual pressure boundary conditions
+  Real   (Int64) :: coef_bc_1, coef_bc_2
+  Real   (Int64), Dimension(:,:), Allocatable :: bc_1,     bc_2
+  Complex(Int64), Dimension(:,:), Allocatable :: bc_1_hat, bc_2_hat
+  Logical(Int32) :: pressure_computed
+
+  ! Runge-Kutta 3 coefficients and buffers
+  Real(Int64), Dimension(:),     Allocatable :: rk_t
+  Real(Int64), Dimension(:,:),   Allocatable :: rk_coef
+  Real(Int64), Dimension(:,:,:), Allocatable :: Fu1, Fu2, Fu3
+  Real(Int64), Dimension(:,:,:), Allocatable :: Fv1, Fv2, Fv3
+  Real(Int64), Dimension(:,:,:), Allocatable :: Fw1, Fw2, Fw3
+
+  !	Eddy Viscosity
+  Real   (Int64), Allocatable, Dimension(:,:,:)   :: nu_t
+
+  ! SGS model control: sgs_model 0=DNS,1=Vreman; Cs_vreman is Smagorinsky-equivalent constant (c_V = 2.5*Cs_vreman^2)
+  Integer(Int32) :: sgs_model  = 0       ! default: DNS
+  Real   (Int64) :: Cs_vreman  = 0.1d0   ! default Vreman constant
+
+  ! Flat-wall equilibrium wall model flag: 0=DNS no-slip (default), 1=log-law EQWM
+  Integer(Int32) :: flat_wall_model_flag = 0
+
+  ! wall-model Robin BC coefficient arrays
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_x, alpha_y, alpha_z
+  
+  ! Auxillary data variables for roughness
+  Real   (Int64) :: Utarget
+  Real   (Int64) :: Lx_i, Ly_i, Lz_i
+  Real   (Int64) :: alphaGrid
+
+  ! Initial condition type (ic_type 1-4) and noise_percent
+  Integer(Int32) :: ic_type      = 1
+  Real   (Int64) :: noise_percent = 5.0d0
+
+  ! Vertical grid type (grid_type 1-7)
+  Integer(Int32) :: grid_type = 1
+
+  !	Grid sizes for fft
+  Real	 (Int64) :: dxmin, dymin, dzmin, Delta
+
+  ! Ghost-cell IBM data structures (phi, Umask_cc, ghost_?_* lists)
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: phi
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: Umask_cc
+
+  ! ghost-cell lists for U (x-faces), V (y-faces), W (z-faces)
+  Integer(Int32) :: n_ghost_u, n_ghost_v, n_ghost_w
+
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_u_idx   ! (3, n_ghost_u)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_u_wgt   ! (9, n_ghost_u)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_u_nrm   ! (3, n_ghost_u)
+  Real   (Int64), Allocatable, Dimension(:)   :: ghost_u_yref  ! (   n_ghost_u)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_u_ref   ! (3, n_ghost_u)
+
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_v_idx
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_v_wgt
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_v_nrm
+  Real   (Int64), Allocatable, Dimension(:)   :: ghost_v_yref
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_v_ref
+
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_w_idx
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_w_wgt
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_w_nrm
+  Real   (Int64), Allocatable, Dimension(:)   :: ghost_w_yref
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_w_ref
+
+  ! Image-point stencil anchor: ghost_?_img(1:3,n) = lower-left (ii,jj,kk) of the enclosing 2x2x2 cube, staggered grid
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_u_img   ! (3, n_ghost_u)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_v_img   ! (3, n_ghost_v)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_w_img   ! (3, n_ghost_w)
+
+  ! Distance from ghost cell G to boundary point B along the wall normal.
+  ! Used for surface-integral force Method 2: dA = dV / dGB.
+  Real(Int64), Allocatable, Dimension(:) :: ghost_u_dGB   ! (n_ghost_u)
+  Real(Int64), Allocatable, Dimension(:) :: ghost_v_dGB   ! (n_ghost_v)
+  Real(Int64), Allocatable, Dimension(:) :: ghost_w_dGB   ! (n_ghost_w)
+
+  ! Physical coordinates of boundary point B = G + dGB * nrm.
+  ! Used for pressure interpolation in force Method 2.
+  Real(Int64), Allocatable, Dimension(:,:) :: ghost_u_xB  ! (3, n_ghost_u)
+  Real(Int64), Allocatable, Dimension(:,:) :: ghost_v_xB  ! (3, n_ghost_v)
+  Real(Int64), Allocatable, Dimension(:,:) :: ghost_w_xB  ! (3, n_ghost_w)
+
+  ! Cell-centre trilinear stencil at image point I = G+2*dGB*nrm, precomputed for pressure interpolation (force Method 2)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_u_img_cc  ! (3, n_ghost_u)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_v_img_cc  ! (3, n_ghost_v)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_w_img_cc  ! (3, n_ghost_w)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_u_wgt_cc  ! (8, n_ghost_u)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_v_wgt_cc  ! (8, n_ghost_v)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_w_wgt_cc  ! (8, n_ghost_w)
+
+  ! Cell-centre ghost list for rigorous pressure-force integration (Method 2): one entry per solid/fluid interface cell, no overcounting
+  Integer(Int32) :: n_ghost_cc = 0
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_idx     ! (3, n_ghost_cc)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_cc_nrm     ! (3, n_ghost_cc)
+  Real   (Int64), Allocatable, Dimension(:)   :: ghost_cc_dGB     ! (   n_ghost_cc)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_img_cc  ! (3, n_ghost_cc)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_cc_wgt_cc  ! (8, n_ghost_cc)
+
+  ! Precomputed staggered-velocity image-point stencils for viscous-traction export in sample_ibm_surface (built in build_ghost_list_cc)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_img_u  ! (3, n_ghost_cc)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_img_v  ! (3, n_ghost_cc)
+  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_img_w  ! (3, n_ghost_cc)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_cc_wgt_u  ! (8, n_ghost_cc)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_cc_wgt_v  ! (8, n_ghost_cc)
+  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_cc_wgt_w  ! (8, n_ghost_cc)
+
+  ! IBM force monitoring: nsampling writes ibm_forces.csv every N steps, ibm_surface_nsampling dumps per-point surface field
+  Integer(Int32) :: nsampling             = 0
+  Integer(Int32) :: ibm_force_unit        = -1
+  Integer(Int32) :: ibm_surface_nsampling = 0
+
+  ! CFL monitoring/adaptive dt: cfl_adaptive 0=fixed,1=adaptive; cfl_target/cfl_safety drive dt within [dt_min,dt_max]; cfl_current is global max
+  Integer(Int32) :: cfl_adaptive  = 0
+  Real   (Int64) :: cfl_target    = 0.5d0
+  Real   (Int64) :: cfl_safety    = 0.9d0
+  Real   (Int64) :: dt_min        = 1d-10
+  Real   (Int64) :: dt_max        = 1d10
+  Real   (Int64) :: cfl_current   = 0d0
+  Real   (Int64) :: cfl_conv_last = 0d0   ! convective CFL from last step
+  Real   (Int64) :: cfl_visc_last = 0d0   ! viscous CFL from last step
+
+  ! Suspended sediment transport: sediment_flag 0=off,1=on; sed_bc_bot 0=flux,1=equilibrium; C_ic_type 0=uniform,1=Rouse,2=ramp,3=slab
+  Integer(Int32) :: sediment_flag = 0
+  Integer(Int32) :: sed_bc_bot    = 0
+  Integer(Int32) :: C_ic_type     = 0
+  Real   (Int64) :: d_s           = 1d-4    ! particle diameter [m]
+  Real   (Int64) :: rho_s         = 2650d0  ! particle density [kg/m^3]
+  Real   (Int64) :: rho_f         = 1000d0  ! fluid density [kg/m^3]
+  Real   (Int64) :: grav          = 9.81d0  ! gravitational acceleration [m/s^2]
+  Real   (Int64) :: Sc            = 1d0     ! molecular Schmidt number
+  Real   (Int64) :: Sc_t          = 0.7d0   ! turbulent Schmidt number
+  Real   (Int64) :: ws            = 0d0     ! settling velocity (computed at init)
+  Real   (Int64) :: C_ref         = 0d0     ! reference near-bed concentration
+  Real   (Int64) :: C_ic_height   = 0d0     ! slab height for C_ic_type==3 [m]
+
+  ! Scalar concentration field (cell-centred: nxg x nyg x nzg)
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Cscal, Cscal_o
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Cscal_oo          ! rank-0 I/O buffer
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Fcs1, Fcs2, Fcs3  ! RK3 stage RHS
+
+  ! Reynolds stress budget (RSB) control and output file layout
+  Integer(Int32) :: rsb_active  = 0
+  Integer(Int32) :: rsb_freq    = 10
+  Integer(Int32) :: rsb_nstart  = 0
+  Character(200) :: rsb_hom_dir = 'x,z'
+  Character(200) :: rsb_fileout = 'rsb'
+
+  ! in-situ SEM inflow TI-profile rescaling
+  Integer(Int32) :: ti_rescale_active = 0
+  Real   (Int64) :: ti_rescale_x      = 0d0
+  Integer(Int32) :: ti_rescale_nstart = 0      ! <0: auto-tuned from advection time and wall-shear timescale
+  Integer(Int32) :: ti_rescale_freq   = 1000   ! <=0: auto-tuned from the SEM eddy turnover time
+  Real   (Int64) :: ti_rescale_relax  = 0.3d0
+  Real   (Int64) :: ti_rescale_clip   = 1.5d0
+  Real   (Int64) :: ti_rescale_abs_clip = 2d0
+  Real   (Int64) :: ti_rescale_filter_alpha = 0.25d0   ! EMA smoothing of the measured variance across windows
+  Real   (Int64) :: ti_rescale_deadband = 0.03d0        ! skip the update where |ratio-1| is below this
+  Real   (Int64) :: ti_rescale_relax_min = 0.05d0       ! floor for the Robbins-Monro-decayed gain
+
+  ! mean-profile (U) companion to TI_RESCALE above: closes the loop on prof_U the same way TI_RESCALE closes it on prof_R11/22/33
+  Integer(Int32) :: ti_rescale_u_active   = 0
+  Real   (Int64) :: ti_rescale_u_relax    = 0.3d0
+  Real   (Int64) :: ti_rescale_u_relax_min = 0.05d0
+  Real   (Int64) :: ti_rescale_u_clip     = 0.5d0    ! max |correction| per window, as a fraction of Uconv_sem
+  Real   (Int64) :: ti_rescale_u_abs_clip = 1.0d0    ! anti-windup: max cumulative |prof_U-prof_U_target|, as a fraction of Uconv_sem
+  Real   (Int64) :: ti_rescale_u_deadband = 0.01d0   ! skip the update where |bias|/Uconv_sem is below this
+
+  ! 2-D planar slice probes: config and output file layout
+  Integer(Int32), Parameter :: MAX_PROBES = 8
+
+  Integer(Int32) :: n_slices   = 0
+  Integer(Int32) :: slice_freq = 100
+  Character(4)   :: slice_dir    (MAX_PROBES) = 'z'
+  Real   (Int64) :: slice_pos    (MAX_PROBES) = 0d0
+  Character(8)   :: slice_comps  (MAX_PROBES) = 'UVW'
+  Character(200) :: slice_fileout(MAX_PROBES) = 'slice'
+
+  ! 1-D line probes: config and output file layout
+  Integer(Int32) :: n_lines   = 0
+  Integer(Int32) :: line_freq = 100
+  Character(4)   :: line_dir    (MAX_PROBES) = 'y'
+  Real   (Int64) :: line_pos1   (MAX_PROBES) = 0d0
+  Real   (Int64) :: line_pos2   (MAX_PROBES) = 0d0
+  Real   (Int64) :: line_start  (MAX_PROBES) = 0d0
+  Real   (Int64) :: line_end    (MAX_PROBES) = 1d30
+  Character(8)   :: line_comps  (MAX_PROBES) = 'UVW'
+  Character(200) :: line_fileout(MAX_PROBES) = 'line'
+
+End Module global
