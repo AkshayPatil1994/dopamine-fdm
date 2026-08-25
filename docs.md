@@ -279,7 +279,5 @@ $$U^+(y^+) = \frac{1}{\kappa}\ln(1 + \kappa y^+) + 7.8\left[1 - e^{-y^+/11} - \f
 
 ---
 
-## Acknowledgments
-
-The original form of the channel flow solver was shared by Adrian Lozano-Duran during my PhD and I am grateful for his generous help and support with the code. 
+ 
 

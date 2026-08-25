@@ -1,4 +1,4 @@
-# fdm-dopamine
+# dopamine-fdm
 
 A finite-difference Navier–Stokes solver for turbulent channel and open-channel flows, with support for rough-wall immersed boundary methods (IBM), wall models, sub-grid scale (SGS) turbulence modelling, and an exact Reynolds stress budget analysis module.
 
@@ -377,3 +377,7 @@ The methods implemented in this solver draw on the following published works.  P
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 
 See [LICENSE](LICENSE) for the full text.
+
+## Acknowledgments
+
+The original form of the channel flow solver was shared by Adrian Lozano-Duran during my PhD and I am grateful for his generous help and support with the code. 
