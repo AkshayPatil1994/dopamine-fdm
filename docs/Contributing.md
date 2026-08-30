@@ -1,6 +1,6 @@
 # Contributing & Citing
 
-← [Home](Home.md)
+← [[Home|Home]]
 
 ## License
 
@@ -43,7 +43,7 @@ publications (also machine-readable in [`CITATION.cff`](../CITATION.cff)):
 4. Patil, A., Paranjothi, U. C. K., & García-Sánchez, C. (2025). GenSDF: An MPI-Fortran
    based signed-distance-field generator for computational fluid dynamics applications.
    *SoftwareX*, 30, 102117. — *GenSDF* (see
-   [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf))
+   [[Pre- and Post-Processing Tools § GenSDF|Tools#gensdf]])
 
 <details>
 <summary>BibTeX</summary>
@@ -113,4 +113,4 @@ cite the relevant papers when publishing results obtained with `fdm-dopamine`.
 | Reichardt IC profile | Reichardt, H. (1951). Z. Angew. Math. Mech. **31**(7), 208–219. | [10.1002/zamm.19510310704](https://doi.org/10.1002/zamm.19510310704) |
 | Staggered MAC grid | Harlow, F.H. & Welch, J.E. (1965). Phys. Fluids **8**(12), 2182–2189. | [10.1063/1.1761178](https://doi.org/10.1063/1.1761178) |
 
-See the fuller in-context references throughout [Numerics & Governing Equations](Numerics.md).
+See the fuller in-context references throughout [[Numerics & Governing Equations|Numerics]].

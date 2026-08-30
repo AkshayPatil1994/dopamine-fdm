@@ -1,12 +1,12 @@
 # Pre- and Post-Processing Tools
 
-← [Home](Home.md)
+← [[Home|Home]]
 
 ## GenSDF
 
 `preProcessing/GenSDF/` is a standalone MPI-Fortran signed-distance-field (SDF)
 generator used to build the cell-centre SDF the solver's IBM reads via `ibm_sdf_file`
-(`&IBM` namelist — see [Input Parameters](Input-Parameters.md#ibm-optional)). The solver
+(`&IBM` namelist — see [[Input Parameters|Input-Parameters#ibm-optional]]). The solver
 no longer accepts a face-point mask input (`Umask_in`) — `GenSDF` is the only supported
 way to produce an IBM geometry.
 
@@ -25,7 +25,7 @@ non-uniform $z$ grid, whether to use the fast-sweep algorithm (narrow-band, fast
 brute-force, narrow-band width, the solver's wall-normal axis (2=y-vertical,
 3=z-vertical), and whether to emit face-staggered SDFs in addition to the cell-centre
 one. See `examples/dns_ibm_wavyWall/geo/parameters.in` for a worked configuration
-matching that example ([Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywall)).
+matching that example ([[Examples § dns_ibm_wavyWall|Examples#dns_ibm_wavywall]]).
 
 Run:
 
@@ -42,7 +42,7 @@ in `parameters.in`, face-staggered SDFs (`sdfu`, `sdfv`, `sdfw`) are written alo
 `sdfp`.
 
 > **Reference (fast-sweep):** Zhao, H., Osher, S. & Fedkiw, R. (2001/2005); Tsai, Y.-H.R.
-> (2002) — see [Numerics § IBM](Numerics.md#6-immersed-boundary-method-ibm).
+> (2002) — see [[Numerics § IBM|Numerics#6-immersed-boundary-method-ibm]].
 
 ## `postProcessing/` scripts
 
@@ -61,7 +61,7 @@ NumPy arrays with ghost layers stripped. Imported by `plot_snapshot.py`, `plot_s
 from snapshot_io import parse_input_parameters, list_snapshots, read_snapshot
 ```
 
-See the binary layout in [Installation § Output files](Installation.md#output-files).
+See the binary layout in [[Installation § Output files|Installation#output-files]].
 
 ### `generateXMF.py`
 
@@ -128,7 +128,7 @@ python3 postProcessing/analyse_channel.py --x 2 4 6 8 \
 ### `read_RSBstats.py`
 
 Reads and plots the Reynolds stress budget (RSB) output described in
-[Input Parameters § STATISTICS](Input-Parameters.md#statistics-optional--omit-to-disable)
+[[Input Parameters § STATISTICS|Input-Parameters#statistics-optional--omit-to-disable]]
 (production, pressure-strain, viscous/turbulent/pressure diffusion, resolved/SGS
 dissipation, residual). Run from the case directory:
 
@@ -160,7 +160,7 @@ python postProcessing/plot_sdf.py [--sdf SDF_in] [--params input_parameters] [--
 
 Reader/converter for the per-point IBM surface samples written to
 `ibm_surface/surface.<step>.bin` (see
-[Input Parameters § IBM](Input-Parameters.md#ibm-optional), `ibm_surface_nsampling`):
+[[Input Parameters § IBM|Input-Parameters#ibm-optional]], `ibm_surface_nsampling`):
 surface position, normal, pressure, and pressure/viscous force per point (summing these
 reproduces the drag reported in `ibm_forces.csv`).
 
@@ -194,7 +194,7 @@ python3 postProcessing/load_line_probes.py <meta.txt> [<meta2.txt> ...] [--snap 
 Mirrors a half-channel SEM inflow profile (one no-slip wall + symmetry plane at the
 centreline, `y ∈ [0,h]`) into a full-channel profile (`y ∈ [0,2h]`, no-slip both walls),
 for use as `inflow_profile_file` (see
-[Input Parameters § INFLOW](Input-Parameters.md#inflow-optional--used-only-when-x_bc_type--1)).
+[[Input Parameters § INFLOW|Input-Parameters#inflow-optional--used-only-when-x_bc_type--1]]).
 Handles the sign flip of $V$ (and any $v$-linear correlation, `uv`/`vw`) under the
 reflection:
 
