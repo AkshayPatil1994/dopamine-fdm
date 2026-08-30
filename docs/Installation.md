@@ -1,6 +1,6 @@
 # Installation & Running
 
-← [Home](Home.md)
+← [[Home|Home]]
 
 ## Dependencies
 
@@ -9,7 +9,7 @@
 | gfortran or ifort | GFortran ≥ 9 / Intel ≥ 2019 | Fortran compiler |
 | MPI | any standard MPI-3 | Domain decomposition |
 | FFTW3 | 3.3 (serial double-precision) | Local single-rank transforms/DCT, and the transform engine inside 2decomp&fft |
-| [2decomp&fft](https://github.com/2decomp-fft/2decomp-fft) | `v2.1.0` | 2-D pencil domain decomposition and inter-rank transposes for the MPI-parallel pressure Poisson solve — see [Numerics § MPI parallelism](Numerics.md#10-mpi-parallelism) |
+| [2decomp&fft](https://github.com/2decomp-fft/2decomp-fft) | `v2.1.0` | 2-D pencil domain decomposition and inter-rank transposes for the MPI-parallel pressure Poisson solve — see [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]] |
 | LAPACK / BLAS | any | Linear algebra |
 | CMake | 3.20 | Build system |
 | git | any | Required at first configure to fetch 2decomp&fft (see below) |
@@ -92,7 +92,7 @@ touched is still being generated for the GPU.
 ## Running
 
 1. Edit `input_parameters` to set domain size, grid type, physics, and IC options — see
-   the [Input Parameters Reference](Input-Parameters.md) for every field. For the GPU
+   the [[Input Parameters Reference|Input-Parameters]] for every field. For the GPU
    build, also make sure `nprocs=1` (i.e. launch with `-np 1`) and `x_bc_type` is 0 or 1
    in `&BOUNDARY_CONDITIONS` (see "Building (single-GPU...)" above).
 2. Create the required output directories (adjust paths to match your `fileout` and
@@ -121,7 +121,7 @@ time is going on either build.
 |----------|---------|--------|
 | `fields/` | Velocity (U, V, W), pressure (P), and — when `sgs_model /= 0` — SGS turbulent viscosity (ν_t) snapshots, written every `nsave` steps (or every `tsave` time units if `nsave < 0`) | Big-endian float64 stream |
 | `restart/` | Hot-restart fields | Big-endian float64 stream |
-| `stats/` | Monitor statistics (text) and, if enabled, RSB budget files (little-endian float64) | See [Input Parameters Reference § STATISTICS](Input-Parameters.md#statistics-optional--omit-to-disable) |
+| `stats/` | Monitor statistics (text) and, if enabled, RSB budget files (little-endian float64) | See [[Input Parameters Reference § STATISTICS|Input-Parameters#statistics-optional--omit-to-disable]] |
 
 Field snapshots are Fortran stream unformatted, big-endian float64 (no record markers).
 Each field block is preceded by a 3-integer size header. The layout is:
@@ -143,7 +143,7 @@ data = np.fromfile("fields/channel_test.1", dtype=">f8")
 
 The reader library `postProcessing/snapshot_io.py` handles this layout (grid parsing,
 ghost-cell stripping) automatically — see
-[Pre- and Post-Processing Tools](Tools.md#snapshot_iopy).
+[[Pre- and Post-Processing Tools|Tools#snapshot_iopy]].
 
 ### XDMF / ParaView post-processing
 
@@ -155,4 +155,4 @@ XDMF `JOIN` function rather than three separate scalars:
 python postProcessing/generateXMF.py --case channel_test --nx 513 --ny 128 --nz 257
 ```
 
-See [Pre- and Post-Processing Tools](Tools.md) for the full script reference.
+See [[Pre- and Post-Processing Tools|Tools]] for the full script reference.

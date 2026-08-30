@@ -13,12 +13,12 @@ here, then jump to whichever page matches what you're doing.
 
 | Page | Use it for |
 |------|------------|
-| [Installation & Running](Installation.md) | Dependencies, CPU/GPU build instructions, launching a run, output layout |
-| [Input Parameters Reference](Input-Parameters.md) | Every namelist and parameter in `input_parameters`, grouped by section |
-| [Numerics & Governing Equations](Numerics.md) | The discretisation, time integration, Poisson solver, SGS model, IBM, wall models, scalar transport, Reynolds stress budget, inflow/outflow BCs |
-| [Examples](Examples.md) | Walkthroughs of the three bundled example cases |
-| [Pre- and Post-Processing Tools](Tools.md) | `GenSDF` mesh/SDF generator and the Python scripts in `postProcessing/` |
-| [Contributing & Citing](Contributing.md) | License, how to cite, acknowledgments, opening issues |
+| [[Installation & Running\|Installation]] | Dependencies, CPU/GPU build instructions, launching a run, output layout |
+| [[Input Parameters Reference\|Input-Parameters]] | Every namelist and parameter in `input_parameters`, grouped by section |
+| [[Numerics & Governing Equations\|Numerics]] | The discretisation, time integration, Poisson solver, SGS model, IBM, wall models, scalar transport, Reynolds stress budget, inflow/outflow BCs |
+| [[Examples\|Examples]] | Walkthroughs of the three bundled example cases |
+| [[Pre- and Post-Processing Tools\|Tools]] | `GenSDF` mesh/SDF generator and the Python scripts in `postProcessing/` |
+| [[Contributing & Citing\|Contributing]] | License, how to cite, acknowledgments, opening issues |
 
 ## At a glance
 

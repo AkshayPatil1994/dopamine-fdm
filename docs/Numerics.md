@@ -1,6 +1,6 @@
 # Numerics & Governing Equations
 
-← [Home](Home.md)
+← [[Home|Home]]
 
 `dopamine-fdm` integrates the incompressible Navier–Stokes equations on distributed-memory
 systems via MPI (2decomp&fft 2-D pencil decomposition, auto-preferring a 1-D z-slab split
@@ -19,13 +19,13 @@ gradient).
 
 Streamwise ($x$) and spanwise ($z$) forcing:
 
-$$f_x(t) = \frac{\mathrm{d}P}{\mathrm{d}x}\bigg|_0 + U_{b,x}\,\omega_x\cos(\omega_x t + \varphi_x), \qquad f_z(t) = \frac{\mathrm{d}P}{\mathrm{d}z}\bigg|_0 + U_{b,z}\,\omega_z\cos(\omega_z t + \varphi_z)$$
+$$f_x(t) = \frac{\mathrm{d}P}{\mathrm{d}x}\bigg|_0 + U_{b,x}\\,\omega_x\cos(\omega_x t + \varphi_x), \qquad f_z(t) = \frac{\mathrm{d}P}{\mathrm{d}z}\bigg|_0 + U_{b,z}\\,\omega_z\cos(\omega_z t + \varphi_z)$$
 
 where $\omega_x = 2\pi / T_{\mathrm{wave},x}$ and $\omega_z = 2\pi / T_{\mathrm{wave},z}$
 are derived from the user-supplied wave periods, and $\varphi_x$, $\varphi_z$ are
 optional phase offsets (radians, default 0). Setting $T_{\mathrm{wave},x} = 0$ (or
 $T_{\mathrm{wave},z} = 0$) disables oscillation in that direction, recovering steady
-forcing. Configured via `&PHYSICS` — see [Input Parameters](Input-Parameters.md#physics).
+forcing. Configured via `&PHYSICS` — see [[Input Parameters|Input-Parameters#physics]].
 
 ## 2. Spatial discretisation
 
@@ -45,7 +45,7 @@ The grid is **uniform** in the homogeneous $x$ and $z$ directions (spacing $\Del
 $\Delta z$) and **non-uniform** in the wall-normal $y$ direction. Seven vertical-grid
 options are provided (uniform, symmetric/single-sided hyperbolic tangent stretching, and
 roughness-sublayer variants), configured via `grid_type` and `alpha_grid` — see
-[Input Parameters § DOMAIN](Input-Parameters.md#domain).
+[[Input Parameters § DOMAIN|Input-Parameters#domain]].
 
 ### 2.2 Finite differences
 
@@ -62,7 +62,7 @@ Time advancement uses the **three-stage, low-storage Runge–Kutta** scheme of W
 (1990) — the same scheme used in the Kim, Moin & Moser (1987) channel flow code and many
 subsequent LES solvers:
 
-$$u^{(s)} = u^{(s-1)} + \alpha_s \Delta t\, R^{(s-1)}, \quad s = 1,2,3$$
+$$u^{(s)} = u^{(s-1)} + \alpha_s \Delta t\\, R^{(s-1)}, \quad s = 1,2,3$$
 
 Coefficients: $\alpha_1 = 8/15$, $\alpha_2 = 5/12$, $\alpha_3 = 3/4$.
 
@@ -93,7 +93,7 @@ available:
 
 These two switches are independent: `nsteps` and `nsave` can each be positive or
 negative in any combination. Configured via `&NUMERICS` — see
-[Input Parameters](Input-Parameters.md#numerics).
+[[Input Parameters|Input-Parameters#numerics]].
 
 ## 4. Pressure projection (fractional step method)
 
@@ -108,7 +108,7 @@ $$\nabla^2 \phi = \frac{1}{\Delta t}\nabla\cdot u^*$$
 
 3. Project to a divergence-free field:
 
-$$u^{n+1} = u^* - \Delta t\,\nabla\phi$$
+$$u^{n+1} = u^* - \Delta t\\,\nabla\phi$$
 
 ### 4.1 Spectral Poisson solver
 
@@ -139,7 +139,7 @@ grid itself is set up.
 > — the maintained fork of the original 2DECOMP&FFT library (Li, N. & Laizet, S. (2010).
 > *2DECOMP&FFT – a highly scalable 2D decomposition library for FFT-based
 > simulations*, Cray User Group 2010). Vendored at `v2.1.0` — see
-> [Installation § Dependencies](Installation.md#dependencies).
+> [[Installation § Dependencies|Installation#dependencies]].
 
 > **Reference (fractional step):** Kim, J. & Moin, P. (1985). *Application of a
 > fractional-step method to incompressible Navier–Stokes equations*. J. Comput. Phys.
@@ -154,13 +154,13 @@ The SGS eddy viscosity $\nu_t$ is provided by the **Vreman (2004) model**, contr
 $$\nu_t = c_V \sqrt{\frac{B_\beta}{\alpha_{ij}\alpha_{ij}}}$$
 
 where $\alpha_{ij} = \partial u_j / \partial x_i$,
-$\beta_{mn} = \sum_l \Delta_l^2\,\alpha_{lm}\alpha_{ln}$,
+$\beta_{mn} = \sum_l \Delta_l^2\\,\alpha_{lm}\alpha_{ln}$,
 $B_\beta = \beta_{11}\beta_{22} - \beta_{12}^2 + \beta_{11}\beta_{33} - \beta_{13}^2 + \beta_{22}\beta_{33} - \beta_{23}^2$,
 and $c_V = 2.5 C_s^2$.
 
 All velocity gradients are evaluated at cell centres by second-order central
 differences; off-diagonal gradients are averaged from the two adjacent face-point
-values. Configured via `&PHYSICS` — see [Input Parameters](Input-Parameters.md#physics).
+values. Configured via `&PHYSICS` — see [[Input Parameters|Input-Parameters#physics]].
 
 > **Reference:** Vreman, A.W. (2004). *An eddy-viscosity subgrid-scale model for
 > turbulent shear flow: Algebraic theory and applications*. Phys. Fluids 16(10),
@@ -183,7 +183,7 @@ boundary conditions.
 The solver itself does **not** compute the SDF — it must be generated ahead of time by
 the `GenSDF` preprocessing tool in `preProcessing/GenSDF/` (which performs the
 fast-sweep distance computation of Zhao et al. (2005) internally) from an OBJ/STL
-geometry — see [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf).
+geometry — see [[Pre- and Post-Processing Tools § GenSDF|Tools#gensdf]].
 
 > **Note:** older solver versions accepted a binary face-point mask (`Umask_in`,
 > `ibm_input_mode = 1` in that scheme) and computed the SDF via fast-sweep at solver
@@ -207,7 +207,7 @@ $$U(G) = 2 U_\text{wall} - U(I)$$
 
 No-slip ($U_\text{wall} = 0$) is the default; moving-wall BCs can be set by changing
 `U_wall`, `V_wall`, `W_wall` in `ibm.f90`. Configured via `&IBM` — see
-[Input Parameters](Input-Parameters.md#ibm-optional).
+[[Input Parameters|Input-Parameters#ibm-optional]].
 
 > **Reference:** Tseng, Y.-H. & Ferziger, J.H. (2003). *A ghost-cell immersed boundary
 > method for flow in complex geometry*. J. Comput. Phys. 192(2), 593–623. DOI:
@@ -222,13 +222,13 @@ No-slip ($U_\text{wall} = 0$) is the default; moving-wall BCs can be set by chan
 > **Reference (`GenSDF` implementation):** Patil, A., Paranjothi, U.C.K. &
 > García-Sánchez, C. (2025). *GenSDF: An MPI-Fortran based signed-distance-field
 > generator for computational fluid dynamics applications*. SoftwareX 30, 102117. See
-> [Contributing § Citing this solver](Contributing.md#citing-this-solver) and
-> [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf).
+> [[Contributing § Citing this solver|Contributing#citing-this-solver]] and
+> [[Pre- and Post-Processing Tools § GenSDF|Tools#gensdf]].
 
 ### 6.3 Validation — turbulent flow over a wavy wall
 
 The IBM is validated on the `dns_ibm_wavyWall` example (ERCOFTAC Classic Collection
-Case 076, [Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywall); $Re_H = U_b
+Case 076, [[Examples § dns_ibm_wavyWall|Examples#dns_ibm_wavywall]]; $Re_H = U_b
 H/\nu = 6760$), a sinusoidal wavy bottom wall of wavelength $\lambda = 1$,
 amplitude-to-wavelength ratio $a/\lambda = 0.05$, tiled four times over the streamwise
 domain $L_x = 4$. The wall is represented as a precomputed cell-centre SDF
@@ -245,7 +245,7 @@ agree closely with the reference DNS:
 > **Reference (DNS comparison data):** Maaß, C. & Schumann, U. *Direct numerical
 > simulation of separated turbulent flow over a wavy boundary*, as used in the
 > ERCOFTAC Classic Collection Case 076 specification (see
-> [Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywall) for the primary case
+> [[Examples § dns_ibm_wavyWall|Examples#dns_ibm_wavywall]] for the primary case
 > citation).
 
 ## 7. Wall models
@@ -259,7 +259,7 @@ based on the classical log-law, applied when `flat_wall_model_flag = 1` (flat wa
 The wall-normal velocity gradient at the boundary is related to the local wall-shear
 stress through a Robin (slip-length) condition parameterised by $\alpha$:
 
-$$U_\text{ghost} = \alpha_y\,U_\text{interior} + (1-\alpha_y)\,U_\text{wall}$$
+$$U_\text{ghost} = \alpha_y\\,U_\text{interior} + (1-\alpha_y)\\,U_\text{wall}$$
 
 For no-slip ($\alpha_y = 0$) and free-slip ($\alpha_y = 1$) this reduces to the
 respective Dirichlet/Neumann limits.
@@ -269,7 +269,7 @@ respective Dirichlet/Neumann limits.
 The friction velocity $u_\tau$ is obtained by a Newton iteration on the log-law /
 viscous-sublayer composite:
 
-$$u^+ = \begin{cases} y^+ & y^+ < 5 \\ \frac{1}{\kappa}\ln(y^+) + B & y^+ \geq 5 \end{cases}$$
+$$u^+ = \begin{cases} y^+ & y^+ < 5 \\\\ \frac{1}{\kappa}\ln(y^+) + B & y^+ \geq 5 \end{cases}$$
 
 with $\kappa = 0.41$ and $B = 5.2$ (Prandtl–Kármán constants). The iteration uses up to
 20 Newton steps; $\alpha$ is then back-computed from $u_\tau$.
@@ -292,19 +292,19 @@ and diffusive flux divergences are normalised by the **local cell width** (the
 face-to-face spacing $x_{i}-x_{i-1}$, $y_{j}-y_{j-1}$, $z_{k}-z_{k-1}$), which
 guarantees discrete conservation on the stretched wall-normal grid and is consistent
 with the momentum solver. Configured via `&SEDIMENT` — see
-[Input Parameters](Input-Parameters.md#sediment-optional--omit-to-disable).
+[[Input Parameters|Input-Parameters#sediment-optional--omit-to-disable]].
 
 ### 8.1 Advection — van Leer slope-limited MUSCL
 
 Advective face values are obtained from a MUSCL reconstruction of the upwind cell,
 
-$$C_\text{face} = C_\text{up} + \sigma_\text{up}\,\bigl(x_\text{face} - x_{g,\text{up}}\bigr),$$
+$$C_\text{face} = C_\text{up} + \sigma_\text{up}\\,\bigl(x_\text{face} - x_{g,\text{up}}\bigr),$$
 
 where the limited cell-centred slope $\sigma_\text{up}$ uses the **van Leer (1974)
 harmonic-mean limiter** applied to the forward and backward gradients formed with the
 *actual* cell-centre distances:
 
-$$g_f = \frac{C_{m+1}-C_m}{x_{g,m+1}-x_{g,m}}, \quad g_b = \frac{C_m-C_{m-1}}{x_{g,m}-x_{g,m-1}}, \quad \sigma = \begin{cases}\dfrac{2\,g_f g_b}{g_f+g_b}, & g_f g_b > 0,\\[2mm] 0, & \text{otherwise.}\end{cases}$$
+$$g_f = \frac{C_{m+1}-C_m}{x_{g,m+1}-x_{g,m}}, \quad g_b = \frac{C_m-C_{m-1}}{x_{g,m}-x_{g,m-1}}, \quad \sigma = \begin{cases}\dfrac{2\\,g_f g_b}{g_f+g_b}, & g_f g_b > 0,\\\\[2mm] 0, & \text{otherwise.}\end{cases}$$
 
 Because real geometric distances enter both the gradients and the projection to the
 face, the scheme remains **second-order accurate and TVD on non-uniform (stretched)
@@ -326,7 +326,7 @@ falls back to first-order upwind.
 
 The particle settling velocity is computed from the Soulsby (1997) formula:
 
-$$D_* = d_s\left[\frac{(s-1)g}{\nu^2}\right]^{1/3}, \quad w_s = \frac{\nu}{d_s}\left[\sqrt{10.36^2 + 1.049\,D_*^3} - 10.36\right]$$
+$$D_* = d_s\left[\frac{(s-1)g}{\nu^2}\right]^{1/3}, \quad w_s = \frac{\nu}{d_s}\left[\sqrt{10.36^2 + 1.049\\,D_*^3} - 10.36\right]$$
 
 where $s = \rho_s/\rho_f$ is the specific gravity of sediment and $d_s$ is the particle
 diameter.
@@ -345,7 +345,7 @@ $$\frac{DR_{ij}}{Dt} = P_{ij} + \Pi_{ij} + D^\nu_{ij} + D^T_{ij} + \Phi^P_{ij} -
 |------|--------|-------------|
 | Production | $P_{ij}$ | $-R_{ik}\partial\langle U_j\rangle/\partial x_k - R_{jk}\partial\langle U_i\rangle/\partial x_k$ |
 | Pressure–strain | $\Pi_{ij}$ | $\langle p'(\partial u_i'/\partial x_j + \partial u_j'/\partial x_i)\rangle$ |
-| Viscous diffusion | $D^\nu_{ij}$ | $\nu\,\nabla^2 R_{ij}$ |
+| Viscous diffusion | $D^\nu_{ij}$ | $\nu\\,\nabla^2 R_{ij}$ |
 | Turbulent diffusion | $D^T_{ij}$ | $-\partial\langle u_i' u_j' u_k'\rangle/\partial x_k$ |
 | Pressure diffusion | $\Phi^P_{ij}$ | $-\partial(\langle p' u_i'\rangle\delta_{jk} + \langle p' u_j'\rangle\delta_{ik})/\partial x_k$ |
 | Resolved dissipation | $\varepsilon^\text{res}_{ij}$ | $2\nu\langle(\partial u_i'/\partial x_k)(\partial u_j'/\partial x_k)\rangle$ |
@@ -356,7 +356,7 @@ time. Homogeneous spatial averaging (configurable over $x$, $z$, or both) reduce
 output to 1-D profiles for canonical channel flows. Output files are little-endian
 float64, appended each window for restart continuity. Configured via `&STATISTICS` —
 full output-file layout in
-[Input Parameters § STATISTICS](Input-Parameters.md#statistics-optional--omit-to-disable).
+[[Input Parameters § STATISTICS|Input-Parameters#statistics-optional--omit-to-disable]].
 
 > **Reference:** Pope, S.B. (2000). *Turbulent Flows*. Cambridge University Press. ISBN:
 > 978-0-521-59886-6. DOI:
@@ -367,7 +367,7 @@ full output-file layout in
 The domain is decomposed with **[2decomp&fft](https://github.com/2decomp-fft/2decomp-fft)**'s
 2-D pencil decomposition: the MPI rank grid is `p_row × p_col` (`p_row` splitting $x$,
 `p_col` splitting $z$; $y$ is always fully local to a rank), configured via `p_row`/
-`p_col` in `&DOMAIN` — see [Input Parameters § DOMAIN](Input-Parameters.md#domain). With
+`p_col` in `&DOMAIN` — see [[Input Parameters § DOMAIN|Input-Parameters#domain]]. With
 the default `p_row = 0, p_col = 0` the solver auto-picks: a **pure z-slab split**
 (`p_row = 1`, each rank owning the full $(x,y)$ extent and a contiguous range of
 $z$-planes) whenever that alone gives every rank at least 2 interior $z$-cells — this is
@@ -396,7 +396,7 @@ velocity is imposed at the inlet ($x=0$) and a convective condition advects the 
 at $x=L_x$. The pressure Poisson solve switches from a periodic FFT to a DCT-IV
 transform in $x$ (§4.1), consistent with the non-periodic velocity BC. Configured via
 `&BOUNDARY_CONDITIONS` and `&INFLOW` — see
-[Input Parameters](Input-Parameters.md#inflow-optional--used-only-when-x_bc_type--1).
+[[Input Parameters|Input-Parameters#inflow-optional--used-only-when-x_bc_type--1]].
 
 ### 11.1 Inlet — constant or synthetic eddy method
 
@@ -430,9 +430,9 @@ a divergence-free (curl-of-vector-potential) construction after Poletto, Craft &
 At the outlet face, each velocity component is relaxed toward a one-sided upwind
 extrapolation from the interior at a rate set by the local Courant number:
 
-$$F(n_\text{last}) \leftarrow F(n_\text{last}) - C\,\bigl[F(n_\text{last}) - F(n_\text{last}-1)\bigr], \qquad C = \min\!\bigl(\max(U_c,0),\,1\bigr)\frac{\Delta t}{\Delta x}$$
+$$F(n_\text{last}) \leftarrow F(n_\text{last}) - C\\,\bigl[F(n_\text{last}) - F(n_\text{last}-1)\bigr], \qquad C = \min\\!\bigl(\max(U_c,0),\\,1\bigr)\frac{\Delta t}{\Delta x}$$
 
-which discretises $\partial F/\partial t + U_c\,\partial F/\partial x = 0$ by
+which discretises $\partial F/\partial t + U_c\\,\partial F/\partial x = 0$ by
 first-order upwinding; clamping $C$ to $[0,1]$ keeps the update stable and avoids
 pulling from outside the domain under local backflow.
 
@@ -464,7 +464,7 @@ The Reichardt (1951) profile for IC type 4:
 $$U^+(y^+) = \frac{1}{\kappa}\ln(1 + \kappa y^+) + 7.8\left[1 - e^{-y^+/11} - \frac{y^+}{11}e^{-0.33 y^+}\right]$$
 
 Configured via `&INITIAL_CONDITIONS` — see
-[Input Parameters](Input-Parameters.md#initial_conditions).
+[[Input Parameters|Input-Parameters#initial_conditions]].
 
 > **Reference:** Reichardt, H. (1951). *Vollständige Darstellung der turbulenten
 > Geschwindigkeitsverteilung in glatten Leitungen*. Z. Angew. Math. Mech. 31(7), 208–219.

@@ -1,10 +1,10 @@
 # Input Parameters Reference
 
-← [Home](Home.md)
+← [[Home|Home]]
 
 Parameters are grouped into Fortran namelists in `input_parameters`. Any namelist group
 marked *optional* may be omitted entirely; the solver will use the documented defaults.
-See also the runnable examples in `examples/` ([Examples](Examples.md)).
+See also the runnable examples in `examples/` ([[Examples|Examples]]).
 
 ## `&DOMAIN`
 | Parameter | Default | Description |
@@ -15,7 +15,7 @@ See also the runnable examples in `examples/` ([Examples](Examples.md)).
 | `alpha_grid` | `1.0` | Grid-stretching intensity (larger → stronger clustering) |
 | `p_row, p_col` | `0, 0` | 2decomp&fft MPI pencil grid: `p_row` splits $x$, `p_col` splits $z$ ($y$ always local); `p_row * p_col` must equal the rank count. `0, 0` = auto-pick (prefer a pure z-slab split, `p_row=1`; fall back to a 2-D split matching the grid's aspect ratio). Set both explicitly to override |
 
-See [Numerics § MPI parallelism](Numerics.md#10-mpi-parallelism).
+See [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]].
 
 ## `&PHYSICS`
 | Parameter | Default | Description |
@@ -30,11 +30,11 @@ See [Numerics § MPI parallelism](Numerics.md#10-mpi-parallelism).
 | `phi_wave_x` | `0.0` | Phase offset $\varphi_x$ [rad] for streamwise oscillation (e.g. `1.5708` ≈ π/2 gives sine forcing) |
 | `phi_wave_z` | `0.0` | Phase offset $\varphi_z$ [rad] for spanwise oscillation; difference $\varphi_z - \varphi_x$ sets the cross-wave phase lag |
 | `sgs_model` | `0` | 0=DNS (ν_t=0), 1=Vreman SGS |
-| `Cs_vreman` | `0.17` | Smagorinsky-equivalent constant for Vreman model ($c_V = 2.5\,C_s^2$) |
+| `Cs_vreman` | `0.17` | Smagorinsky-equivalent constant for Vreman model ($c_V = 2.5\\,C_s^2$) |
 | `flat_wall_model_flag` | `0` | 0=no-slip, 1=log-law EQWM on flat walls |
 
-See [Numerics § Forcing](Numerics.md#1-governing-equations) and
-[§ SGS model](Numerics.md#5-sub-grid-scale-model).
+See [[Numerics § Forcing|Numerics#1-governing-equations]] and
+[[§ SGS model|Numerics#5-sub-grid-scale-model]].
 
 ## `&NUMERICS`
 | Parameter | Default | Description |
@@ -51,7 +51,7 @@ See [Numerics § Forcing](Numerics.md#1-governing-equations) and
 | `dt_min` | `1e-10` | Minimum allowed `dt` (adaptive mode) |
 | `dt_max` | `1e10` | Maximum allowed `dt` (adaptive mode) |
 
-See [Numerics § Time integration](Numerics.md#3-time-integration).
+See [[Numerics § Time integration|Numerics#3-time-integration]].
 
 ## `&BOUNDARY_CONDITIONS`
 | Parameter | Default | Description |
@@ -76,8 +76,8 @@ See [Numerics § Time integration](Numerics.md#3-time-integration).
 | `sem_use_esem` | `1` | 1=Ensemble SEM (Schau et al. 2022) — empirical/exact normalisation, recommended; 0=classical SEM (Jarrin 2006) — analytical normalisation, comparison only |
 | `sem_divergence_free` | `0` | 0=independent scalar eddy sums; 1=divergence-free construction (Poletto, Craft & Revell 2013) — curl of a vector potential, guarantees `div(u')=0` at the inflow plane. Requires `sem_use_esem=1` |
 
-See [Numerics § Streamwise inflow/outflow BC](Numerics.md#11-streamwise-inflowoutflow-bc-x_bc_type--1)
-and the [precursor/successor example](Examples.md#precursor_successor).
+See [[Numerics § Streamwise inflow/outflow BC|Numerics#11-streamwise-inflowoutflow-bc-x_bc_type--1]]
+and the [[precursor/successor example|Examples#precursor_successor]].
 
 ## `&IBM` *(optional)*
 | Parameter | Default | Description |
@@ -94,7 +94,7 @@ and the [precursor/successor example](Examples.md#precursor_successor).
 > **Note:** Single IBM path: `ibm_input_mode = 1` always
 > reads a precomputed cell-centre SDF from `ibm_sdf_file`. Generate that SDF ahead of
 > time with the `GenSDF` tool — see
-> [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf).
+> [[Pre- and Post-Processing Tools § GenSDF|Tools#gensdf]].
 
 ## `&INITIAL_CONDITIONS`
 | Parameter | Default | Description |
@@ -108,7 +108,7 @@ and the [precursor/successor example](Examples.md#precursor_successor).
 **IC type 4 — Reichardt profile** (`ic_type = 4`):
 Builds the Reichardt (1951) composite law-of-the-wall profile, scaled by $u_\tau$ derived
 from `dPdx` and the channel half-height, mirrored symmetrically for a two-wall channel.
-The peak centreline velocity is $U_{cl}^+ \cdot u_\tau \approx 18\,\text{m/s}$ for
+The peak centreline velocity is $U_{cl}^+ \cdot u_\tau \approx 18\\,\text{m/s}$ for
 $Re_\tau \approx 395$. Perturbations are applied as structured streamwise/spanwise waves
 rather than white noise.
 
@@ -116,10 +116,10 @@ rather than white noise.
 Sets a mean streamwise velocity that is large near the walls and decreases linearly to
 zero at the channel centre (or top boundary), imposing a strong destabilising shear
 throughout the domain to promote rapid laminar-to-turbulent transition:
-$$U(y) = \begin{cases} U_\text{target}\left(1 - \dfrac{2\min(y,\,L_y-y)}{L_y}\right) & \text{closed channel (no-slip top)} \\[6pt] U_\text{target}\left(1 - \dfrac{y}{L_y}\right) & \text{open channel (free-slip top)} \end{cases}$$
+$$U(y) = \begin{cases} U_\text{target}\left(1 - \dfrac{2\min(y,\\,L_y-y)}{L_y}\right) & \text{closed channel (no-slip top)} \\\\[6pt] U_\text{target}\left(1 - \dfrac{y}{L_y}\right) & \text{open channel (free-slip top)} \end{cases}$$
 White noise of amplitude `noise_percent`% is superimposed on U, V, and W.
 
-See [Numerics § Initial conditions](Numerics.md#12-initial-conditions).
+See [[Numerics § Initial conditions|Numerics#12-initial-conditions]].
 
 ## `&IO`
 | Parameter | Default | Description |
@@ -142,7 +142,7 @@ See [Numerics § Initial conditions](Numerics.md#12-initial-conditions).
 | `C_ic_type` | `0` | Initial C profile: 0=uniform `C_ref`, 1=Rouse, 2=linear ramp, 3=slab |
 | `C_ic_height` | `0.0` | Slab height [m] (used when `C_ic_type = 3`) |
 
-See [Numerics § Scalar transport](Numerics.md#8-scalar-transport-suspended-sediment).
+See [[Numerics § Scalar transport|Numerics#8-scalar-transport-suspended-sediment]].
 
 ## `&STATISTICS` *(optional — omit to disable)*
 
@@ -173,7 +173,7 @@ to each `.bin` file, so the on-disk layout is `(nc, out_nx, out_ny, out_nz, nsam
 | `<base>_epsSGS.bin` | 6 | SGS dissipation $\varepsilon_{ij}^\text{sgs} = 2\langle\nu_t s_{ij}'\rangle$ |
 | `<base>_PiStrain.bin` | 6 | Pressure-strain $\Pi_{ij}$ |
 | `<base>_DTij.bin` | 6 | Turbulent diffusion $D^T_{ij}$ |
-| `<base>_Dnuij.bin` | 6 | Viscous diffusion $D^\nu_{ij} = \nu\,\nabla^2 R_{ij}$ |
+| `<base>_Dnuij.bin` | 6 | Viscous diffusion $D^\nu_{ij} = \nu\\,\nabla^2 R_{ij}$ |
 | `<base>_PhiPij.bin` | 6 | Pressure diffusion $\Phi^P_{ij}$ |
 | `<base>_Resid.bin` | 6 | Budget residual (closure check) |
 | `<base>.meta` | — | Text file: grid shape, `nsamples`, endian, dtype, component order |
@@ -206,6 +206,6 @@ Rij = load_rsb("stats/rsb", "Rij", 6, 1, 128, 1)
 ```
 
 Or use `postProcessing/read_RSBstats.py` — see
-[Pre- and Post-Processing Tools](Tools.md#read_rsbstatspy).
+[[Pre- and Post-Processing Tools|Tools#read_rsbstatspy]].
 
-See [Numerics § Reynolds stress budget](Numerics.md#9-reynolds-stress-budget).
+See [[Numerics § Reynolds stress budget|Numerics#9-reynolds-stress-budget]].
