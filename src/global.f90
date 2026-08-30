@@ -249,7 +249,7 @@ Module global
 
   ! SGS model control: sgs_model 0=DNS,1=Vreman; Cs_vreman is Smagorinsky-equivalent constant (c_V = 2.5*Cs_vreman^2)
   Integer(Int32) :: sgs_model  = 0       ! default: DNS
-  Real   (Int64) :: Cs_vreman  = 0.1d0   ! default Vreman constant
+  Real   (Int64) :: Cs_vreman  = 0.17d0   ! default Vreman constant
 
   ! Flat-wall equilibrium wall model flag: 0=DNS no-slip (default), 1=log-law EQWM
   Integer(Int32) :: flat_wall_model_flag = 0

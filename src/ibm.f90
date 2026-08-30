@@ -596,7 +596,7 @@ Contains
     Integer(Int32) :: n, i, j, k
     Real   (Int64) :: U_I
 
-    ! Zero fully-solid faces using phi-based averages (Umask unavailable in mode 2).
+    ! Zero fully-solid faces using phi-based averages (face-centred; Umask_cc is cell-centred).
     ! Ghost cells are also zeroed here and corrected below from fluid image points.
     !$acc parallel loop collapse(3) present(phi,U_)
     Do k = 2, nzg-1

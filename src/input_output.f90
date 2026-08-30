@@ -572,7 +572,7 @@ Contains
 	! Generate the initial conditions
 	Call generateIc
 
-	! NOTE: readUmask (IBM setup) is deferred to initialize() so that
+	! NOTE: readSDF (IBM setup) is deferred to initialize() so that
 	! xg/yg/zg are populated before compute_normal_at_face_* is called.
 
   End Subroutine init_flow
@@ -671,7 +671,7 @@ Contains
     Vo = V
     Wo = W
 
-! NOTE: readUmask (IBM setup) is deferred to initialize() so that
+! NOTE: readSDF (IBM setup) is deferred to initialize() so that
 	! xg/yg/zg are populated before compute_normal_at_face_* is called.
 
   End Subroutine read_input_data
