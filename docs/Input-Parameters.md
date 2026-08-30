@@ -144,6 +144,27 @@ See [[Numerics § Initial conditions|Numerics#12-initial-conditions]].
 
 See [[Numerics § Scalar transport|Numerics#8-scalar-transport-suspended-sediment]].
 
+## `&BOUSSINESQ` *(optional — omit to disable)*
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `boussinesq_flag` | `0` | 0=off, 1=transport temperature $T$ and couple it into the $v$-momentum equation via Boussinesq buoyancy |
+| `beta_T` | `0.0` | Thermal expansion coefficient $\beta_T$ [1/K] |
+| `T_ref` | `0.0` | Reference temperature $T_\text{ref}$ [K] used in the buoyancy source term |
+| `grav` | — | Gravitational acceleration [m s⁻²] (shared with `&SEDIMENT`; a warning is printed if the two disagree) |
+| `Pr` | `0.7` | Molecular Prandtl number |
+| `Pr_t` | `0.85` | Turbulent Prandtl number |
+| `T_bc_bot`, `T_bc_top` | `0`, `0` | Wall BC type: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet) |
+| `T_wall_bot`, `T_wall_top` | `0.0`, `0.0` | Wall temperature (used when the corresponding `T_bc_*` is isothermal) |
+| `T_ic_type` | `0` | Initial $T$ profile: 0=uniform `T_ref`, 1=linear gradient |
+| `T_ic_grad` | `0.0` | Gradient $\mathrm{d}T/\mathrm{d}y$ (used when `T_ic_type = 1`) |
+| `ibm_T_bc_type(0:15)` | `0` | Per-IBM-object thermal BC type (0=adiabatic, 1=isothermal), indexed by object ID |
+| `ibm_T_wall(0:15)` | `0.0` | Per-IBM-object wall temperature (used where the corresponding `ibm_T_bc_type` is isothermal) |
+
+If `&BOUSSINESQ` is omitted entirely, the solver prints `INFO: no &BOUSSINESQ found,
+thermal stratification disabled` and runs without the temperature scalar or buoyancy
+coupling. See
+[[Numerics § Boussinesq buoyancy|Numerics#83-boussinesq-buoyancy-thermal-stratification]].
+
 ## `&STATISTICS` *(optional — omit to disable)*
 
 Controls the Reynolds stress budget (RSB) module. When enabled, the module accumulates

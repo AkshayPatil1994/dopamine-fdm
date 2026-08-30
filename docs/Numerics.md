@@ -334,6 +334,40 @@ diameter.
 > **Reference:** Soulsby, R.L. (1997). *Dynamics of Marine Sands*. Thomas Telford,
 > London. ISBN: 978-0-7277-2584-5
 
+### 8.3 Boussinesq buoyancy (thermal stratification)
+
+A second, independent transported scalar $T$ (temperature) is available for
+buoyancy-driven flows, enabled by `boussinesq_flag >= 1`. It is advected and diffused on
+cell centres the same way as the sediment scalar, but with molecular diffusivity
+$\nu/Pr$, turbulent diffusivity $\nu_t/Pr_t$, and **no settling term**:
+
+$$\frac{\partial T}{\partial t} + \frac{\partial (u_j T)}{\partial x_j} = \frac{\partial}{\partial x_j}\left[\left(\frac{\nu}{Pr} + \frac{\nu_t}{Pr_t}\right)\frac{\partial T}{\partial x_j}\right]$$
+
+Under the Boussinesq approximation the resulting density perturbation feeds back into
+the wall-normal ($y$) momentum equation as a buoyancy source term, added to the $v$-RHS
+after the standard advection/viscous terms:
+
+$$f_y^\text{buoy} = \beta_T\, g\, (T_\text{face} - T_\text{ref})$$
+
+where $\beta_T$ is the thermal expansion coefficient, $g$ is gravitational acceleration
+(shared with `&SEDIMENT`'s `grav` — the solver warns if the two namelists disagree),
+$T_\text{ref}$ is the reference temperature, and $T_\text{face}$ is $T$ interpolated from
+cell centres to the $v$-face using the same stretched-grid weights used for $\nu_t$
+elsewhere in the momentum solve. Gravity is assumed to act along $-y$.
+
+Wall boundary conditions are adiabatic (zero-gradient) or isothermal (Dirichlet),
+independently settable at the bottom and top walls; streamwise/spanwise BCs follow the
+velocity field's (periodic, or SEM-inflow/convective-outflow when `x_bc_type = 1`), and
+IBM surfaces support per-object adiabatic/isothermal conditions. The Reynolds stress
+budget module (§9) additionally reports the buoyancy production term $\beta_T g \langle
+v'T'\rangle$ when both `&STATISTICS` and `&BOUSSINESQ` are active. Configured via
+`&BOUSSINESQ` — see
+[[Input Parameters § BOUSSINESQ|Input-Parameters#boussinesq-optional--omit-to-disable]].
+
+> **Note:** this is independent of the suspended-sediment scalar (§8.1–8.2) — the two can
+> be enabled together, each with its own transport equation, but only $T$ couples back
+> into the momentum equation.
+
 ## 9. Reynolds stress budget
 
 The `reynolds_stress_budget` module computes all terms in the **Reynolds stress
