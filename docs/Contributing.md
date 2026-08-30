@@ -12,9 +12,8 @@ See [LICENSE](../LICENSE) for the full text.
 
 ## Reporting issues / contributing
 
-- `docs.md` at the repository root notes that its content was LLM-generated and
-  subsequently edited for correctness — if you spot a mistake anywhere in the docs
-  (including this wiki), please open an issue on GitHub.
+- If you spot a mistake anywhere in the docs (including this wiki), please open an issue
+  on GitHub.
 - Bug reports and pull requests are welcome; there is no separate CONTRIBUTING template
   at present, so a descriptive issue or PR is the way to start.
 

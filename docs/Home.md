@@ -3,8 +3,8 @@
 `dopamine-fdm` is a parallel, finite-difference solver for the 3-D incompressible
 Navier–Stokes equations, targeting turbulent channel and open-channel flows. It supports
 rough-wall immersed boundary methods (IBM), equilibrium wall models, sub-grid scale (SGS)
-turbulence modelling, suspended-sediment scalar transport, and an exact Reynolds stress
-budget analysis module.
+turbulence modelling, suspended-sediment scalar transport, Boussinesq buoyancy
+(thermal stratification), and an exact Reynolds stress budget analysis module.
 
 This wiki expands on the top-level [README](../README.md) with a page per topic. Start
 here, then jump to whichever page matches what you're doing.
@@ -29,8 +29,9 @@ here, then jump to whichever page matches what you're doing.
   MPI decomposition (auto-prefers a cheap 1-D z-slab split when the rank count allows);
   optional single-GPU (OpenACC + cuFFT + cuSPARSE) build for `nprocs=1`.
 - **Physics** — DNS or Vreman-model LES, flat-wall/IBM log-law wall models, rough-wall
-  ghost-cell IBM, oscillatory/pulsatile forcing, suspended-sediment transport, periodic or
-  inflow/outflow (synthetic-eddy-method) streamwise boundary conditions.
+  ghost-cell IBM, oscillatory/pulsatile forcing, suspended-sediment transport, Boussinesq
+  buoyancy (thermal stratification), periodic or inflow/outflow (synthetic-eddy-method)
+  streamwise boundary conditions.
 - **Diagnostics** — full Pope §7.4 Reynolds stress budget, line/slice probes, per-stage
   profiler summary at shutdown.
 
