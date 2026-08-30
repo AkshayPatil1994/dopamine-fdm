@@ -6,6 +6,7 @@ Module initialization
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
+  Use decomp, Only : decomp_init_pencil, decomp_build_xz_ranges, decomp_init_poisson_pencil, decomp_poisson, z_periodic_partner
   Use input_output
   Use ibmSetup
   Use scalar_transport, Only : compute_settling_velocity
@@ -20,9 +21,12 @@ Contains
   ! Initialize everything
   Subroutine initialize
     
-    Integer(Int32) :: i, j, k, kk, nzpe, pos, ipos, nze, nzme
+    Integer(Int32) :: i, j, k, kk, nzpe, pos, ipos
     Real   (Int64) :: dy1, dy2, det, a, b, c, r, Qflow_ref
+    Real   (Int64) :: dy   ! uniform y spacing, periodic-y path only (y_bc_type==0)
     Integer(Int32), Dimension(:,:), Allocatable :: A_kmodes, A_kmodes_local
+    Logical        :: is_first_z, is_last_z
+    Integer(Int32) :: z_partner
 
     ! first initialize MPI
     call Mpi_init(ierr)
@@ -56,6 +60,7 @@ Contains
     ! single-GPU cuFFT Poisson solve (periodic or DCT-IV) only supports nprocs==1
     If ( nprocs /= 1 ) Stop 'ERROR: GPU_POISSON build only supports nprocs=1 (single-GPU); rebuild without ENABLE_GPU for multi-rank runs'
     If ( x_bc_type /= 0 .And. x_bc_type /= 1 ) Stop 'ERROR: GPU_POISSON build only supports x_bc_type=0 or 1'
+    If ( y_bc_type == 0 .And. x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
 #endif
 
     ! time: on restart advance physical time to match nstep_init * dt
@@ -69,49 +74,36 @@ Contains
     ! snapshot is due one tsave interval after the run's starting time
     If ( nsave < 0 ) tsave_next = t + tsave
     
-    ! grid definitions
-    Allocate (  k1_global(0:nprocs-1),  k2_global(0:nprocs-1) )
-    Allocate ( kg1_global(0:nprocs-1), kg2_global(0:nprocs-1) )
+    ! restrictions
+    If ( Mod( nx_global, 2 )/=0 ) Stop 'Error: nx must be even'
+    If ( Mod( nz_global, 2 )/=0 ) Stop 'Error: nz must be even'
+    If ( y_bc_type == 0 .And. grid_type /= 1 ) Stop 'ERROR: y_bc_type=0 (periodic y) requires grid_type=1 (uniform y grid)'
+    If ( ic_type == 6 .And. ( x_bc_type /= 0 .Or. y_bc_type /= 0 ) ) &
+       Stop 'ERROR: ic_type=6 (Taylor-Green Vortex) requires x_bc_type=0 and y_bc_type=0 (fully periodic box)'
 
-    ! restrictions for FFTW mapping
-    If ( Mod( nx_global   , 2     )/=0 ) Stop 'Error: nx must be even'
-    If ( Mod( nz_global   , 2     )/=0 ) Stop 'Error: nz must be even'
-    If ( Mod( nz_global-2 , nprocs)/=0 ) Stop 'nz-2 should be divisible by number of processors'
+    ! domain decomposition: resolves p_row/p_col (auto-factorized when both are 0, see decomp_auto_factorize), then builds this rank's x/z ownership ranges via 2decomp&fft's own distribute() algorithm, replicated locally -- no restriction that nx_global/nz_global divide evenly by p_row/p_col
+    Call decomp_init_pencil
+    If ( myid==0 ) Write(*,'(A,I0,A,I0)') '   p_row, p_col (resolved)     =  ', p_row, '  ', p_col
+    Call decomp_build_xz_ranges
 
-    ! number of interior z-planes per processor based on fftw decomposition
-    nslices_z = Nint( Real((nz_global-2))/Real(nprocs) ) 
-    
-    ! restriction for MPI boundaries
-    If ( nslices_z<2 ) Stop 'Error: nslices_z must be at least 2' 
-
-    ! domain decomposition. Must be consistent with fftw
-    Do i = 0, nprocs-1
-       ! range index for faces in each processor
-       k1_global(i)  = i*nslices_z  + 1
-       k2_global(i)  = k1_global(i) + nslices_z + 1
-       ! range index for centers in each processor
-       kg1_global(i) = i*nslices_z   + 1
-       kg2_global(i) = kg1_global(i) + nslices_z + 1
-    End Do    
-
-    ! remaining planes in last processor
-    k2_global (nprocs-1) = nz_global 
-    kg2_global(nprocs-1) = nz_global + 1
+    ! restriction for MPI boundaries (ghost-cell stencils need >=2 interior cells per rank)
+    If ( Any( (kg2_global-kg1_global-1) < 2 ) ) Stop 'Error: each rank needs at least 2 interior z-cells'
+    If ( Any( (ig2_global-ig1_global-1) < 2 ) ) Stop 'Error: each rank needs at least 2 interior x-cells'
 
     ! face points
-    nx = nx_global
+    nx = i2_global(myid) - i1_global(myid) + 1
     ny = ny_global
-    nz = k2_global(myid) - k1_global(myid) + 1 
+    nz = k2_global(myid) - k1_global(myid) + 1
 
     ! middle points
     nxm_global = nx_global - 1
     nym_global = ny_global - 1
     nzm_global = nz_global - 1
 
-    nxm = nx - 1
+    nxm = ig2_global(myid) - ig1_global(myid) + 1 - 2
     nym = ny - 1
-    nzm = kg2_global(myid) - kg1_global(myid) + 1 - 2  
-    
+    nzm = kg2_global(myid) - kg1_global(myid) + 1 - 2
+
     ! middle points + ghost cells
     nxg_global = nxm_global + 2
     nyg_global = nym_global + 2
@@ -119,14 +111,8 @@ Contains
 
     nxg = nxm + 2
     nyg = nym + 2
-    nzg = kg2_global(myid) - kg1_global(myid) + 1 
+    nzg = kg2_global(myid) - kg1_global(myid) + 1
 
-    ! size for last proccesor nz and nzm -> nze and nzme
-    nze  = nz
-    nzme = nzm
-    Call Mpi_bcast (  nze,1,MPI_integer,nprocs-1,MPI_COMM_WORLD,ierr )
-    Call Mpi_bcast ( nzme,1,MPI_integer,nprocs-1,MPI_COMM_WORLD,ierr )
-   
     ! Allocate main arrays
     If ( myid==0 ) Write(*,'(A)') ' [2/4] Allocating arrays ...'
     Allocate ( x_global (  nx_global),  y_global (  ny_global),  z_global (  nz_global)  )
@@ -154,13 +140,6 @@ Contains
     Allocate (Wo  ( nxm+2,  nym+2,    nz) )
     Allocate (Po  ( nxm+2,  nym+2, nzm+2) )
 
-    If (myid == 0) Then
-       Allocate (Uoo (    nx,  nym+2, nzme+2) ) ! z-planes modified for I/O
-       Allocate (Voo ( nxm+2,     ny, nzme+2) )
-       Allocate (Woo ( nxm+2,  nym+2,    nze) )
-       Allocate (Poo ( nxm+2,  nym+2, nzme+2) )
-    End If
-
     ! Auxiliary arrays
     Allocate ( term   ( nxg, nyg, nzm+2 ) ) 
     Allocate ( term_1 ( nxg, nyg, nzm+2 ) ) 
@@ -170,7 +149,7 @@ Contains
     Allocate ( rhs_uo ( 2:nx-1,  2:nyg-1, 2:nzg-1 ) ) 
     Allocate ( rhs_vo ( 2:nxg-1, 2:ny-1,  2:nzg-1 ) )
     Allocate ( rhs_wo ( 2:nxg-1, 2:nyg-1, 2:nz-1  ) )
-    Allocate ( rhs_p  ( 2:nxg-1, 2:nyg-1, 2:nzg   ) ) ! ONE EXTRA PLANE IN Z FOR GHOST CELL
+    Allocate ( rhs_p  ( 2:nxg,   2:nyg-1, 2:nzg   ) ) ! ONE EXTRA PLANE IN X AND Z FOR GHOST CELLS
     rhs_p = 0d0
     
     ! read data
@@ -189,7 +168,7 @@ Contains
 
     ! definie global grids from x_global, y_global and z_global (face to centers)
     ! local faces
-    x = x_global
+    x = x_global( i1_global(myid):i2_global(myid) )
     y = y_global
     z = z_global( k1_global(myid):k2_global(myid) )
 
@@ -205,7 +184,7 @@ Contains
     End Do
 
     ! local interior centers
-    xm = xm_global
+    xm = xm_global( ig1_global(myid):ig2_global(myid)-2 )
     ym = ym_global
     zm = zm_global( kg1_global(myid):kg2_global(myid)-2 )
 
@@ -222,7 +201,7 @@ Contains
     zg_global(1)              = zm_global(1)          - 2d0*(zm_global(1)-z_global(1))
     zg_global(nzm_global+2)   = zm_global(nzm_global) + 2d0*(z_global(nz_global)-zm_global(nzm_global))    
 
-    xg = xg_global
+    xg = xg_global( ig1_global(myid):ig2_global(myid) )
     yg = yg_global
     zg = zg_global( kg1_global(myid):kg2_global(myid) )
 
@@ -263,16 +242,14 @@ Contains
     ! local pressure z-plane
     Allocate ( buffer_p(2:nxg-1,2:nyg-1) ) 
 
-    ! Interior communications
-    Allocate ( buffer_us(nx ,nyg), buffer_ur(nx ,nyg) )
-    Allocate ( buffer_vs(nxg, ny), buffer_vr(nxg, ny) )
-    Allocate ( buffer_ws(nxg,nyg), buffer_wr(nxg,nyg) )
-    Allocate ( buffer_ps(2:nxg-1,2:nyg-1), buffer_pr(2:nxg-1,2:nyg-1) ) 
+    ! Interior communications; 3rd dim: 1=+z exchange, 2=-z exchange, issued concurrently
+    Allocate ( buffer_us(nx ,nyg,2), buffer_ur(nx ,nyg,2) )
+    Allocate ( buffer_vs(nxg, ny,2), buffer_vr(nxg, ny,2) )
+    Allocate ( buffer_ws(nxg,nyg,2), buffer_wr(nxg,nyg,2) )
+    Allocate ( buffer_ps(2:nxg-1,2:nyg-1), buffer_pr(2:nxg-1,2:nyg-1) )
 
     ! Fourier transform
-    If ( myid==0 ) Write(*,'(A)') ' [4/4] Initializing FFT (FFTW-MPI) ...'
-    ! initialize MPI FFTW
-    Call fftw_mpi_init()
+    If ( myid==0 ) Write(*,'(A)') ' [4/4] Initializing FFT (2decomp&fft pencil transposes) ...'
 
     ! Fourier constant grid spacing
     dx = dxmin
@@ -293,36 +270,54 @@ Contains
     mx_global = nxp_global - 1
     mz_global = nzp_global - 1
 
-    ! Get local sizes: local x-direction size (x is never domain-decomposed, in either path)
-    nxp = nxp_global
-    mx  =  mx_global
+    ! local z-slab count for physical-space rhs_p ghost fill (apply_periodic_xz_pressure), independent of the pencil-transpose chain below
+    Call z_periodic_partner(is_first_z, is_last_z, z_partner)
+    nzp = nzm
+    If ( is_last_z ) nzp = nzm - 1
+
+    ! Poisson pencil grid: sized to the Fourier-transform grid (nxp_global x nym_global x nzp_global), not the face-point grid decomp_init_pencil used
+    Call decomp_init_poisson_pencil( Int(nxp_global,Int32), nym_global, Int(nzp_global,Int32) )
+
+    ! this rank's local mode-count range in the y-pencil (post transpose chain)
+    mx = decomp_poisson%ysz(1) - 1
+    mz = decomp_poisson%ysz(3) - 1
+
+    ! y-first layout: rhs_p_hat(2:nyg-1, 0:mx, 0:mz) keeps each y-pencil
+    ! contiguous so Zgtsv can operate in-place without a temporary copy.
+    Allocate ( rhs_p_hat ( 2:nyg-1, 0:mx, 0:mz ) )
+
+    ! pencil work arrays for the transpose chain
+    Allocate ( poisson_y_r ( decomp_poisson%ysz(1), decomp_poisson%ysz(2), decomp_poisson%ysz(3) ) )
+    Allocate ( poisson_x_r ( decomp_poisson%xsz(1), decomp_poisson%xsz(2), decomp_poisson%xsz(3) ) )
+    Allocate ( poisson_x_c ( decomp_poisson%xsz(1), decomp_poisson%xsz(2), decomp_poisson%xsz(3) ) )
+    Allocate ( poisson_y_c ( decomp_poisson%ysz(1), decomp_poisson%ysz(2), decomp_poisson%ysz(3) ) )
+    Allocate ( poisson_z_c ( decomp_poisson%zsz(1), decomp_poisson%zsz(2), decomp_poisson%zsz(3) ) )
+
+    ! local (non-MPI) batched complex 1-D FFT in z, dimension 3 (fully local in the z-pencil)
+    plan_fz_fwd = fftw_plan_many_dft( 1_C_INT, [Int(nzp_global,C_INT)],                          &
+             Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT),                             &
+             poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
+             poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
+             FFTW_FORWARD, FFTW_MEASURE )
+    plan_fz_inv = fftw_plan_many_dft( 1_C_INT, [Int(nzp_global,C_INT)],                          &
+             Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT),                             &
+             poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
+             poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
+             FFTW_BACKWARD, FFTW_MEASURE )
 
     If ( x_bc_type == 0 ) Then
 
-       ! ---- periodic x: unchanged joint 2-D complex FFT path ----------
-       ! local data size in z direction (note dimension reversal)
-       alloc_local = fftw_mpi_local_size_2d(nzp_global, nxp_global, MPI_COMM_WORLD, nzp, local_k_offset)
-       mz  = nzp - 1
-
-       ! sanity check and restrictions in fftw
-       If ( (nzp/=nzm .And. myid/=nprocs-1) .Or. (nzp/=nzm-1 .And. myid==nprocs-1) ) Then
-          Write(*,*) nzp,nzm
-          Stop 'Error: something wrong in FFTW size'
-       End If
-
-       ! allocate variables
-       cplane_fft = fftw_alloc_complex(alloc_local)
-       Call c_f_pointer(cplane_fft,plane,[nxp,nzp])
-       plane_hat(0:,0:) => plane
-       ! y-first layout: rhs_p_hat(2:nyg-1, 0:mx, 0:mz) keeps each y-pencil
-       ! contiguous so Zgtsv can operate in-place without a temporary copy.
-       Allocate ( rhs_p_hat ( 2:nyg-1, 0:mx, 0:mz ) )
-
-       ! create MPI plan for forward DFT (note dimension reversal and transposed_out/in)
-       plan_d = fftw_mpi_plan_dft_2d( nzp_global, nxp_global, plane, plane_hat,           &
-                MPI_COMM_WORLD,  FFTW_FORWARD, ior(FFTW_MEASURE, FFTW_MPI_TRANSPOSED_OUT) )
-       plan_i = fftw_mpi_plan_dft_2d( nzp_global, nxp_global, plane_hat, plane,           &
-                MPI_COMM_WORLD, FFTW_BACKWARD, ior(FFTW_MEASURE, FFTW_MPI_TRANSPOSED_IN)  )
+       ! ---- periodic x: local batched complex 1-D FFT in x, dimension 1 (fully local in the x-pencil) ----------
+       plan_fx_fwd = fftw_plan_many_dft( 1_C_INT, [Int(nxp_global,C_INT)],                    &
+                Int(decomp_poisson%xsz(2)*decomp_poisson%xsz(3),C_INT),                       &
+                poisson_x_c, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),         &
+                poisson_x_c, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),         &
+                FFTW_FORWARD, FFTW_MEASURE )
+       plan_fx_inv = fftw_plan_many_dft( 1_C_INT, [Int(nxp_global,C_INT)],                    &
+                Int(decomp_poisson%xsz(2)*decomp_poisson%xsz(3),C_INT),                       &
+                poisson_x_c, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),         &
+                poisson_x_c, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),         &
+                FFTW_BACKWARD, FFTW_MEASURE )
 
        ! global Fourier coeficients with modified wave-number for the second derivative
        Allocate ( kxx(0:mx_global), kzz(0:mz_global) )
@@ -344,35 +339,11 @@ Contains
 
     Else
 
-       ! Inflow/outflow x: DCT-IV (quarter-wave cosine transform); joint-vs-batched transform rationale
-       alloc_local = fftw_mpi_local_size_many( 1_C_INT, [nzp_global], nxp_global,        &
-                     FFTW_MPI_DEFAULT_BLOCK, MPI_COMM_WORLD, nzp, local_k_offset )
-       mz  = nzp - 1
-
-       If ( (nzp/=nzm .And. myid/=nprocs-1) .Or. (nzp/=nzm-1 .And. myid==nprocs-1) ) Then
-          Write(*,*) nzp,nzm
-          Stop 'Error: something wrong in FFTW size'
-       End If
-
-       cplane_fft = fftw_alloc_complex(alloc_local)
-       Call c_f_pointer(cplane_fft,plane,[nxp,nzp])
-       plane_hat(0:,0:) => plane
-       Allocate ( rhs_p_hat ( 2:nyg-1, 0:mx, 0:mz ) )
-
-       ! Batched (howmany=nxp_global) distributed 1-D complex FFT in z; no-transpose-flags rationale
-       plan_d = fftw_mpi_plan_many_dft( 1_C_INT, [nzp_global], nxp_global,               &
-                FFTW_MPI_DEFAULT_BLOCK, FFTW_MPI_DEFAULT_BLOCK, plane, plane_hat,         &
-                MPI_COMM_WORLD, FFTW_FORWARD, FFTW_MEASURE )
-       plan_i = fftw_mpi_plan_many_dft( 1_C_INT, [nzp_global], nxp_global,               &
-                FFTW_MPI_DEFAULT_BLOCK, FFTW_MPI_DEFAULT_BLOCK, plane_hat, plane,         &
-                MPI_COMM_WORLD, FFTW_BACKWARD, FFTW_MEASURE )
-
-       ! Local (non-MPI) DCT-IV plan for x, batched over local z-lines; DCT-IV (FFTW_REDFT11) is self-inverse (up to 1/(2N) FFTW normalisation), so reused forward/backward
-       rplane_fft = fftw_alloc_real( int(nxp_global,C_SIZE_T) * int(nzp,C_SIZE_T) )
-       Call c_f_pointer( rplane_fft, xplane, [nxp_global,nzp] )
-       plan_dct = fftw_plan_many_r2r( 1_C_INT, [Int(nxp_global,C_INT)], Int(nzp,C_INT),  &
-                  xplane, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),       &
-                  xplane, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),       &
+       ! Inflow/outflow x: local (non-MPI) batched DCT-IV in x, dimension 1 (fully local in the x-pencil); DCT-IV (FFTW_REDFT11) is self-inverse (up to 1/(2N) FFTW normalisation), so reused forward/backward
+       plan_dct = fftw_plan_many_r2r( 1_C_INT, [Int(nxp_global,C_INT)],                       &
+                  Int(decomp_poisson%xsz(2)*decomp_poisson%xsz(3),C_INT),                     &
+                  poisson_x_r, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),       &
+                  poisson_x_r, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),       &
                   [FFTW_REDFT11], FFTW_MEASURE )
 
        ! DCT-IV (quarter-wave) modified wavenumber; BC/null-space rationale
@@ -390,38 +361,43 @@ Contains
 
     End If
 
-    ! FFTW+MPI local-to-global mode mapping (transposed_out/in); periodic-only applicability rationale
-    If ( x_bc_type == 0 ) Then
+    ! Wall-normal (y) periodicity (y_bc_type==0): local batched complex 1-D FFT
+    ! in y, dimension 2 (fully local in the y-pencil -- y is never MPI-split).
+    ! Same "last interior cell is a redundant duplicate of the first" convention
+    ! as the periodic x/z directions (nxp_global=nxm_global-1): the periodic FFT
+    ! length is nyp = decomp_poisson%ysz(2)-1 = nym_global-1, NOT the full
+    ! nym_global -- the excluded last cell (index nyg-1) is reconstructed by a
+    ! plain copy from index 2 after the solve (see solve_poisson_equation),
+    ! exactly mirroring apply_periodic_xz_pressure's rhs_p(nxg-1,:,:)=rhs_p(2,:,:).
+    ! Batched over the stride-1 x-index only (dim1); the z-index (dim3) is
+    ! looped over at execute time in solve_poisson_equation, since
+    ! fftw_plan_many_dft can only batch over one additional stride/dist pair.
+    If ( y_bc_type == 0 ) Then
 
-       ! this needs (mz_global+1)*(mx_global+1)/nprocs to be an integer
-       If ( Mod((mz_global+1)*(mx_global+1),nprocs)/=0 ) Stop 'Error: (mz_global+1)*(mx_global+1)/nprocs should be an integer'
-       Allocate ( imode_map_fft(0:mx_global,0:mz) )
-       Allocate ( kmode_map_fft(0:mx_global,0:mz) )
-       Do i = 0, mx_global
-          Do k = 0, mz
-             pos = i + (mx_global+1)*k + (mz_global+1)*(mx_global+1)/nprocs*myid
-             imode_map_fft(i,k) = Floor( Real(pos/(mz_global+1)) )
-             kmode_map_fft(i,k) = Mod  ( pos, mz_global+1 )
-          end Do
-       End Do
+       plan_fy_fwd = fftw_plan_many_dft( 1_C_INT, [Int(decomp_poisson%ysz(2)-1,C_INT)],                      &
+                Int(decomp_poisson%ysz(1),C_INT),                                                            &
+                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(decomp_poisson%ysz(1),C_INT), 1_C_INT, &
+                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(decomp_poisson%ysz(1),C_INT), 1_C_INT, &
+                FFTW_FORWARD, FFTW_MEASURE )
+       plan_fy_inv = fftw_plan_many_dft( 1_C_INT, [Int(decomp_poisson%ysz(2)-1,C_INT)],                      &
+                Int(decomp_poisson%ysz(1),C_INT),                                                            &
+                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(decomp_poisson%ysz(1),C_INT), 1_C_INT, &
+                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(decomp_poisson%ysz(1),C_INT), 1_C_INT, &
+                FFTW_BACKWARD, FFTW_MEASURE )
 
-       ! Sanity check for FFTW mapping
-       Allocate(A_kmodes      (0:mx_global,0:mz_global))
-       Allocate(A_kmodes_local(0:mx_global,0:mz_global))
-       A_kmodes       = 0
-       A_kmodes_local = 0
-       Do i = 0, mx_global
-          Do k = 0, mz
-             A_kmodes_local( imode_map_fft(i,k), kmode_map_fft(i,k) ) =  A_kmodes_local(imode_map_fft(i,k), kmode_map_fft(i,k) ) + 1
-          end Do
+       ! global Fourier coefficients with modified wave-number for the second derivative; uniform y grid (grid_type=1 enforced above)
+       Allocate ( kyy(0:decomp_poisson%ysz(2)-2) )
+       kyy = 0d0
+       dy  = y_global(2) - y_global(1)
+       Do j = 0, Ceiling( Real(decomp_poisson%ysz(2)-1)/2d0 )
+          kyy(j) = 2d0*( dcos(2d0*pi*Real(j,8)/Real(decomp_poisson%ysz(2)-1,8)) - 1d0 )/dy**2d0
        End Do
-       Call MPI_AllReduce(A_kmodes_local,A_kmodes,Int((mx_global+1)*(mz_global+1),Int32),MPI_integer,MPI_sum,MPI_COMM_WORLD,ierr)
-       If ( Any(A_kmodes>1) .Or. Any(A_kmodes==0) ) Stop 'Error: wrong combination of nx, nz and processors'
-       Deallocate(A_kmodes)
-       Deallocate(A_kmodes_local)
+       Do j = Ceiling( Real(decomp_poisson%ysz(2)-1)/2d0 )+1, decomp_poisson%ysz(2)-2
+          kyy(j) = 2d0*( dcos(2d0*pi*Real(-(decomp_poisson%ysz(2)-1)+j,8)/Real(decomp_poisson%ysz(2)-1,8)) - 1d0 )/dy**2d0
+       End Do
 
     End If
-     
+
     ! Tridiagonal linear solver
     If ( myid==0 ) Write(*,*) 'initializing pressure solver...'
     Allocate ( pivot(nyg) )
@@ -519,9 +495,6 @@ Contains
        Allocate( Fcs1(2:nxg-1, 2:nyg-1, 2:nzg-1) )
        Allocate( Fcs2(2:nxg-1, 2:nyg-1, 2:nzg-1) )
        Allocate( Fcs3(2:nxg-1, 2:nyg-1, 2:nzg-1) )
-       If (myid == 0) Then
-          Allocate( Cscal_oo(1:nxg, 1:nyg, 1:kg2_global(nprocs-1)-kg1_global(nprocs-1)+1) )
-       End If
        If ( restart == 1 .And. scalar_restart == 1 ) Then
           Call read_scalar_restart
        Else
@@ -529,6 +502,20 @@ Contains
        End If
        Call compute_settling_velocity
        If (myid == 0) Write(*,'(A,E12.4,A)') '   ws (Soulsby 1997) = ', ws, ' m/s'
+    End If
+
+    ! Boussinesq temperature
+    If ( boussinesq_flag >= 1 ) Then
+       Allocate( Tscal  (1:nxg, 1:nyg, 1:nzg) )
+       Allocate( Tscal_o(1:nxg, 1:nyg, 1:nzg) )
+       Allocate( Ft1(2:nxg-1, 2:nyg-1, 2:nzg-1) )
+       Allocate( Ft2(2:nxg-1, 2:nyg-1, 2:nzg-1) )
+       Allocate( Ft3(2:nxg-1, 2:nyg-1, 2:nzg-1) )
+       If ( restart == 1 .And. scalar_restart == 1 ) Then
+          Call read_temperature_restart
+       Else
+          Call init_temperature_profile
+       End If
     End If
 
     ! Wall-models
@@ -546,8 +533,11 @@ Contains
 
     ! Push host values once for scalars `!$acc declare create`d in global.f90 (needed by !$acc routine seq procedures)
     !$acc update device(nx,ny,nz,nxg,nyg,nzg,nu,pi,inflow_type,inflow_Uconst,sem_n_eddies,sem_length_scale,sem_seed,sem_eddy_placement,sem_use_esem,sem_divergence_free)
+    !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall)
     ! OpenACC: static grid arrays copied once, scratch arrays created once, never re-transferred
     !$acc enter data copyin(y,yg,z,zg,weight_y_0,weight_y_1)
+    ! x,xg needed on device by compute_rhs_scalar_core (non-uniform-grid-style stencil, even though x itself is uniform)
+    !$acc enter data copyin(x,xg)
     !$acc enter data create(term,term_1,term_2)
     ! Evolving per-substage fields: allocated here (create, not copyin) so time_integration.f90's per-RK-substage update device/host calls have a target
     !$acc enter data create(U,V,W,nu_t,Fu1,Fv1,Fw1,Fu2,Fv2,Fw2,Fu3,Fv3,Fw3)
@@ -555,6 +545,16 @@ Contains
     !$acc update device(U,V,W)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
     !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z)
+    ! Boussinesq temperature: stays device-resident end-to-end so compute_rhs_v can read it directly
+    If ( boussinesq_flag >= 1 ) Then
+       !$acc enter data create(Tscal,Tscal_o,Ft1,Ft2,Ft3)
+       !$acc update device(Tscal,Tscal_o)
+    End If
+    ! Sediment scalar: device residency required by the shared compute_rhs_scalar_core (see scalar_transport.f90)
+    If ( sediment_flag >= 1 ) Then
+       !$acc enter data create(Cscal,Cscal_o,Fcs1,Fcs2,Fcs3)
+       !$acc update device(Cscal,Cscal_o)
+    End If
 #ifdef GPU_POISSON
     ! rhs_p_hat stays device-resident end-to-end through the whole Poisson stage
     !$acc enter data create(rhs_p_hat)
@@ -657,5 +657,40 @@ Contains
        '   C_ic_type = ', C_ic_type, '  Max Cscal = ', MaxVal(Cscal)
 
   End Subroutine init_scalar_profile
+
+  ! Set the initial temperature profile; T_ic_type 0=uniform (T_ref), 1=linear gradient in y from the bottom wall
+  Subroutine init_temperature_profile
+
+    Integer(Int32) :: jj
+    Real   (Int64) :: y0
+
+    y0 = yg(1)
+
+    Select Case (T_ic_type)
+
+    Case (1)   ! Linear gradient: T = T_ref + T_ic_grad*(y-y0)
+       Do jj = 1, nyg
+          Tscal(:,jj,:) = T_ref + T_ic_grad * ( yg(jj) - y0 )
+       End Do
+
+    Case Default   ! Uniform
+       Tscal = T_ref
+
+    End Select
+
+    Tscal_o = Tscal
+
+    ! Zero temperature perturbation inside IBM solid cells so the IC never persists inside solid and pollutes adjacent fluid via diffusion
+    If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
+       Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) <= 0d0 )
+          Tscal(2:nxg-1, 2:nyg-1, 2:nzg-1) = T_ref
+       End Where
+       Tscal_o = Tscal
+    End If
+
+    If (myid == 0) Write(*,'(A,I1,A,E12.4)') &
+       '   T_ic_type = ', T_ic_type, '  Max Tscal = ', MaxVal(Tscal)
+
+  End Subroutine init_temperature_profile
 
 End Module initialization

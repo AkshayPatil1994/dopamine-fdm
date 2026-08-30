@@ -9,7 +9,7 @@ Module global
   Implicit None
 
   ! FFTW
-  Include 'fftw3-mpi.f03'  
+  Include 'fftw3.f03'
 
   ! Declarations
 
@@ -41,8 +41,16 @@ Module global
   Real(Int64) :: nu
   !$acc declare create(nu)
 
+  ! convective-term discretization: 0=skew-symmetric (default, recommended -- suppresses
+  ! aliasing-driven ringing near sharp/immersed-boundary gradients), 1=pure divergence-form central
+  ! Host-only: consumed once per RHS call to derive a blend weight, never referenced on device.
+  Integer(Int32) :: advection_scheme = 0
+
   ! global face points
   Integer(Int32) :: nx_global, ny_global, nz_global
+
+  ! 2decomp&fft process grid (0,0 = let the library auto-factorize nprocs)
+  Integer(Int32) :: p_row = 0, p_col = 0
 
   ! global roughness points
   Real(Int64) :: ks
@@ -56,6 +64,7 @@ Module global
   ! IBM control flags: ibm_input_mode 0=no body,1=SDF ghost-cell IBM; ibm_wall_model_flag 0=DNS no-slip,1=log-law EQWM
   Integer(Int32) :: ibm_input_mode      = 0            ! default: no IBM body
   Character(200) :: ibm_sdf_file        = 'SDF_in'     ! cell-centre SDF file
+  Character(200) :: ibm_objid_file      = ''           ! optional per-solid ID field (GenSDF sdfp_objid.bin); '' = single uniform IBM condition
   Integer(Int32) :: ibm_wall_model_flag = 0             ! default: DNS no-slip
 
   !  y-wall boundary condition type
@@ -103,7 +112,6 @@ Module global
   ! local velocities and pressure
   Real(Int64), Allocatable, Dimension(:,:,:) :: U,V,W,P
   Real(Int64), Allocatable, Dimension(:,:,:) :: Uo,Vo,Wo,Po
-  Real(Int64), Allocatable, Dimension(:,:,:) :: Uoo,Voo,Woo,Poo
 
   ! local auxiliary 
   Real(Int64), Allocatable, Dimension(:,:,:) :: term_1, term_2, term
@@ -121,44 +129,59 @@ Module global
   Real(Int64), Allocatable, Dimension(:,:)   :: buffer_ue, buffer_ve, buffer_we, buffer_wi, buffer_ce
   Real(Int64), Allocatable, Dimension(:,:)   :: buffer_p
 
-  ! local auxiliary arrays for MPI_sendrev interior planes
-  Real(Int64), Allocatable, Dimension(:,:) :: buffer_us, buffer_ur
-  Real(Int64), Allocatable, Dimension(:,:) :: buffer_vs, buffer_vr
-  Real(Int64), Allocatable, Dimension(:,:) :: buffer_ws, buffer_wr
-  Real(Int64), Allocatable, Dimension(:,:) :: buffer_ps, buffer_pr
+  ! local auxiliary arrays for MPI_isend/irecv interior planes; 3rd dim: 1=+z exchange, 2=-z exchange, issued concurrently
+  Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_us, buffer_ur
+  Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_vs, buffer_vr
+  Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_ws, buffer_wr
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_ps, buffer_pr
   
-  ! local auxiliary planes for FFTW
-  Type(C_PTR) :: cplane_fft
-  Complex(C_DOUBLE_COMPLEX), Pointer, Dimension(:,:) :: plane, plane_hat
+  ! local pencil work arrays for the Poisson pencil-transpose chain (2decomp&fft); rhs_p_hat below (y-pencil, post z-FFT) is shared with the GPU_POISSON path
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: poisson_y_r   ! y-pencil, real: interfaces with rhs_p
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: poisson_x_r   ! x-pencil, real: DCT-IV path only
+  Complex(Int64), Allocatable, Dimension(:,:,:) :: poisson_x_c   ! x-pencil, complex
+  Complex(Int64), Allocatable, Dimension(:,:,:) :: poisson_y_c   ! y-pencil, complex: also the Zgtsv operand
+  Complex(Int64), Allocatable, Dimension(:,:,:) :: poisson_z_c   ! z-pencil, complex
 
-  ! Fourier points and wave numbers 
-  Integer(C_INTPTR_T) :: nxp_global, nzp_global, local_k_offset
-  Integer(C_INTPTR_T) :: nxp, nzp
+  ! Fourier points and wave numbers
+  Integer(C_INTPTR_T) :: nxp_global, nzp_global
+  Integer(Int32)      :: nzp   ! local z-slab count for physical-space rhs_p ghost fill (old 1D z-slab convention; unrelated to the pencil-transpose chain above, unchanged by the 2D-pencil Poisson port until physical-space arrays move to the pencil layout too)
   Integer(C_INTPTR_T) :: mx_global, mz_global
-  Integer(C_INTPTR_T) :: mx, mz
+  Integer(C_INTPTR_T) :: mx, mz   ! this rank's local mode-count range in the y-pencil after the transpose chain (== mx_global/mz_global whenever x/z aren't split, e.g. nprocs==1)
   Real   (Int64)      :: dx, dz
-  Real   (Int64), Dimension(:), Allocatable :: kxx, kzz
+  Real   (Int64), Dimension(:), Allocatable :: kxx, kyy, kzz
 
-  ! Mappings for fft modes
-  Integer(Int64), Dimension(:,:), Allocatable :: imode_map_fft, kmode_map_fft
-  
-  ! FFTW plans
-  Integer(C_INTPTR_T) :: alloc_local
-  Type   (C_PTR)      :: plan_d, plan_i
+  ! local (non-MPI) FFTW plans for the post-transpose 1-D transforms
+  Type(C_PTR) :: plan_fx_fwd, plan_fx_inv   ! complex 1-D FFT in x (periodic path)
+  Type(C_PTR) :: plan_fy_fwd, plan_fy_inv   ! complex 1-D FFT in y (periodic-y path only, y_bc_type==0)
+  Type(C_PTR) :: plan_fz_fwd, plan_fz_inv   ! complex 1-D FFT in z (both paths)
+  Type(C_PTR) :: plan_dct                    ! real 1-D DCT-IV in x (inflow/outflow path)
 
   ! streamwise (x) pressure/velocity BC selector: 0=periodic, 1=inflow/outflow
   Integer(Int32) :: x_bc_type  = 0
 
-  ! local (non-MPI; x is never domain-decomposed) real work array and plan
-  ! for the streamwise DCT-IV transform, used only when x_bc_type==1
-  Type(C_PTR) :: rplane_fft
-  Real(C_DOUBLE), Pointer, Dimension(:,:) :: xplane
-  Type(C_PTR) :: plan_dct
+  ! wall-normal (y) pressure/velocity BC selector: 0=periodic, 1=wall (uses bc_face_ylo/yhi as today)
+  Integer(Int32) :: y_bc_type  = 1
 
-  ! &INFLOW streamwise inflow condition (x_bc_type==1 only): inflow_type 0=constant, 1=SEM
+  ! &INFLOW streamwise inflow condition (x_bc_type==1 only): inflow_type 0=constant, 1=SEM, 2=recycled precursor slice
   Integer(Int32) :: inflow_type        = 0
   Real   (Int64) :: inflow_Uconst      = 0d0
   Character(200) :: inflow_profile_file = 'inflow_profile.dat'
+
+  ! recycled precursor inflow (inflow_type==2): reads an x-normal slice produced by
+  ! probe_output's slice writer (dir='x') from an independent donor simulation with
+  ! identical ny/nz, and imposes it as a time-interpolated Dirichlet inflow plane;
+  ! inflow_recycle_file is the donor's slice_fileout base name (reads <file>.bin,
+  ! <file>_meta.txt, <file>_times.bin)
+  Character(200) :: inflow_recycle_file    = ''
+  Integer(Int32) :: inflow_recycle_loop    = 1     ! 1: wrap the donor time series when this run's t exceeds its range; 0: clamp to the last frame
+  Real   (Int64) :: inflow_recycle_t_offset = 0d0  ! donor_time = t + inflow_recycle_t_offset, before looping/clamping
+  ! spanwise (z) shift on every donor-loop wrap (inflow_recycle_loop==1 only), to avoid the
+  ! spurious phase-locked streamwise structure spacing (Uconv*donor_duration) that a plain
+  ! repeated loop would inject -- same purpose as sem.f90's per-recycle eddy re-randomization
+  Integer(Int32) :: inflow_recycle_shift_z = 1
+  Integer(Int32) :: inflow_recycle_seed    = 12345
+  ! optional SEM inflow mean-temperature profile (y T columns); unset -> mean_profile_T falls back to T_ref
+  Character(200) :: inflow_temperature_file = ''
   Integer(Int32) :: sem_profile_format = 0   ! 0=Reynolds-stress (y U V W uu vv ww uv), 1=wind-tunnel TI (see sem.md)
   Real   (Int64) :: sem_Lscale_ratio_y = 0.3d0   ! fallback Loy/Lox when only a length scale's x-component is given (sem_profile_format==1)
   Real   (Int64) :: sem_Lscale_ratio_z = 0.2d0   ! fallback Loz/Lox, same as above
@@ -239,7 +262,7 @@ Module global
   Real   (Int64) :: Lx_i, Ly_i, Lz_i
   Real   (Int64) :: alphaGrid
 
-  ! Initial condition type (ic_type 1-4) and noise_percent
+  ! Initial condition type (ic_type 1-6; 6=Taylor-Green Vortex, requires x_bc_type=0 and y_bc_type=0) and noise_percent
   Integer(Int32) :: ic_type      = 1
   Real   (Int64) :: noise_percent = 5.0d0
 
@@ -252,6 +275,9 @@ Module global
   ! Ghost-cell IBM data structures (phi, Umask_cc, ghost_?_* lists)
   Real   (Int64), Allocatable, Dimension(:,:,:) :: phi
   Real   (Int64), Allocatable, Dimension(:,:,:) :: Umask_cc
+
+  ! Per-cell solid ID from ibm_objid_file (0 = unset/legacy single-object); rounded to Integer when consumed
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: ibm_obj_id
 
   ! ghost-cell lists for U (x-faces), V (y-faces), W (z-faces)
   Integer(Int32) :: n_ghost_u, n_ghost_v, n_ghost_w
@@ -306,6 +332,7 @@ Module global
   Real   (Int64), Allocatable, Dimension(:)   :: ghost_cc_dGB     ! (   n_ghost_cc)
   Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_img_cc  ! (3, n_ghost_cc)
   Real   (Int64), Allocatable, Dimension(:,:) :: ghost_cc_wgt_cc  ! (8, n_ghost_cc)
+  Integer(Int32), Allocatable, Dimension(:)   :: ghost_cc_objid   ! (   n_ghost_cc) per-ghost-point solid ID, resolved from ibm_obj_id
 
   ! Precomputed staggered-velocity image-point stencils for viscous-traction export in sample_ibm_surface (built in build_ghost_list_cc)
   Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_img_u  ! (3, n_ghost_cc)
@@ -343,11 +370,31 @@ Module global
   Real   (Int64) :: ws            = 0d0     ! settling velocity (computed at init)
   Real   (Int64) :: C_ref         = 0d0     ! reference near-bed concentration
   Real   (Int64) :: C_ic_height   = 0d0     ! slab height for C_ic_type==3 [m]
+  !$acc declare create(grav)
 
   ! Scalar concentration field (cell-centred: nxg x nyg x nzg)
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cscal, Cscal_o
-  Real(Int64), Allocatable, Dimension(:,:,:) :: Cscal_oo          ! rank-0 I/O buffer
   Real(Int64), Allocatable, Dimension(:,:,:) :: Fcs1, Fcs2, Fcs3  ! RK3 stage RHS
+
+  ! Boussinesq thermal stratification: boussinesq_flag 0=off,1=on; gravity acts along -y; T_bc_bot/top 0=adiabatic,1=isothermal
+  Integer(Int32) :: boussinesq_flag = 0
+  Real   (Int64) :: beta_T   = 0d0    ! thermal expansion coefficient [1/K]
+  Real   (Int64) :: T_ref    = 0d0    ! reference temperature for buoyancy [K]
+  Real   (Int64) :: Pr       = 0.7d0  ! molecular Prandtl number
+  Real   (Int64) :: Pr_t     = 0.85d0 ! turbulent Prandtl number
+  Integer(Int32) :: T_bc_bot = 0, T_bc_top = 0
+  Real   (Int64) :: T_wall_bot = 0d0, T_wall_top = 0d0
+  Integer(Int32) :: T_ic_type = 0     ! 0=uniform (T_ref), 1=linear gradient in y
+  Real   (Int64) :: T_ic_grad = 0d0   ! [K/m], used when T_ic_type==1
+  ! Per-object IBM thermal BC by solid ID (0=adiabatic, 1=isothermal against ibm_T_wall(id); 0 is the default/legacy slot).
+  Integer(Int32), Parameter :: max_ibm_objects = 15
+  Integer(Int32) :: ibm_T_bc_type(0:max_ibm_objects) = 0
+  Real   (Int64) :: ibm_T_wall   (0:max_ibm_objects) = 0d0
+  !$acc declare create(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,ibm_T_bc_type,ibm_T_wall)
+
+  ! Temperature field (cell-centred: nxg x nyg x nzg)
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Tscal, Tscal_o
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Ft1, Ft2, Ft3     ! RK3 stage RHS
 
   ! Reynolds stress budget (RSB) control and output file layout
   Integer(Int32) :: rsb_active  = 0

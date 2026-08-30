@@ -4,7 +4,7 @@ Module poisson_gpu
   Use iso_fortran_env, Only : Int32, Int64
   Use cufft
   Use cusparse
-  Use global, Only : nxp_global, nzp_global, mx, mz, nyg, rhs_p, rhs_p_hat, Dyy, kxx, kzz, x_bc_type, pi
+  Use global, Only : nxp_global, nzp_global, mx, mz, nyg, rhs_p, rhs_p_hat, Dyy, kxx, kyy, kzz, x_bc_type, y_bc_type, pi
 
   Implicit None
 
@@ -13,6 +13,10 @@ Module poisson_gpu
   Integer :: nslabs   ! number of interior y-planes batched per transform (nyg-2)
 
   Complex(Int64), Allocatable :: slab(:,:,:)
+
+  ! Genuine 3D periodic cuFFT transform (y_bc_type==0 AND x_bc_type==0 only)
+  Integer :: plan_fwd3d, plan_bwd3d
+  Complex(Int64), Allocatable :: cube3d(:,:,:)   ! (nx1, nslabs, nz1), device-resident
 
   ! DCT-IV (x_bc_type==1) state: zero-padded 4N-point Z2Z FFT + twiddle, then z-FFT
   Integer :: plan_dct_L, plan_z, Lx
@@ -36,7 +40,24 @@ Contains
     nz1    = Int(nzp_global)
     nslabs = nyg - 2
 
-    If ( x_bc_type == 0 ) Then
+    If ( y_bc_type == 0 ) Then
+
+       If ( x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
+
+       ! Same "last interior cell is a redundant duplicate of the first" convention as
+       ! periodic x/z (nxp_global=nxm_global-1): the periodic y transform only covers
+       ! nslabs-1 independent cells; the excluded last cell (rhs_p y-index nyg-1) is
+       ! reconstructed by a plain copy from index 2 in projection.f90, after
+       ! apply_periodic_xz_pressure -- mirrors that routine's own x-periodic fixup.
+       Allocate( cube3d( nx1, nslabs-1, nz1 ) )
+       !$acc enter data create(cube3d)
+
+       ! cufftPlan3d dims use the reversed-relative-to-Fortran convention (see cufftPlanMany note below)
+       ierr =         cufftPlan3d( plan_fwd3d, nz1, nslabs-1, nx1, CUFFT_Z2Z )
+       ierr = ierr + cufftPlan3d( plan_bwd3d, nz1, nslabs-1, nx1, CUFFT_Z2Z )
+       If ( ierr /= 0 ) Stop 'ERROR: cuFFT 3D periodic plan creation failed'
+
+    Else If ( x_bc_type == 0 ) Then
 
        Allocate( slab( nx1, nz1, nslabs ) )
        !$acc enter data create(slab)
@@ -140,6 +161,87 @@ Contains
     !$acc end parallel loop
 
   End Subroutine gpu_inverse_transform_all_slabs
+
+  !> Forward 3D periodic cuFFT transform of the whole domain in one call (y_bc_type==0, x_bc_type==0, nprocs==1 only)
+  Subroutine gpu_forward_transform_3d
+
+    Integer :: ix, iy, iz, ierr, nx1, nz1
+
+    If ( .Not. plans_created ) Call gpu_poisson_init
+
+    nx1 = Int(nxp_global)
+    nz1 = Int(nzp_global)
+
+    !$acc parallel loop collapse(3) present(rhs_p,cube3d)
+    Do iz = 1, nz1
+       Do iy = 1, nslabs-1
+          Do ix = 1, nx1
+             cube3d(ix,iy,iz) = dcmplx( rhs_p(ix+1, iy+1, iz+1) )
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !$acc host_data use_device(cube3d)
+    ierr = cufftExecZ2Z( plan_fwd3d, cube3d, cube3d, CUFFT_FORWARD )
+    !$acc end host_data
+    If ( ierr /= 0 ) Stop 'ERROR: cuFFT 3D forward exec failed'
+
+  End Subroutine gpu_forward_transform_3d
+
+  !> Elementwise divide by (kxx+kyy+kzz) in Fourier space; (0,0,0) mode fixed to zero (periodic Poisson null-space)
+  Subroutine gpu_solve_periodic_3d
+
+    Integer :: ix, iy, iz, mx_i, mz_i, my_i
+
+    mx_i = Int(mx,Int32)
+    mz_i = Int(mz,Int32)
+    my_i = nslabs - 2   ! max 0-based y-mode index (nslabs-1 independent y samples)
+
+    !$acc data copyin(kxx,kyy,kzz) present(cube3d)
+    !$acc parallel loop collapse(3) present(kxx,kyy,kzz,cube3d)
+    Do iz = 0, mz_i
+       Do iy = 0, my_i
+          Do ix = 0, mx_i
+             If ( ix==0 .And. iy==0 .And. iz==0 ) Then
+                cube3d(1,1,1) = (0d0,0d0)
+             Else
+                cube3d(ix+1,iy+1,iz+1) = cube3d(ix+1,iy+1,iz+1) / ( kxx(ix) + kyy(iy) + kzz(iz) )
+             End If
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+    !$acc end data
+
+  End Subroutine gpu_solve_periodic_3d
+
+  !> Inverse 3D periodic cuFFT transform, normalised by nx1*nslabs*nz1
+  Subroutine gpu_inverse_transform_3d
+
+    Integer :: ix, iy, iz, ierr, nx1, nz1
+    Real(Int64) :: norm
+
+    nx1  = Int(nxp_global)
+    nz1  = Int(nzp_global)
+    norm = Real(nx1,Int64) * Real(nslabs-1,Int64) * Real(nz1,Int64)
+
+    !$acc host_data use_device(cube3d)
+    ierr = cufftExecZ2Z( plan_bwd3d, cube3d, cube3d, CUFFT_INVERSE )
+    !$acc end host_data
+    If ( ierr /= 0 ) Stop 'ERROR: cuFFT 3D inverse exec failed'
+
+    !$acc parallel loop collapse(3) present(cube3d,rhs_p)
+    Do iz = 1, nz1
+       Do iy = 1, nslabs-1
+          Do ix = 1, nx1
+             rhs_p(ix+1, iy+1, iz+1) = Real(cube3d(ix,iy,iz),Int64) / norm
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+  End Subroutine gpu_inverse_transform_3d
 
   !> Forward DCT-IV(x) then complex FFT(z) of every y-slab of rhs_p into rhs_p_hat, batched; x_bc_type==1 only, direct kx=i/kz=k indexing
   Subroutine gpu_forward_transform_dct_slabs
