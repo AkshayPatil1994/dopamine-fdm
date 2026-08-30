@@ -189,7 +189,7 @@ contains
     end subroutine do_sweep
 
 #ifdef GPU_SDF
-    !  GPU diagonal-wavefront reformulation of do_sweep (same dependency structure, reordered).
+    !  GPU diagonal-wavefront reformulation of do_sweep (same dependency structure, reordered — see docs/external-lib-guidance/GenSDF_GPU_porting.md).
     subroutine do_sweep_wavefront_gpu(sdf, xstart, xend, ystart, yend, zstart, zend, &
                                        sx_dir, sy_dir, sz_dir, xin, yin, zin, &
                                        ghost_left, ghost_right)

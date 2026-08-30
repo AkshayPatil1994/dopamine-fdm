@@ -459,6 +459,96 @@ contains
         end if
     end subroutine parse_vertex_normal_pair
 
+    ! Load geometry for one or more solids, tagging every face with its owning solid ID.
+    subroutine load_multi_object_geometry(procid, filename, vertices, normals, faces, face_normals, &
+                                          face_solid_id, num_vertices, num_normals, num_faces, num_solids)
+        ! `filename` is a single .stl/.obj file (solid ID 1) or a `.list` manifest (one path per line, 1-based order is the solid ID).
+        implicit none
+        integer,  intent(in)  :: procid
+        character(len=*), intent(in) :: filename
+        real(dp), allocatable, intent(out) :: vertices(:,:), normals(:,:)
+        integer,  allocatable, intent(out) :: faces(:,:), face_normals(:,:)
+        integer,  allocatable, intent(out) :: face_solid_id(:)
+        integer,  intent(out) :: num_vertices, num_normals, num_faces, num_solids
+
+        character(len=512), allocatable :: manifest(:)
+        real(dp), allocatable :: v_i(:,:), n_i(:,:)
+        integer,  allocatable :: f_i(:,:), fn_i(:,:)
+        integer :: nv_i, nn_i, nf_i
+        integer :: solid, unit, ios, nlines
+        character(len=512) :: line, aline
+        character(len=4)   :: ext
+        integer :: ii, pos, vbase, nbase, fbase
+
+        ii = len_trim(filename)
+        ext = filename(max(1,ii-3):ii)
+
+        if (ext == '.lst' .or. filename(max(1,ii-4):ii) == '.list') then
+            ! Count manifest entries first
+            open(newunit=unit, file=trim(filename), status='old', action='read', iostat=ios)
+            if (ios /= 0) then
+                print *, 'Error opening manifest file: ', trim(filename); stop
+            end if
+            nlines = 0
+            do
+                read(unit,'(A)',iostat=ios) line
+                if (ios /= 0) exit
+                aline = adjustl(line)
+                pos = verify(aline, ' ')
+                if (pos == 0 .or. aline(pos:pos) == '#') cycle
+                nlines = nlines + 1
+            end do
+            rewind(unit)
+            allocate(manifest(nlines))
+            nlines = 0
+            do
+                read(unit,'(A)',iostat=ios) line
+                if (ios /= 0) exit
+                aline = adjustl(line)
+                pos = verify(aline, ' ')
+                if (pos == 0 .or. aline(pos:pos) == '#') cycle
+                nlines = nlines + 1
+                manifest(nlines) = trim(aline)
+            end do
+            close(unit)
+        else
+            allocate(manifest(1))
+            manifest(1) = trim(filename)
+        end if
+
+        num_solids   = size(manifest)
+        num_vertices = 0; num_normals = 0; num_faces = 0
+        allocate(vertices(3,0), normals(3,0), faces(3,0), face_normals(3,0), face_solid_id(0))
+
+        do solid = 1, num_solids
+            ii = len_trim(manifest(solid))
+            ext = manifest(solid)(max(1,ii-3):ii)
+            if (ext == '.stl' .or. ext == '.STL') then
+                call read_stl_binary(procid, trim(manifest(solid)), v_i, n_i, f_i, fn_i, nv_i, nn_i, nf_i)
+            else
+                call read_obj(procid, trim(manifest(solid)), v_i, n_i, f_i, fn_i, nv_i, nn_i, nf_i)
+            end if
+
+            vbase = num_vertices; nbase = num_normals; fbase = num_faces
+
+            vertices     = reshape([vertices, v_i],           [3, vbase + nv_i])
+            normals      = reshape([normals,  n_i],            [3, nbase + nn_i])
+            faces        = reshape([faces,    f_i + vbase],    [3, fbase + nf_i])
+            face_normals = reshape([face_normals, fn_i + nbase], [3, fbase + nf_i])
+            face_solid_id = [face_solid_id, spread(solid, 1, nf_i)]
+
+            num_vertices = vbase + nv_i
+            num_normals  = nbase + nn_i
+            num_faces    = fbase + nf_i
+
+            deallocate(v_i, n_i, f_i, fn_i)
+        end do
+
+        if (procid == 0) then
+            print *, 'Loaded ', num_solids, ' solid(s), total faces: ', num_faces
+        end if
+    end subroutine load_multi_object_geometry
+
     ! Get axis-aligned bounding box of the geometry
     subroutine getbbox(procid, vertices_in, num_vertices_in, bbox_min, bbox_max)
         implicit none

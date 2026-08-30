@@ -1,5 +1,7 @@
-# Name and location of the input geometry (OBJ or binary STL, detected by extension)
-'data/geometry.obj'
+# Name and location of the input geometry: a single OBJ/STL file (one solid, ID 1),
+# or a .list manifest of multiple OBJ/STL files, one path per line (# comments/blank
+# lines skipped) — each line's order becomes that solid's ID, used for per-object BCs.
+'data/objects.list'
 # Scalar default value (real), narrow-band buffer_points (int), progress bar width (int)
 1d10  5  40
 # Grid dimensions nx, ny, nz (interior cell-centres, matching geometry.out)

@@ -23,7 +23,7 @@ module spatial_hash_mod
     ! Number of faces stored in the hash (set by build_hash)
     integer :: nfaces_hash
 
-    ! Per-thread GPU query_hash candidate buffer capacity -- must be at least 27 * max_cell_count
+    ! Per-thread GPU query_hash candidate buffer capacity — see known limits in docs/external-lib-guidance/GenSDF_GPU_porting.md.
     integer, parameter :: max_cands_gpu = 32768
 
     !$acc declare create(hcells, h_origin, h_size, total_hcells)

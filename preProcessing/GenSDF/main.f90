@@ -14,16 +14,19 @@ program generatesdf
 
     implicit none
 
-    !  geometry 
-    integer :: nfaces, nvertices, nnormals
+    !  geometry
+    integer :: nfaces, nvertices, nnormals, nsolids
     real(dp), allocatable :: vertices(:,:), normals(:,:)
     integer,  allocatable :: faces(:,:), face_normals(:,:)
+    integer,  allocatable :: face_solid_id(:)
     real(dp) :: bbox_min(3), bbox_max(3)
     integer  :: sx, ex, sy, ey, sz, ez
 
-    !  SDF arrays 
+    !  SDF arrays
     real(dp), allocatable :: sdf(:,:,:)
+    real(dp), allocatable :: objid(:,:,:)
     real(dp), allocatable :: flood_fill_arr(:,:,:)
+    real(dp), allocatable :: objid_fill_arr(:,:,:)
     real(dp), allocatable :: fsm_local(:,:,:)    ! per-rank slab for parallel FSM
 
     !  MPI neighbours for FSM 
@@ -39,7 +42,6 @@ program generatesdf
     !  misc
     integer :: ii
     logical :: debug = .false.
-    character(len=4) :: ext
 
 #ifdef GPU_SDF
     !  multi-GPU device binding
@@ -53,7 +55,7 @@ program generatesdf
     allocate(decomp_x_start(0:nprocs-1), decomp_x_end(0:nprocs-1), decomp_size(0:nprocs-1))
 
 #ifdef GPU_SDF
-    ! One GPU per rank (node-local rank mod GPU count)
+    ! One GPU per rank (node-local rank mod GPU count) — see docs/external-lib-guidance/GenSDF_GPU_porting.md.
     call MPI_COMM_SPLIT_TYPE(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, node_comm, ierror)
     call MPI_COMM_RANK(node_comm, node_rank, ierror)
     num_gpus = acc_get_num_devices(acc_device_nvidia)
@@ -83,20 +85,20 @@ program generatesdf
     !$acc update device(dx, dy, dz)
 #endif
 
-    ! Detect input format from file extension
-    ii = len_trim(inputfilename)
-    ext = inputfilename(ii-3:ii)
-    if (ext == '.stl' .or. ext == '.STL') then
-        call read_stl_binary(myid, trim(inputfilename), vertices, normals, faces, face_normals, &
-                             nvertices, nnormals, nfaces)
-    else
-        call read_obj(myid, trim(inputfilename), vertices, normals, faces, face_normals, &
-                      nvertices, nnormals, nfaces)
+    ! Load geometry: a single .stl/.obj file (one solid, ID 1) or a .list manifest
+    ! of multiple .stl/.obj files, each assigned a solid ID by its manifest order.
+    call load_multi_object_geometry(myid, trim(inputfilename), vertices, normals, faces, face_normals, &
+                                    face_solid_id, nvertices, nnormals, nfaces, nsolids)
+
+    ! Solver clamps solid IDs into src/global.f90's max_ibm_objects-sized BC arrays; keep both in sync.
+    if (nsolids > 15) then
+        print *, 'FATAL: manifest has ', nsolids, ' solids, exceeds solver max_ibm_objects=15'
+        error stop
     end if
 
 #ifdef GPU_SDF
     ! Geometry is read-only and reused unchanged across the p/u/v/w passes below.
-    !$acc enter data copyin(vertices, normals, faces, face_normals)
+    !$acc enter data copyin(vertices, normals, faces, face_normals, face_solid_id)
 #endif
 
     call getbbox(myid, vertices, nvertices, bbox_min, bbox_max)
@@ -147,21 +149,30 @@ program generatesdf
     ! Only sdfp (cell-center) is calculated by default, compute_face_sdf = .true. handles face SDF 
     allocate(flood_fill_arr(nx, ny, nz))
     flood_fill_arr = scalarvalue
+    allocate(objid_fill_arr(nx, ny, nz))
+    objid_fill_arr = 0.0_dp
 
     allocate(sdf(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
+    allocate(objid(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
     sdf = scalarvalue
+    objid = 0.0_dp
     if (use_fast_sweep) then
         call compute_narrowband_sdf(myid, decomp_x_start(myid), decomp_x_end(myid), &
                                     sy, ey, sz, ez, xp, yp, zp, nfaces, faces, face_normals, &
-                                    vertices, normals, narrow_band_width, sdf)
+                                    vertices, normals, face_solid_id, narrow_band_width, sdf, objid)
     else
         call compute_scalar_distance_face(myid, decomp_x_start(myid), decomp_x_end(myid), &
                                           sy, ey, sz, ez, xp, yp, zp, nfaces, faces, face_normals, &
-                                          vertices, normals, buffer_points, sdf)
+                                          vertices, normals, face_solid_id, buffer_points, sdf, objid)
     end if
     call MPI_BARRIER(MPI_COMM_WORLD, ierror)
     call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
                       1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
+    call gather_array(myid, nprocs, objid, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
+                      1, ny, 1, nz, 0.0_dp, objid_fill_arr, ierror)
+    ! gather_array fills untouched (outside-AABB) cells with the module sentinel `scalarvalue`,
+    ! not the requested background — those cells are always far from any solid, so zero them here.
+    if (myid == 0) where (objid_fill_arr == scalarvalue) objid_fill_arr = 0.0_dp
     call MPI_BARRIER(MPI_COMM_WORLD, ierror)
     if (myid == 0) &
         call fill_internal(flood_fill_arr, size(xp), size(yp), size(zp), sx, sy, sz, ex, ey, ez, -scalarvalue)
@@ -175,11 +186,14 @@ program generatesdf
         call gather_array(myid, nprocs, fsm_local, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
                           1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
         deallocate(fsm_local)
+        ! objid is not touched by the fast-sweep propagation — it only needs to be
+        ! correct in the narrow-band interface cells where ghost points actually live.
     end if
     if (myid == 0) then
         call cpu_time(time1)
         print *, "*** Writing | cell-centres ***"
         call write_sdf_padded('data/sdfp.bin', flood_fill_arr)
+        call write_sdf_padded('data/sdfp_objid.bin', objid_fill_arr)
         call cpu_time(time2)
         print *, "-- Write done in", time2-time1, "s | cell-centres"
         if (compute_face_sdf) print *, "*** Calculating SDF | u-faces ***"
@@ -187,6 +201,8 @@ program generatesdf
     call MPI_BARRIER(MPI_COMM_WORLD, ierror)
 
     ! Face-staggered SDFs — only computed when compute_face_sdf = .true.
+    ! (objid is recomputed but not written for these passes: the solver's thermal
+    ! ghost list is cell-centre-only, so face-staggered object IDs are unused.)
     if (compute_face_sdf) then
 
         ! U-faces
@@ -194,11 +210,11 @@ program generatesdf
         if (use_fast_sweep) then
             call compute_narrowband_sdf(myid, decomp_x_start(myid), decomp_x_end(myid), &
                                         sy, ey, sz, ez, xf, yp, zp, nfaces, faces, face_normals, &
-                                        vertices, normals, narrow_band_width, sdf)
+                                        vertices, normals, face_solid_id, narrow_band_width, sdf, objid)
         else
             call compute_scalar_distance_face(myid, decomp_x_start(myid), decomp_x_end(myid), &
                                               sy, ey, sz, ez, xf, yp, zp, nfaces, faces, face_normals, &
-                                              vertices, normals, buffer_points, sdf)
+                                              vertices, normals, face_solid_id, buffer_points, sdf, objid)
         end if
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
@@ -231,11 +247,11 @@ program generatesdf
         if (use_fast_sweep) then
             call compute_narrowband_sdf(myid, decomp_x_start(myid), decomp_x_end(myid), &
                                         sy, ey, sz, ez, xp, yf, zp, nfaces, faces, face_normals, &
-                                        vertices, normals, narrow_band_width, sdf)
+                                        vertices, normals, face_solid_id, narrow_band_width, sdf, objid)
         else
             call compute_scalar_distance_face(myid, decomp_x_start(myid), decomp_x_end(myid), &
                                               sy, ey, sz, ez, xp, yf, zp, nfaces, faces, face_normals, &
-                                              vertices, normals, buffer_points, sdf)
+                                              vertices, normals, face_solid_id, buffer_points, sdf, objid)
         end if
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
@@ -268,11 +284,11 @@ program generatesdf
         if (use_fast_sweep) then
             call compute_narrowband_sdf(myid, decomp_x_start(myid), decomp_x_end(myid), &
                                         sy, ey, sz, ez, xp, yp, zf, nfaces, faces, face_normals, &
-                                        vertices, normals, narrow_band_width, sdf)
+                                        vertices, normals, face_solid_id, narrow_band_width, sdf, objid)
         else
             call compute_scalar_distance_face(myid, decomp_x_start(myid), decomp_x_end(myid), &
                                               sy, ey, sz, ez, xp, yp, zf, nfaces, faces, face_normals, &
-                                              vertices, normals, buffer_points, sdf)
+                                              vertices, normals, face_solid_id, buffer_points, sdf, objid)
         end if
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
