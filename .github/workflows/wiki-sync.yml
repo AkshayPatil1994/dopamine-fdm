@@ -24,11 +24,9 @@ jobs:
           echo "${{ secrets.WIKI_DEPLOY_KEY }}" > ~/.ssh/wiki_deploy_key
           chmod 600 ~/.ssh/wiki_deploy_key
           ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
-          cat >> ~/.ssh/config <<EOF
-          Host github.com
-            IdentityFile ~/.ssh/wiki_deploy_key
-            IdentitiesOnly yes
-          EOF
+          echo "Key fingerprint (verify this matches the deploy key on GitHub):"
+          ssh-keygen -lf ~/.ssh/wiki_deploy_key.pub 2>/dev/null || ssh-keygen -y -f ~/.ssh/wiki_deploy_key | ssh-keygen -lf /dev/stdin
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/wiki_deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts" >> "$GITHUB_ENV"
 
       - name: Clone wiki
         run: |
