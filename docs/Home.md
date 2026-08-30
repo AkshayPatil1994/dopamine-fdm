@@ -35,4 +35,4 @@ here, then jump to whichever page matches what you're doing.
   profiler summary at shutdown.
 
 See the repository layout in the [README](../README.md#repository-layout) for where each
-piece of source lives within the repository.
+piece of source lives.
