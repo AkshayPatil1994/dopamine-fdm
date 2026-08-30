@@ -79,6 +79,8 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(InOut) :: W_
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: nu_t_
 
+    If ( y_bc_type == 0 ) Return   ! no wall model meaning for periodic y
+
     If ( flat_wall_model_flag == 1 ) Then
        ! Flat-wall log-law EQWM: compute alpha from local u_tau
        Call compute_flat_wall_eqwm(U_, W_)

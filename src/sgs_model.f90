@@ -4,6 +4,7 @@ Module sgs_models
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
+  Use decomp, Only : z_halo_neighbors
   Use boundary_conditions, Only : apply_periodic_bc_z
 
   Implicit None
@@ -223,8 +224,16 @@ Contains
     End If
 
     ! No-slip flat walls only (j=1, nyg): zero nu_t to avoid polluting the Robin BC; leave nu_t alone at a free-slip boundary (bc_face_y*==2), which has no molecular sublayer to damp it
-    If ( bc_face_ylo == 1 ) nu_t_(:,  1,:) = 0d0
-    If ( bc_face_yhi == 1 ) nu_t_(:,nyg,:) = 0d0
+    If ( y_bc_type == 1 .And. bc_face_ylo == 1 ) nu_t_(:,  1,:) = 0d0
+    If ( y_bc_type == 1 .And. bc_face_yhi == 1 ) nu_t_(:,nyg,:) = 0d0
+
+    ! y-periodicity (y_bc_type==0): fill ghost planes j=1,nyg (never written by
+    ! Pass 1/2 above, but read by compute_rhs_v/w at the y boundaries)
+    If ( y_bc_type == 0 ) Then
+       nu_t_(:,    1,:) = nu_t_(:,nyg-2,:)
+       nu_t_(:,nyg-1,:) = nu_t_(:,    2,:)
+       nu_t_(:,nyg  ,:) = nu_t_(:,    3,:)
+    End If
 
     ! IBM solid cells: suppress SGS stress to avoid polluting adjacent fluid
     If ( ibm_input_mode >= 1 .And. Allocated(Umask_cc) ) Then
@@ -254,7 +263,7 @@ Contains
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: F_
 
-    Integer(Int32) :: sendto, recvfrom, tagto, tagfrom
+    Integer(Int32) :: up, down
 
     ! Allocate persistent single-plane buffers on first call
     If (.Not. Allocated(sgs_snd_lo)) Then
@@ -262,31 +271,21 @@ Contains
        Allocate( sgs_rcv_lo(nxg,nyg,1), sgs_rcv_hi(nxg,nyg,1) )
     End If
 
-    !-- Exchange A: send nzg-1 upward; receive z=1 from below -------
-    sendto   = myid + 1
-    tagto    = myid + 1
-    recvfrom = myid - 1
-    tagfrom  = myid
-    If (myid == 0)        Then; recvfrom = MPI_PROC_NULL; tagfrom = MPI_ANY_TAG; End If
-    If (myid == nprocs-1) Then; sendto   = MPI_PROC_NULL; tagto   = 0;           End If
-    sgs_snd_lo(:,:,1) = F_(:,:,nzg-1)
-    Call Mpi_Sendrecv( sgs_snd_lo, nxg*nyg, Mpi_real8, sendto,   tagto,   &
-                       sgs_rcv_lo, nxg*nyg, Mpi_real8, recvfrom, tagfrom, &
-                       MPI_COMM_WORLD, istat, ierr )
-    If (myid /= 0) F_(:,:,1) = sgs_rcv_lo(:,:,1)
+    Call z_halo_neighbors(up, down)
 
-    !-- Exchange B: send z=2 downward; receive z=nzg from above -----
-    sendto   = myid - 1
-    tagto    = myid - 1
-    recvfrom = myid + 1
-    tagfrom  = myid
-    If (myid == 0)        Then; sendto   = MPI_PROC_NULL; tagto   = 0;           End If
-    If (myid == nprocs-1) Then; recvfrom = MPI_PROC_NULL; tagfrom = MPI_ANY_TAG; End If
-    sgs_snd_hi(:,:,1) = F_(:,:,2)
-    Call Mpi_Sendrecv( sgs_snd_hi, nxg*nyg, Mpi_real8, sendto,   tagto,   &
-                       sgs_rcv_hi, nxg*nyg, Mpi_real8, recvfrom, tagfrom, &
+    !-- Exchange A: send nzg-1 towards +z; receive z=1 from -z -------
+    sgs_snd_lo(:,:,1) = F_(:,:,nzg-1)
+    Call Mpi_Sendrecv( sgs_snd_lo, nxg*nyg, Mpi_real8, up,   0, &
+                       sgs_rcv_lo, nxg*nyg, Mpi_real8, down, 0, &
                        MPI_COMM_WORLD, istat, ierr )
-    If (myid /= nprocs-1) F_(:,:,nzg) = sgs_rcv_hi(:,:,1)
+    If (down /= MPI_PROC_NULL) F_(:,:,1) = sgs_rcv_lo(:,:,1)
+
+    !-- Exchange B: send z=2 towards -z; receive z=nzg from +z -----
+    sgs_snd_hi(:,:,1) = F_(:,:,2)
+    Call Mpi_Sendrecv( sgs_snd_hi, nxg*nyg, Mpi_real8, down, 0, &
+                       sgs_rcv_hi, nxg*nyg, Mpi_real8, up,   0, &
+                       MPI_COMM_WORLD, istat, ierr )
+    If (up /= MPI_PROC_NULL) F_(:,:,nzg) = sgs_rcv_hi(:,:,1)
 
   End Subroutine update_ghost_interior_planes_nut
 

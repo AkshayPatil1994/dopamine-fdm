@@ -123,10 +123,14 @@ Contains
           str_wm = '1  (log-law EQWM)'
        End If
 
-       If (bc_face_yhi == 1) Then
-          str_bc_top = '1  (no-slip — closed channel)'
+       If ( y_bc_type == 1 ) Then
+          If (bc_face_yhi == 1) Then
+             str_bc_top = '1  (no-slip — closed channel)'
+          Else
+             str_bc_top = '2  (free-slip — open channel)'
+          End If
        Else
-          str_bc_top = '2  (free-slip — open channel)'
+          str_bc_top = '0  (periodic, y_bc_type=0)'
        End If
 
        ! ── print ───────────────────────────────────────────────────────
@@ -195,7 +199,11 @@ Contains
           Write(*,'(A,A)') '    IBM wall model     :  ', Trim(str_ibmwm)
        If (ibm_input_mode >= 1 .And. nsampling > 0) &
           Write(*,'(A,I8)') '    IBM force sampling :  every ', nsampling, ' steps'
-       Write(*,'(A,A)') '    Top wall BC        :  ', Trim(str_bc_top)
+       If ( y_bc_type == 1 ) Then
+          Write(*,'(A,A)') '    Top wall BC        :  ', Trim(str_bc_top)
+       Else
+          Write(*,'(A,A)') '    y-direction BC     :  ', Trim(str_bc_top)
+       End If
        If ( sediment_flag >= 1 ) Then
           Write(*,'(A)') '  --------------------------------------------------------------------'
           Write(*,'(A)') '  SEDIMENT'

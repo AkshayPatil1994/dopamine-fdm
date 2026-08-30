@@ -68,7 +68,8 @@ Program dopamine
      If ( nsteps > 0 ) Then
         If ( istep >= nsteps ) Exit
      Else
-        If ( t >= sim_end_time ) Exit
+        ! tolerance guards against t landing one ULP short of sim_end_time after dt-snapping in compute_time_step_RK3
+        If ( t >= sim_end_time - 1d-10 ) Exit
      End If
 
   End Do

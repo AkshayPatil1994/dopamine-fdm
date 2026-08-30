@@ -7,6 +7,7 @@ Module finalization
   Use mpi
   Use monitor,   Only : close_force_csv
   Use profiler,  Only : profiler_print_summary
+  Use decomp_2d, Only : decomp_2d_finalize
   
   ! prevent implicit typing
   Implicit None
@@ -19,8 +20,14 @@ Contains
     Real(Int64) :: total_wall_time
 
     ! finalize FFTW
-    Call dfftw_destroy_plan(plan_d)
-    Call dfftw_destroy_plan(plan_i)
+    Call dfftw_destroy_plan(plan_fz_fwd)
+    Call dfftw_destroy_plan(plan_fz_inv)
+    If ( x_bc_type == 0 ) Then
+       Call dfftw_destroy_plan(plan_fx_fwd)
+       Call dfftw_destroy_plan(plan_fx_inv)
+    Else
+       Call dfftw_destroy_plan(plan_dct)
+    End If
 
     Call Mpi_barrier(MPI_COMM_WORLD, ierr)
     total_wall_time = MPI_WTIME() - time_wall_start
@@ -42,6 +49,9 @@ Contains
     Call close_force_csv
 
     Call profiler_print_summary
+
+    ! tear down 2decomp&fft's pencil/pool state before MPI goes away
+    Call decomp_2d_finalize
 
     ! finalized MPI
     Call Mpi_finalize(ierr)

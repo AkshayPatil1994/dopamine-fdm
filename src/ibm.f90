@@ -4,6 +4,7 @@ Module ibm
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
+  Use decomp, Only : z_halo_neighbors, x_periodic_partner
 
   Implicit None
 
@@ -57,95 +58,103 @@ Contains
     !$acc enter data copyin(ghost_u_idx,ghost_u_wgt,ghost_u_img,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB)
     !$acc enter data copyin(ghost_v_idx,ghost_v_wgt,ghost_v_img,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB)
     !$acc enter data copyin(ghost_w_idx,ghost_w_wgt,ghost_w_img,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB)
+    ! Cell-centre ghost list: used both by the host-only Method-2 force diagnostic and (when boussinesq_flag>=1) by the device-resident apply_ghost_cell_ibm_scalar
+    !$acc enter data copyin(ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc,ghost_cc_objid)
 
   End Subroutine setup_ibm
 
-  !> Exchange phi z-ghost planes between neighbouring MPI ranks; domain-boundary Neumann values from the caller are left untouched
+  !> Exchange phi z-ghost planes between row-adjacent MPI ranks; domain-boundary Neumann values from the caller are left untouched
   Subroutine exchange_phi_ghost_planes
 
     Real   (Int64) :: buf_s(nxg,nyg), buf_r(nxg,nyg)
-    Integer(Int32) :: sendto, recvfrom, tagto, tagfrom
+    Integer(Int32) :: up, down
 
-    ! Pass 1: send k=nzg-1 UP to rank+1 (they store it in k=1);
-    !         receive from rank-1 into our k=1.
-    sendto   = myid + 1;  tagto   = myid + 1
-    recvfrom = myid - 1;  tagfrom = myid
-    If ( myid == 0        ) Then;  recvfrom = MPI_PROC_NULL;  tagfrom = MPI_ANY_TAG;  End If
-    If ( myid == nprocs-1 ) Then;  sendto   = MPI_PROC_NULL;  tagto   = 0;            End If
+    Call z_halo_neighbors(up, down)
+
+    ! Pass 1: send k=nzg-1 towards +z; receive from -z into k=1.
     buf_s = phi(:,:,nzg-1)
-    Call MPI_Sendrecv( buf_s, nxg*nyg, MPI_real8, sendto,   tagto,   &
-                       buf_r, nxg*nyg, MPI_real8, recvfrom, tagfrom, &
+    Call MPI_Sendrecv( buf_s, nxg*nyg, MPI_real8, up,   0, &
+                       buf_r, nxg*nyg, MPI_real8, down, 0, &
                        MPI_COMM_WORLD, istat, ierr )
-    If ( myid /= 0 ) phi(:,:,1) = buf_r
+    If ( down /= MPI_PROC_NULL ) phi(:,:,1) = buf_r
 
-    ! Pass 2: send k=2 DOWN to rank-1 (they store it in k=nzg);
-    !         receive from rank+1 into our k=nzg.
-    sendto   = myid - 1;  tagto   = myid - 1
-    recvfrom = myid + 1;  tagfrom = myid
-    If ( myid == 0        ) Then;  sendto   = MPI_PROC_NULL;  tagto   = 0;            End If
-    If ( myid == nprocs-1 ) Then;  recvfrom = MPI_PROC_NULL;  tagfrom = MPI_ANY_TAG;  End If
+    ! Pass 2: send k=2 towards -z; receive from +z into k=nzg.
     buf_s = phi(:,:,2)
-    Call MPI_Sendrecv( buf_s, nxg*nyg, MPI_real8, sendto,   tagto,   &
-                       buf_r, nxg*nyg, MPI_real8, recvfrom, tagfrom, &
+    Call MPI_Sendrecv( buf_s, nxg*nyg, MPI_real8, down, 0, &
+                       buf_r, nxg*nyg, MPI_real8, up,   0, &
                        MPI_COMM_WORLD, istat, ierr )
-    If ( myid /= nprocs-1 ) phi(:,:,nzg) = buf_r
+    If ( up /= MPI_PROC_NULL ) phi(:,:,nzg) = buf_r
 
   End Subroutine exchange_phi_ghost_planes
 
-  !> Read cell-centre SDF from ibm_sdf_file and derive Umask_cc from sign(phi)
-  Subroutine read_phi_from_sdf_file
+  !> Read a distributed cell-centre scalar field from file: (nxg_global,nyg_global,nzm_global) Real(8), column-major, big-endian (x,y already ghosted in-file, z interior-only, same convention as xg_global/kg-based reads elsewhere)
+  Subroutine read_distributed_scalar_field(filename, field)
 
-    Integer(Int32) :: iproc, nzge, nzge_max, n_interior
+    Character(*), Intent(In) :: filename
+    Real(Int64), Dimension(nxg,nyg,nzg), Intent(InOut) :: field
+
+    Integer(Int32) :: iproc, nxge_r, nzge_r, n_interior
     Integer(Int32) :: sdf_unit
-    Real   (Int64), Allocatable :: sdf_buf(:,:,:), tmp_read(:)
-    Integer(Int32) :: i, j, k
+    Real   (Int64), Allocatable :: global_field(:,:,:), tmp_read(:), send_buf(:,:,:)
 
-    If (Allocated(phi))      Deallocate(phi)
-    If (Allocated(Umask_cc)) Deallocate(Umask_cc)
-    Allocate ( phi     (nxg, nyg, nzg) )
-    Allocate ( Umask_cc(nxg, nyg, nzg) )
-    phi      = 0d0
-    Umask_cc = 0d0
-
-    ! SDF file: (nxg_global, nyg_global, nzm_global) Real(8), column-major, big-endian.
-    ! Rank iproc's interior planes span file z-indices kg1_global(iproc)..kg2_global(iproc)-2.
-
+    ! Rank iproc owns global x-columns ig1_global(iproc):ig2_global(iproc) (already ghosted in-file)
+    ! and interior z-planes kg1_global(iproc):kg2_global(iproc)-2.
     If ( myid==0 ) Then
 
-       Open(newunit=sdf_unit, file=Trim(ibm_sdf_file), access='stream', form='unformatted', action='read', convert='big_endian')
-
-       ! Read slab for rank 0 (starts at file beginning)
-       nzge = kg2_global(0) - kg1_global(0) + 1
-       n_interior = nzge - 2
-       Allocate( tmp_read(Int(nxg, Int64) * Int(nyg, Int64) * Int(n_interior, Int64)) )
+       Open(newunit=sdf_unit, file=Trim(filename), access='stream', form='unformatted', action='read', convert='big_endian')
+       Allocate( tmp_read(Int(nxg_global, Int64) * Int(nyg_global, Int64) * Int(nzm_global, Int64)) )
        Read(sdf_unit) tmp_read
-       phi(:,:,2:nzge-1) = Reshape(tmp_read, [nxg, nyg, n_interior])
+       Close(sdf_unit)
+       Allocate( global_field(nxg_global, nyg_global, nzm_global) )
+       global_field = Reshape(tmp_read, [nxg_global, nyg_global, nzm_global])
        Deallocate(tmp_read)
 
-       ! Distribute slabs to ranks 1..nprocs-1 sequentially
-       nzge_max = kg2_global(nprocs-1) - kg1_global(nprocs-1) + 1
-       Allocate( sdf_buf(nxg, nyg, nzge_max) )
-       sdf_buf = 0d0   ! guard: ghost planes may not be overwritten before MPI send
-       Do iproc = 1, nprocs-1
-          nzge      = kg2_global(iproc) - kg1_global(iproc) + 1
-          n_interior = nzge - 2
-          ! Sequential read — file pointer already positioned after previous rank's data
-          Allocate( tmp_read(Int(nxg, Int64) * Int(nyg, Int64) * Int(n_interior, Int64)) )
-          Read(sdf_unit) tmp_read
-          sdf_buf(:,:,2:nzge-1) = Reshape(tmp_read, [nxg, nyg, n_interior])
-          Deallocate(tmp_read)
-          Call MPI_Send(sdf_buf, nxg*nyg*nzge, MPI_real8, iproc, iproc, MPI_COMM_WORLD, ierr)
+       Do iproc = 0, nprocs-1
+          nxge_r     = ig2_global(iproc) - ig1_global(iproc) + 1
+          nzge_r     = kg2_global(iproc) - kg1_global(iproc) + 1
+          n_interior = nzge_r - 2
+          Allocate( send_buf(nxge_r, nyg_global, n_interior) )
+          send_buf = global_field( ig1_global(iproc):ig2_global(iproc), :, kg1_global(iproc):kg2_global(iproc)-2 )
+          If ( iproc == 0 ) Then
+             field(:,:,2:nzge_r-1) = send_buf
+          Else
+             Call MPI_Send(send_buf, nxge_r*nyg_global*n_interior, MPI_real8, iproc, iproc, MPI_COMM_WORLD, ierr)
+          End If
+          Deallocate(send_buf)
        End Do
-       Deallocate(sdf_buf)
-       Close(sdf_unit)
+       Deallocate(global_field)
 
     Else
-       Call MPI_Recv(phi, nxg*nyg*nzg, MPI_real8, 0, myid, MPI_COMM_WORLD, istat, ierr)
+       Call MPI_Recv(field(:,:,2:nzg-1), nxg*nyg*(nzg-2), MPI_real8, 0, myid, MPI_COMM_WORLD, istat, ierr)
     End If
 
-    ! Apply Neumann (zero-gradient) ghost BCs for phi at domain boundaries
-    phi(1,:,:)   = phi(2,:,:)
-    phi(nxg,:,:) = phi(nxg-1,:,:)
+  End Subroutine read_distributed_scalar_field
+
+  !> Read cell-centre SDF from ibm_sdf_file and derive Umask_cc from sign(phi); optionally reads the per-solid object-ID field from ibm_objid_file
+  Subroutine read_phi_from_sdf_file
+
+    Integer(Int32) :: i, j, k
+    Logical        :: is_first_x, is_last_x
+    Integer(Int32) :: partner_x
+
+    If (Allocated(phi))       Deallocate(phi)
+    If (Allocated(Umask_cc))  Deallocate(Umask_cc)
+    If (Allocated(ibm_obj_id)) Deallocate(ibm_obj_id)
+    Allocate ( phi       (nxg, nyg, nzg) )
+    Allocate ( Umask_cc  (nxg, nyg, nzg) )
+    Allocate ( ibm_obj_id(nxg, nyg, nzg) )
+    phi        = 0d0
+    Umask_cc   = 0d0
+    ibm_obj_id = 0d0
+
+    Call read_distributed_scalar_field(ibm_sdf_file, phi)
+
+    ! Apply Neumann (zero-gradient) ghost BCs for phi at domain boundaries; x=1/nxg is an
+    ! inter-rank seam (already correctly populated straight from the global file slice) on
+    ! any rank that doesn't own the true global x edge, so skip it there
+    Call x_periodic_partner(is_first_x, is_last_x, partner_x)
+    If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
+    If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
     phi(:,1,:)   = phi(:,2,:)
     phi(:,nyg,:) = phi(:,nyg-1,:)
     phi(:,:,1)   = phi(:,:,2)
@@ -165,6 +174,12 @@ Contains
           End Do
        End Do
     End Do
+
+    ! Optional per-solid object-ID field (companion to phi, written by GenSDF's .list manifest mode)
+    If ( Len_Trim(ibm_objid_file) > 0 ) Then
+       If ( myid==0 ) Write(*,*) 'IBM: reading per-object ID field from ', Trim(ibm_objid_file), '...'
+       Call read_distributed_scalar_field(ibm_objid_file, ibm_obj_id)
+    End If
 
   End Subroutine read_phi_from_sdf_file
 
@@ -640,6 +655,29 @@ Contains
 
   End Subroutine apply_ghost_cell_ibm
 
+  !> Ghost-cell thermal condition at the immersed boundary, per solid ID: ibm_T_bc_type(id) 0=adiabatic (T_ghost=T_image), 1=isothermal (mirror against ibm_T_wall(id))
+  Subroutine apply_ghost_cell_ibm_scalar(T_)
+
+    Real(Int64), Dimension(nxg,nyg,nzg), Intent(InOut) :: T_
+
+    Integer(Int32) :: n, i, j, k, oid
+    Real   (Int64) :: T_I
+
+    !$acc parallel loop present(T_,ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc,ghost_cc_objid,ibm_T_bc_type,ibm_T_wall) private(T_I,oid)
+    Do n = 1, n_ghost_cc
+       i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)
+       oid = ghost_cc_objid(n)
+       T_I = trilinear_interp_p(T_, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n))
+       If ( ibm_T_bc_type(oid) == 1 ) Then
+          T_(i,j,k) = 2d0*ibm_T_wall(oid) - T_I   ! isothermal: Dirichlet mirror
+       Else
+          T_(i,j,k) = T_I                         ! adiabatic: zero-gradient
+       End If
+    End Do
+    !$acc end parallel loop
+
+  End Subroutine apply_ghost_cell_ibm_scalar
+
   !                     Helper routines
 
   !  Zero the per-step IBM force accumulators.
@@ -728,6 +766,7 @@ Contains
     Allocate ( ghost_cc_dGB   (   n_ghost_cc) )
     Allocate ( ghost_cc_img_cc(3, n_ghost_cc) )
     Allocate ( ghost_cc_wgt_cc(8, n_ghost_cc) )
+    Allocate ( ghost_cc_objid (   n_ghost_cc) )
     ! Staggered image-point stencils for surface-sampling viscous traction.
     Allocate ( ghost_cc_img_u (3, n_ghost_cc) )
     Allocate ( ghost_cc_img_v (3, n_ghost_cc) )
@@ -758,6 +797,7 @@ Contains
                          ghost_cc_idx(1,ng) = i
                          ghost_cc_idx(2,ng) = j
                          ghost_cc_idx(3,ng) = k
+                         ghost_cc_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
                          ghost_cc_nrm(1,ng) = nx_
                          ghost_cc_nrm(2,ng) = ny_
                          ghost_cc_nrm(3,ng) = nz_
@@ -1060,6 +1100,7 @@ Contains
   !  Trilinear interpolation of the cell-centred pressure field P
   !  to an arbitrary point, using the centre-grid stencil.
   Real(Int64) Function trilinear_interp_p(P_, w, img)
+    !$acc routine seq
     Real   (Int64), Dimension(nxg,nyg,nzg), Intent(In) :: P_
     Real   (Int64), Dimension(8),           Intent(In) :: w
     Integer(Int32), Dimension(3),           Intent(In) :: img

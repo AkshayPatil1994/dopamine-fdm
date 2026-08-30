@@ -14,9 +14,10 @@ Module probe_output
   Integer(Int32) :: sli_idx  (MAX_PROBES)    ! global 1-based interior cc index along normal
   Integer(Int32) :: sli_n1   (MAX_PROBES)    ! first  output dimension
   Integer(Int32) :: sli_n2   (MAX_PROBES)    ! second output dimension
-  Logical        :: sli_cmask(4,MAX_PROBES)  ! component mask: U,V,W,P
+  Logical        :: sli_cmask(6,MAX_PROBES)  ! component mask: U,V,W,P,T,C
   Integer(Int32) :: sli_ncomp(MAX_PROBES)    ! number of selected components
   Integer(Int32) :: sli_funit(MAX_PROBES)    ! Fortran file unit (rank 0)
+  Integer(Int32) :: sli_tunit(MAX_PROBES)    ! companion <file>_times.bin unit (rank 0): one Real64 sim-time per snapshot, for donor-time interpolation by downstream consumers (e.g. recycled inflow)
   Integer(Int32) :: sli_nwrit(MAX_PROBES)    ! snapshots written so far
 
   ! ── per-line resolved state ─────────────────────────────────────────────
@@ -26,7 +27,7 @@ Module probe_output
   Integer(Int32) :: lin_ks   (MAX_PROBES)    ! start index along line (global 1-based cc)
   Integer(Int32) :: lin_ke   (MAX_PROBES)    ! end   index along line (global 1-based cc)
   Integer(Int32) :: lin_npts (MAX_PROBES)    ! = ke - ks + 1
-  Logical        :: lin_cmask(4,MAX_PROBES)  ! component mask
+  Logical        :: lin_cmask(6,MAX_PROBES)  ! component mask: U,V,W,P,T,C
   Integer(Int32) :: lin_ncomp(MAX_PROBES)
   Integer(Int32) :: lin_funit(MAX_PROBES)
   Integer(Int32) :: lin_nwrit(MAX_PROBES)
@@ -41,7 +42,7 @@ Contains
     Character(4)   :: dstr
     Character(8)   :: cstr
 
-    sli_funit = 0;  sli_nwrit = 0
+    sli_funit = 0;  sli_tunit = 0;  sli_nwrit = 0
     lin_funit = 0;  lin_nwrit = 0
 
     ! ── 2-D slices ─────────────────────────────────────────────────────────
@@ -72,6 +73,11 @@ Contains
         Open(newunit=sli_funit(n), file=Trim(fname), access='stream', &
              form='unformatted', status='replace', action='write')
 
+        ! companion time log: one Real64 sim-time appended per snapshot, same cadence as sli_funit(n)
+        Write(fname,'(A,A)') Trim(slice_fileout(n)), '_times.bin'
+        Open(newunit=sli_tunit(n), file=Trim(fname), access='stream', &
+             form='unformatted', status='replace', action='write')
+
         Write(fname,'(A,A)') Trim(slice_fileout(n)), '_meta.txt'
         Open(newunit=meta_unit, file=Trim(fname), form='formatted', status='replace')
         Write(meta_unit,'(A,I0)')   'ncomp  = ', sli_ncomp(n)
@@ -81,6 +87,7 @@ Contains
         Write(meta_unit,'(A,F16.8)') 'pos   = ', slice_pos(n)
         Write(meta_unit,'(A,A)')    'comps  = ', Trim(cstr)
         Write(meta_unit,'(A,I0)')   'nsnaps = 0'
+        Write(meta_unit,'(A,A)')    'times  = ', Trim(slice_fileout(n))//'_times.bin'
         Close(meta_unit)
 
         Write(*,'(A,I2,A,A,A,I6,A,I6,A,I2)') &
@@ -180,6 +187,7 @@ Contains
 
     Do n = 1, n_slices
       If (sli_funit(n) > 0) Close(sli_funit(n))
+      If (sli_tunit(n) > 0) Close(sli_tunit(n))
     End Do
 
     Do n = 1, n_lines
@@ -206,7 +214,7 @@ Contains
     If (myid == 0) Allocate( out2d(nc,n1,n2) )
 
     c = 0
-    Do comp = 1, 4
+    Do comp = 1, 6
       If ( .Not. sli_cmask(comp,n) ) Cycle
       c = c + 1
       lbuf = 0d0
@@ -215,29 +223,32 @@ Contains
 
       !── x-normal: fixed x-index, output(jg, kg_g) ─────────────────────!
       Case (1)
-        fix_ia = sli_idx(n) + 1   ! global cc 1-based → ghost array index
-        Do ka = 2, nzg-1
-          kg_g = kg1_global(myid) + ka - 2   ! global 1-based interior cc z
-          If (kg_g < 1 .Or. kg_g > nzm_global) Cycle
-          Do ja = 2, nyg-1
-            jg = ja - 1
-            lbuf(jg, kg_g) = cc_val(comp, fix_ia, ja, ka)
+        ! global cc index sli_idx(n) (1-based) -> local array index; skip on ranks whose x-row doesn't own it
+        fix_ia = sli_idx(n) - ig1_global(myid) + 2
+        If (fix_ia >= 2 .And. fix_ia <= nxg-1) Then
+          Do ka = 2, nzg-1
+            kg_g = kg1_global(myid) + ka - 2   ! global 1-based interior cc z
+            If (kg_g < 1 .Or. kg_g > nzm_global) Cycle
+            Do ja = 2, nyg-1
+              jg = ja - 1
+              lbuf(jg, kg_g) = cc_val(comp, fix_ia, ja, ka)
+            End Do
           End Do
-        End Do
+        End If
 
-      !── y-normal: fixed y-index, output(ig, kg_g) ─────────────────────!
+      !── y-normal: fixed y-index, output(ig_g, kg_g) ────────────────────!
       Case (2)
         fix_ja = sli_idx(n) + 1
         Do ka = 2, nzg-1
           kg_g = kg1_global(myid) + ka - 2
           If (kg_g < 1 .Or. kg_g > nzm_global) Cycle
           Do ia = 2, nxg-1
-            ig = ia - 1
+            ig = ig1_global(myid) + ia - 2   ! global 1-based interior cc x
             lbuf(ig, kg_g) = cc_val(comp, ia, fix_ja, ka)
           End Do
         End Do
 
-      !── z-normal: fixed z-index, output(ig, jg) ───────────────────────!
+      !── z-normal: fixed z-index, output(ig_g, jg) ──────────────────────!
       Case (3)
         ! global cc index sli_idx(n) (1-based) → local array index
         fix_ka = sli_idx(n) - kg1_global(myid) + 2
@@ -245,7 +256,7 @@ Contains
           Do ja = 2, nyg-1
             jg = ja - 1
             Do ia = 2, nxg-1
-              ig = ia - 1
+              ig = ig1_global(myid) + ia - 2   ! global 1-based interior cc x
               lbuf(ig, jg) = cc_val(comp, ia, ja, fix_ka)
             End Do
           End Do
@@ -262,6 +273,14 @@ Contains
 
     If (myid == 0) Then
       Write(sli_funit(n)) out2d
+      Write(sli_tunit(n)) t
+      ! flush now (not just at finalize_probes' Close): _times.bin's tiny per-call
+      ! writes can sit unflushed in the runtime buffer for the whole run, so a
+      ! run killed before a clean exit leaves it empty even though .bin (whose
+      ! larger per-call writes get flushed automatically) and _meta.txt (reopened
+      ! and closed every call) both already reflect every snapshot written so far
+      Flush(sli_funit(n))
+      Flush(sli_tunit(n))
       sli_nwrit(n) = sli_nwrit(n) + 1
       Call update_slice_meta(n)
       Deallocate(out2d)
@@ -289,21 +308,22 @@ Contains
     If (myid == 0) Allocate( out1d(nc,npts) )
 
     c = 0
-    Do comp = 1, 4
+    Do comp = 1, 6
       If ( .Not. lin_cmask(comp,n) ) Cycle
       c = c + 1
       lbuf = 0d0
 
       Select Case (lin_ax(n))
 
-      !── line along x: fixed y (t1) and z (t2) ─────────────────────────!
+      !── line along x: fixed y (t1) and z (t2), each rank fills its x-range ─!
       Case (1)
         fix_ka = lin_t2(n) - kg1_global(myid) + 2   ! local z-array index
         If (fix_ka >= 2 .And. fix_ka <= nzg-1) Then
           fix_ja = lin_t1(n) + 1   ! y ghost-array index
           Do lp = 1, npts
             ig_g = lin_ks(n) + lp - 1   ! global 1-based cc x index
-            ia   = ig_g + 1
+            If (ig_g < ig1_global(myid) .Or. ig_g > ig2_global(myid)-2) Cycle
+            ia = ig_g - ig1_global(myid) + 2   ! local x ghost-array index
             lbuf(lp) = cc_val(comp, ia, fix_ja, fix_ka)
           End Do
         End If
@@ -311,8 +331,8 @@ Contains
       !── line along y: fixed x (t1) and z (t2) ─────────────────────────!
       Case (2)
         fix_ka = lin_t2(n) - kg1_global(myid) + 2
-        If (fix_ka >= 2 .And. fix_ka <= nzg-1) Then
-          fix_ia = lin_t1(n) + 1
+        fix_ia = lin_t1(n) - ig1_global(myid) + 2   ! local x-array index
+        If (fix_ka >= 2 .And. fix_ka <= nzg-1 .And. fix_ia >= 2 .And. fix_ia <= nxg-1) Then
           Do lp = 1, npts
             jg_g = lin_ks(n) + lp - 1
             ja   = jg_g + 1
@@ -322,14 +342,16 @@ Contains
 
       !── line along z: fixed x (t1) and y (t2), each rank fills slab ───!
       Case (3)
-        fix_ia = lin_t1(n) + 1
+        fix_ia = lin_t1(n) - ig1_global(myid) + 2   ! local x-array index
         fix_ja = lin_t2(n) + 1
-        Do ka = 2, nzg-1
-          kg_g = kg1_global(myid) + ka - 2   ! global 1-based cc z
-          If (kg_g < lin_ks(n) .Or. kg_g > lin_ke(n)) Cycle
-          lp = kg_g - lin_ks(n) + 1
-          lbuf(lp) = cc_val(comp, fix_ia, fix_ja, ka)
-        End Do
+        If (fix_ia >= 2 .And. fix_ia <= nxg-1) Then
+          Do ka = 2, nzg-1
+            kg_g = kg1_global(myid) + ka - 2   ! global 1-based cc z
+            If (kg_g < lin_ks(n) .Or. kg_g > lin_ke(n)) Cycle
+            lp = kg_g - lin_ks(n) + 1
+            lbuf(lp) = cc_val(comp, fix_ia, fix_ja, ka)
+          End Do
+        End If
 
       End Select
 
@@ -362,6 +384,8 @@ Contains
     Case (1);  cc_val = 0.5d0 * (U(ia-1,ja,ka) + U(ia,ja,ka))
     Case (2);  cc_val = 0.5d0 * (V(ia,ja-1,ka) + V(ia,ja,ka))
     Case (3);  cc_val = 0.5d0 * (W(ia,ja,ka-1) + W(ia,ja,ka))
+    Case (5);  cc_val = Tscal(ia,ja,ka)
+    Case (6);  cc_val = Cscal(ia,ja,ka)
     Case Default;  cc_val = P(ia,ja,ka)
     End Select
 
@@ -437,11 +461,11 @@ Contains
   End Subroutine line_extent
 
 
-  !> Build a 4-element logical mask (U,V,W,P) from str ('U'/'V'/'W'/'P', case-insensitive; empty = all three velocities)
+  !> Build a 6-element logical mask (U,V,W,P,T,C) from str, case-insensitive; empty = all three velocities
   Subroutine parse_comps(str, mask, ncomp)
 
     Character(*),   Intent(In)  :: str
-    Logical,        Intent(Out) :: mask(4)
+    Logical,        Intent(Out) :: mask(6)
     Integer(Int32), Intent(Out) :: ncomp
 
     Character(Len(str)) :: ustr
@@ -457,9 +481,17 @@ Contains
     mask(2) = Index(Trim(ustr), 'V') > 0
     mask(3) = Index(Trim(ustr), 'W') > 0
     mask(4) = Index(Trim(ustr), 'P') > 0
+    mask(5) = ( Index(Trim(ustr), 'T') > 0 ) .And. ( boussinesq_flag >= 1 )
+    If ( Index(Trim(ustr), 'T') > 0 .And. boussinesq_flag < 1 ) Then
+      Write(*,'(A)') ' WARNING: probe requested component T but boussinesq_flag=0, dropping it'
+    End If
+    mask(6) = ( Index(Trim(ustr), 'C') > 0 ) .And. ( sediment_flag >= 1 )
+    If ( Index(Trim(ustr), 'C') > 0 .And. sediment_flag < 1 ) Then
+      Write(*,'(A)') ' WARNING: probe requested component C but sediment_flag=0, dropping it'
+    End If
 
-    If ( .Not. (mask(1) .Or. mask(2) .Or. mask(3) .Or. mask(4)) ) Then
-      mask = [.True., .True., .True., .False.]   ! default: U,V,W
+    If ( .Not. (mask(1) .Or. mask(2) .Or. mask(3) .Or. mask(4) .Or. mask(5) .Or. mask(6)) ) Then
+      mask = [.True., .True., .True., .False., .False., .False.]   ! default: U,V,W
     End If
 
     ncomp = Count(mask)
@@ -502,6 +534,7 @@ Contains
     Write(u,'(A,F16.8)') 'pos    = ', slice_pos(n)
     Write(u,'(A,A)')     'comps  = ', Trim(slice_comps(n))
     Write(u,'(A,I0)')    'nsnaps = ', sli_nwrit(n)
+    Write(u,'(A,A)')     'times  = ', Trim(slice_fileout(n))//'_times.bin'
     Close(u)
 
   End Subroutine update_slice_meta

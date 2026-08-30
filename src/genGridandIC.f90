@@ -5,6 +5,7 @@ Module genGridAndIC
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
+  Use synthetic_eddy_method, Only : mean_profile_U, init_inflow_profile
   !Use ifport   ! Only for intel compiler
 
   ! prevent implicit typing
@@ -256,7 +257,8 @@ Contains
 		Real(Int64), Parameter :: B_ic     = 5.2d0
 
 		! channel_perturb IC (ic_type==4)
-		Integer(Int32) :: kk_glob
+		Integer(Int32) :: kk_glob, ii_glob
+		Real   (Int64) :: max_u_g, max_v_g, max_w_g, sum_u_g
 		Integer(Int32) :: n_int_ch, ii_int_ch
 		Real   (Int64) :: Re_tau_ch, Re_b_ch, C_ch, k_ch
 		Real   (Int64) :: h_ch, u_tau_ch
@@ -266,7 +268,70 @@ Contains
 		Real   (Int64) :: alpha_ls, beta_ls, alpha_ss, beta_ss
 		Real   (Int64) :: x_c, z_c, z_f, ran_ch
 
+		! Taylor-Green Vortex IC (ic_type==6)
+		Real   (Int64) :: kx_tgv, ky_tgv, kz_tgv, x_f
+
 		noise_frac = noise_percent * 0.01d0
+
+		! ---- Taylor-Green Vortex IC (ic_type==6): fully analytic, deterministic,
+		! exactly divergence-free on any box aspect ratio -- no noise added.
+		! Requires x_bc_type==0 and y_bc_type==0 (validated in initialization.f90).
+		If ( ic_type == 6 ) Then
+
+			kx_tgv = 2d0*pi / Lx_i
+			ky_tgv = 2d0*pi / Ly_i
+			kz_tgv = 2d0*pi / Lz_i
+
+			If ( myid == 0 ) Write(*,'(A)') '   IC = Taylor-Green Vortex (ic_type=6), Utarget used as amplitude U0'
+
+			! -- U: x-face, y-center, z-center --
+			U = 0d0
+			Do kk = 2, nzg-1
+				kk_glob = k1_global(myid) + kk - 1
+				z_c = 0.5d0 * ( z_global(kk_glob-1) + z_global(kk_glob) )
+				Do jj = 2, nyg_global-1
+					y_c = 0.5d0 * ( y_global(jj-1) + y_global(jj) )
+					Do ii = 1, nx
+						ii_glob = i1_global(myid) + ii - 1
+						x_f = x_global(ii_glob)
+						U(ii,jj,kk) = Utarget * dsin(kx_tgv*x_f) * dcos(ky_tgv*y_c) * dcos(kz_tgv*z_c)
+					End Do
+				End Do
+			End Do
+
+			! -- V: x-center, y-face, z-center -- faces 1 and ny_global are the
+			! same physical periodic point (y=0==y=Ly), so the plain analytic
+			! formula is exact there with no wraparound special-casing needed
+			V = 0d0
+			Do kk = 2, nzg-1
+				kk_glob = k1_global(myid) + kk - 1
+				z_c = 0.5d0 * ( z_global(kk_glob-1) + z_global(kk_glob) )
+				Do jj = 2, ny_global-1
+					Do ii = 2, nxg-1
+						ii_glob = ig1_global(myid) + ii - 2
+						x_c = 0.5d0 * ( x_global(ii_glob-1) + x_global(ii_glob) )
+						V(ii,jj,kk) = -Utarget*(kx_tgv/ky_tgv) * dcos(kx_tgv*x_c) * dsin(ky_tgv*y_global(jj)) * dcos(kz_tgv*z_c)
+					End Do
+				End Do
+			End Do
+
+			! -- W = 0 everywhere (TGV has no spanwise velocity) --
+			W = 0d0
+
+			Call Mpi_allreduce( MaxVal(Abs(U)), max_u_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+			Call Mpi_allreduce( MaxVal(Abs(V)), max_v_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+			If ( myid==0 ) Then
+				Write(*,'(A,E12.4)') '   IC Max |U| = ', max_u_g
+				Write(*,'(A,E12.4)') '   IC Max |V| = ', max_v_g
+				Write(*,'(A,E12.4)') '   IC Max |W| = ', 0d0
+			End If
+
+			Return  ! skip log-law/Reichardt setup, Select Case, and noise loops entirely
+
+		End If
+
+		! x_bc_type==1: load the inflow mean profile now so it can seed U_base below, avoiding a step-1 IC/BC divergence spike
+		If ( x_bc_type == 1 ) Call init_inflow_profile
 
 		! ---- Reichardt profile parameters for channel_perturb IC --------
 		C_ch   = 5.17d0
@@ -393,16 +458,23 @@ Contains
 
 			End Select
 
+			! x_bc_type==1: seed the interior mean with the inflow BC's own profile instead of ic_type's, so step 1 doesn't see a large inflow-face divergence
+			If ( x_bc_type == 1 ) U_base = mean_profile_U( y_c )
+
 			U(:, jj, :) = U_base
 
 		End Do
 
 		! ---- Ghost-cell BCs for U ------------------------------------
-		U(:, 1, :) = -U(:, 2, :)                        ! bottom: always no-slip
-		If ( bc_face_yhi == 1 ) Then
-			U(:, nyg_global, :) = -U(:, nyg_global-1, :)  ! top: no-slip
-		Else
-			U(:, nyg_global, :) =  U(:, nyg_global-1, :)  ! top: free-slip
+		! (y_bc_type==0: left unfilled here -- apply_periodic_bc_y fills them
+		! on the first RK-stage call, before any RHS reads a ghost cell)
+		If ( y_bc_type == 1 ) Then
+			U(:, 1, :) = -U(:, 2, :)                        ! bottom: always no-slip
+			If ( bc_face_yhi == 1 ) Then
+				U(:, nyg_global, :) = -U(:, nyg_global-1, :)  ! top: no-slip
+			Else
+				U(:, nyg_global, :) =  U(:, nyg_global-1, :)  ! top: free-slip
+			End If
 		End If
 
 		! ---- channel_perturb IC: 3-D structured + random perturbations ----
@@ -414,8 +486,9 @@ Contains
 				kk_glob = k1_global(myid) + kk - 1
 				z_c = 0.5d0 * ( z_global(kk_glob-1) + z_global(kk_glob) )
 				Do jj = 2, nyg_global-1
-					Do ii = 1, nx_global
-						x_c = x_global(ii)
+					Do ii = 1, nx
+						ii_glob = i1_global(myid) + ii - 1
+						x_c = x_global(ii_glob)
 						U(ii,jj,kk) = U(ii,jj,kk) &
 							+ noise_frac      *beta_ls  * sin(alpha_ls*x_c)*cos(beta_ls*z_c) &
 							+ 0.1d0*noise_frac*beta_ss * sin(alpha_ss*x_c)*cos(beta_ss*z_c)
@@ -424,11 +497,13 @@ Contains
 			End Do
 
 			! Re-enforce ghost-cell BCs after perturbations
-			U(:, 1, :) = -U(:, 2, :)
-			If ( bc_face_yhi == 1 ) Then
-				U(:, nyg_global, :) = -U(:, nyg_global-1, :)
-			Else
-				U(:, nyg_global, :) =  U(:, nyg_global-1, :)
+			If ( y_bc_type == 1 ) Then
+				U(:, 1, :) = -U(:, 2, :)
+				If ( bc_face_yhi == 1 ) Then
+					U(:, nyg_global, :) = -U(:, nyg_global-1, :)
+				Else
+					U(:, nyg_global, :) =  U(:, nyg_global-1, :)
+				End If
 			End If
 
 			! -- V: structured + random perturbations (x-center, y-face, z-center) --
@@ -439,8 +514,9 @@ Contains
 				Do jj = 2, ny_global-1
 					y_c    = y_global(jj)
 					y_norm = 2.0d0 * y_c / Ly_i - 1.0d0
-					Do ii = 2, nxg_global-1
-						x_c = 0.5d0 * ( x_global(ii-1) + x_global(ii) )
+					Do ii = 2, nxg-1
+						ii_glob = ig1_global(myid) + ii - 2
+						x_c = 0.5d0 * ( x_global(ii_glob-1) + x_global(ii_glob) )
 						! Structured perturbations (large- and small-scale)
 						V(ii,jj,kk) = noise_frac       * sin(alpha_ls*x_c)*sin(beta_ls*z_c) &
 						            + 0.1d0*noise_frac  * sin(alpha_ss*x_c)*sin(beta_ss*z_c)
@@ -457,21 +533,26 @@ Contains
 			Do kk = 1, nz
 				z_f = z_global( k1_global(myid) + kk - 1 )
 				Do jj = 2, nyg_global-1
-					Do ii = 2, nxg_global-1
-						x_c = 0.5d0 * ( x_global(ii-1) + x_global(ii) )
+					Do ii = 2, nxg-1
+						ii_glob = ig1_global(myid) + ii - 2
+						x_c = 0.5d0 * ( x_global(ii_glob-1) + x_global(ii_glob) )
 						W(ii,jj,kk) = -noise_frac      *alpha_ls * cos(alpha_ls*x_c)*sin(beta_ls*z_f) &
 						              -0.1d0*noise_frac*alpha_ss * cos(alpha_ss*x_c)*sin(beta_ss*z_f)
 					End Do
 				End Do
 			End Do
 
+			! global-sum diagnostics: MPI_Allreduce over each rank's local extent
+			Call Mpi_allreduce( MaxVal(Abs(U)), max_u_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+			Call Mpi_allreduce( MaxVal(Abs(V)), max_v_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+			Call Mpi_allreduce( MaxVal(Abs(W)), max_w_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+			Call Mpi_allreduce( Sum(U(1:nx, 2:nyg_global-1, 2:nzg-1)), sum_u_g, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr )
 			If ( myid==0 ) Then
-				Write(*,'(A,E12.4)') '   IC Max |U| = ', MaxVal(Abs(U))
-				Write(*,'(A,E12.4)') '   IC Max |V| = ', MaxVal(Abs(V))
-				Write(*,'(A,E12.4)') '   IC Max |W| = ', MaxVal(Abs(W))
+				Write(*,'(A,E12.4)') '   IC Max |U| = ', max_u_g
+				Write(*,'(A,E12.4)') '   IC Max |V| = ', max_v_g
+				Write(*,'(A,E12.4)') '   IC Max |W| = ', max_w_g
 				Write(*,'(A,E12.4)') '   IC Mean U  = ', &
-					Sum(U(1:nx_global, 2:nyg_global-1, 2:nzg-1)) / &
-					Real(nx_global*(nyg_global-2)*(nzg-2), Int64)
+					sum_u_g / Real(nx_global*(nyg_global-2)*(nzm_global), Int64)
 			End If
 
 			Return  ! skip white-noise loops
@@ -481,7 +562,7 @@ Contains
 		! ---- Add white noise to interior U planes --------------------
 		Do kk = 1, nzg
 			Do jj = 2, nyg_global-1
-				Do ii = 1, nx_global
+				Do ii = 1, nx
 					Call Random_number(rnd)
 					U(ii,jj,kk) = U(ii,jj,kk) + &
 						noise_frac * Utarget * 2d0*(rnd-0.5d0)
@@ -490,18 +571,20 @@ Contains
 		End Do
 
 		! Re-impose ghost-cell BCs after noise (keeps BCs clean)
-		U(:, 1, :) = -U(:, 2, :)
-		If ( bc_face_yhi == 1 ) Then
-			U(:, nyg_global, :) = -U(:, nyg_global-1, :)
-		Else
-			U(:, nyg_global, :) =  U(:, nyg_global-1, :)
+		If ( y_bc_type == 1 ) Then
+			U(:, 1, :) = -U(:, 2, :)
+			If ( bc_face_yhi == 1 ) Then
+				U(:, nyg_global, :) = -U(:, nyg_global-1, :)
+			Else
+				U(:, nyg_global, :) =  U(:, nyg_global-1, :)
+			End If
 		End If
 
 		! ---- V: zero mean + noise (y-face velocity component) --------
 		V = 0d0
 		Do kk = 1, nzg
 			Do jj = 1, ny_global
-				Do ii = 1, nxg_global
+				Do ii = 1, nxg
 					Call Random_number(rnd)
 					V(ii,jj,kk) = noise_frac * Utarget * 2d0*(rnd-0.5d0)
 				End Do
@@ -512,21 +595,24 @@ Contains
 		W = 0d0
 		Do kk = 1, nz
 			Do jj = 1, nyg_global
-				Do ii = 1, nxg_global
+				Do ii = 1, nxg
 					Call Random_number(rnd)
 					W(ii,jj,kk) = noise_frac * Utarget * 2d0*(rnd-0.5d0)
 				End Do
 			End Do
 		End Do
 
-		! ---- Diagnostics (rank 0 only) --------------------------------
+		! ---- Diagnostics: MPI_Allreduce over each rank's local extent, print on rank 0 ----
+		Call Mpi_allreduce( MaxVal(Abs(U)), max_u_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+		Call Mpi_allreduce( MaxVal(Abs(V)), max_v_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+		Call Mpi_allreduce( MaxVal(Abs(W)), max_w_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+		Call Mpi_allreduce( Sum(U(1:nx, 2:nyg_global-1, 2:nzg-1)), sum_u_g, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr )
 		If ( myid==0 ) Then
-			Write(*,'(A,E12.4)') '   IC Max |U| = ', MaxVal(Abs(U))
-			Write(*,'(A,E12.4)') '   IC Max |V| = ', MaxVal(Abs(V))
-			Write(*,'(A,E12.4)') '   IC Max |W| = ', MaxVal(Abs(W))
+			Write(*,'(A,E12.4)') '   IC Max |U| = ', max_u_g
+			Write(*,'(A,E12.4)') '   IC Max |V| = ', max_v_g
+			Write(*,'(A,E12.4)') '   IC Max |W| = ', max_w_g
 			Write(*,'(A,E12.4)') '   IC Mean U  = ', &
-				Sum(U(1:nx_global, 2:nyg_global-1, 2:nzg-1)) / &
-				Real(nx_global*(nyg_global-2)*(nzg-2), Int64)
+				sum_u_g / Real(nx_global*(nyg_global-2)*(nzm_global), Int64)
 		End If
 
 	End Subroutine generateIC
