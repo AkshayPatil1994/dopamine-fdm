@@ -1,0 +1,69 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the following works."
+type: software
+title: "fdm-dopamine"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Lozano-Durán"
+      given-names: "Adrián"
+    - family-names: "Bae"
+      given-names: "Hyunji Jane"
+  title: "Characteristic scales of Townsend's wall-attached eddies"
+  journal: "Journal of Fluid Mechanics"
+  volume: 868
+  start: 698
+  end: 725
+  year: 2019
+  doi: "10.1017/jfm.2019.209"
+references:
+  - type: article
+    authors:
+      - family-names: "Lozano-Durán"
+        given-names: "Adrián"
+      - family-names: "Bae"
+        given-names: "Hyunji Jane"
+    title: "Characteristic scales of Townsend's wall-attached eddies"
+    journal: "Journal of Fluid Mechanics"
+    volume: 868
+    start: 698
+    end: 725
+    year: 2019
+    doi: "10.1017/jfm.2019.209"
+    notes: "Original DNS solver"
+  - type: article
+    authors:
+      - family-names: "Patil"
+        given-names: "Akshay"
+      - family-names: "Fringer"
+        given-names: "Oliver"
+    title: "Drag enhancement by the addition of weak waves to a wave-current boundary layer over bumpy walls"
+    journal: "Journal of Fluid Mechanics"
+    volume: 947
+    start: "A3"
+    year: 2022
+    doi: "10.1017/jfm.2022.628"
+    notes: "IBM + DNS"
+  - type: misc
+    authors:
+      - family-names: "Patil"
+        given-names: "Akshay"
+      - family-names: "García-Sánchez"
+        given-names: "Clara"
+    title: "Should we care about the spatial heterogeneity in coral reefs under unidirectional turbulent flows?"
+    year: 2025
+    url: "https://arxiv.org/abs/2506.03021"
+    notes: "Improved IBM (arXiv:2506.03021, physics.flu-dyn)"
+  - type: article
+    authors:
+      - family-names: "Patil"
+        given-names: "Akshay"
+      - family-names: "Paranjothi"
+        given-names: "Uma Chandrika Karrothu"
+      - family-names: "García-Sánchez"
+        given-names: "Clara"
+    title: "GenSDF: An MPI-Fortran based signed-distance-field generator for computational fluid dynamics applications"
+    journal: "SoftwareX"
+    volume: 30
+    year: 2025
+    notes: "GenSDF"

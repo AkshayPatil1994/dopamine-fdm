@@ -380,4 +380,62 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Acknowledgments
 
-The original form of the channel flow solver was shared by Adrian Lozano-Duran during my PhD and I am grateful for his generous help and support with the code. 
+The original form of the channel flow solver was shared by Adrian Lozano-Duran during my PhD and I am grateful for his generous help and support with the code.
+
+## Citing this solver
+
+If you use `dopamine-fdm` in your research, please consider citing the following publications.
+
+1. Lozano-Durán, A., & Bae, H. J. (2019). Characteristic scales of Townsend's wall-attached eddies. *Journal of Fluid Mechanics*, 868, 698–725. doi:[10.1017/jfm.2019.209](https://doi.org/10.1017/jfm.2019.209) — *original DNS solver*
+2. Patil, A., & Fringer, O. (2022). Drag enhancement by the addition of weak waves to a wave-current boundary layer over bumpy walls. *Journal of Fluid Mechanics*, 947, A3. doi:[10.1017/jfm.2022.628](https://doi.org/10.1017/jfm.2022.628) — *IBM + DNS*
+3. Patil, A., & García-Sánchez, C. (2025). Should we care about the spatial heterogeneity in coral reefs under unidirectional turbulent flows? arXiv:[2506.03021](https://arxiv.org/abs/2506.03021) [physics.flu-dyn] — *improved IBM*
+4. Patil, A., Paranjothi, U. C. K., & García-Sánchez, C. (2025). GenSDF: An MPI-Fortran based signed-distance-field generator for computational fluid dynamics applications. *SoftwareX*, 30, 102117. — *GenSDF*
+
+<details>
+<summary>BibTeX</summary>
+
+```bibtex
+@article{lozanoduran2019characteristic,
+  title={Characteristic scales of {T}ownsend's wall-attached eddies},
+  author={Lozano-Dur{\'a}n, Adri{\'a}n and Bae, Hyunji Jane},
+  journal={Journal of Fluid Mechanics},
+  volume={868},
+  pages={698--725},
+  year={2019},
+  publisher={Cambridge University Press},
+  doi={10.1017/jfm.2019.209}
+}
+
+@article{patil2022drag,
+  title={Drag enhancement by the addition of weak waves to a wave-current boundary layer over bumpy walls},
+  author={Patil, Akshay and Fringer, Oliver},
+  journal={Journal of Fluid Mechanics},
+  volume={947},
+  pages={A3},
+  year={2022},
+  publisher={Cambridge University Press},
+  doi={10.1017/jfm.2022.628}
+}
+
+@misc{patil2025carespatialheterogeneitycoral,
+  title={Should we care about the spatial heterogeneity in coral reefs under unidirectional turbulent flows?},
+  author={Patil, Akshay and Garc{\'i}a-S{\'a}nchez, Clara},
+  year={2025},
+  eprint={2506.03021},
+  archivePrefix={arXiv},
+  primaryClass={physics.flu-dyn},
+  url={https://arxiv.org/abs/2506.03021}
+}
+
+@article{patil2025gensdf,
+  title={{GenSDF}: An {MPI-Fortran} based signed-distance-field generator for computational fluid dynamics applications},
+  author={Patil, Akshay and Paranjothi, Uma Chandrika Karrothu and Garc{\'i}a-S{\'a}nchez, Clara},
+  journal={SoftwareX},
+  volume={30},
+  pages={102117},
+  year={2025},
+  publisher={Elsevier}
+}
+```
+
+</details>
