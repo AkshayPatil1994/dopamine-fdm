@@ -1,4 +1,4 @@
-# fdm-dopamine — Documentation
+# dopamine-fdm — Documentation
 
 Notice: This file was generated using an LLM and subsequently edited for correctness. If you find a mistake please create an issue on github. Thank you!
 

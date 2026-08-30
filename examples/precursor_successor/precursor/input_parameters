@@ -3,19 +3,21 @@
 ! ================================================================
 
 &DOMAIN
-  nx         = 66,
+  nx         = 130,
   ny         = 65,
   nz         = 66,
-  Lx         = 6.0,
+  Lx         = 12.0,
   Ly         = 2.0,
-  Lz         = 2.0,
-  alpha_grid = 2.5,
+  Lz         = 6.0,
+  alpha_grid = 2.8,
   grid_type  = 2,
+  p_row      = 0,
+  p_col      = 0,
 /
 
 &PHYSICS
-  nu                   = 0.002531645569620253,      ! Re_tau = 395, H = 1.0, u_tau = 1.0, nu = 1/Re_tau
-  dPdx                 = 1.0,                       ! Driving Pressure gradient u_tau**2/H = 1*1/1 = 1.0
+  nu                   = 1.0e-3,
+  dPdx                 = 1.0,
   dPdz                 = 0.0,
   Ub_x                 = 0.0,
   Ub_z                 = 0.0,
@@ -24,15 +26,21 @@
   phi_wave_x           = 0.0,     ! phase offset [rad] for x-wave forcing
   phi_wave_z           = 0.0,     ! phase offset [rad] for z-wave forcing
   sgs_model            = 1,       ! 0=DNS, 1=Vreman
-  Cs_vreman            = 0.17,    ! Vreman tuning coefficient ~ 0.167 for shear flows
+  Cs_vreman            = 0.17,    ! Sub-grid model constant (Eq. 5)
   flat_wall_model_flag = 1,       ! 0=no-slip, 1=log-law EQWM
+  flow_forcing_mode    = 0,       ! 0=prescribed dPdx (default), 1=constant mass flux
+  Ub_target            = 0,   ! target bulk velocity, used only if flow_forcing_mode=1
+  advection_scheme     = 0,       ! 0=skew-symmetric (default), 1=pure divergence-form central
 /
 
+! Time-stepping and output
 &NUMERICS
-  dt           = 1.0,
-  nsteps       = 120000,
-  nsave        = 1000,
+  dt           = 5.0e-3,
+  nsteps       = -200,      ! >0: run exactly nsteps steps. <0: ignore step count, run until t>=sim_end_time
+  nsave        = -200,      ! >0: write a snapshot every nsave steps. <0: ignore step count, write every tsave time units
   nmonitor     = 10,
+  sim_end_time = 200.0,   ! physical end time, used only when nsteps<0
+  tsave        = 1.0,     ! physical save interval, used only when nsave<0
   cfl_adaptive = 1,       ! 0=fixed dt, 1=adaptive dt
   cfl_target   = 0.5,     ! target CFL number (adaptive mode)
   cfl_safety   = 1.0,     ! safety factor on dt adjustment
@@ -40,17 +48,19 @@
   dt_max       = 1.0e10,  ! maximum allowed dt
 /
 
-
 &BOUNDARY_CONDITIONS
   bc_face_ylo = 1,
   bc_face_yhi = 1,
+
+  x_bc_type   = 0,
+  y_bc_type   = 1,
 /
 
 
 &INITIAL_CONDITIONS
-  Utarget      = 15.0,
-  ic_type      = 5,
-  noise_percent  = 5.0,
+  Utarget      = 15,	    ! Log-law reference velocity
+  ic_type      = 1,	    ! log-law
+  noise_percent  = 5.0,	    ! Random noise
   nstep_init     = 0,       ! starting step number (for hot-start)
   restart        = 0,       ! 0=fresh run, 1=hot-start from filein
   scalar_restart = 1,       ! 1=read C from restart file (default)
@@ -61,7 +71,15 @@
 
 ! File paths
 &IO
-  filein  = 'restart/les_chan395.1',
-  fileout = 'les_chan395',
+  filein  = 'restart/precursor.1',
+  fileout = 'precursor',
 /
+
+&STATISTICS
+
+  n_slices = 1,
+  slice_freq = 10,
+  slice_dir(1) = 'x',  slice_pos(1) = 10,  slice_comps(1) = 'UVW',  slice_fileout(1) = 'slices/precursor',
+/
+
 

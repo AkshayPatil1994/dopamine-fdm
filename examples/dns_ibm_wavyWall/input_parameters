@@ -1,24 +1,7 @@
 ! ================================================================
-! Input parameters for fdm-dopamine solver (Fortran namelist format)
+! Input parameters for dopamine-fdm solver (Fortran namelist format)
 ! ================================================================
 
-! Grid dimensions (total face points, including boundaries)
-! Interior cells = nx-1, ny-1, nz-1
-!
-! grid_type controls the vertical (y) grid distribution:
-!   1 = uniform
-!   2 = tanh, fine at both walls, coarse at centre
-!   3 = tanh, fine at bottom wall, coarse at top
-!   4 = tanh, fine at top wall, coarse at bottom
-!   5 = uniform sublayer [0,ks] with nks intervals, then
-!       symmetric tanh: fine at rough interface AND top wall
-!   6 = uniform sublayer [0,ks] with nks intervals, then
-!       tanh: fine at rough interface, coarse at top
-!   7 = uniform sublayer [0,ks] with nks intervals, then
-!       tanh: coarse at rough interface, fine at top wall
-!
-! alpha_grid controls the stretching intensity (larger = stronger clustering).
-! Ignored for grid_type=1. For grid_types 5-7, ks and nks must be set in &IBM.
 &DOMAIN
   nx         = 258,
   ny         = 129,
@@ -30,19 +13,6 @@
   grid_type  = 6,
 /
 
-! Physical parameters
-! Oscillatory forcing is applied independently in x and z:
-!   dP/dx(t) = dPdx + Ub_x * wave_omega_x * cos(wave_omega_x * t)
-!   dP/dz(t) = dPdz + Ub_z * wave_omega_z * cos(wave_omega_z * t)
-! where wave_omega_x = 2*pi / T_wave_x  (derived internally).
-! Set T_wave_x = 0 (or T_wave_z = 0) to disable oscillation in that direction.
-!
-! flow_forcing_mode: 0 (default) = prescribed dPdx/dPdz above (steady or
-!   oscillatory). 1 = constant mass flux (CMFR): dPdx is ignored as an input
-!   and instead solved for internally each step so the volume-averaged bulk
-!   streamwise velocity is held exactly at Ub_target; requires x_bc_type=0
-!   (periodic) and is incompatible with T_wave_x oscillatory forcing.
-! Ub_target: target bulk streamwise velocity (flow_forcing_mode=1 only).
 &PHYSICS
   nu                   = 0.00014792899408284024,
   dPdx                 = 0.0
@@ -60,7 +30,7 @@
   Ub_target            = 1,       ! target bulk velocity, used only if flow_forcing_mode=1
 /
 
-! Time-stepping and output
+
 &NUMERICS
   dt           = 5.0e-3,
   nsteps       = -10,      ! >0: run exactly nsteps steps. <0: ignore step count, run until t>=sim_end_time
@@ -75,35 +45,12 @@
   dt_max       = 1.0e10,  ! maximum allowed dt
 /
 
-! Wall boundary condition types (1=Dirichlet no-slip, 2=Neumann free-slip)
-!
-! x_bc_type: streamwise boundary condition
-!   0 = periodic (default): fully-spectral complex FFT pressure solve
-!   1 = inflow (Dirichlet velocity, see &INFLOW below) / outflow (convective:
-!       dF/dt + Uc*dF/dx = 0, Uc = local mean streamwise velocity at the
-!       outlet, clipped to [0,dx/dt] -- reduces to zero-gradient only if the
-!       outlet Courant number reaches 1). Pressure is solved with a DCT-IV
-!       (quarter-wave cosine transform): homogeneous Neumann at the inflow
-!       face, homogeneous Dirichlet at the outflow face -- the outflow face
-!       is exactly divergence-free-corrected by the pressure projection, so
-!       mass is conserved without any separate rescaling step.
-! Omit this group to use defaults (both walls no-slip, x periodic)
-!
-! GPU build (ENABLE_GPU=ON, see README.md "Building (single-GPU...)"): the GPU Poisson
-! solve supports x_bc_type=0 or 1 here, AND a single MPI rank (nprocs=1, i.e. run with
-! `mpirun -np 1`) -- a runtime Stop fires on startup otherwise. Everything else in this
-! file (IBM, wall models, SGS, sediment, RSB, etc.) is unaffected by ENABLE_GPU.
 &BOUNDARY_CONDITIONS
   bc_face_ylo = 1,
   bc_face_yhi = 1,
   x_bc_type   = 0,
 /
 
-! Immersed boundary method
-! ibm_input_mode: 0=no IBM body (smooth walls)
-!                 1=SDF-based ghost-cell IBM (precomputed cell-centre SDF)
-! ibm_wall_model_flag: 0=DNS no-slip, 1=log-law EQWM
-! Omit this group if no IBM body is present
 &IBM
   ibm_input_mode      = 1,
   ibm_wall_model_flag = 0,
@@ -114,30 +61,6 @@
   ibm_surface_nsampling = 0, ! surface field dump interval -> ibm_surface/surface.<step>.bin (0=disabled)
 /
 
-! Initial conditions
-! ic_type:
-!   1 = log-law profile + white noise  (profile mirrored for no-slip top,
-!       applied from bottom wall only for free-slip top; u_tau estimated
-!       from dPdx and bc_face_yhi)
-!   2 = linear profile  + white noise  (tent function for no-slip top,
-!       linear ramp 0→Utarget for free-slip top)
-!   3 = zero mean + white noise
-!   4 = Reichardt turbulent channel profile + structured perturbation
-!       Builds the composite Reichardt (1951) law-of-the-wall profile scaled
-!       by u_tau = sqrt(|dPdx|*Ly/2), mirrored symmetrically for a two-wall
-!       channel.  Peak centreline velocity ≈ U_cl+ * u_tau (≈18 m/s for
-!       Re_tau≈395 with nu=1e-6).  Perturbations are structured sinusoidal
-!       waves rather than white noise.
-!   5 = Inverse-linear profile + white noise
-!       Anti-tent (closed channel, bc_face_yhi=1):
-!         U = Utarget * (1 - 2*min(y,Ly-y)/Ly)  — Utarget at walls, 0 at centre
-!       Inverted ramp (open channel, bc_face_yhi=2):
-!         U = Utarget * (1 - y/Ly)              — Utarget at bottom, 0 at top
-!       Large |dU/dy| throughout imposes a strong destabilising shear to
-!       promote rapid laminar-to-turbulent transition.
-!
-! noise_percent: white-noise amplitude as % of Utarget (applied to U,V,W
-!               for ic_types 1-3; ignored for ic_type=4)
 &INITIAL_CONDITIONS
   Utarget      = 0.068,
   ic_type      = 1,
@@ -150,7 +73,6 @@
                             !    velocity/pressure and has no scalar block)
 /
 
-! File paths
 &IO
   filein  = 'restart/wavy_channel.1',
   fileout = 'wavy_channel',

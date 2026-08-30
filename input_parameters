@@ -1,5 +1,5 @@
 ! ================================================================
-! Input parameters for fdm-dopamine solver (Fortran namelist format)
+! Input parameters for dopamine-fdm solver (Fortran namelist format)
 ! ================================================================
 
 ! Grid dimensions (total face points, including boundaries)
