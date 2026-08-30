@@ -40,6 +40,7 @@ fields/
 restart/
 stats/
 __pycache__/
+scripts/
 
 # Editor / IDE
 .vscode/
