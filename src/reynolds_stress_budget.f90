@@ -53,6 +53,10 @@ Module reynolds_stress_budget
   Real(Int64), Allocatable :: acc_TijX(:,:,:,:)    ! (6, nxm, nym_global, nzm)  ! only if !hom_x
   Real(Int64), Allocatable :: acc_TijZ(:,:,:,:)    ! (6, nxm, nym_global, nzm)  ! only if !hom_z
 
+  !  Boussinesq temperature statistics (only allocated when boussinesq_flag>=1): mean, variance, and turbulent heat flux <u_i'T'>
+  Real(Int64), Allocatable :: acc_T(:,:,:), acc_TT(:,:,:)
+  Real(Int64), Allocatable :: acc_UiT(:,:,:,:)   ! (3, nxm, nym_global, nzm): uT, vT, wT
+
 Contains
 
   !> init_rsb: called once after grid allocation; parses rsb_hom_dir, allocates accumulator arrays, opens/appends output files depending on restart
@@ -120,6 +124,11 @@ Contains
     Allocate( acc_TijY   (6,nxm, nym_global, nzm) )
     If ( .Not. hom_x ) Allocate( acc_TijX(6,nxm,nym_global,nzm) )
     If ( .Not. hom_z ) Allocate( acc_TijZ(6,nxm,nym_global,nzm) )
+    If ( boussinesq_flag >= 1 ) Then
+       Allocate( acc_T (nxm, nym_global, nzm) )
+       Allocate( acc_TT(nxm, nym_global, nzm) )
+       Allocate( acc_UiT(3,nxm, nym_global, nzm) )
+    End If
 
     Call zero_accumulators
 
@@ -194,6 +203,15 @@ Contains
              acc_PVel(1,i-1,j-1,k-1) = acc_PVel(1,i-1,j-1,k-1) + pc*uc
              acc_PVel(2,i-1,j-1,k-1) = acc_PVel(2,i-1,j-1,k-1) + pc*vc
              acc_PVel(3,i-1,j-1,k-1) = acc_PVel(3,i-1,j-1,k-1) + pc*wc
+
+             ! ── Boussinesq temperature statistics (already cell-centred, no interpolation) ──
+             If ( boussinesq_flag >= 1 ) Then
+                acc_T (i-1,j-1,k-1) = acc_T (i-1,j-1,k-1) + Tscal(i,j,k)
+                acc_TT(i-1,j-1,k-1) = acc_TT(i-1,j-1,k-1) + Tscal(i,j,k)*Tscal(i,j,k)
+                acc_UiT(1,i-1,j-1,k-1) = acc_UiT(1,i-1,j-1,k-1) + uc*Tscal(i,j,k)
+                acc_UiT(2,i-1,j-1,k-1) = acc_UiT(2,i-1,j-1,k-1) + vc*Tscal(i,j,k)
+                acc_UiT(3,i-1,j-1,k-1) = acc_UiT(3,i-1,j-1,k-1) + wc*Tscal(i,j,k)
+             End If
 
              ! ── triple correlations for turbulent diffusion ───────────
              !  y-direction flux (always stored): u_i u_j v
@@ -338,6 +356,7 @@ Contains
     Real(Int64), Allocatable :: g_PiStrain(:,:,:,:), g_PVel(:,:,:,:)
     Real(Int64), Allocatable :: g_TijY(:,:,:,:)
     Real(Int64), Allocatable :: g_TijX(:,:,:,:), g_TijZ(:,:,:,:)
+    Real(Int64), Allocatable :: g_T(:,:,:), g_TT(:,:,:), g_UiT(:,:,:,:)
 
     ! ── budget term arrays (output grid: out_nx × out_ny × out_nz) ───────
     Real(Int64), Allocatable :: Rij(:,:,:,:)     ! Reynolds stresses (central moments)
@@ -350,8 +369,10 @@ Contains
     Real(Int64), Allocatable :: PhiPij(:,:,:,:)  ! pressure diffusion
     Real(Int64), Allocatable :: Umean(:,:,:,:)   ! mean velocities (3 components)
     Real(Int64), Allocatable :: Resid(:,:,:,:)   ! budget residual
+    Real(Int64), Allocatable :: Tmean_g(:,:,:), Tvar_g(:,:,:), UiT_g(:,:,:,:), BuoyProd_g(:,:,:)
+    Real(Int64), Allocatable :: Tmean(:,:,:,:), Tvar(:,:,:,:), UiT(:,:,:,:), BuoyProd(:,:,:,:)
 
-    Integer(Int32) :: c
+    Integer(Int32) :: c, i, j, k
     Real(Int64)    :: dn   ! = 1 / n_accum (for averaging)
 
     If ( rsb_active /= 1 ) Return
@@ -385,6 +406,15 @@ Contains
     Call reduce_to_rank0_4d(acc_TijY,    g_TijY,    6,nxm,nym_global,nzm)
     If ( .Not. hom_x ) Call reduce_to_rank0_4d(acc_TijX,g_TijX,6,nxm,nym_global,nzm)
     If ( .Not. hom_z ) Call reduce_to_rank0_4d(acc_TijZ,g_TijZ,6,nxm,nym_global,nzm)
+
+    If ( boussinesq_flag >= 1 ) Then
+       Allocate( g_T (nxm_global, nym_global, nzm_global) )
+       Allocate( g_TT(nxm_global, nym_global, nzm_global) )
+       Allocate( g_UiT(3,nxm_global, nym_global, nzm_global) )
+       Call reduce_to_rank0(acc_T,   g_T,   nxm*nym_global*nzm)
+       Call reduce_to_rank0(acc_TT,  g_TT,  nxm*nym_global*nzm)
+       Call reduce_to_rank0_4d(acc_UiT, g_UiT, 3, nxm, nym_global, nzm)
+    End If
 
     ! ── rank 0: compute budget and write ─────────────────────────────────
     If ( myid == 0 ) Then
@@ -434,6 +464,46 @@ Contains
        Call write_rsb_slice('PhiPij',   PhiPij,   N_COMP)
        Call write_rsb_slice('Resid',    Resid,    N_COMP)
 
+       ! Boussinesq temperature statistics: mean, variance, turbulent heat flux, buoyancy production -beta_T*grav*<v'T'>
+       If ( boussinesq_flag >= 1 ) Then
+          g_T  = g_T  * dn;  g_TT = g_TT * dn;  g_UiT = g_UiT * dn
+
+          Allocate( Tmean_g   (  nxm_global,nym_global,nzm_global) )
+          Allocate( Tvar_g    (  nxm_global,nym_global,nzm_global) )
+          Allocate( UiT_g     (3,nxm_global,nym_global,nzm_global) )
+          Allocate( BuoyProd_g(  nxm_global,nym_global,nzm_global) )
+
+          Do k = 1, nzm_global
+             Do j = 1, nym_global
+                Do i = 1, nxm_global
+                   Tmean_g(i,j,k) = g_T(i,j,k)
+                   Tvar_g(i,j,k)  = g_TT(i,j,k) - g_T(i,j,k)*g_T(i,j,k)
+                   UiT_g(1,i,j,k) = g_UiT(1,i,j,k) - g_U(i,j,k)*g_T(i,j,k)   ! <u'T'>
+                   UiT_g(2,i,j,k) = g_UiT(2,i,j,k) - g_V(i,j,k)*g_T(i,j,k)   ! <v'T'>
+                   UiT_g(3,i,j,k) = g_UiT(3,i,j,k) - g_W(i,j,k)*g_T(i,j,k)   ! <w'T'>
+                   BuoyProd_g(i,j,k) = beta_T*grav*UiT_g(2,i,j,k)
+                End Do
+             End Do
+          End Do
+
+          Allocate( Tmean   (1, out_nx, out_ny, out_nz) )
+          Allocate( Tvar    (1, out_nx, out_ny, out_nz) )
+          Allocate( UiT     (3, out_nx, out_ny, out_nz) )
+          Allocate( BuoyProd(1, out_nx, out_ny, out_nz) )
+
+          Call hom_avg_4d( Reshape(Tmean_g,   [1,nxm_global,nym_global,nzm_global]), 1, Tmean )
+          Call hom_avg_4d( Reshape(Tvar_g,    [1,nxm_global,nym_global,nzm_global]), 1, Tvar  )
+          Call hom_avg_4d( UiT_g,     3, UiT )
+          Call hom_avg_4d( Reshape(BuoyProd_g,[1,nxm_global,nym_global,nzm_global]), 1, BuoyProd )
+
+          Call write_rsb_slice('Tmean',    Tmean,    1)
+          Call write_rsb_slice('Tvar',     Tvar,     1)
+          Call write_rsb_slice('UiT',      UiT,      3)
+          Call write_rsb_slice('BuoyProd', BuoyProd, 1)
+
+          Deallocate( Tmean_g, Tvar_g, UiT_g, BuoyProd_g, Tmean, Tvar, UiT, BuoyProd )
+       End If
+
        ! update meta file
        Call write_meta
 
@@ -448,6 +518,7 @@ Contains
     Deallocate(g_U, g_V, g_W, g_P, g_UiUj, g_GijRes, g_GijSGS)
     Deallocate(g_PiStrain, g_PVel, g_TijY)
     Deallocate(g_TijX, g_TijZ)
+    If ( boussinesq_flag >= 1 ) Deallocate(g_T, g_TT, g_UiT)
 
     ! ── reset accumulators for next window ───────────────────────────────
     Call zero_accumulators
@@ -466,6 +537,9 @@ Contains
     Deallocate(acc_PiStrain, acc_PVel, acc_TijY)
     If ( Allocated(acc_TijX) ) Deallocate(acc_TijX)
     If ( Allocated(acc_TijZ) ) Deallocate(acc_TijZ)
+    If ( Allocated(acc_T) )   Deallocate(acc_T)
+    If ( Allocated(acc_TT) )  Deallocate(acc_TT)
+    If ( Allocated(acc_UiT) ) Deallocate(acc_UiT)
 
   End Subroutine finalize_rsb
 
@@ -481,6 +555,9 @@ Contains
     acc_TijY     = 0d0
     If ( Allocated(acc_TijX) ) acc_TijX = 0d0
     If ( Allocated(acc_TijZ) ) acc_TijZ = 0d0
+    If ( Allocated(acc_T) )   acc_T   = 0d0
+    If ( Allocated(acc_TT) )  acc_TT  = 0d0
+    If ( Allocated(acc_UiT) ) acc_UiT = 0d0
   End Subroutine zero_accumulators
 
 
@@ -1070,6 +1147,8 @@ Contains
     Write(funit,'(A)')      'dtype     = float64'
     Write(funit,'(A)')      '# component order: 11 22 33 12 13 23'
     Write(funit,'(A)')      '# files: Umean(3) Rij Pij epsRes epsSGS PiStrain DTij Dnuij PhiPij Resid'
+    If ( boussinesq_flag >= 1 ) Write(funit,'(A)') &
+         '# boussinesq files: Tmean(1) Tvar(1) UiT(3, order u/v/w) BuoyProd(1) = beta_T*grav*<v''T''>'
     Write(funit,'(A)')      '# array layout in each file: (nc, out_nx, out_ny, out_nz, nsamples)'
     Write(funit,'(A)')      '#   i.e. one slice of shape (nc, out_nx, out_ny, out_nz) per sample'
     Close(funit)

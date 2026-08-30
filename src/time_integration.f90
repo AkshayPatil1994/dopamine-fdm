@@ -11,7 +11,8 @@ Module time_integration
   Use wallmodel
   Use sgs_models
   Use ibm
-  Use scalar_transport, Only : compute_rhs_scalar, apply_scalar_bc
+  Use scalar_transport,  Only : compute_rhs_scalar, apply_scalar_bc
+  Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
   Use monitor,          Only : compute_cfl, write_force_csv, compute_bulk_velocity
   Use profiler
 
@@ -48,8 +49,9 @@ Contains
     Real(Int64) :: Fx_ibm,  Fy_ibm,  Fz_ibm
     Real(Int64) :: Fx_pres, Fy_pres, Fz_pres
     Real(Int64) :: Fx_visc, Fy_visc, Fz_visc
-    Real(Int64) :: cfl_conv, cfl_visc, dt_new
+    Real(Int64) :: cfl_conv, cfl_visc, dt_new, dt_presnap
     Real(Int64) :: Ub_now, dU_cmfr
+    Logical     :: needs_final_sync
 
     ! Enforce IBM before saving old state (zeroes solid cells on step 1, no-op thereafter); apply_ghost_cell_ibm is device-resident and U,V,W are already device-current, so no sync needed
     If ( ibm_input_mode >= 1 ) Then
@@ -79,6 +81,7 @@ Contains
     End If
 
     ! nsave<0: shrink dt (even below dt_min) so t lands exactly on tsave_next, keeping physical-time-based snapshots uniformly spaced under adaptive dt
+    dt_presnap = dt
     If ( nsave < 0 .And. t + dt > tsave_next ) Then
        dt = tsave_next - t
     End If
@@ -93,7 +96,16 @@ Contains
     Wo = W
     !$acc end kernels
     Call profiler_stop(PROF_RK_UPDATE)
-    If ( sediment_flag >= 1 ) Cscal_o = Cscal
+    If ( sediment_flag >= 1 ) Then
+       !$acc kernels present(Cscal,Cscal_o)
+       Cscal_o = Cscal
+       !$acc end kernels
+    End If
+    If ( boussinesq_flag >= 1 ) Then
+       !$acc kernels present(Tscal,Tscal_o)
+       Tscal_o = Tscal
+       !$acc end kernels
+    End If
 
     ! Update imposed pressure gradient (oscillatory / steady forcing); under constant-mass-flux forcing dPdx carries no direct RHS forcing (the CMFR correction below is the sole forcing mechanism)
     If ( flow_forcing_mode == 0 ) Then
@@ -159,13 +171,13 @@ Contains
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
     Call profiler_stop(PROF_BC)
-    ! U,V,W now correct+resident on device; sync to host for the IBM impulse snapshot and the next substage's host-only SGS Pass 2 / scalar transport, if active
-    Call profiler_start(PROF_RK_UPDATE)
-    !$acc update host(U,V,W)
-    Call profiler_stop(PROF_RK_UPDATE)
-    ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
-    ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
+    ! U,V,W now correct+resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
     If ( ibm_input_mode >= 1 ) Then
+       Call profiler_start(PROF_RK_UPDATE)
+       !$acc update host(U,V,W)
+       Call profiler_stop(PROF_RK_UPDATE)
+       ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
+       ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
        Call profiler_start(PROF_IBM)
        If ( nsampling > 0 .And. Mod(istep, nsampling) == 0 ) Then
           U_pre = U;  V_pre = V;  W_pre = W
@@ -186,8 +198,26 @@ Contains
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
        Call compute_rhs_scalar(Cscal, U, V, W, Fcs1)
+       !$acc kernels present(Cscal,Cscal_o,Fcs1)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Fcs1
+       !$acc end kernels
+       !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
+       !$acc update device(Cscal)
+       Call profiler_stop(PROF_SCALAR)
+    End If
+
+    ! Temperature step 1 (buoyancy in stage n's compute_rhs_v reads Tscal as finalized at the end of stage n-1)
+    If ( boussinesq_flag >= 1 ) Then
+       Call profiler_start(PROF_SCALAR)
+       Call compute_rhs_temperature(Tscal, U, V, W, Ft1)
+       !$acc kernels present(Tscal,Tscal_o,Ft1)
+       Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Ft1
+       !$acc end kernels
+       !$acc update host(Tscal)
+       Call apply_temperature_bc(Tscal)
+       !$acc update device(Tscal)
+       If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
        Call profiler_stop(PROF_SCALAR)
     End If
 
@@ -244,13 +274,13 @@ Contains
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
     Call profiler_stop(PROF_BC)
-    ! U,V,W now correct+resident on device; sync to host for the IBM impulse snapshot and the next substage's host-only SGS Pass 2 / scalar transport, if active
-    Call profiler_start(PROF_RK_UPDATE)
-    !$acc update host(U,V,W)
-    Call profiler_stop(PROF_RK_UPDATE)
-    ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
-    ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
+    ! U,V,W now correct+resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
     If ( ibm_input_mode >= 1 ) Then
+       Call profiler_start(PROF_RK_UPDATE)
+       !$acc update host(U,V,W)
+       Call profiler_stop(PROF_RK_UPDATE)
+       ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
+       ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
        Call profiler_start(PROF_IBM)
        If ( nsampling > 0 .And. Mod(istep, nsampling) == 0 ) Then
           U_pre = U;  V_pre = V;  W_pre = W
@@ -271,9 +301,28 @@ Contains
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
        Call compute_rhs_scalar(Cscal, U, V, W, Fcs2)
+       !$acc kernels present(Cscal,Cscal_o,Fcs1,Fcs2)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(2,1)*Fcs1 + rk_coef(2,2)*Fcs2 )
+       !$acc end kernels
+       !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
+       !$acc update device(Cscal)
+       Call profiler_stop(PROF_SCALAR)
+    End If
+
+    ! Temperature step 2
+    If ( boussinesq_flag >= 1 ) Then
+       Call profiler_start(PROF_SCALAR)
+       Call compute_rhs_temperature(Tscal, U, V, W, Ft2)
+       !$acc kernels present(Tscal,Tscal_o,Ft1,Ft2)
+       Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
+            dt*( rk_coef(2,1)*Ft1 + rk_coef(2,2)*Ft2 )
+       !$acc end kernels
+       !$acc update host(Tscal)
+       Call apply_temperature_bc(Tscal)
+       !$acc update device(Tscal)
+       If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
        Call profiler_stop(PROF_SCALAR)
     End If
 
@@ -349,10 +398,20 @@ Contains
        Call profiler_stop(PROF_BC)
     End If
 
-    ! Final sync: host U,V,W needed by CFL/monitor/output and the next full step's pre-CFL SGS call
-    Call profiler_start(PROF_RK_UPDATE)
-    !$acc update host(U,V,W)
-    Call profiler_stop(PROF_RK_UPDATE)
+    ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (IBM re-enforce below, RSB/TI-rescale accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
+    needs_final_sync = ( ibm_input_mode >= 1 ) .Or. &
+         ( rsb_active == 1 .And. istep >= rsb_nstart ) .Or. &
+         ( ti_rescale_active == 1 .And. istep >= ti_rescale_nstart ) .Or. &
+         ( Mod(istep, nmonitor) == 0 ) .Or. &
+         ( nsave > 0 .And. Mod(istep, nsave) == 0 ) .Or. &
+         ( nsave < 0 .And. t >= tsave_next - 1d-10 ) .Or. &
+         ( n_slices > 0 .And. slice_freq > 0 .And. Mod(istep, slice_freq) == 0 ) .Or. &
+         ( n_lines  > 0 .And. line_freq  > 0 .And. Mod(istep, line_freq)  == 0 )
+    If ( needs_final_sync ) Then
+       Call profiler_start(PROF_RK_UPDATE)
+       !$acc update host(U,V,W)
+       Call profiler_stop(PROF_RK_UPDATE)
+    End If
     ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
     ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
     If ( ibm_input_mode >= 1 ) Then
@@ -376,9 +435,28 @@ Contains
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
        Call compute_rhs_scalar(Cscal, U, V, W, Fcs3)
+       !$acc kernels present(Cscal,Cscal_o,Fcs1,Fcs2,Fcs3)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(3,1)*Fcs1 + rk_coef(3,2)*Fcs2 + rk_coef(3,3)*Fcs3 )
+       !$acc end kernels
+       !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
+       !$acc update device(Cscal)
+       Call profiler_stop(PROF_SCALAR)
+    End If
+
+    ! Temperature step 3
+    If ( boussinesq_flag >= 1 ) Then
+       Call profiler_start(PROF_SCALAR)
+       Call compute_rhs_temperature(Tscal, U, V, W, Ft3)
+       !$acc kernels present(Tscal,Tscal_o,Ft1,Ft2,Ft3)
+       Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
+            dt*( rk_coef(3,1)*Ft1 + rk_coef(3,2)*Ft2 + rk_coef(3,3)*Ft3 )
+       !$acc end kernels
+       !$acc update host(Tscal)
+       Call apply_temperature_bc(Tscal)
+       !$acc update device(Tscal)
+       If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
        Call profiler_stop(PROF_SCALAR)
     End If
 
@@ -404,6 +482,9 @@ Contains
        Call sample_ibm_surface(U, V, W)
        Call profiler_stop(PROF_IBM)
     End If
+
+    ! restore the pre-snap dt so next step's CFL-based scaling isn't anchored to the output-snapped value
+    dt = dt_presnap
 
   End Subroutine compute_time_step_RK3
 

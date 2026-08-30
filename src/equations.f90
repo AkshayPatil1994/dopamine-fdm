@@ -3,10 +3,12 @@ Module equations
 
   ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
-  Use global,          Only : x, xm, xg, y, ym, yg, z, zm, zg, term_1, & 
-                              term_2, term, nx, nxg, ny, nyg, nz, nzg, & 
+  Use global,          Only : x, xm, xg, y, ym, yg, z, zm, zg, term_1, &
+                              term_2, term, nx, nxg, ny, nyg, nz, nzg, &
                               nu, dPdx, dPdz, yg_m, nu_t, in1, in2,    &
-                              weight_y_0, weight_y_1, dx, dz
+                              weight_y_0, weight_y_1, dx, dz,         &
+                              boussinesq_flag, beta_T, grav, T_ref, Tscal, &
+                              advection_scheme
   Use interpolation
   
   ! prevent implicit typing
@@ -30,10 +32,16 @@ Contains
     Real   (Int64) :: inv_dx, inv_dz, inv_dx2
     Real   (Int64) :: inv_dy_j   ! 1/(y(j)-y(j-1))
     Real   (Int64) :: inv_dy3    ! 1/dy_3
+    Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
 
     inv_dx  = 1d0 / dx
     inv_dz  = 1d0 / dz
     inv_dx2 = inv_dx * inv_dx   ! used for second derivative in x: 1/dx^2
+
+    ! advective-form weight: 0.5 gives skew-symmetric (default), 0 gives pure divergence-form central
+    w_adv = 0.5d0
+    If ( advection_scheme == 1 ) w_adv = 0d0
+    w_div = 1d0 - w_adv
 
     ! compute convective terms
 
@@ -42,12 +50,13 @@ Contains
     ! interpolate u in x (faces to centers)
     Call interpolate_x(U_,term_1,in1)
 
-    ! -du^2/dx, fused: square + difference + write directly into rhs_u (was 3 separate kernels)
-    !$acc parallel loop collapse(3) present(term_1,rhs_u)
+    ! -du^2/dx: w_div*(divergence form) + w_adv*(advective form u*du/dx), skew-symmetric suppresses aliasing near sharp gradients
+    !$acc parallel loop collapse(3) present(term_1,rhs_u,U_)
     Do k=2,nzg-1
        Do j=2,nyg-1
           Do i=2,nx-1
-             rhs_u(i,j,k) = -( term_1(i,j,k)*term_1(i,j,k) - term_1(i-1,j,k)*term_1(i-1,j,k) )*inv_dx
+             rhs_u(i,j,k) = -( w_div*( term_1(i,j,k)*term_1(i,j,k) - term_1(i-1,j,k)*term_1(i-1,j,k) ) + &
+                                w_adv*U_(i,j,k)*( term_1(i,j,k) - term_1(i-1,j,k) ) )*inv_dx
           End Do
        End Do
     End Do
@@ -61,12 +70,14 @@ Contains
     ! interpolate v in x (centers to faces)
     Call interpolate_x(V_,term_2(:,1:ny,:),in2)
 
-    ! -duv/dy (this derivative goes to ym), fused: uv product + difference + accumulate into rhs_u
+    ! -duv/dy: w_div*(divergence form) + w_adv*(advective form v*du/dy)
     !$acc parallel loop collapse(3) present(term_1,term_2,rhs_u,y)
     Do k=2,nzg-1
        Do j=2,nyg-1
           Do i=2,nx-1
-             rhs_u(i,j,k) = rhs_u(i,j,k) - ( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j-1,k)*term_2(i,j-1,k) ) / ( y(j) - y(j-1) )
+             rhs_u(i,j,k) = rhs_u(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j-1,k)*term_2(i,j-1,k) ) + &
+                  w_adv*0.5d0*(term_2(i,j-1,k)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j-1,k) ) ) &
+                  / ( y(j) - y(j-1) )
           End Do
        End Do
     End Do
@@ -80,12 +91,13 @@ Contains
     ! interpolate w in x (centers to faces)
     Call interpolate_x(W_,term_2(:,:,1:nz),in2)
 
-    ! -duw/dz, fused: uw product + difference + accumulate into rhs_u
+    ! -duw/dz: w_div*(divergence form) + w_adv*(advective form w*du/dz)
     !$acc parallel loop collapse(3) present(term_1,term_2,rhs_u)
     Do k=2,nzg-1
        Do j=2,nyg-1
           Do i=2,nx-1
-             rhs_u(i,j,k) = rhs_u(i,j,k) - ( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j,k-1)*term_2(i,j,k-1) )*inv_dz
+             rhs_u(i,j,k) = rhs_u(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j,k-1)*term_2(i,j,k-1) ) + &
+                  w_adv*0.5d0*(term_2(i,j,k-1)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j,k-1) ) )*inv_dz
           End Do
        End Do
     End Do
@@ -172,10 +184,16 @@ Contains
     Real   (Int64) :: inv_dx, inv_dz, inv_dx2
     Real   (Int64) :: inv_dyg_j               ! 1/(yg(j+1)-yg(j))
     Real   (Int64) :: inv_dy1, inv_dy2, inv_dy3, two_inv_dy3  ! y-spacing inverses
+    Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
 
     inv_dx  = 1d0 / dx
     inv_dz  = 1d0 / dz
     inv_dx2 = inv_dx * inv_dx
+
+    ! advective-form weight: 0.5 gives skew-symmetric (default), 0 gives pure divergence-form central
+    w_adv = 0.5d0
+    If ( advection_scheme == 1 ) w_adv = 0d0
+    w_div = 1d0 - w_adv
 
     ! compute convective terms
 
@@ -184,12 +202,13 @@ Contains
     ! interpolate v in y (faces to centers)
     Call interpolate_y(V_,term_1,in1)
 
-    ! -dv^2/dy ( this derivative goes to yg_m(2:ny-1) ), fused: square + difference + write directly into rhs_v
-    !$acc parallel loop collapse(3) present(term_1,rhs_v,yg)
+    ! -dv^2/dy: w_div*(divergence form) + w_adv*(advective form v*dv/dy)
+    !$acc parallel loop collapse(3) present(term_1,rhs_v,yg,V_)
     Do k=2,nzg-1
        Do j=2,ny-1
           Do i=2,nxg-1
-             rhs_v(i,j,k) = -( term_1(i,j,k)*term_1(i,j,k) - term_1(i,j-1,k)*term_1(i,j-1,k) ) / ( yg(j+1) - yg(j) )
+             rhs_v(i,j,k) = -( w_div*( term_1(i,j,k)*term_1(i,j,k) - term_1(i,j-1,k)*term_1(i,j-1,k) ) + &
+                                w_adv*V_(i,j,k)*( term_1(i,j,k) - term_1(i,j-1,k) ) ) / ( yg(j+1) - yg(j) )
           End Do
        End Do
     End Do
@@ -206,12 +225,13 @@ Contains
     ! interpolate v in x (centers to faces)
     Call interpolate_x(V_,term_2(:,1:ny,:),in2)
 
-    ! -duv/dx, fused: uv product + difference + accumulate into rhs_v
+    ! -duv/dx: w_div*(divergence form) + w_adv*(advective form u*dv/dx)
     !$acc parallel loop collapse(3) present(term_1,term_2,rhs_v)
     Do k=2,nzg-1
        Do j=2,ny-1
           Do i=2,nxg-1
-             rhs_v(i,j,k) = rhs_v(i,j,k) - ( term_1(i,j,k)*term_2(i,j,k) - term_1(i-1,j,k)*term_2(i-1,j,k) )*inv_dx
+             rhs_v(i,j,k) = rhs_v(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i-1,j,k)*term_2(i-1,j,k) ) + &
+                  w_adv*0.5d0*(term_1(i-1,j,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i-1,j,k) ) )*inv_dx
           End Do
        End Do
     End Do
@@ -225,12 +245,13 @@ Contains
     ! interpolate w in y (centers to faces)
     Call interpolate_y(W_,term_2(:,:,1:nz),in2)
 
-    ! -dvw/dz, fused: vw product + difference + accumulate into rhs_v
+    ! -dvw/dz: w_div*(divergence form) + w_adv*(advective form w*dv/dz)
     !$acc parallel loop collapse(3) present(term_1,term_2,rhs_v)
     Do k=2,nzg-1
        Do j=2,ny-1
           Do i=2,nxg-1
-             rhs_v(i,j,k) = rhs_v(i,j,k) - ( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j,k-1)*term_2(i,j,k-1) )*inv_dz
+             rhs_v(i,j,k) = rhs_v(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j,k-1)*term_2(i,j,k-1) ) + &
+                  w_adv*0.5d0*(term_2(i,j,k-1)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j,k-1) ) )*inv_dz
           End Do
        End Do
     End Do
@@ -289,6 +310,19 @@ Contains
     End Do
     !$acc end parallel loop
 
+    ! Boussinesq buoyancy: gravity acts along -y; T_face is the stretched-grid-aware cell-centre-to-v-face interpolation of Tscal (same weight_y_0/weight_y_1 used for nu_t elsewhere in this file)
+    If ( boussinesq_flag >= 1 ) Then
+       !$acc parallel loop collapse(3) present(rhs_v,Tscal,weight_y_0,weight_y_1)
+       Do k=2,nzg-1
+          Do j=2,ny-1
+             Do i=2,nxg-1
+                rhs_v(i,j,k) = rhs_v(i,j,k) + beta_T*grav*( weight_y_0(j)*Tscal(i,j,k) + weight_y_1(j)*Tscal(i,j+1,k) - T_ref )
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+
   End Subroutine compute_rhs_v
 
   !                Compute RHS for dw/dt
@@ -307,10 +341,16 @@ Contains
     Real   (Int64) :: inv_dx, inv_dz, inv_dz2
     Real   (Int64) :: inv_dy_j   ! 1/(y(j)-y(j-1))
     Real   (Int64) :: inv_dy3    ! 1/dy_3
+    Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
 
     inv_dx  = 1d0 / dx
     inv_dz  = 1d0 / dz
     inv_dz2 = inv_dz * inv_dz
+
+    ! advective-form weight: 0.5 gives skew-symmetric (default), 0 gives pure divergence-form central
+    w_adv = 0.5d0
+    If ( advection_scheme == 1 ) w_adv = 0d0
+    w_div = 1d0 - w_adv
 
     ! compute convective terms
 
@@ -319,12 +359,13 @@ Contains
     ! interpolate w in z (faces to centers)
     Call interpolate_z(W_,term_1,in1)
 
-    ! -dw^2/dz, fused: square + difference + write directly into rhs_w
-    !$acc parallel loop collapse(3) present(term_1,rhs_w)
+    ! -dw^2/dz: w_div*(divergence form) + w_adv*(advective form w*dw/dz)
+    !$acc parallel loop collapse(3) present(term_1,rhs_w,W_)
     Do k=2,nz-1
        Do j=2,nyg-1
           Do i=2,nxg-1
-             rhs_w(i,j,k) = -( term_1(i,j,k)*term_1(i,j,k) - term_1(i,j,k-1)*term_1(i,j,k-1) )*inv_dz
+             rhs_w(i,j,k) = -( w_div*( term_1(i,j,k)*term_1(i,j,k) - term_1(i,j,k-1)*term_1(i,j,k-1) ) + &
+                                w_adv*W_(i,j,k)*( term_1(i,j,k) - term_1(i,j,k-1) ) )*inv_dz
           End Do
        End Do
     End Do
@@ -338,12 +379,13 @@ Contains
     ! interpolate w in x (centers to faces)
     Call interpolate_x(W_,term_2(:,:,1:nz),in2)
 
-    ! -duw/dx, fused: uw product + difference + accumulate into rhs_w
+    ! -duw/dx: w_div*(divergence form) + w_adv*(advective form u*dw/dx)
     !$acc parallel loop collapse(3) present(term_1,term_2,rhs_w)
     Do k=2,nz-1
        Do j=2,nyg-1
           Do i=2,nxg-1
-             rhs_w(i,j,k) = rhs_w(i,j,k) - ( term_1(i,j,k)*term_2(i,j,k) - term_1(i-1,j,k)*term_2(i-1,j,k) )*inv_dx
+             rhs_w(i,j,k) = rhs_w(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i-1,j,k)*term_2(i-1,j,k) ) + &
+                  w_adv*0.5d0*(term_1(i-1,j,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i-1,j,k) ) )*inv_dx
           End Do
        End Do
     End Do
@@ -357,12 +399,14 @@ Contains
     ! interpolate w in y (centers to faces)
     Call interpolate_y(W_,term_2(:,:,1:nz),in2)
 
-    ! -dvw/dy (this derivative goes to ym), fused: vw product + difference + accumulate into rhs_w
+    ! -dvw/dy: w_div*(divergence form) + w_adv*(advective form v*dw/dy)
     !$acc parallel loop collapse(3) present(term_1,term_2,rhs_w,y)
     Do k=2,nz-1
        Do j=2,nyg-1
           Do i=2,nxg-1
-             rhs_w(i,j,k) = rhs_w(i,j,k) - ( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j-1,k)*term_2(i,j-1,k) ) / ( y(j) - y(j-1) )
+             rhs_w(i,j,k) = rhs_w(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j-1,k)*term_2(i,j-1,k) ) + &
+                  w_adv*0.5d0*(term_1(i,j-1,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i,j-1,k) ) ) &
+                  / ( y(j) - y(j-1) )
           End Do
        End Do
     End Do

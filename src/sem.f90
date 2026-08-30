@@ -1,4 +1,4 @@
-!> Streamwise inflow BC (x_bc_type==1): constant uniform flow or Ensemble SEM
+!> Streamwise inflow BC (x_bc_type==1): constant uniform flow, Ensemble SEM, or recycled precursor slice
 Module synthetic_eddy_method
 
   ! Modules
@@ -13,6 +13,12 @@ Module synthetic_eddy_method
   Integer(Int32) :: n_profile = 0
   Real   (Int64), Allocatable :: prof_y(:), prof_U(:)
   Real   (Int64), Allocatable :: prof_R11(:), prof_R22(:), prof_R33(:), prof_R12(:)
+  Logical :: inflow_profile_loaded = .False.   ! guards init_inflow_profile against a second (redundant) file read
+
+  ! optional SEM inflow mean-temperature profile (inflow_temperature_file); n_profile_T==0 -> mean_profile_T falls back to T_ref
+  Integer(Int32) :: n_profile_T = 0
+  Real   (Int64), Allocatable :: prof_y_T(:), prof_T(:)
+  !$acc declare create(n_profile_T, prof_y_T, prof_T)
 
   ! inhomogeneous eddy length-scale profile sigma_ij(y) (i=u,v,w; j=x,y,z); n_sigma==0 (sem_sigma_file unset) => homogeneous mode
   Integer(Int32) :: n_sigma = 0
@@ -82,6 +88,35 @@ Module synthetic_eddy_method
   ! leading sentinel + version tag, so read_ti_rescale_restart can tell a current-format file (which starts with this magic) from a pre-ti_gain_decay_started file (which starts directly with n_profile, a small positive count that can never equal this magic)
   Integer(Int32), Parameter :: ti_rescale_restart_magic = -987654321
   Integer(Int32), Parameter :: ti_rescale_restart_version = 4
+
+  ! ---- recycled precursor inflow (inflow_type==2) ------------------------
+  ! rec_active is only .True. on the rank owning the x=1 face (row==0 in the
+  ! p_row/p_col grid); every other rank leaves it .False. and every routine
+  ! below is a no-op there. Can't tell this apart from rec_unit's sign alone:
+  ! Open(newunit=...) always hands back a negative unit (the standard's
+  ! reserved range), so "rec_unit<0" is true both before AND after a
+  ! successful open -- that previously made update_inflow_recycle return
+  ! before ever reading a donor frame, on every rank, every call.
+  Logical        :: rec_active  = .False.
+  Integer(Int32) :: rec_unit    = -1
+  Integer(Int32) :: rec_ncomp   = 0
+  Integer(Int32) :: rec_n1      = 0   ! donor n1 = nym_global (full y, matches this run's)
+  Integer(Int32) :: rec_n2_global = 0 ! donor n2 = nzm_global
+  Integer(Int32) :: rec_col_U   = 0, rec_col_V = 0, rec_col_W = 0   ! 1-based column within the ncomp axis (fixed U,V,W,P,T,C order, see probe_output's parse_comps)
+  Integer(Int32) :: rec_col_T   = 0   ! 0 if the donor slice didn't record T (fine unless boussinesq_flag>=1, checked in init_inflow_recycle)
+  Integer(Int32) :: rec_col_C   = 0   ! 0 if the donor slice didn't record C (fine unless sediment_flag>=1, checked in init_inflow_recycle)
+  Integer(Int32) :: rec_nsnaps  = 0
+  Real   (Int64), Allocatable :: rec_times(:)   ! full donor snapshot-time array; tiny (one Real64 per snapshot), kept resident on the host only
+  Integer(Int32) :: rec_k1 = 0, rec_k2 = 0       ! this rank's local donor z range (global 1-based interior cc indices, same convention as kg1_global/kg2_global-2)
+  Integer(Int64) :: rec_frame_bytes = 0_Int64    ! bytes per full (ncomp,n1,n2_global) donor frame
+  Integer(Int32) :: rec_idx_lo = -1, rec_idx_hi = -1   ! cached bracketing donor frame indices, so a step that doesn't cross a donor sample re-reads nothing
+  Integer(Int32) :: rec_shift_z   = 0                   ! spanwise shift (donor z-cells) for the current pass through the donor timeline; re-drawn every donor-loop wrap (inflow_recycle_shift_z==1)
+  Integer(Int32) :: rec_loop_idx  = -999999              ! which pass through the donor timeline rec_shift_z was drawn for
+  Integer(Int32) :: rec_idx_shift = -999999              ! shift value currently baked into rec_lo/rec_hi (vs. rec_shift_z, the shift that should be active now)
+  Real   (Int64), Allocatable :: rec_lo(:,:,:), rec_hi(:,:,:)   ! (ncomp, n1, local nz) bracketing frames -- only this rank's z-slab, not the whole donor plane
+  Real   (Int64) :: rec_frac = 0d0   ! time-interpolation weight between rec_lo and rec_hi
+
+  !$acc declare create(rec_lo, rec_hi, rec_frac, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1)
 
 Contains
 
@@ -183,23 +218,51 @@ Contains
   End Subroutine auto_set_n_eddies
 
   ! One-time inflow setup. No-op unless x_bc_type==1.
+  !> Read just the mean-profile file (prof_y/prof_U/prof_R**) so an IC generator can seed the interior from the same mean profile the inflow BC will impose; safe to call before the rest of init_inflow's eddy-population setup, and idempotent (init_inflow skips re-reading via inflow_profile_loaded)
+  Subroutine init_inflow_profile
+
+    If ( x_bc_type /= 1 ) Return
+    If ( inflow_profile_loaded ) Return
+
+    If ( inflow_type == 1 ) Then
+       If ( sem_profile_format == 0 ) Then
+          Call read_mean_profile
+       Else If ( sem_profile_format == 1 ) Then
+          Call read_mean_profile_TI
+       Else
+          Stop 'ERROR: sem_profile_format must be 0 (Reynolds-stress) or 1 (wind-tunnel TI)'
+       End If
+       inflow_profile_loaded = .True.
+    Else If ( inflow_type == 2 ) Then
+       ! mean profile only (z-average of the donor's first frame), so genGridandIC can
+       ! seed the interior mean without a step-1 inflow/IC divergence spike, same as inflow_type==1
+       Call read_recycle_mean_profile
+       inflow_profile_loaded = .True.
+    End If
+
+  End Subroutine init_inflow_profile
+
   Subroutine init_inflow
 
     Logical :: auto_length_scale
 
-    If ( x_bc_type /= 1 .Or. inflow_type /= 1 ) Return
+    If ( x_bc_type /= 1 ) Return
+
+    If ( inflow_type == 2 ) Then
+       Call init_inflow_profile
+       Call init_inflow_recycle
+       Return
+    End If
+
+    If ( inflow_type /= 1 ) Return
 
     auto_length_scale = ( sem_length_scale <= 0d0 )
     If ( auto_length_scale ) sem_length_scale = geometric_length_scale_estimate()
 
-    If ( sem_profile_format == 0 ) Then
-       Call read_mean_profile
-    Else If ( sem_profile_format == 1 ) Then
-       Call read_mean_profile_TI
-    Else
-       Stop 'ERROR: sem_profile_format must be 0 (Reynolds-stress) or 1 (wind-tunnel TI)'
-    End If
+    Call init_inflow_profile
     Call read_sigma_profile   ! sem_sigma_file, if set, overrides any length scales read_mean_profile_TI derived from inflow_profile_file
+
+    If ( boussinesq_flag >= 1 .And. Len_trim(inflow_temperature_file) > 0 ) Call read_mean_profile_T
 
     If ( sem_use_esem == 0 .And. ( n_sigma > 0 .Or. sem_wall_damping == 1 ) ) Stop &
          'ERROR: sem_use_esem=0 (classical SEM) requires sem_sigma_file to be unset and sem_wall_damping=0 -- ' // &
@@ -239,8 +302,345 @@ Contains
     If ( sem_use_esem == 1 ) Then
        !$acc update device(ens_mean_uU, ens_std_uU, ens_mean_uV, ens_std_uV, ens_mean_vV, ens_std_vV, ens_mean_wW, ens_std_wW)
     End If
+    If ( n_profile_T > 0 ) Then
+       !$acc update device(n_profile_T, prof_y_T, prof_T)
+    Else
+       !$acc update device(n_profile_T)
+    End If
 
   End Subroutine init_inflow
+
+  !> Parse a recycled-inflow donor's <inflow_recycle_file>_meta.txt (as written by probe_output's x-normal slice writer); returns the slice dims/snapshot count and the U/V/W 1-based column index within the ncomp axis (0 if a component is absent -- probe_output always writes columns in fixed U,V,W,P,T order regardless of the order requested in slice_comps)
+  Subroutine read_recycle_meta(ncomp, n1, n2, nsnaps, colU, colV, colW, colT, colC)
+
+    Integer(Int32), Intent(Out) :: ncomp, n1, n2, nsnaps, colU, colV, colW, colT, colC
+
+    Integer(Int32) :: u_meta, ios, eqpos, i, ic, colP
+    Character(300) :: fname, line
+    Character(20)  :: key
+    Character(8)   :: comps_str
+
+    If ( Len_trim(inflow_recycle_file) == 0 ) &
+         Stop 'ERROR: inflow_type=2 (recycled inflow) requires inflow_recycle_file to be set'
+
+    Write(fname,'(A,A)') Trim(inflow_recycle_file), '_meta.txt'
+    Open(newunit=u_meta, file=Trim(fname), form='formatted', status='old', action='read', iostat=ios)
+    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file meta (expected <inflow_recycle_file>_meta.txt)'
+
+    ncomp = 0; n1 = 0; n2 = 0; nsnaps = 0; comps_str = ''
+    Do
+       Read(u_meta,'(A)', iostat=ios) line
+       If ( ios /= 0 ) Exit
+       eqpos = Index(line,'=')
+       If ( eqpos < 1 ) Cycle
+       key = Adjustl(line(1:eqpos-1))
+       Select Case ( Trim(key) )
+       Case ('ncomp');  Read(line(eqpos+1:),*) ncomp
+       Case ('n1');     Read(line(eqpos+1:),*) n1
+       Case ('n2');     Read(line(eqpos+1:),*) n2
+       Case ('comps');  comps_str = Adjustl(line(eqpos+1:))
+       Case ('nsnaps'); Read(line(eqpos+1:),*) nsnaps
+       Case ('dir')
+          line = Adjustl(line(eqpos+1:))
+          If ( line(1:1) /= 'x' .And. line(1:1) /= 'X' ) &
+               Stop 'ERROR: inflow_recycle_file meta is not an x-normal slice (dir/=x)'
+       End Select
+    End Do
+    Close(u_meta)
+
+    If ( ncomp < 1 .Or. n1 < 1 .Or. n2 < 1 .Or. nsnaps < 1 ) &
+         Stop 'ERROR: inflow_recycle_file meta is incomplete or malformed'
+
+    Do ic = 1, Len_trim(comps_str)
+       If ( comps_str(ic:ic) >= 'a' .And. comps_str(ic:ic) <= 'z' ) &
+            comps_str(ic:ic) = Achar(Iachar(comps_str(ic:ic)) - 32)
+    End Do
+
+    ! fixed U,V,W,P,T,C column order, matching probe_output's parse_comps/write_slice_n
+    colU = 0; colV = 0; colW = 0; colP = 0; colT = 0; colC = 0
+    i = 0
+    If ( Index(comps_str,'U') > 0 ) Then; i = i + 1; colU = i; End If
+    If ( Index(comps_str,'V') > 0 ) Then; i = i + 1; colV = i; End If
+    If ( Index(comps_str,'W') > 0 ) Then; i = i + 1; colW = i; End If
+    If ( Index(comps_str,'P') > 0 ) Then; i = i + 1; colP = i; End If
+    If ( Index(comps_str,'T') > 0 ) Then; i = i + 1; colT = i; End If
+    If ( Index(comps_str,'C') > 0 ) Then; i = i + 1; colC = i; End If
+    If ( colU == 0 .Or. colV == 0 .Or. colW == 0 ) Stop &
+         'ERROR: inflow_recycle_file must contain U,V,W (set slice_comps="UVW..." on the donor run)'
+
+  End Subroutine read_recycle_meta
+
+  !> Mean-profile seed for inflow_type==2 (recycled precursor inflow): every rank independently reads the donor's first frame and z-averages U(y), mirroring read_mean_profile's per-rank-independent read of a small shared file (here the read is one frame, not the whole donor file); R11/R22/R33/R12 are left at zero since sem_fluctuation is never called under inflow_type==2 -- these only feed mean_profile_U, used by genGridandIC to seed the IC mean
+  Subroutine read_recycle_mean_profile
+
+    Integer(Int32) :: ncomp, n1, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy
+    Real(Int64), Allocatable :: frame(:,:,:)
+    Character(300) :: fname
+
+    Call read_recycle_meta(ncomp, n1, n2, nsnaps, colU, colV, colW, colT, colC)
+
+    If ( n1 /= nym_global ) Stop 'ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global'
+    If ( n2 /= nzm_global ) Stop 'ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global'
+
+    n_profile = n1
+    Allocate( prof_y(n_profile), prof_U(n_profile) )
+    Allocate( prof_R11(n_profile), prof_R22(n_profile), prof_R33(n_profile), prof_R12(n_profile) )
+    prof_y = ym_global
+    prof_R11 = 0d0;  prof_R22 = 0d0;  prof_R33 = 0d0;  prof_R12 = 0d0
+
+    ! only rank 0 pays the O(ncomp*n1*n2) transient allocation+read for the donor's first
+    ! frame (unlike read_mean_profile's small text file, every rank independently reading
+    ! this full field slice would multiply a potentially large one-time cost by nprocs);
+    ! the result (prof_U, n1 reals) is tiny, so broadcast it instead
+    If ( myid == 0 ) Then
+       Allocate( frame(ncomp,n1,n2) )
+       Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
+       Open(newunit=unit_in, file=Trim(fname), access='stream', form='unformatted', &
+            status='old', action='read', iostat=ios)
+       If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)'
+       Read(unit_in) frame
+       Close(unit_in)
+       Do jy = 1, n1
+          prof_U(jy) = Sum(frame(colU,jy,:)) / Real(n2,8)
+       End Do
+       Deallocate(frame)
+    End If
+
+    Call Mpi_bcast( prof_U, n_profile, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+
+  End Subroutine read_recycle_mean_profile
+
+  !> One-time setup for inflow_type==2's runtime BC buffers: no-op on every rank except the one owning the x=1 face (row==0), which opens a persistent stream handle on the donor .bin and primes the bracketing time-interpolation frames (rec_lo/rec_hi) for this rank's own local z-slab only
+  Subroutine init_inflow_recycle
+
+    Integer(Int32) :: ios, u_times
+    Character(300) :: fname
+
+    rec_unit = -1
+    rec_active = .False.
+    ! this rank owns the x=1 face iff it's in row 0 of the p_row/p_col grid (mirrors decomp's x_periodic_partner, avoiding a new decomp.f90 dependency here since sem.f90 is also compiled standalone by the tests/verify_* targets)
+    If ( myid/p_col /= 0 ) Return
+
+    Call read_recycle_meta(rec_ncomp, rec_n1, rec_n2_global, rec_nsnaps, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C)
+
+    If ( rec_n1 /= nym_global ) Stop 'ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global'
+    If ( rec_n2_global /= nzm_global ) Stop 'ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global'
+    If ( rec_nsnaps < 2 ) Stop 'ERROR: inflow_recycle_file must contain at least 2 snapshots to interpolate in time'
+    If ( boussinesq_flag >= 1 .And. rec_col_T == 0 ) Stop 'ERROR: boussinesq_flag>=1 with ' // &
+         'inflow_type=2 requires T in the donor slice (donor slice_comps must include ''T'')'
+    If ( sediment_flag >= 1 .And. rec_col_C == 0 ) Stop 'ERROR: sediment_flag>=1 with ' // &
+         'inflow_type=2 requires C in the donor slice (donor slice_comps must include ''C'')'
+
+    Allocate( rec_times(rec_nsnaps) )
+    Write(fname,'(A,A)') Trim(inflow_recycle_file), '_times.bin'
+    Open(newunit=u_times, file=Trim(fname), access='stream', form='unformatted', &
+         status='old', action='read', iostat=ios)
+    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file times (expected <inflow_recycle_file>_times.bin)'
+    Read(u_times) rec_times
+    Close(u_times)
+
+    ! this rank's local donor z-slab: same global 1-based interior cc convention write_slice_n used (kg_g = kg1_global(myid)+ka-2)
+    rec_k1 = kg1_global(myid)
+    rec_k2 = kg2_global(myid) - 2
+    rec_frame_bytes = 8_Int64 * Int(rec_ncomp,Int64) * Int(rec_n1,Int64) * Int(rec_n2_global,Int64)
+
+    Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
+    Open(newunit=rec_unit, file=Trim(fname), access='stream', form='unformatted', &
+         status='old', action='read', iostat=ios)
+    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)'
+    rec_active = .True.
+
+    Allocate( rec_lo(rec_ncomp, rec_n1, rec_k2-rec_k1+1) )
+    Allocate( rec_hi(rec_ncomp, rec_n1, rec_k2-rec_k1+1) )
+    rec_idx_lo = -1;  rec_idx_hi = -1
+
+    !$acc update device(rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1)
+
+    Call update_inflow_recycle(t)   ! prime rec_lo/rec_hi/rec_frac before the first BC application
+
+    Write(*,'(A,I0,A,A,A,I0,A)') ' Rank ', myid, ': recycled precursor inflow from ', &
+         Trim(inflow_recycle_file), ' (', rec_nsnaps, ' donor snapshots)'
+
+  End Subroutine init_inflow_recycle
+
+  !> Read one contiguous donor-z span (z0..z0+count-1, 1-based global donor z index, no shift/wrap applied by this routine) of frame frame_idx's local slab into buf(:,:,zoff:zoff+count-1); the donor's (ncomp,n1,n2) storage order (component fastest, then y, then z) makes any single z-span a contiguous disk read
+  Subroutine read_recycle_span(frame_idx, z0, count, buf, zoff)
+
+    Integer(Int32), Intent(In)    :: frame_idx, z0, count, zoff
+    Real   (Int64), Intent(InOut) :: buf(:,:,:)
+
+    Integer(Int64) :: byte_pos
+
+    If ( count < 1 ) Return
+    byte_pos = Int(frame_idx-1,Int64)*rec_frame_bytes + &
+               Int(z0-1,Int64)*8_Int64*Int(rec_ncomp,Int64)*Int(rec_n1,Int64) + 1_Int64
+    Read(rec_unit, pos=byte_pos) buf(:,:,zoff:zoff+count-1)
+
+  End Subroutine read_recycle_span
+
+  !> Read one donor frame's local z-slab, circularly shifted by shift_z donor z-cells (spanwise shift, see update_inflow_recycle); this rank's unshifted span is [rec_k1,rec_k2], so the shifted span is that window rotated by shift_z within the donor's periodic z range [1,rec_n2_global] -- at most one wrap, split into two contiguous reads when it crosses the donor's z boundary
+  Subroutine read_recycle_frame(frame_idx, shift_z, buf)
+
+    Integer(Int32), Intent(In)    :: frame_idx, shift_z
+    Real   (Int64), Intent(InOut) :: buf(:,:,:)
+
+    Integer(Int32) :: nzloc, z_start, nA
+
+    nzloc   = rec_k2 - rec_k1 + 1
+    z_start = Modulo( rec_k1 - 1 + shift_z, rec_n2_global ) + 1
+
+    If ( z_start + nzloc - 1 <= rec_n2_global ) Then
+       Call read_recycle_span(frame_idx, z_start, nzloc, buf, 1)
+    Else
+       nA = rec_n2_global - z_start + 1
+       Call read_recycle_span(frame_idx, z_start, nA,         buf, 1)
+       Call read_recycle_span(frame_idx, 1,       nzloc-nA,   buf, nA+1)
+    End If
+
+  End Subroutine read_recycle_frame
+
+  !> Advance the recycled-inflow bracket (rec_lo/rec_hi/rec_frac) to time t_now; no-op except on the rank owning the x=1 face. Re-reads donor frames from disk only when the bracket or the spanwise shift actually changes, and only ever reads the frame(s) needed rather than the whole donor plane -- when the bracket simply slides forward (same loop pass, same shift), the old "hi" frame becomes the new "lo" and only one fresh frame is read
+  Subroutine update_inflow_recycle(t_now)
+
+    Real(Int64), Intent(In) :: t_now
+
+    Real(Int64) :: t0, t1, duration, t_target, u
+    Integer(Int32) :: ilo, ihi, lo, hi, mid, loop_idx, shift_z
+    Logical :: changed
+
+    If ( .Not. rec_active ) Return
+
+    t0 = rec_times(1);  t1 = rec_times(rec_nsnaps)
+    duration = t1 - t0
+
+    t_target = t_now + inflow_recycle_t_offset
+    loop_idx = 0
+    If ( inflow_recycle_loop == 1 .And. duration > 0d0 ) Then
+       loop_idx = Floor( (t_target - t0) / duration )
+       t_target = t0 + Modulo(t_target - t0, duration)
+    Else
+       t_target = Min( Max(t_target, t0), t1 )
+    End If
+
+    ! new spanwise shift each time we start a fresh pass through the donor timeline (deterministic hash of (seed,loop_idx), same tool sem.f90 already uses to re-randomize eddies each recycle -- restart-safe, no RNG state to persist)
+    shift_z = 0
+    If ( inflow_recycle_loop == 1 .And. inflow_recycle_shift_z == 1 .And. rec_n2_global > 1 ) Then
+       If ( loop_idx /= rec_loop_idx ) Then
+          u = hash_uniform(inflow_recycle_seed, loop_idx, 0, 97)
+          rec_shift_z  = Int( u * Real(rec_n2_global,8) )
+          rec_shift_z  = Min( Max(rec_shift_z,0), rec_n2_global-1 )
+          rec_loop_idx = loop_idx
+       End If
+       shift_z = rec_shift_z
+    End If
+
+    ! binary search rec_times(1:rec_nsnaps) (monotone by construction) for the bracketing pair
+    lo = 1;  hi = rec_nsnaps
+    Do While ( hi - lo > 1 )
+       mid = (lo+hi)/2
+       If ( rec_times(mid) <= t_target ) Then
+          lo = mid
+       Else
+          hi = mid
+       End If
+    End Do
+    ilo = lo;  ihi = hi
+    If ( ilo == ihi ) ihi = Min(ilo+1, rec_nsnaps)
+
+    changed = .False.
+    If ( ilo /= rec_idx_lo .Or. ihi /= rec_idx_hi .Or. shift_z /= rec_idx_shift ) Then
+       If ( ilo == rec_idx_hi .And. shift_z == rec_idx_shift ) Then
+          rec_lo = rec_hi                                 ! bracket slid forward, same shift: reuse, don't re-read
+          Call read_recycle_frame(ihi, shift_z, rec_hi)
+       Else
+          Call read_recycle_frame(ilo, shift_z, rec_lo)    ! first call, a jump, or a fresh shift at a loop wrap
+          Call read_recycle_frame(ihi, shift_z, rec_hi)
+       End If
+       rec_idx_lo = ilo;  rec_idx_hi = ihi;  rec_idx_shift = shift_z
+       changed = .True.
+    End If
+
+    If ( rec_times(ihi) > rec_times(ilo) ) Then
+       rec_frac = ( t_target - rec_times(ilo) ) / ( rec_times(ihi) - rec_times(ilo) )
+    Else
+       rec_frac = 0d0
+    End If
+    rec_frac = Min( Max(rec_frac,0d0), 1d0 )
+
+    If ( changed ) Then
+       !$acc update device(rec_lo, rec_hi)
+    End If
+    !$acc update device(rec_frac)
+
+  End Subroutine update_inflow_recycle
+
+  !> Time-interpolated recycled-inflow value for component comp (1=U,2=V,3=W,4=T,5=C) at this rank's local ghost-array (j,k); j,k use the same (yg,zg)-ghost-inclusive index space as apply_inflow_bc_x/apply_inflow_bc_scalar_x -- the donor stored cell-centre-averaged U,V,W,T,C (see probe_output's cc_val), so this ignores the sub-cell y/z staggering offset for V/W, an accepted approximation at typical grid resolutions
+  Real(Int64) Function recycle_value(comp, j, k) Result(val)
+    !$acc routine seq
+
+    Integer(Int32), Intent(In) :: comp, j, k
+
+    Integer(Int32) :: jy, kz, col
+
+    jy = Max( 1, Min(rec_n1, j-1) )
+    kz = Max( 1, Min(Size(rec_lo,3), k-1) )
+
+    If ( comp == 1 ) Then
+       col = rec_col_U
+    Else If ( comp == 2 ) Then
+       col = rec_col_V
+    Else If ( comp == 3 ) Then
+       col = rec_col_W
+    Else If ( comp == 4 ) Then
+       col = rec_col_T
+    Else
+       col = rec_col_C
+    End If
+
+    val = rec_lo(col,jy,kz) + rec_frac*( rec_hi(col,jy,kz) - rec_lo(col,jy,kz) )
+
+  End Function recycle_value
+
+  !> Read the SEM inflow mean-temperature profile (two columns: y T); optional companion to read_mean_profile
+  Subroutine read_mean_profile_T
+
+    Integer(Int32) :: unit_in, ios, n
+    Real   (Int64) :: col(2)
+    Character(300) :: line
+
+    If ( myid == 0 ) Write(*,'(A,A)') ' Reading SEM inflow temperature profile from ', Trim(inflow_temperature_file)
+
+    Open(newunit=unit_in, file=Trim(inflow_temperature_file), status='old', action='read', iostat=ios)
+    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_temperature_file'
+
+    n_profile_T = 0
+    Do
+       Read(unit_in,'(A)',iostat=ios) line
+       If ( ios /= 0 ) Exit
+       line = Adjustl(line)
+       If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
+       n_profile_T = n_profile_T + 1
+    End Do
+    If ( n_profile_T < 2 ) Stop 'ERROR: inflow_temperature_file: fewer than 2 data rows found'
+
+    Allocate( prof_y_T(n_profile_T), prof_T(n_profile_T) )
+
+    Rewind(unit_in)
+    n = 0
+    Do
+       Read(unit_in,'(A)',iostat=ios) line
+       If ( ios /= 0 ) Exit
+       line = Adjustl(line)
+       If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
+       n = n + 1
+       Read(line,*,iostat=ios) col(1:2)
+       If ( ios /= 0 ) Stop 'ERROR: inflow_temperature_file: failed to parse a data row (need 2 columns: y T)'
+       prof_y_T(n) = col(1)
+       prof_T(n)   = col(2)
+    End Do
+    Close(unit_in)
+
+  End Subroutine read_mean_profile_T
 
   ! Read the mean-velocity / Reynolds-stress reference profile (unchanged
   ! format/semantics from the original SEM implementation).
@@ -1105,6 +1505,20 @@ Contains
 
   End Function mean_profile_U
 
+  !> Target mean inflow temperature profile: n_profile_T==0 falls back to T_ref (uniform), else interpolated prof_T(y)
+  Real(Int64) Function mean_profile_T(yc) Result(Tc)
+    !$acc routine seq
+
+    Real(Int64), Intent(In) :: yc
+
+    If ( n_profile_T > 0 ) Then
+       Tc = linterp(prof_y_T, prof_T, n_profile_T, yc)
+    Else
+       Tc = T_ref
+    End If
+
+  End Function mean_profile_T
+
   !> Inflow velocity fluctuation at (yc,zc) for component comp (1=U,2=V,3=W): inflow_type==0 none, inflow_type==1 ESEM raw eddy sum normalised (Section 3) then Cholesky-correlated to the target Reynolds-stress tensor (R13=R23=0 assumed)
   Subroutine sem_fluctuation(comp, j, k, yc, zc, t_now, up, vp, wp)
     !$acc routine seq
@@ -1313,7 +1727,7 @@ Contains
 
   End Subroutine init_ti_rescale
 
-  !> Per-step raw-moment accumulation at the TI-rescale sampling station, summed over the local z range (no MPI; cheap host loop, mirrors accumulate_rsb's style). No-op unless ti_rescale_active==1 and istep>=ti_rescale_nstart.
+  !> Per-step raw-moment accumulation at the TI-rescale sampling station, summed over the local z range (no MPI; cheap host loop, mirrors accumulate_rsb's style). No-op unless ti_rescale_active==1, istep>=ti_rescale_nstart, and this rank's x-row owns the sampling station.
   Subroutine accumulate_ti_rescale
 
     Integer(Int32) :: j, k, ia, jg
@@ -1321,8 +1735,10 @@ Contains
 
     If ( ti_rescale_active /= 1 ) Return
     If ( istep < ti_rescale_nstart ) Return
+    ! ti_i0 is a global interior cc x-index; skip on ranks whose x-row doesn't own it
+    If ( ti_i0 < ig1_global(myid) .Or. ti_i0 > ig2_global(myid)-2 ) Return
 
-    ia = ti_i0 + 1   ! global cc index -> local ghost-array index (x is never domain-decomposed)
+    ia = ti_i0 - ig1_global(myid) + 2   ! global cc index -> local ghost-array index
 
     Do k = 2, nzg-1
        Do j = 2, nyg-1
