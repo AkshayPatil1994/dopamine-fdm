@@ -33,10 +33,13 @@ Module synthetic_eddy_method
 
   ! eddy population (inflow_type==1): fixed size class/x-phase, but (y,z) and sign re-drawn every recycle -- eddy-recycling/phase-locking rationale
   Real   (Int64), Allocatable :: eddy_x0(:)
+  Real   (Int64), Allocatable :: eddy_y0(:)        ! (sem_n_eddies): placement height this eddy's size class (eddy_sig) was calibrated at; anchors eddy_realize's per-cycle y_r redraw (inhomogeneous mode) so a wall-sized eddy can't wander into the outer layer and vice versa
   Real   (Int64), Allocatable :: eddy_sig(:,:,:)   ! (3,3,sem_n_eddies): (i,j,k)=sigma_ij of eddy k
   Real   (Int64), Allocatable :: eddy_smax(:,:)    ! (3,sem_n_eddies): (j,k)=max_i(sigma_ij) of eddy k
   Real   (Int64), Allocatable :: eddy_Tperiod(:)   ! (sem_n_eddies): 2*eddy_smax(1,k)/Uconv_sem
   Real   (Int64) :: Uconv_sem = 0d0                ! eddy-box convection velocity
+
+  Real   (Int64), Parameter :: sem_placement_band_factor = 3d0  ! half-width (in units of eddy_smax(2,k)) of the y-band eddy_realize confines eddy k's re-realized position to, inhomogeneous mode only
 
   ! placement box bounds, needed at runtime (not just at init) by
   ! eddy_realize's per-cycle re-randomization
@@ -53,14 +56,19 @@ Module synthetic_eddy_method
 
   Real   (Int64), Parameter :: sem_clip_sigma = 5d0  ! safety-net clip, local target std-devs
 
+  ! near-wall no-slip enforcement for the fluctuating field (Section sem_fluctuation): precomputed once (host-side, init_inflow) from y_global/y_bc_type/bc_face_ylo/yhi so sem_fluctuation's !$acc routine seq body only needs these device-resident scalars, not y_global itself
+  Integer(Int32) :: wall_active_lo = 0, wall_active_hi = 0
+  Real   (Int64) :: wall_y_lo = 0d0, wall_y_hi = 0d0, wall_Ltaper_lo = 1d0, wall_Ltaper_hi = 1d0
+
   ! device residency for the state sem_fluctuation's per-step (!$acc routine seq) call chain reads; populated once by init_inflow (see its !$acc update device calls), read-only thereafter
   !$acc declare create(n_profile, prof_y, prof_U, prof_R11, prof_R22, prof_R33, prof_R12)
   !$acc declare create(n_sigma, sig_y, sig_ux, sig_uy, sig_uz, sig_vx, sig_vy, sig_vz, sig_wx, sig_wy, sig_wz)
   !$acc declare create(n_cdf, cdf_y, cdf_val)
-  !$acc declare create(eddy_x0, eddy_sig, eddy_smax, eddy_Tperiod, Uconv_sem)
+  !$acc declare create(eddy_x0, eddy_y0, eddy_sig, eddy_smax, eddy_Tperiod, Uconv_sem)
   !$acc declare create(box_y_lo, box_y_hi, box_z_lo, box_z_hi)
   !$acc declare create(ens_mean_uU, ens_std_uU, ens_mean_uV, ens_std_uV, ens_mean_vV, ens_std_vV, ens_mean_wW, ens_std_wW)
   !$acc declare create(sem_norm)
+  !$acc declare create(wall_active_lo, wall_active_hi, wall_y_lo, wall_y_hi, wall_Ltaper_lo, wall_Ltaper_hi)
 
   ! in-situ TI-profile rescaling (ti_rescale_active==1): host-only bookkeeping
   ! prof_R11_target/R22_target/R33_target: immutable copy of the originally-read profile; prof_R11/R22/R33 are the mutable, currently-injected profile that gets nudged
@@ -275,6 +283,14 @@ Contains
     Uconv_sem = Sum(prof_U) / Real(n_profile,8)
     If ( Uconv_sem <= 0d0 ) Stop 'ERROR: SEM inflow profile has non-positive bulk velocity'
 
+    ! near-wall no-slip enforcement setup (see wall_taper/sem_fluctuation): only active at faces that are literal Dirichlet (no-slip) walls, not periodic or free-slip
+    wall_active_lo = Merge( 1, 0, y_bc_type == 1 .And. bc_face_ylo == 1 )
+    wall_active_hi = Merge( 1, 0, y_bc_type == 1 .And. bc_face_yhi == 1 )
+    wall_y_lo      = y_global(1)
+    wall_y_hi      = y_global(ny_global)
+    wall_Ltaper_lo = 2d0*( y_global(2)         - y_global(1) )
+    wall_Ltaper_hi = 2d0*( y_global(ny_global) - y_global(ny_global-1) )
+
     If ( auto_length_scale ) Call refine_sem_length_scale
     If ( sem_n_eddies <= 0 ) Call auto_set_n_eddies
 
@@ -288,13 +304,14 @@ Contains
 
     ! one-time push of everything sem_fluctuation's per-step !$acc routine seq chain reads
     !$acc update device(n_profile, prof_y, prof_U, prof_R11, prof_R22, prof_R33, prof_R12)
+    !$acc update device(wall_active_lo, wall_active_hi, wall_y_lo, wall_y_hi, wall_Ltaper_lo, wall_Ltaper_hi)
     If ( n_sigma > 0 ) Then
        !$acc update device(n_sigma, sig_y, sig_ux, sig_uy, sig_uz, sig_vx, sig_vy, sig_vz, sig_wx, sig_wy, sig_wz)
     Else
        !$acc update device(n_sigma)
     End If
     !$acc update device(Uconv_sem, box_y_lo, box_y_hi, box_z_lo, box_z_hi)
-    !$acc update device(eddy_x0, eddy_sig, eddy_smax, eddy_Tperiod)
+    !$acc update device(eddy_x0, eddy_y0, eddy_sig, eddy_smax, eddy_Tperiod)
     If ( sem_eddy_placement == 1 .And. n_sigma > 0 ) Then
        !$acc update device(n_cdf, cdf_y, cdf_val)
     End If
@@ -1047,7 +1064,7 @@ Contains
     box_z_lo = z_global(1)         - smaxz_glob
     box_z_hi = z_global(nz_global) + smaxz_glob
 
-    Allocate( eddy_x0(sem_n_eddies) )
+    Allocate( eddy_x0(sem_n_eddies), eddy_y0(sem_n_eddies) )
     Allocate( eddy_sig(3,3,sem_n_eddies), eddy_smax(3,sem_n_eddies), eddy_Tperiod(sem_n_eddies) )
 
     ! identical seed/sequence on every rank: eddy population is a single shared virtual field upstream of the (MPI-decomposed-in-z) inflow plane
@@ -1067,6 +1084,7 @@ Contains
        Else
           y0 = box_y_lo + (box_y_hi-box_y_lo)*r1
        End If
+       eddy_y0(kk) = y0
 
        ! ---- this eddy's own 9-component length scales (Section 4.1);
        ! homogeneous mode: all nine = sem_length_scale
@@ -1133,13 +1151,26 @@ Contains
     Integer(Int32), Intent(In)  :: k, n
     Real   (Int64), Intent(Out) :: y_r, z_r, eps_r(3)
 
-    Real(Int64) :: u1, u2, u3, u4, u5
+    Real(Int64) :: u1, u2, u3, u4, u5, band
 
     u1 = hash_uniform(sem_seed, k, n, 1)
     If ( sem_eddy_placement == 1 .And. n_sigma > 0 ) Then
        y_r = invert_cdf(u1)
     Else
        y_r = box_y_lo + (box_y_hi-box_y_lo)*u1
+    End If
+
+    ! Inhomogeneous mode: keep eddy k statistically anchored to the
+    ! wall-normal region its size class (eddy_sig, fixed at place_eddies
+    ! from placement height eddy_y0(k)) was calibrated for. Without this,
+    ! the draw above is independent of k's own size, so an outer-layer-sized
+    ! eddy can be re-realized at the wall (injecting an oversized fluctuation
+    ! there and biasing the mean profile) while a wall-sized eddy is wasted
+    ! out in the free stream (under-populating outer-layer variance).
+    If ( n_sigma > 0 ) Then
+       band = sem_placement_band_factor * eddy_smax(2,k)
+       y_r  = Min( Max( y_r, eddy_y0(k)-band ), eddy_y0(k)+band )
+       y_r  = Min( Max( y_r, box_y_lo ), box_y_hi )
     End If
 
     u2 = hash_uniform(sem_seed, k, n, 2); z_r = box_z_lo + (box_z_hi-box_z_lo)*u2
@@ -1528,7 +1559,7 @@ Contains
     Real   (Int64), Intent(Out) :: up, vp, wp
 
     Real(Int64) :: ustar, vstar, wstar, ui, vi, wi
-    Real(Int64) :: R11, R22, R33, R12, a11, a21, a22, a33
+    Real(Int64) :: R11, R22, R33, R12, a11, a21, a22, a33, taper
 
     If ( inflow_type == 0 ) Then
        up = 0d0; vp = 0d0; wp = 0d0
@@ -1560,6 +1591,18 @@ Contains
     ! with the local target Reynolds-stress tensor via Cholesky
     R11 = interp_profile(prof_R11,yc); R22 = interp_profile(prof_R22,yc)
     R33 = interp_profile(prof_R33,yc); R12 = interp_profile(prof_R12,yc)
+
+    ! Force no-slip on the injected fluctuation at literal solid walls,
+    ! independent of whether the user-supplied Reynolds-stress profile
+    ! itself decays to zero there: linterp clamps to the profile's
+    ! endpoint value outside its data range, so a profile that doesn't
+    ! extend flush to the wall would otherwise hold a non-decaying,
+    ! nonzero R_ii right up to the wall face.
+    taper = 1d0
+    If ( wall_active_lo == 1 ) taper = taper * wall_taper( yc-wall_y_lo, wall_Ltaper_lo )
+    If ( wall_active_hi == 1 ) taper = taper * wall_taper( wall_y_hi-yc, wall_Ltaper_hi )
+    R11 = R11*taper; R22 = R22*taper; R33 = R33*taper; R12 = R12*taper
+
     a11 = Sqrt( Max(R11,0d0) )
     a21 = Merge( R12/a11, 0d0, a11 > 0d0 )
     a22 = Sqrt( Max(R22 - a21*a21, 0d0) )
@@ -1575,6 +1618,18 @@ Contains
     wp = Sign( Min(Abs(wp), sem_clip_sigma*a33), wp )
 
   End Subroutine sem_fluctuation
+
+  !> Smoothstep ramp from 0 (at the wall, d=0) to 1 (by d>=Ltaper); used to enforce no-slip on injected SEM fluctuations at literal solid walls regardless of the input Reynolds-stress profile's near-wall coverage
+  Real(Int64) Function wall_taper(d, Ltaper) Result(f)
+    !$acc routine seq
+
+    Real(Int64), Intent(In) :: d, Ltaper
+    Real(Int64) :: tt
+
+    tt = Min( Max( d/Ltaper, 0d0 ), 1d0 )
+    f  = tt*tt*(3d0 - 2d0*tt)
+
+  End Function wall_taper
 
   !> 1-D tent (triangular) SEM shape function (Jarrin 2006), normalised so integral of f^2 over its support equals 1; homogeneous mode only
   Real(Int64) Function tent_kernel(r, sigma) Result(f)

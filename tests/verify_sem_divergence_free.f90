@@ -111,6 +111,7 @@ Contains
   Subroutine reset_sem_state
 
     If ( Allocated(eddy_x0)     ) Deallocate(eddy_x0)
+    If ( Allocated(eddy_y0)     ) Deallocate(eddy_y0)
     If ( Allocated(eddy_sig)    ) Deallocate(eddy_sig)
     If ( Allocated(eddy_smax)   ) Deallocate(eddy_smax)
     If ( Allocated(eddy_Tperiod)) Deallocate(eddy_Tperiod)
