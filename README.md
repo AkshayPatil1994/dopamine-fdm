@@ -2,13 +2,15 @@
 
 A finite-difference Navier–Stokes solver for turbulent channel and open-channel flows, with support for rough-wall immersed boundary methods (IBM), wall models, sub-grid scale (SGS) turbulence modelling, and an exact Reynolds stress budget analysis module.
 
+This README covers the essentials. For a topic-by-topic reference — full numerics writeup, every `input_parameters` field, example walkthroughs, and the pre-/post-processing tool reference — see the **[docs/ wiki](docs/Home.md)**.
+
 ## Features
 
-- **3-D incompressible Navier–Stokes** — fractional-step projection method with a spectral (FFTW3-MPI) Poisson solver for the pressure correction
-- **MPI parallelism** — z-slab domain decomposition via MPI; scales to large core counts
+- **3-D incompressible Navier–Stokes** — fractional-step projection method with a spectral (local FFTW3 + 2decomp&fft pencil transposes) Poisson solver for the pressure correction
+- **MPI parallelism** — [2decomp&fft](https://github.com/2decomp-fft/2decomp-fft) 2-D pencil domain decomposition (auto-picks a cheap pure z-slab split when the rank count allows, else a general `p_row × p_col` split); scales to large core counts
 - **Staggered MAC grid** — U on x-faces, V on y-faces, W on z-faces, pressure at cell centres
 - **Flexible vertical grid** — 7 stretching options (uniform, symmetric tanh, single-sided tanh, uniform roughness sublayer + tanh blend)
-- **Immersed boundary method (IBM)** — ghost-cell method (Tseng & Ferziger 2003) for complex rough surfaces; accepts a binary face-point mask or a precomputed signed-distance field (SDF)
+- **Immersed boundary method (IBM)** — ghost-cell method (Tseng & Ferziger 2003) for complex rough surfaces; reads a precomputed cell-centre signed-distance field (SDF), generated ahead of time by the `GenSDF` tool; validated against DNS of turbulent flow over a wavy wall, see [Numerics § IBM Validation](docs/Numerics.md#63-validation--turbulent-flow-over-a-wavy-wall)
 - **Wall models** — flat-wall and IBM-surface equilibrium wall models (log-law EQWM); selectable per wall
 - **SGS turbulence model** — Vreman (2004) eddy-viscosity model; optional (set `sgs_model = 0` for DNS)
 - **Flexible boundary conditions** — Dirichlet (no-slip) or Neumann (free-slip) independently on top and bottom y-walls
@@ -30,22 +32,26 @@ fdm-dopamine/
 │   ├── mpi.f90              # MPI setup and domain decomposition
 │   ├── profiler.f90         # Per-stage MPI_Wtime() profiler (printed at shutdown)
 │   ├── global.f90           # Shared global variables
+│   ├── decomp.f90           # 2decomp&fft pencil-decomposition bookkeeping (main + Poisson pencil grids)
 │   ├── interpolation.f90    # Velocity interpolation utilities
+│   ├── sem.f90              # Synthetic Eddy Method inflow (ESEM/SEM, recycling)
 │   ├── sgs_model.f90        # Vreman SGS model
 │   ├── equations.f90        # RHS convection + diffusion
 │   ├── boundary_conditions.f90
-│   ├── readMask.f90         # IBM mask / SDF reader
+│   ├── readMask.f90         # IBM setup driver (reads precomputed SDF)
 │   ├── ibm.f90              # Ghost-cell IBM module
 │   ├── genGridandIC.f90     # Grid generation and initial conditions
 │   ├── input_output.f90     # Namelist reader and field I/O
 │   ├── initialization.f90
 │   ├── scalar_transport.f90 # Suspended sediment: van Leer MUSCL advection, settling
+│   ├── thermal_transport.f90 # Passive thermal scalar transport
 │   ├── wallmodel.f90        # Flat-wall and IBM EQWM
 │   ├── poisson_gpu.f90      # [ENABLE_GPU only] cuFFT + cuSPARSE GPU Poisson solve
-│   ├── projection.f90       # Pressure projection (FFTW Poisson, or GPU when ENABLE_GPU=ON)
+│   ├── projection.f90       # Pressure projection (FFTW + 2decomp&fft pencil transposes, or GPU when ENABLE_GPU=ON)
 │   ├── time_integration.f90 # RK3 time stepping
 │   ├── monitor.f90          # Runtime statistics
 │   ├── reynolds_stress_budget.f90  # Pope §7.4 budget (all 6 components)
+│   ├── probe_output.f90     # Line/slice probe output
 │   ├── finalization.f90
 │   └── main.f90             # Entry point
 ├── postProcessing/
@@ -62,15 +68,18 @@ fdm-dopamine/
 |---------|----------------|---------|
 | gfortran or ifort | GFortran ≥ 9 / Intel ≥ 2019 | Fortran compiler |
 | MPI | any standard MPI-3 | Domain decomposition |
-| FFTW3 | 3.3 with MPI support | Spectral Poisson solver |
+| FFTW3 | 3.3 (serial double-precision) | Local single-rank transforms/DCT, and the transform engine inside 2decomp&fft |
+| [2decomp&fft](https://github.com/2decomp-fft/2decomp-fft) | `v2.1.0` | 2-D pencil domain decomposition and inter-rank transposes for the MPI-parallel pressure Poisson solve; fetched and built automatically by CMake, see below |
 | LAPACK / BLAS | any | Linear algebra |
-| CMake | 3.18 | Build system |
+| CMake | 3.20 | Build system |
+| git | any | Required at first configure to fetch 2decomp&fft |
 | NVHPC SDK *(optional, GPU build only)* | 23.3+ | `nvfortran` + OpenACC + cuFFT + cuSPARSE |
 
-On Debian/Ubuntu the CPU-build dependencies can be installed with:
+On Debian/Ubuntu the CPU-build dependencies (excluding 2decomp&fft, fetched
+automatically) can be installed with:
 
 ```bash
-sudo apt install gfortran libopenmpi-dev libfftw3-dev libfftw3-mpi-dev liblapack-dev libblas-dev cmake
+sudo apt install gfortran libopenmpi-dev libfftw3-dev liblapack-dev libblas-dev cmake git
 ```
 
 ## Building (CPU)
@@ -81,6 +90,14 @@ cmake --build build -j$(nproc)
 ```
 
 The executable `dopamine` is placed in `build/`.
+
+> **2decomp&fft is fetched and built automatically** on first configure: CMake clones
+> `2decomp-fft/2decomp-fft` (pinned to `v2.1.0`) into `build/_deps/2decomp_fft-src`,
+> configures and builds it as its own independent CMake invocation, and installs it under
+> `build/_deps/2decomp_fft-install`. This needs `git` and network access the first time
+> you configure a given build directory; subsequent `cmake`/`cmake --build` calls reuse
+> the already-installed copy. For an offline build host, pre-populate
+> `build/_deps/2decomp_fft-src` with a clone of the pinned tag before running `cmake -S`.
 
 > **Note**: The solver uses `-fconvert=big-endian` globally so that field snapshots are big-endian.
 > Reynolds stress budget output uses `CONVERT='little_endian'` on the file `OPEN` to produce
@@ -161,13 +178,14 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `Lx, Ly, Lz` | — | Domain lengths |
 | `grid_type` | `1` | Vertical grid: 1=uniform, 2=symmetric tanh, 3=tanh bottom, 4=tanh top, 5–7=sublayer+tanh variants |
 | `alpha_grid` | `1.0` | Grid-stretching intensity (larger → stronger clustering) |
+| `p_row, p_col` | `0, 0` | 2decomp&fft MPI pencil grid: `p_row` splits x, `p_col` splits z (y always local); `p_row * p_col` must equal the rank count. `0, 0` = auto-pick (prefer a pure z-slab split; fall back to a 2-D split matching the grid's aspect ratio) |
 
 ### `&PHYSICS`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `nu` | — | Kinematic viscosity |
 | `dPdx` | — | Mean (steady) streamwise pressure gradient |
-| `dPdz` | `0.0` | Mean (steady) spanwise pressure gradient |
+| `dPdz` | — | Mean (steady) spanwise pressure gradient |
 | `Ub_x` | `0.0` | Streamwise oscillatory velocity amplitude |
 | `Ub_z` | `0.0` | Spanwise oscillatory velocity amplitude |
 | `T_wave_x` | `0.0` | Wave period $T_x$ [s] for streamwise forcing; `0` = steady; $\omega_x = 2\pi/T_x$ derived internally |
@@ -175,7 +193,7 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `phi_wave_x` | `0.0` | Phase offset $\varphi_x$ [rad] for streamwise oscillation (e.g. `1.5708` ≈ π/2 gives sine forcing) |
 | `phi_wave_z` | `0.0` | Phase offset $\varphi_z$ [rad] for spanwise oscillation; difference $\varphi_z - \varphi_x$ sets the cross-wave phase lag |
 | `sgs_model` | `0` | 0=DNS (ν_t=0), 1=Vreman SGS |
-| `Cs_vreman` | `0.1` | Smagorinsky-equivalent constant for Vreman model ($c_V = 2.5\,C_s^2$) |
+| `Cs_vreman` | `0.17` | Smagorinsky-equivalent constant for Vreman model ($c_V = 2.5\,C_s^2$) |
 | `flat_wall_model_flag` | `0` | 0=no-slip, 1=log-law EQWM on flat walls |
 
 ### `&NUMERICS`
@@ -184,13 +202,13 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `dt` | — | Time-step size |
 | `nsteps` | — | Total number of time steps. If `nsteps < 0`, the step count is ignored and the run instead stops once physical time `t >= sim_end_time` |
 | `nsave` | — | Write field snapshot every `nsave` steps. If `nsave < 0`, the step count is ignored and a snapshot is instead written every `tsave` physical time units |
-| `nmonitor` | `1` | Print monitor line every `nmonitor` steps |
+| `nmonitor` | — | Print monitor line every `nmonitor` steps |
 | `sim_end_time` | `1e30` | Physical end time; only used when `nsteps < 0` |
 | `tsave` | `1e30` | Physical save interval; only used when `nsave < 0`. When `cfl_adaptive=1` (or `dt` otherwise doesn't divide evenly into `tsave`), `dt` is automatically shrunk on the step just before a save so `t` lands exactly on multiples of `tsave` |
 | `cfl_adaptive` | `0` | 0=fixed `dt`, 1=CFL-adaptive time step |
 | `cfl_target` | `0.5` | Target CFL number (adaptive mode) |
 | `cfl_safety` | `0.9` | Safety factor on adaptive `dt` adjustment |
-| `dt_min` | `1e-8` | Minimum allowed `dt` (adaptive mode) |
+| `dt_min` | `1e-10` | Minimum allowed `dt` (adaptive mode) |
 | `dt_max` | `1e10` | Maximum allowed `dt` (adaptive mode) |
 
 ### `&BOUNDARY_CONDITIONS`
@@ -220,12 +238,12 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 ### `&IBM` *(optional)*
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `ibm_input_mode` | `0` | 0=no body; 1=read `Umask_in` (face-point binary mask, φ computed via fast-sweep); 2=read `SDF_in` only (precomputed cell-centre signed-distance, solid/fluid from sign(φ)) |
+| `ibm_input_mode` | `0` | 0=no IBM body (smooth walls); 1=SDF-based ghost-cell IBM — reads the precomputed cell-centre SDF `ibm_sdf_file`, solid/fluid mask derived from sign(φ) |
 | `ibm_wall_model_flag` | `0` | 0=no-slip, 1=log-law EQWM on IBM surfaces |
-| `ibm_mask_file` | `'Umask_in'` | Path to face-point binary mask (mode 1) |
-| `ibm_sdf_file` | `'SDF_in'` | Path to precomputed cell-centre SDF (mode 2) |
+| `ibm_sdf_file` | `'SDF_in'` | Path to precomputed cell-centre SDF |
+| `ibm_objid_file` | `''` | Optional per-solid object-ID field (e.g. `GenSDF`'s `sdfp_objid.bin`) for per-object BCs; `''` = single uniform IBM condition |
 | `ks` | — | Roughness sublayer height (grid types 5–7) |
-| `nks` | — | Number of uniform cells in roughness sublayer |
+| `nks` | `0` | Number of uniform cells in roughness sublayer |
 | `nsampling` | `0` | IBM force output interval (0 = disabled) |
 | `ibm_surface_nsampling` | `0` | Per-point surface field (pressure + pressure/viscous force) dump interval, written to `ibm_surface/surface.<step>.bin` (0 = disabled) |
 
@@ -235,7 +253,7 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `ic_type` | `1` | 1=log-law + noise; 2=linear/tent + noise; 3=zero mean + noise; 4=Reichardt turbulent channel profile + structured perturbation; 5=inverse-linear/anti-tent + noise |
 | `noise_percent` | `5.0` | White-noise amplitude as % of `Utarget` (applied to U, V, W for types 1–3) |
 | `Utarget` | — | Target bulk or centreline velocity |
-| `nstep_init` | `0` | Starting step number (non-zero for hot-start logging) |
+| `nstep_init` | — | Starting step number (non-zero for hot-start logging) |
 | `restart` | `0` | 0=fresh run, 1=hot-start from `filein` |
 
 **IC type 4 — Reichardt profile** (`ic_type = 4`):  
@@ -363,6 +381,7 @@ The methods implemented in this solver draw on the following published works.  P
 | Time integration (RK3) | Wray, A.A. (1990). *Minimal storage time advancement schemes for spectral methods*. NASA Ames Report. | — |
 | Fractional-step projection | Kim, J. & Moin, P. (1985). J. Comput. Phys. **59**, 308–323. | [10.1016/0021-9991(85)90148-2](https://doi.org/10.1016/0021-9991(85)90148-2) |
 | Spectral Poisson solver (FFTW3) | Frigo, M. & Johnson, S.G. (2005). Proc. IEEE **93**(2), 216–231. | [10.1109/JPROC.2004.840301](https://doi.org/10.1109/JPROC.2004.840301) |
+| MPI pencil decomposition ([2decomp&fft](https://github.com/2decomp-fft/2decomp-fft)) | Li, N. & Laizet, S. (2010). *2DECOMP&FFT – A Highly Scalable 2D Decomposition Library for FFT-based Simulations*. Cray User Group 2010. | — |
 | Ghost-cell IBM | Tseng, Y.-H. & Ferziger, J.H. (2003). J. Comput. Phys. **192**(2), 593–623. | [doi:10.1016/j.jcp.2003.07.024](https://doi.org/10.1016/j.jcp.2003.07.024) |
 | Vreman SGS model | Vreman, A.W. (2004). Phys. Fluids **16**(10), 3670–3681. | [10.1063/1.1785131](https://doi.org/10.1063/1.1785131) |
 | van Leer MUSCL limiter (scalar) | van Leer, B. (1974). J. Comput. Phys. **14**(4), 361–370. | [10.1016/0021-9991(74)90019-9](https://doi.org/10.1016/0021-9991(74)90019-9) |

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.20)
 project(dopamine LANGUAGES Fortran)
 
 #------------------------------------------------------------------------------
@@ -21,10 +21,67 @@ find_package(LAPACK REQUIRED)
 find_package(BLAS   REQUIRED)
 
 #------------------------------------------------------------------------------
-# FFTW3 (including MPI variant)
+# FFTW3 (local single-rank transforms/DCT only -- MPI-parallel transforms go
+# through 2decomp&fft's pencil transposes instead, see src/projection.f90)
 #------------------------------------------------------------------------------
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-find_package(FFTW REQUIRED COMPONENTS DOUBLE DOUBLE_MPI)
+find_package(FFTW REQUIRED COMPONENTS DOUBLE)
+
+#------------------------------------------------------------------------------
+# 2decomp&fft (2D pencil decomposition), vendored as a configure-time
+# sub-build rather than FetchContent+add_subdirectory: 2decomp&fft's own
+# CMakeLists.txt hardcodes ${CMAKE_SOURCE_DIR} (not
+# ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_SOURCE_DIR}) for its own module path
+# and config-file templates, which resolves to *our* source tree rather than
+# theirs when embedded via add_subdirectory -- breaks its include(D2D_MPI)
+# and configure_file(.../decomp2d-config.cmake.in) calls. Building it as an
+# independent CMake invocation (its own CMAKE_SOURCE_DIR) sidesteps that;
+# this mirrors the same synchronous configure+build pattern 2decomp&fft's
+# own cmake/fft/fft.cmake uses to fetch+build its FindFFTW.cmake dependency.
+#------------------------------------------------------------------------------
+set(DECOMP2D_TAG        "v2.1.0")
+set(DECOMP2D_SRC_DIR    "${CMAKE_BINARY_DIR}/_deps/2decomp_fft-src")
+set(DECOMP2D_BIN_DIR    "${CMAKE_BINARY_DIR}/_deps/2decomp_fft-build")
+set(DECOMP2D_INSTALL_DIR "${CMAKE_BINARY_DIR}/_deps/2decomp_fft-install")
+
+if(NOT EXISTS "${DECOMP2D_SRC_DIR}/CMakeLists.txt")
+    execute_process(
+        COMMAND git clone --branch ${DECOMP2D_TAG} --depth 1
+                https://github.com/2decomp-fft/2decomp-fft.git "${DECOMP2D_SRC_DIR}"
+        RESULT_VARIABLE _d2d_clone_result
+    )
+    if(_d2d_clone_result)
+        message(FATAL_ERROR "Failed to clone 2decomp&fft ${DECOMP2D_TAG}")
+    endif()
+endif()
+
+if(NOT EXISTS "${DECOMP2D_INSTALL_DIR}/lib/decomp2d/decomp2d-config.cmake")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND}
+                -S "${DECOMP2D_SRC_DIR}" -B "${DECOMP2D_BIN_DIR}"
+                -DCMAKE_INSTALL_PREFIX=${DECOMP2D_INSTALL_DIR}
+                -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+                -DCMAKE_Fortran_COMPILER=${CMAKE_Fortran_COMPILER}
+                -DBUILD_TARGET=mpi -DFFT_Choice=fftw -DBUILD_TESTING=OFF
+                -DCMAKE_MODULE_PATH=${CMAKE_CURRENT_SOURCE_DIR}/cmake
+        RESULT_VARIABLE _d2d_cfg_result
+    )
+    if(_d2d_cfg_result)
+        message(FATAL_ERROR "2decomp&fft configure failed")
+    endif()
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} --build "${DECOMP2D_BIN_DIR}" --target install -j${CMAKE_BUILD_PARALLEL_LEVEL}
+        RESULT_VARIABLE _d2d_build_result
+    )
+    if(_d2d_build_result)
+        message(FATAL_ERROR "2decomp&fft build/install failed")
+    endif()
+endif()
+
+find_package(decomp2d REQUIRED CONFIG
+    PATHS "${DECOMP2D_INSTALL_DIR}/lib/decomp2d"
+    NO_DEFAULT_PATH
+)
 
 #------------------------------------------------------------------------------
 # Compiler flags
@@ -36,7 +93,8 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
     set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -cpp -O3 -Mbyteswapio")
     if(ENABLE_GPU)
-        # GPU_POISSON: single-GPU cuFFT periodic Poisson solve (nprocs==1 only), 
+        # GPU_POISSON: single-GPU cuFFT periodic Poisson solve (nprocs==1 only), see
+        # docs/Installation.md#building-single-gpu-openacc--cufft--cusparse
         # rdc (relocatable device code): required so nvlink can resolve cross-procedure
         # !$acc routine seq calls (e.g. wallmodel/ibm device-callable helpers)
         set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -acc -gpu=cc86,rdc -Minfo=accel -DGPU_POISSON -cudalib=cufft,cusparse")
@@ -50,6 +108,7 @@ set(SRCS
     src/mpi.f90
     src/profiler.f90
     src/global.f90
+    src/decomp.f90
     src/interpolation.f90
     src/sem.f90
     src/boundary_conditions.f90
@@ -58,6 +117,7 @@ set(SRCS
     src/readMask.f90
     src/ibm.f90
     src/scalar_transport.f90
+    src/thermal_transport.f90
     src/genGridandIC.f90
     src/input_output.f90
     src/initialization.f90
@@ -112,14 +172,16 @@ target_include_directories(dopamine BEFORE PRIVATE
 
 target_link_libraries(dopamine
     MPI::MPI_Fortran
-    ${FFTW_LIBRARIES}          # includes fftw3_mpi + fftw3
+    ${FFTW_LIBRARIES}          # fftw3 (local single-rank transforms/DCT only)
     LAPACK::LAPACK
     BLAS::BLAS
+    decomp2d
 )
 
 #------------------------------------------------------------------------------
 # Standalone verification driver for the divergence-free SEM construction
-# (src/sem.f90's raw_eddy_curl_sum); not part of the dopamine executable
+# (src/sem.f90's raw_eddy_curl_sum, sem_divergence_free=1); not part of the dopamine
+# executable, see docs/Numerics.md#111-inlet--constant-or-synthetic-eddy-method
 #------------------------------------------------------------------------------
 add_executable(verify_sem_divergence_free
     src/mpi.f90
@@ -147,7 +209,8 @@ target_link_libraries(verify_sem_divergence_free
 
 #------------------------------------------------------------------------------
 # Standalone verification driver for the wind-tunnel TI inflow profile parser
-# (src/sem.f90's read_mean_profile_TI); not part of the dopamine executable,
+# (src/sem.f90's read_mean_profile_TI); not part of the dopamine executable, see
+# docs/Numerics.md#111-inlet--constant-or-synthetic-eddy-method
 #------------------------------------------------------------------------------
 add_executable(verify_ti_profile
     src/mpi.f90

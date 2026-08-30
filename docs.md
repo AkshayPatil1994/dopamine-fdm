@@ -4,7 +4,7 @@ Notice: This file was generated using an LLM and subsequently edited for correct
 
 ## Overview
 
-`fdm-dopamine` is a parallel, finite-difference solver for the three-dimensional incompressible Navier–Stokes equations, targeting turbulent channel and open-channel flows.  It runs on distributed-memory systems via MPI (1-D z-slab decomposition) and supports large-eddy simulation (LES) as well as direct numerical simulation (DNS).
+`fdm-dopamine` is a parallel, finite-difference solver for the three-dimensional incompressible Navier–Stokes equations, targeting turbulent channel and open-channel flows.  It runs on distributed-memory systems via MPI (2decomp&fft 2-D pencil decomposition, auto-preferring a 1-D z-slab split when the rank count allows) and supports large-eddy simulation (LES) as well as direct numerical simulation (DNS).
 
 ---
 
@@ -91,13 +91,17 @@ $$u^{n+1} = u^* - \Delta t\,\nabla\phi$$
 
 ### 4.1 Spectral Poisson solver
 
-Taking discrete Fourier transforms in the homogeneous $x$ and $z$ directions (via **FFTW3-MPI**, Frigo & Johnson 2005) converts the Poisson equation into a set of independent 1-D tridiagonal systems in $y$, one per Fourier mode pair $(k_x, k_z)$:
+Taking discrete Fourier transforms in the homogeneous $x$ and $z$ directions converts the Poisson equation into a set of independent 1-D tridiagonal systems in $y$, one per Fourier mode pair $(k_x, k_z)$:
 
 $$\left(-k_x^2 - k_z^2 + \frac{\partial^2}{\partial y^2}\right)\hat{\phi}(k_x, y, k_z) = \hat{f}(k_x, y, k_z)$$
 
-Each tridiagonal system is solved by the LAPACK complex tridiagonal routine `Zgtsv`.  The implementation uses FFTW's **transposed-output** layout so that the FFT-distributed data aligns with the tridiagonal solve without extra communication.
+Each tridiagonal system is solved by the LAPACK complex tridiagonal routine `Zgtsv`.
+
+The transforms themselves are **local, single-rank FFTW3** calls (periodic FFT in $x$, or a DCT-IV in $x$ when `x_bc_type = 1`, and an FFT in $z$), each performed entirely within one rank's pencil. Getting every $(x,z)$ pencil fully onto one rank before each transform — and getting the $y$-line fully onto one rank before the `Zgtsv` solve — is the job of **2decomp&fft**'s pencil-transpose routines, which redistribute the data around the forward chain $y \to x \to y \to z \to y\text{(Zgtsv)} \to z \to y \to x \to y$ and back for the inverse transform. See §10 for how the pencil grid itself is set up.
 
 > **Reference (FFTW3):** Frigo, M. & Johnson, S.G. (2005). *The design and implementation of FFTW3*. Proc. IEEE 93(2), 216–231. DOI: [10.1109/JPROC.2004.840301](https://doi.org/10.1109/JPROC.2004.840301)
+
+> **Reference (2decomp&fft):** [2decomp-fft/2decomp-fft](https://github.com/2decomp-fft/2decomp-fft), vendored at `v2.1.0`.
 
 > **Reference (fractional step):** Kim, J. & Moin, P. (1985). *Application of a fractional-step method to incompressible Navier–Stokes equations*. J. Comput. Phys. 59, 308–323. DOI: [10.1016/0021-9991(85)90148-2](https://doi.org/10.1016/0021-9991(85)90148-2)
 
@@ -123,12 +127,9 @@ Complex solid geometries (e.g. rough surfaces) are represented via a **ghost-cel
 
 ### 6.1 Signed-distance function
 
-The interface geometry is described by a signed-distance field $\phi$ at cell centres ($\phi < 0$ inside solid, $\phi > 0$ in fluid).  Two input modes are supported:
+The interface geometry is described by a signed-distance field $\phi$ at cell centres ($\phi < 0$ inside solid, $\phi > 0$ in fluid).  Setting `ibm_input_mode = 1` reads a precomputed cell-centre SDF from `ibm_sdf_file` (default `SDF_in`) at solver startup; the fluid/solid mask is derived from `sign(phi)`. An optional per-solid object-ID field (`ibm_objid_file`) can be read alongside it for per-object boundary conditions.
 
-- **Mode 1** (`ibm_input_mode = 1`): read a binary face-point mask (`Umask_in`); $\phi$ is computed automatically by the fast-sweep algorithm of Zhao et al. (2005).
-- **Mode 2** (`ibm_input_mode = 2`): read a precomputed cell-centre SDF (`SDF_in`) directly.
-
-The `GenSDF` preprocessing tool in `preProcessing/GenSDF/` generates SDFs for user-defined geometries.
+The solver does not compute the SDF itself — it must be generated ahead of time by the `GenSDF` preprocessing tool in `preProcessing/GenSDF/` (which performs the fast-sweep distance computation of Zhao et al. (2005) internally) from an OBJ/STL geometry.
 
 ### 6.2 Ghost-cell interpolation
 
@@ -233,7 +234,9 @@ Statistics are accumulated as raw moments and converted to central moments at wr
 
 ## 10. MPI parallelism
 
-The domain is decomposed into **z-slabs**: each MPI rank owns the full $(x, y)$ extent and a contiguous range of $z$-planes.  Ghost-cell exchanges in $z$ are performed with `MPI_Sendrecv` at the start of each RK3 sub-step.  The FFT-based Poisson solver uses FFTW's MPI transposed-output layout, which redistributes Fourier modes across ranks without additional all-to-all communication.
+The domain is decomposed with **[2decomp&fft](https://github.com/2decomp-fft/2decomp-fft)**'s 2-D pencil decomposition: the MPI rank grid is `p_row × p_col` (`p_row` splitting $x$, `p_col` splitting $z$; $y$ is always fully local to a rank), configured via `p_row`/`p_col` in `&DOMAIN`. With the default `p_row = 0, p_col = 0` the solver auto-picks: a **pure z-slab split** (`p_row = 1`, each rank owning the full $(x,y)$ extent and a contiguous range of $z$-planes) whenever that alone gives every rank at least 2 interior $z$-cells — the cheapest option, since it needs no $x$-transpose communication — otherwise a true 2-D split, choosing the `nprocs` factor pair closest to the grid's $x{:}z$ aspect ratio among pairs that still leave ≥2 interior cells per rank in both directions. Set both explicitly to override the heuristic (`p_row * p_col` must equal the MPI rank count).
+
+Ghost-cell exchanges in $z$ (and, for a 2-D split, in $x$) for the velocity fields are performed at the start of each RK3 sub-step with non-blocking `MPI_Isend`/`MPI_Irecv` + `MPI_Waitall`; the SGS eddy-viscosity, scalar, and IBM halo exchanges each use a blocking `MPI_Sendrecv` instead. The FFT-based Poisson solver (§4.1) performs its local FFTW transforms one pencil at a time and uses 2decomp&fft's transpose routines to redistribute the data between the $x$-, $y$-, and $z$-aligned pencils each transform needs, without extra all-to-all communication beyond those transposes. A second, independent 2decomp&fft pencil grid is registered specifically for the Poisson solve, sized to the Fourier-transform grid rather than the face-point grid used everywhere else.
 
 ---
 
