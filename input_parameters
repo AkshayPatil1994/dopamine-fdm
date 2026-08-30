@@ -19,6 +19,13 @@
 !
 ! alpha_grid controls the stretching intensity (larger = stronger clustering).
 ! Ignored for grid_type=1. For grid_types 5-7, ks and nks must be set in &IBM.
+!
+! p_row/p_col: 2D pencil process grid for the x/z domain decomposition (y is
+! always fully local per rank). p_row splits x, p_col splits z; p_row*p_col
+! must equal the MPI rank count. 0,0 (default) auto-picks: pure z-split
+! (p_row=1, cheapest, no x-transpose communication) if that alone gives
+! every rank >=2 interior z-cells, otherwise the nprocs factor pair closest
+! to the grid's x:z aspect ratio. Set both explicitly to override.
 &DOMAIN
   nx         = 514,
   ny         = 129,
@@ -28,6 +35,8 @@
   Lz         = 0.31460,
   alpha_grid = 2.08,
   grid_type  = 1,
+  p_row      = 0,
+  p_col      = 0,
 /
 
 ! Physical parameters
@@ -43,6 +52,13 @@
 !   streamwise velocity is held exactly at Ub_target; requires x_bc_type=0
 !   (periodic) and is incompatible with T_wave_x oscillatory forcing.
 ! Ub_target: target bulk streamwise velocity (flow_forcing_mode=1 only).
+!
+! advection_scheme: convective-term discretization for the momentum equations.
+!   0 = skew-symmetric (default, recommended): blend of divergence form and
+!       advective form, still kinetic-energy-conserving on this staggered
+!       grid but with less aliasing error than either form alone -- reduces
+!       Gibbs-like ringing near sharp immersed-boundary gradients.
+!   1 = pure divergence-form central differencing (original scheme).
 &PHYSICS
   nu                   = 1.0e-6,
   dPdx                 = 1.225e-4,
@@ -54,10 +70,11 @@
   phi_wave_x           = 0.0,     ! phase offset [rad] for x-wave forcing
   phi_wave_z           = 0.0,     ! phase offset [rad] for z-wave forcing
   sgs_model            = 0,       ! 0=DNS, 1=Vreman
-  Cs_vreman            = 0.1,
+  Cs_vreman            = 0.17,    ! Sub-grid model constant (Eq. 5)
   flat_wall_model_flag = 0,       ! 0=no-slip, 1=log-law EQWM
   flow_forcing_mode    = 0,       ! 0=prescribed dPdx (default), 1=constant mass flux
   Ub_target            = 0.068,   ! target bulk velocity, used only if flow_forcing_mode=1
+  advection_scheme     = 0,       ! 0=skew-symmetric (default), 1=pure divergence-form central
 /
 
 ! Time-stepping and output
@@ -89,14 +106,23 @@
 !       mass is conserved without any separate rescaling step.
 ! Omit this group to use defaults (both walls no-slip, x periodic)
 !
+! y_bc_type: wall-normal boundary condition
+!   0 = periodic (fully periodic domain -- requires grid_type=1, uniform y);
+!       bc_face_ylo/bc_face_yhi are ignored. Needed for e.g. the Taylor-Green
+!       Vortex IC (ic_type=6, see &INITIAL_CONDITIONS below), which also
+!       requires x_bc_type=0.
+!   1 = wall (default): bc_face_ylo/bc_face_yhi as above.
+!
 ! GPU build (ENABLE_GPU=ON, see README.md "Building (single-GPU...)"): the GPU Poisson
 ! solve supports x_bc_type=0 or 1 here, AND a single MPI rank (nprocs=1, i.e. run with
-! `mpirun -np 1`) -- a runtime Stop fires on startup otherwise. Everything else in this
+! `mpirun -np 1`) -- a runtime Stop fires on startup otherwise. y_bc_type=0 (periodic y)
+! on the GPU build additionally requires x_bc_type=0. Everything else in this
 ! file (IBM, wall models, SGS, sediment, RSB, etc.) is unaffected by ENABLE_GPU.
 &BOUNDARY_CONDITIONS
   bc_face_ylo = 1,
   bc_face_yhi = 1,
   x_bc_type   = 0,
+  y_bc_type   = 1,
 /
 
 ! Streamwise inflow condition (only used when x_bc_type=1 above; omit or
@@ -112,6 +138,10 @@
 !       box upstream of the inflow plane and correlated with the local
 !       Reynolds-stress tensor via a Cholesky decomposition (R13=R23=0
 !       assumed -- only the primary R12 shear component is used).
+!   2 = recycled precursor inflow: imposes an x-normal slice recorded by
+!       an independent "donor" simulation (via &STATISTICS slice_dir='x')
+!       directly as the time-varying inflow plane. See inflow_recycle_*
+!       below.
 !
 ! inflow_Uconst: uniform streamwise velocity (inflow_type=0 only)
 !
@@ -156,7 +186,7 @@
 !                    used when sem_sigma_file is not given (homogeneous
 !                    mode, see below); also the floor on the mixing-length
 !                    fallback (sem_profile_format=1 with no L** column,
-!                    sem_use_esem=1. The
+!                    sem_use_esem=1, see docs/design-notes/sem.md). The
 !                    eddy-box convection velocity is taken as the bulk mean
 !                    of the profile's U column.
 ! sem_seed:         RNG seed for the eddy population (must be identical
@@ -187,12 +217,12 @@
 !                    stress file. 1 = wind-tunnel style z U Iu Iv Iw
 !                    [+ optional length-scale columns] file, for sites
 !                    where only mean speed + turbulence intensity profiles
-!                    are available
+!                    are available -- see docs/design-notes/sem.md's
 !                    wind-tunnel TI section. If no length-scale column is
 !                    given, length scales are derived automatically from
 !                    mixing-length theory rather than falling back to a
 !                    single isotropic sem_length_scale (sem_use_esem=1
-!                    only).
+!                    only; see docs/design-notes/sem.md).
 ! sem_Lscale_ratio_y: fallback Loy/Lox ratio (default 0.3), used when a
 !                    length-scale column's x-component is given but its y
 !                    (or z, see sem_Lscale_ratio_z) component is not
@@ -262,7 +292,8 @@
 !                    the scalar path). Requires sem_use_esem=1 (classical
 !                    normalisation has no closed form for the curl
 !                    construction); works with both homogeneous and
-!                    sem_sigma_file inhomogeneous modes.
+!                    sem_sigma_file inhomogeneous modes. See
+!                    docs/design-notes/sem.md.
 !
 ! sem_wall_damping: 0 (default) = no wall-distance damping of eddy size.
 !               1 = Van Driest-style damping of each eddy's whole size class
@@ -271,10 +302,63 @@
 !                    mean-flow bias oversized near-wall eddies can rectify
 !                    into, without touching injected turbulence intensity
 !                    (set independently by prof_R11/22/33). Composes with
-!                    sem_sigma_file.
+!                    sem_sigma_file. See docs/design-notes/sem.md's
+!                    near-wall eddy-size damping section.
 ! sem_wall_damping_Aplus: Van Driest A+ constant (default 25, standard
 !                    mixing-length value); larger = damping reaches further
 !                    from the wall.
+!
+! Recycled precursor inflow (inflow_type=2): run an independent donor
+! simulation with identical ny/nz (Ly/Lz should also match so grid points
+! line up) that records an x-normal slice, e.g. in the donor's own
+! &STATISTICS group:
+!   n_slices = 1, slice_dir(1) = 'x', slice_pos(1) = <x location>,
+!   slice_comps(1) = 'UVW', slice_fileout(1) = 'fields/recycle_slice'
+! This writes fields/recycle_slice.bin (snapshots), _meta.txt (dims/comps),
+! and _times.bin (one physical-time Real64 per snapshot -- exact even under
+! cfl_adaptive=1's variable dt, so downstream time-interpolation is exact).
+! The successor run then reads the SAME base name back here:
+!
+! inflow_recycle_file: donor slice_fileout base name (reads <file>.bin,
+!                    <file>_meta.txt, <file>_times.bin). Required for
+!                    inflow_type=2. Only the rank owning the x=1 face opens
+!                    the file, and only ever reads its own local z-slab of
+!                    the two donor snapshots bracketing the current time in
+!                    the donor's timeline (not the whole slice) -- memory/
+!                    IO cost is independent of the donor file's length.
+! inflow_recycle_loop: 1 (default) = wrap around the donor's recorded time
+!                    range once this run's time exceeds it (a longer
+!                    successor run replays the donor's turbulence on a
+!                    loop). 0 = clamp to the donor's last snapshot instead.
+! inflow_recycle_t_offset: donor_time = t + inflow_recycle_t_offset (added
+!                    before looping/clamping), default 0. Use this to start
+!                    the successor run partway into the donor's timeline
+!                    instead of at its first snapshot.
+! inflow_recycle_shift_z: 1 (default) = every time the donor time series
+!                    wraps (inflow_recycle_loop=1 only), apply a fresh
+!                    random circular shift in the periodic spanwise (z)
+!                    direction to the recycled plane. Without this, the
+!                    exact same donor sequence re-enters the domain at the
+!                    same z location every wrap, and convects downstream as
+!                    a spurious phase-locked periodic mode with streamwise
+!                    spacing ~ Uconv*(donor time range) -- same rationale
+!                    as the SEM's own per-recycle eddy re-randomization
+!                    (see sem.md). 0 = disable (no shift).
+! inflow_recycle_seed: RNG seed for the shift above (deterministic hash of
+!                    (seed, loop index), restart-safe -- default 12345).
+!
+! Notes: the donor slice stores cell-centre-averaged U,V,W,T,C (see cc_val in
+! probe_output.f90), so V/W are imposed slightly off their true staggered
+! face location -- a small, standard approximation at typical grid
+! resolutions. sem_* / inflow_profile_file settings are unused when
+! inflow_type=2. U,V,W,T,C are all recycled; if &BOUSSINESQ boussinesq_flag
+! is on, the donor's slice_comps must include 'T' or the run aborts at
+! start-up -- otherwise T at the inflow still falls back to
+! inflow_temperature_file/T_ref as usual. Likewise if &SEDIMENT
+! sediment_flag is on, slice_comps must include 'C' or the run aborts at
+! start-up -- otherwise C at the inflow (x_bc_type=1 only; &SEDIMENT's
+! apply_scalar_bc is x-periodic when x_bc_type=0) falls back to the
+! constant C_ref (no optional mean-profile-file path for C, unlike T).
 &INFLOW
   inflow_type          = 0,
   inflow_Uconst        = 0.068,
@@ -293,21 +377,35 @@
   sem_divergence_free  = 0,    ! 0=scalar sums (default), 1=divergence-free curl construction
   sem_wall_damping       = 0,    ! 0=off (default), 1=Van Driest near-wall eddy-size damping
   sem_wall_damping_Aplus = 25.0, ! Van Driest A+ constant
+  inflow_temperature_file = '',  ! optional (y T) mean-temperature profile; needs &BOUSSINESQ boussinesq_flag=1; empty -> mean_profile_T falls back to uniform T_ref
+  ! inflow_type=2 (recycled precursor inflow) only -- see comments above:
+  ! inflow_recycle_file     = 'fields/recycle_slice',
+  ! inflow_recycle_loop     = 1,
+  ! inflow_recycle_t_offset = 0.0,
+  ! inflow_recycle_shift_z  = 1,
+  ! inflow_recycle_seed     = 12345,
 /
 
 ! Immersed boundary method
 ! ibm_input_mode: 0=no IBM body (smooth walls)
 !                 1=SDF-based ghost-cell IBM (precomputed cell-centre SDF)
 ! ibm_wall_model_flag: 0=DNS no-slip, 1=log-law EQWM
+! ibm_objid_file: optional per-solid ID field from GenSDF's .list manifest mode; '' = single uniform IBM condition (index 0)
+! ibm_T_bc_type/ibm_T_wall are arrays indexed by solid ID (0..15); index 0 is the default/legacy slot
 ! Omit this group if no IBM body is present
 &IBM
   ibm_input_mode      = 0,
   ibm_wall_model_flag = 0,
   ibm_sdf_file        = 'SDF_in',
+  ibm_objid_file      = '',
   ks                  = 0.00242,
   nks                 = 20,
   nsampling           = 0,   ! IBM force output interval (0=disabled)
   ibm_surface_nsampling = 0, ! surface field dump interval -> ibm_surface/surface.<step>.bin (0=disabled)
+  ibm_T_bc_type(0)    = 0,   ! immersed-boundary thermal condition: 0=adiabatic, 1=isothermal (needs &BOUSSINESQ boussinesq_flag=1)
+  ibm_T_wall(0)       = 0.0, ! wall temperature [K], used when ibm_T_bc_type(0)=1
+  ! ibm_T_bc_type(1)  = 1,   ! example: solid ID 1 (from ibm_objid_file) isothermal
+  ! ibm_T_wall(1)     = 350.0,
 /
 
 ! Initial conditions
@@ -331,9 +429,17 @@
 !         U = Utarget * (1 - y/Ly)              — Utarget at bottom, 0 at top
 !       Large |dU/dy| throughout imposes a strong destabilising shear to
 !       promote rapid laminar-to-turbulent transition.
+!   6 = Taylor-Green Vortex (fully analytic, deterministic, no noise added).
+!       Requires x_bc_type=0 and y_bc_type=0 (fully periodic box). Utarget is
+!       used as the vortex amplitude U0:
+!         U =  U0*sin(kx*x)*cos(ky*y)*cos(kz*z)
+!         V = -U0*(kx/ky)*cos(kx*x)*sin(ky*y)*cos(kz*z)
+!         W =  0
+!       with kx=2*pi/Lx, ky=2*pi/Ly, kz=2*pi/Lz — exactly divergence-free.
+!       See the worked example at the end of this file.
 !
 ! noise_percent: white-noise amplitude as % of Utarget (applied to U,V,W
-!               for ic_types 1-3; ignored for ic_type=4)
+!               for ic_types 1-3; ignored for ic_type=4; unused for ic_type=6)
 &INITIAL_CONDITIONS
   Utarget      = 0.068,
   ic_type      = 1,
@@ -396,14 +502,21 @@
 ! slice_freq:     output every slice_freq steps (shared by all slices)
 ! slice_dir(n):   normal direction of slice n: 'x', 'y', or 'z'
 ! slice_pos(n):   physical coordinate along the normal direction
-! slice_comps(n): velocity/pressure components to save, any subset of
-!                 'U', 'V', 'W', 'P' concatenated (e.g. 'UVW', 'UVWP', 'U')
-!                 Default (empty string): 'UVW'
+! slice_comps(n): velocity/pressure/scalar components to save, any subset of
+!                 'U', 'V', 'W', 'P', 'T', 'C' concatenated (e.g. 'UVW',
+!                 'UVWP', 'UVWT'); 'T' needs &BOUSSINESQ boussinesq_flag=1,
+!                 'C' needs &SEDIMENT sediment_flag=1 (dropped with a
+!                 warning otherwise). Default (empty string): 'UVW'
 ! slice_fileout(n): base path for output files (no extension), e.g. 'slices/z05'
 !
 ! File output (rank 0, stream unformatted, big-endian float64):
-!   <fileout>.bin     — appends (ncomp, n1, n2) float64 per step
-!   <fileout>_meta.txt — text: ncomp, n1, n2, dir, pos, comps, nsnaps
+!   <fileout>.bin       — appends (ncomp, n1, n2) float64 per step
+!   <fileout>_meta.txt  — text: ncomp, n1, n2, dir, pos, comps, nsnaps
+!   <fileout>_times.bin — appends one float64 (the simulation time t) per
+!                         step, same cadence/order as <fileout>.bin; lets a
+!                         downstream consumer interpolate exactly in time
+!                         even under cfl_adaptive=1's variable dt (used by
+!                         &INFLOW inflow_type=2, recycled precursor inflow)
 ! where n1 x n2 depends on orientation:
 !   x-normal: (nym_global, nzm_global)
 !   y-normal: (nxm_global, nzm_global)
@@ -481,11 +594,60 @@
   C_ic_height   = 0.0,
 /
 
+! Boussinesq thermal stratification (optional -- omit this group to disable)
+!
+! boussinesq_flag: 0=off, 1=on -- couples a transported temperature field
+!                  Tscal back into the wall-normal (y) momentum equation via
+!                  a buoyancy body force. Gravity is assumed to act along -y
+!                  (y increasing = up).
+!
+! Buoyancy coupling (dimensional; added to compute_rhs_v in equations.f90):
+!   beta_T = thermal expansion coefficient [1/K]
+!   T_ref  = reference temperature for buoyancy and the uniform IC [K]
+!   grav   = gravitational acceleration [m/s^2] (shared with &SEDIMENT: set
+!            it here if boussinesq_flag=1 and sediment_flag=0)
+!
+! Diffusion (mirrors &SEDIMENT's Sc/Sc_t):
+!   Pr    = molecular Prandtl number   (kappa_mol = nu/Pr)
+!   Pr_t  = turbulent Prandtl number   (kappa_sgs = nu_t/Pr_t)
+!
+! y-wall boundary conditions:
+!   T_bc_bot/T_bc_top: 0 = adiabatic (zero-gradient)
+!                      1 = isothermal (Dirichlet, mirrored against
+!                          T_wall_bot/T_wall_top)
+!   T_wall_bot/T_wall_top = wall temperature [K] (used when the
+!                      corresponding T_bc_*=1)
+!
+! Initial temperature profile:
+!   T_ic_type: 0 = uniform T_ref throughout domain
+!              1 = linear gradient T = T_ref + T_ic_grad*(y-y_bottom)
+!   T_ic_grad = gradient [K/m] (used only when T_ic_type=1)
+!
+! Immersed-boundary (per-solid-ID) and SEM-inflow thermal conditions are configured in
+! &IBM (ibm_objid_file, ibm_T_bc_type, ibm_T_wall) and &INFLOW (inflow_temperature_file)
+! respectively.
+!
+&BOUSSINESQ
+  boussinesq_flag = 0,
+  beta_T          = 0.0,
+  T_ref           = 0.0,
+  grav            = 9.81,
+  Pr              = 0.7,
+  Pr_t            = 0.85,
+  T_bc_bot        = 0,
+  T_bc_top        = 0,
+  T_wall_bot      = 0.0,
+  T_wall_top      = 0.0,
+  T_ic_type       = 0,
+  T_ic_grad       = 0.0,
+/
+
 ! In-situ SEM inflow TI-profile rescaling (optional — omit this group to
 ! disable; only meaningful with &INFLOW inflow_type=1). Closes the loop
 ! between the wind-tunnel target profile and what actually arrives at a
 ! downstream station, without a manual pre-multiplier on
-! inflow_profile_file 
+! inflow_profile_file -- see docs/design-notes/sem.md's in-situ TI-profile
+! rescaling section.
 !
 ! ti_rescale_active: 0=disabled (default), 1=enabled
 ! ti_rescale_x:      streamwise station [m] to sample and match against the
@@ -506,7 +668,7 @@
 !                    target*ti_rescale_abs_clip] regardless of how many
 !                    windows have run -- ti_rescale_clip alone only bounds a
 !                    single window's step, not the drift compounded over a
-!                    long transient
+!                    long transient (see docs/design-notes/sem.md)
 ! ti_rescale_filter_alpha: EMA smoothing factor (0,1] applied to the measured
 !                    variance across windows before computing the ratio;
 !                    smaller = more filtering of window-to-window noise
@@ -522,7 +684,8 @@
 !                    prof_R11/22/33 are rescaled above -- without this, only
 !                    the fluctuation variance is corrected and Iu=sqrt(R11)/U
 !                    can stay off-target if the simulated mean flow itself
-!                    drifts from the wind-tunnel U(y)
+!                    drifts from the wind-tunnel U(y) (see docs/design-notes/
+!                    sem.md's mean-profile rescaling section)
 ! ti_rescale_u_relax / ti_rescale_u_relax_min: additive-controller analogues
 !                    of ti_rescale_relax/ti_rescale_relax_min above
 ! ti_rescale_u_clip: max |correction| per window, as a fraction of Uconv_sem
