@@ -75,6 +75,8 @@ See [[Numerics § Time integration|Numerics#3-time-integration]].
 | `sem_eddy_placement` | `0` | 0=uniform random placement; 1=PDF-weighted placement favouring smaller-eddy regions (ESEM §4.2, needs `sem_sigma_file`) |
 | `sem_use_esem` | `1` | 1=Ensemble SEM (Schau et al. 2022) — empirical/exact normalisation, recommended; 0=classical SEM (Jarrin 2006) — analytical normalisation, comparison only |
 | `sem_divergence_free` | `0` | 0=independent scalar eddy sums; 1=divergence-free construction (Poletto, Craft & Revell 2013) — curl of a vector potential, guarantees `div(u')=0` at the inflow plane. Requires `sem_use_esem=1` |
+| `sem_wall_damping` | `0` | 0=off; 1=Van Driest-style near-wall shrinking of each eddy's size class (`eddy_sig`) based on wall distance in `y+` units — reduces oversized eddies being deposited near the wall. Requires `sem_use_esem=1` (incompatible with classical SEM). Recommended for wall-bounded inflow profiles (channel/boundary-layer) that show near-wall mean-velocity overshoot |
+| `sem_wall_damping_Aplus` | `25.0` | Van Driest damping constant `A+` (only used when `sem_wall_damping=1`) |
 
 See [[Numerics § Streamwise inflow/outflow BC|Numerics#11-streamwise-inflowoutflow-bc-x_bc_type--1]]
 and the [[precursor/successor example|Examples#precursor_successor]].
