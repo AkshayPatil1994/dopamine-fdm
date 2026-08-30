@@ -9,7 +9,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   sync:
@@ -18,9 +18,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up SSH for wiki deploy key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.WIKI_DEPLOY_KEY }}" > ~/.ssh/wiki_deploy_key
+          chmod 600 ~/.ssh/wiki_deploy_key
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host github.com
+            IdentityFile ~/.ssh/wiki_deploy_key
+            IdentitiesOnly yes
+          EOF
+
       - name: Clone wiki
         run: |
-          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git" wiki
+          git clone "git@github.com:${{ github.repository }}.wiki.git" wiki
 
       - name: Sync docs into wiki
         run: |
