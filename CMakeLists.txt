@@ -237,6 +237,44 @@ target_link_libraries(verify_ti_profile
 )
 
 #------------------------------------------------------------------------------
+# dopamine-ESEM: standalone ESEM inflow precursor generator (precomputes an
+# x-normal donor slice time series in probe_output.f90's format, consumed by
+# a separate inflow_type=2 run -- see src/dopamine_esem_main.f90). Needs the
+# real domain decomposition (decomp.f90/2decomp&fft) for MPI-parallel z-slab
+# generation, and genGridAndIC/input_output for the same grid + namelist
+# reading a live solver run uses; does not need equations/sgs/ibm/poisson.
+#------------------------------------------------------------------------------
+add_executable(dopamine-ESEM
+    src/mpi.f90
+    src/profiler.f90
+    src/global.f90
+    src/decomp.f90
+    src/sem.f90
+    src/genGridandIC.f90
+    src/input_output.f90
+    src/dopamine_esem_main.f90
+)
+
+set_target_properties(dopamine-ESEM PROPERTIES Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mod/dopamine-ESEM")
+
+target_include_directories(dopamine-ESEM PRIVATE
+    ${FFTW_INCLUDE_DIRS}
+)
+
+target_include_directories(dopamine-ESEM BEFORE PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/mod/dopamine-ESEM"
+)
+
+target_link_libraries(dopamine-ESEM
+    MPI::MPI_Fortran
+    ${FFTW_LIBRARIES}
+    LAPACK::LAPACK
+    BLAS::BLAS
+    decomp2d
+)
+
+#------------------------------------------------------------------------------
 # Install
 #------------------------------------------------------------------------------
 install(TARGETS dopamine DESTINATION bin)
+install(TARGETS dopamine-ESEM DESTINATION bin)
