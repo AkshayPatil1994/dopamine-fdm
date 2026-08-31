@@ -1166,8 +1166,8 @@ Contains
     ! the draw above is independent of k's own size, so an outer-layer-sized
     ! eddy can be re-realized at the wall (injecting an oversized fluctuation
     ! there and biasing the mean profile) while a wall-sized eddy is wasted
-    ! out in the free stream (under-populating outer-layer variance).
-    If ( n_sigma > 0 ) Then
+    ! out in the free stream (under-populating outer-layer variance). Also needed under sem_wall_damping alone (n_sigma==0), since place_eddies gives each eddy a per-eddy-damped eddy_sig/eddy_smax there too.
+    If ( n_sigma > 0 .Or. sem_wall_damping == 1 ) Then
        band = sem_placement_band_factor * eddy_smax(2,k)
        y_r  = Min( Max( y_r, eddy_y0(k)-band ), eddy_y0(k)+band )
        y_r  = Min( Max( y_r, box_y_lo ), box_y_hi )
@@ -1380,10 +1380,11 @@ Contains
        Return
     End If
 
-    If ( n_sigma == 0 ) Then
+    If ( n_sigma == 0 .And. sem_wall_damping == 0 ) Then
 
        ! ---- homogeneous: original Jarrin tent-kernel formula, with a
        ! freshly re-randomized (y,z,sign) every cycle (see eddy_realize) ----
+       ! (sem_wall_damping alone routes through the inhomogeneous branch below instead, since this branch ignores the per-eddy damped eddy_sig/eddy_smax and would otherwise make sem_wall_damping a no-op)
        halfwidth = sem_length_scale
        Do kk = 1, sem_n_eddies
           phase   = (eddy_x0(kk)+halfwidth) + Uconv_sem*t_now
