@@ -12,10 +12,14 @@ Module input_output
 
 Contains
 
-  !  Read input parameters from namelist
-  !  file 'input_parameters'
-  Subroutine read_input_parameters
+  !  Read input parameters from a Fortran-namelist file. Defaults to
+  !  'input_parameters' in the working directory (the main solver's usual
+  !  call, see initialize() in initialization.f90); pass input_file to read
+  !  a different path instead (e.g. dopamine_esem_main.f90's --input= option).
+  Subroutine read_input_parameters(input_file)
 
+    Character(*), Intent(In), Optional :: input_file
+    Character(:), Allocatable :: fname
     Integer(Int32) :: ios, unit_in
     Real(Int64)    :: grav_sediment
     ! Local aliases so the namelist uses short, user-friendly names
@@ -87,12 +91,15 @@ Contains
     noise_percent = 5.0d0
     advection_scheme = 0
 
+    fname = 'input_parameters'
+    If ( Present(input_file) ) fname = input_file
+
     ! ---- Only rank 0 reads the file ----------------------------------
     If ( myid==0 ) Then
 
-       Open(newunit=unit_in, file='input_parameters', status='old',    &
+       Open(newunit=unit_in, file=fname, status='old',    &
             action='read', iostat=ios)
-       If ( ios /= 0 ) Stop 'ERROR: cannot open input_parameters file'
+       If ( ios /= 0 ) Stop 'ERROR: cannot open input parameters file: '//fname
 
        Rewind(unit_in)
        Read(unit_in, nml=DOMAIN,              iostat=ios)
