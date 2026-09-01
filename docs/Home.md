@@ -9,6 +9,10 @@ turbulence modelling, suspended-sediment scalar transport, Boussinesq buoyancy
 This wiki expands on the top-level [README](../README.md) with a page per topic. Start
 here, then jump to whichever page matches what you're doing.
 
+> **Note on LLM-assisted code review:**
+> This repository has undergone an LLM-assisted code cleanup and bug-fixing pass, as reflected in the Git commit history. The review included performance-related changes and code optimisations. These changes have therefore already been subjected to an LLM-based audit as part of the development process. The commit history provides a transparent record of these modifications.
+
+
 ## Pages
 
 | Page | Use it for |
