@@ -108,7 +108,7 @@ $$\nabla^2 \phi = \frac{1}{\Delta t}\nabla\cdot u^*$$
 
 3. Project to a divergence-free field:
 
-$$u^{n+1} = u^* - \Delta t\\,\nabla\phi$$
+$$u^{n+1} = u^* - \Delta t \nabla\phi$$
 
 ### 4.1 Spectral Poisson solver
 
@@ -161,6 +161,12 @@ and $c_V = 2.5 C_s^2$.
 All velocity gradients are evaluated at cell centres by second-order central
 differences; off-diagonal gradients are averaged from the two adjacent face-point
 values. Configured via `&PHYSICS` — see [[Input Parameters|Input-Parameters#physics]].
+
+### 5.1 Validation — turbulent channel flow 
+
+The LES is validated against a standard turbulent channel flow case used in the Vreman (2004) manuscript. See the profile comparison below that shows excellent agreement between the reference DNS dataset and the LES results using `dopamine-fdm`.
+
+![LES validation results: Mean velocity profile, resolved-RMS velocity profiles, and resolved-stress profile comparison](LES_validation.png)
 
 > **Reference:** Vreman, A.W. (2004). *An eddy-viscosity subgrid-scale model for
 > turbulent shear flow: Algebraic theory and applications*. Phys. Fluids 16(10),
@@ -367,6 +373,12 @@ v'T'\rangle$ when both `&STATISTICS` and `&BOUSSINESQ` are active. Configured vi
 > **Note:** this is independent of the suspended-sediment scalar (§8.1–8.2) — the two can
 > be enabled together, each with its own transport equation, but only $T$ couples back
 > into the momentum equation.
+
+### 8.1 Validation - Rayleigh–Bénard convection
+
+The Boussinesq implementation is validated against a standard turbulent Rayleigh–Bénard convection case corresponding to the work by Kunnen, Geurts, and Clercx, (2009). 
+
+![test](Temperature_validation.png)
 
 ## 9. Reynolds stress budget
 
