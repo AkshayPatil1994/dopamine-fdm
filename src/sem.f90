@@ -108,23 +108,32 @@ Module synthetic_eddy_method
   Logical        :: rec_active  = .False.
   Integer(Int32) :: rec_unit    = -1
   Integer(Int32) :: rec_ncomp   = 0
-  Integer(Int32) :: rec_n1      = 0   ! donor n1 = nym_global (full y, matches this run's)
-  Integer(Int32) :: rec_n2_global = 0 ! donor n2 = nzm_global
-  Integer(Int32) :: rec_col_U   = 0, rec_col_V = 0, rec_col_W = 0   ! 1-based column within the ncomp axis (fixed U,V,W,P,T,C order, see probe_output's parse_comps)
+  Integer(Int32) :: rec_n1      = 0   ! U/W/T/C's native n1 = nym_global (cell-centre y)
+  Integer(Int32) :: rec_n1_v    = 0   ! V's own native n1 = ny_global (y-face, no half-cell shift needed)
+  Integer(Int32) :: rec_n2_global = 0 ! all components' donor n2 = nzm_global (U/V cell-centre z; W left-face-of-cell z)
+  Integer(Int32) :: rec_col_U   = 0, rec_col_V = 0, rec_col_W = 0   ! presence flags (1 if the component is in the donor's comps, 0 if absent) -- U,V,W always required
   Integer(Int32) :: rec_col_T   = 0   ! 0 if the donor slice didn't record T (fine unless boussinesq_flag>=1, checked in init_inflow_recycle)
   Integer(Int32) :: rec_col_C   = 0   ! 0 if the donor slice didn't record C (fine unless sediment_flag>=1, checked in init_inflow_recycle)
   Integer(Int32) :: rec_nsnaps  = 0
   Real   (Int64), Allocatable :: rec_times(:)   ! full donor snapshot-time array; tiny (one Real64 per snapshot), kept resident on the host only
-  Integer(Int32) :: rec_k1 = 0, rec_k2 = 0       ! this rank's local donor z range (global 1-based interior cc indices, same convention as kg1_global/kg2_global-2)
-  Integer(Int64) :: rec_frame_bytes = 0_Int64    ! bytes per full (ncomp,n1,n2_global) donor frame
+  Integer(Int32) :: rec_k1 = 0, rec_k2 = 0       ! this rank's local donor z range (global 1-based interior cc/face indices, same convention as kg1_global/kg2_global-2)
+  Integer(Int64) :: rec_frame_bytes = 0_Int64    ! bytes per full per-snapshot frame (sum of the selected components' own (n1_c,n2) blocks, fixed U,V,W,T,C order)
+  Integer(Int64) :: rec_off_U = 0_Int64, rec_off_V = 0_Int64, rec_off_W = 0_Int64   ! each component's byte offset of its block's start within a frame
+  Integer(Int64) :: rec_off_T = 0_Int64, rec_off_C = 0_Int64
   Integer(Int32) :: rec_idx_lo = -1, rec_idx_hi = -1   ! cached bracketing donor frame indices, so a step that doesn't cross a donor sample re-reads nothing
   Integer(Int32) :: rec_shift_z   = 0                   ! spanwise shift (donor z-cells) for the current pass through the donor timeline; re-drawn every donor-loop wrap (inflow_recycle_shift_z==1)
   Integer(Int32) :: rec_loop_idx  = -999999              ! which pass through the donor timeline rec_shift_z was drawn for
-  Integer(Int32) :: rec_idx_shift = -999999              ! shift value currently baked into rec_lo/rec_hi (vs. rec_shift_z, the shift that should be active now)
-  Real   (Int64), Allocatable :: rec_lo(:,:,:), rec_hi(:,:,:)   ! (ncomp, n1, local nz) bracketing frames -- only this rank's z-slab, not the whole donor plane
-  Real   (Int64) :: rec_frac = 0d0   ! time-interpolation weight between rec_lo and rec_hi
+  Integer(Int32) :: rec_idx_shift = -999999              ! shift value currently baked into rec_lo_*/rec_hi_* (vs. rec_shift_z, the shift that should be active now)
+  ! bracketing frames per component -- each on its OWN native (n1_c, local nz) grid (no
+  ! half-cell shift needed on read: U/W index directly via rec_n1, V via rec_n1_v)
+  Real   (Int64), Allocatable :: rec_lo_U(:,:), rec_hi_U(:,:)
+  Real   (Int64), Allocatable :: rec_lo_V(:,:), rec_hi_V(:,:)
+  Real   (Int64), Allocatable :: rec_lo_W(:,:), rec_hi_W(:,:)
+  Real   (Int64), Allocatable :: rec_lo_T(:,:), rec_hi_T(:,:)
+  Real   (Int64), Allocatable :: rec_lo_C(:,:), rec_hi_C(:,:)
+  Real   (Int64) :: rec_frac = 0d0   ! time-interpolation weight between rec_lo_* and rec_hi_*
 
-  !$acc declare create(rec_lo, rec_hi, rec_frac, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1)
+  !$acc declare create(rec_lo_U, rec_hi_U, rec_lo_V, rec_hi_V, rec_lo_W, rec_hi_W, rec_lo_T, rec_hi_T, rec_lo_C, rec_hi_C, rec_frac, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v)
 
 Contains
 
@@ -136,6 +145,36 @@ Contains
                 Minval(z_global(2:nz_global)-z_global(1:nz_global-1)) )
 
   End Function min_grid_spacing
+
+  !> Per-direction maximum grid spacing (x,y,z), the building block behind both max_grid_spacing()
+  !> (isotropic sem_length_scale's floor) and enforce_sigma_floor (sem_sigma_file's per-direction
+  !> sigma_ij floor, which matches each component to the spacing in ITS OWN direction rather than one
+  !> isotropic value -- a wall-clustered y-grid's coarse mid-channel spacing shouldn't be diluted by a
+  !> fine spanwise z-grid, or vice versa).
+  Subroutine max_grid_spacing_xyz(dx_max, dy_max, dz_max)
+
+    Real(Int64), Intent(Out) :: dx_max, dy_max, dz_max
+
+    dx_max = Maxval(x_global(2:nx_global)-x_global(1:nx_global-1))
+    dy_max = Maxval(y_global(2:ny_global)-y_global(1:ny_global-1))
+    dz_max = Maxval(z_global(2:nz_global)-z_global(1:nz_global-1))
+
+  End Subroutine max_grid_spacing_xyz
+
+  !> Maximum grid spacing over the whole domain (x,y,z faces): the resolvability floor for
+  !> sem_length_scale needs THIS, not min_grid_spacing() -- an eddy's footprint is ~2*sem_length_scale
+  !> in every direction (homogeneous mode: eddy_sig is isotropic, see place_eddies), so what matters is
+  !> whether the COARSEST relevant spacing (typically the streamwise spacing, or a wall-clustered grid's
+  !> mid-channel y-spacing) can resolve it; min_grid_spacing() is dominated by the tiny near-wall cell,
+  !> which an eddy doesn't need to fit inside and so is far too permissive a floor on its own.
+  Real(Int64) Function max_grid_spacing() Result(dmax)
+
+    Real(Int64) :: dx_max, dy_max, dz_max
+
+    Call max_grid_spacing_xyz(dx_max, dy_max, dz_max)
+    dmax = Max(dx_max, dy_max, dz_max)
+
+  End Function max_grid_spacing
 
   !> Mean streamwise (x) grid spacing; used (paired with Uconv_sem) to estimate dt for the ti_rescale_freq/nstart auto-tuning -- unlike min_grid_spacing(), this deliberately excludes the wall-clustered y-spacing, since a near-wall cell's tiny spacing pairs with a near-zero local velocity there and is not representative of the convective step size that limits dt
   Real(Int64) Function streamwise_grid_spacing() Result(dx)
@@ -198,6 +237,87 @@ Contains
          ' INFO: auto-tuned sem_length_scale (sem_length_scale<=0 requested) = ', sem_length_scale
 
   End Subroutine refine_sem_length_scale
+
+  !> Unconditional resolvability floor on sem_length_scale, applied regardless of whether it was
+  !> auto-tuned or set explicitly in the namelist: an eddy's footprint is ~2*sem_length_scale in every
+  !> direction (homogeneous mode: eddy_sig is isotropic, see place_eddies), so a value narrower than a
+  !> few grid cells cannot be represented by the mesh and is destroyed by advection/pressure-projection
+  !> within the first cell or two of the domain -- observed in practice as injected Reynolds stresses
+  !> collapsing right at the inflow even though the target statistics (verified offline, e.g. via
+  !> postProcessing/check_inflow_donor.py) were exact. The auto-tune path (geometric_length_scale_estimate/
+  !> refine_sem_length_scale) already has its own internal floor, but that one is keyed off
+  !> min_grid_spacing() -- dominated by the smallest cell anywhere in the domain, almost always a
+  !> wall-clustered near-wall cell an eddy never needs to fit inside, so it under-floors whenever the
+  !> coarsest *relevant* direction (typically streamwise) is far coarser than the finest one. This uses
+  !> max_grid_spacing() instead, which tracks the actual bottleneck. A user-supplied value had no floor
+  !> at all before this -- only the auto-tune path was ever checked.
+  Subroutine enforce_sem_length_scale_floor
+
+    Real(Int64) :: Lfloor
+
+    Lfloor = 5d0*max_grid_spacing()
+    If ( sem_length_scale < Lfloor ) Then
+       If ( myid == 0 ) Write(*,'(A,E12.4,A,E12.4,A)') &
+            ' WARNING: sem_length_scale (', sem_length_scale, ') is below the grid''s resolvability floor ' // &
+            '(5*max_grid_spacing = ', Lfloor, ') -- eddies this small cannot be represented by the mesh ' // &
+            'and would be destroyed by advection/pressure-projection within the first cell or two of ' // &
+            'the domain; raising it to the floor.'
+       sem_length_scale = Lfloor
+    End If
+
+  End Subroutine enforce_sem_length_scale_floor
+
+  !> Per-direction resolvability floor on the inhomogeneous eddy length-scale profile (sem_sigma_file,
+  !> or sem_profile_format=1's derived sig_* -- see read_sigma_profile/derive_mixing_length/
+  !> fill_length_scale), mirroring enforce_sem_length_scale_floor above for the homogeneous case: no-op
+  !> when n_sigma==0 (homogeneous mode, already covered by enforce_sem_length_scale_floor). sigma_ij sets
+  !> eddy component i's footprint in direction j (see place_eddies/unified_kernel), so unlike the isotropic
+  !> sem_length_scale floor, each of the 9 profiles is floored against the spacing in ITS OWN direction --
+  !> sig_*x vs the streamwise spacing, sig_*y vs the (possibly wall-clustered) y-spacing, sig_*z vs the
+  !> spanwise spacing -- rather than one shared value, so a fine z-grid can't be diluted by a coarse y-grid
+  !> or vice versa. Clamps in place; warns once per profile (not once per point) when at least one node
+  !> needed raising, reporting that profile's pre-clamp minimum against the floor it was raised to.
+  Subroutine enforce_sigma_floor
+
+    Real(Int64) :: dx_max, dy_max, dz_max, Lfloor_x, Lfloor_y, Lfloor_z
+
+    If ( n_sigma == 0 ) Return
+
+    Call max_grid_spacing_xyz(dx_max, dy_max, dz_max)
+    Lfloor_x = 5d0*dx_max;  Lfloor_y = 5d0*dy_max;  Lfloor_z = 5d0*dz_max
+
+    Call floor_sigma_component('sig_ux', sig_ux, Lfloor_x)
+    Call floor_sigma_component('sig_uy', sig_uy, Lfloor_y)
+    Call floor_sigma_component('sig_uz', sig_uz, Lfloor_z)
+    Call floor_sigma_component('sig_vx', sig_vx, Lfloor_x)
+    Call floor_sigma_component('sig_vy', sig_vy, Lfloor_y)
+    Call floor_sigma_component('sig_vz', sig_vz, Lfloor_z)
+    Call floor_sigma_component('sig_wx', sig_wx, Lfloor_x)
+    Call floor_sigma_component('sig_wy', sig_wy, Lfloor_y)
+    Call floor_sigma_component('sig_wz', sig_wz, Lfloor_z)
+
+  Contains
+
+    Subroutine floor_sigma_component(name, sig, Lfloor)
+
+      Character(*),   Intent(In)    :: name
+      Real   (Int64), Intent(InOut) :: sig(:)
+      Real   (Int64), Intent(In)    :: Lfloor
+
+      Real(Int64) :: Lmin_before
+
+      Lmin_before = Minval(sig)
+      If ( Lmin_before < Lfloor ) Then
+         If ( myid == 0 ) Write(*,'(A,A,A,E12.4,A,E12.4,A)') &
+              ' WARNING: ', name, ' has a minimum (', Lmin_before, ') below the grid''s resolvability ' // &
+              'floor in its direction (', Lfloor, ') -- eddies this small cannot be represented by the ' // &
+              'mesh; clamping up.'
+         sig = Max(sig, Lfloor)
+      End If
+
+    End Subroutine floor_sigma_component
+
+  End Subroutine enforce_sigma_floor
 
   !> Auto-sets sem_n_eddies (sem_n_eddies<=0 requests this) from Jarrin's box-fill density guideline: ~1 eddy per sem_length_scale^3 cell of the padded inflow box; mirrors build_analytical_normalisation's recommended_N diagnostic
   Subroutine auto_set_n_eddies
@@ -269,6 +389,7 @@ Contains
 
     Call init_inflow_profile
     Call read_sigma_profile   ! sem_sigma_file, if set, overrides any length scales read_mean_profile_TI derived from inflow_profile_file
+    Call enforce_sigma_floor  ! unconditional: catches a sig_* profile (explicit file or mixing-length-derived) too small for the grid to resolve, same rationale as enforce_sem_length_scale_floor below
 
     If ( boussinesq_flag >= 1 .And. Len_trim(inflow_temperature_file) > 0 ) Call read_mean_profile_T
 
@@ -292,6 +413,7 @@ Contains
     wall_Ltaper_hi = 2d0*( y_global(ny_global) - y_global(ny_global-1) )
 
     If ( auto_length_scale ) Call refine_sem_length_scale
+    Call enforce_sem_length_scale_floor   ! unconditional: also catches an explicitly-set sem_length_scale too small for the grid to resolve
     If ( sem_n_eddies <= 0 ) Call auto_set_n_eddies
 
     Call place_eddies
@@ -327,12 +449,12 @@ Contains
 
   End Subroutine init_inflow
 
-  !> Parse a recycled-inflow donor's <inflow_recycle_file>_meta.txt (as written by probe_output's x-normal slice writer); returns the slice dims/snapshot count and the U/V/W 1-based column index within the ncomp axis (0 if a component is absent -- probe_output always writes columns in fixed U,V,W,P,T order regardless of the order requested in slice_comps)
-  Subroutine read_recycle_meta(ncomp, n1, n2, nsnaps, colU, colV, colW, colT, colC)
+  !> Parse a recycled-inflow donor's <inflow_recycle_file>_meta.txt (as written by dopamine-ESEM's per-component-native-grid writer); returns U/W/T/C's shared native n1 (cell-centre y), V's own native n1_v (y-face), the shared n2 (donor z), snapshot count, and per-component presence flags (1 if the component is in the donor's comps, 0 if absent)
+  Subroutine read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC)
 
-    Integer(Int32), Intent(Out) :: ncomp, n1, n2, nsnaps, colU, colV, colW, colT, colC
+    Integer(Int32), Intent(Out) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC
 
-    Integer(Int32) :: u_meta, ios, eqpos, i, ic, colP
+    Integer(Int32) :: u_meta, ios, eqpos, ic
     Character(300) :: fname, line
     Character(20)  :: key
     Character(8)   :: comps_str
@@ -344,7 +466,7 @@ Contains
     Open(newunit=u_meta, file=Trim(fname), form='formatted', status='old', action='read', iostat=ios)
     If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file meta (expected <inflow_recycle_file>_meta.txt)'
 
-    ncomp = 0; n1 = 0; n2 = 0; nsnaps = 0; comps_str = ''
+    ncomp = 0; n1 = 0; n1_v = 0; n2 = 0; nsnaps = 0; comps_str = ''
     Do
        Read(u_meta,'(A)', iostat=ios) line
        If ( ios /= 0 ) Exit
@@ -354,6 +476,7 @@ Contains
        Select Case ( Trim(key) )
        Case ('ncomp');  Read(line(eqpos+1:),*) ncomp
        Case ('n1');     Read(line(eqpos+1:),*) n1
+       Case ('n1_V');   Read(line(eqpos+1:),*) n1_v
        Case ('n2');     Read(line(eqpos+1:),*) n2
        Case ('comps');  comps_str = Adjustl(line(eqpos+1:))
        Case ('nsnaps'); Read(line(eqpos+1:),*) nsnaps
@@ -365,23 +488,22 @@ Contains
     End Do
     Close(u_meta)
 
-    If ( ncomp < 1 .Or. n1 < 1 .Or. n2 < 1 .Or. nsnaps < 1 ) &
-         Stop 'ERROR: inflow_recycle_file meta is incomplete or malformed'
+    If ( ncomp < 1 .Or. n1 < 1 .Or. n1_v < 1 .Or. n2 < 1 .Or. nsnaps < 1 ) &
+         Stop 'ERROR: inflow_recycle_file meta is incomplete or malformed (expected the per-component-native-grid ' // &
+         'format written by the current dopamine-ESEM/sem.f90 -- a donor from an older build is missing n1_V and ' // &
+         'must be regenerated)'
 
     Do ic = 1, Len_trim(comps_str)
        If ( comps_str(ic:ic) >= 'a' .And. comps_str(ic:ic) <= 'z' ) &
             comps_str(ic:ic) = Achar(Iachar(comps_str(ic:ic)) - 32)
     End Do
 
-    ! fixed U,V,W,P,T,C column order, matching probe_output's parse_comps/write_slice_n
-    colU = 0; colV = 0; colW = 0; colP = 0; colT = 0; colC = 0
-    i = 0
-    If ( Index(comps_str,'U') > 0 ) Then; i = i + 1; colU = i; End If
-    If ( Index(comps_str,'V') > 0 ) Then; i = i + 1; colV = i; End If
-    If ( Index(comps_str,'W') > 0 ) Then; i = i + 1; colW = i; End If
-    If ( Index(comps_str,'P') > 0 ) Then; i = i + 1; colP = i; End If
-    If ( Index(comps_str,'T') > 0 ) Then; i = i + 1; colT = i; End If
-    If ( Index(comps_str,'C') > 0 ) Then; i = i + 1; colC = i; End If
+    ! presence flags (1/0), fixed U,V,W,T,C block order on disk (see read_recycle_frame_comp)
+    colU = Merge(1,0, Index(comps_str,'U') > 0)
+    colV = Merge(1,0, Index(comps_str,'V') > 0)
+    colW = Merge(1,0, Index(comps_str,'W') > 0)
+    colT = Merge(1,0, Index(comps_str,'T') > 0)
+    colC = Merge(1,0, Index(comps_str,'C') > 0)
     If ( colU == 0 .Or. colV == 0 .Or. colW == 0 ) Stop &
          'ERROR: inflow_recycle_file must contain U,V,W (set slice_comps="UVW..." on the donor run)'
 
@@ -390,11 +512,11 @@ Contains
   !> Mean-profile seed for inflow_type==2 (recycled precursor inflow): every rank independently reads the donor's first frame and z-averages U(y), mirroring read_mean_profile's per-rank-independent read of a small shared file (here the read is one frame, not the whole donor file); R11/R22/R33/R12 are left at zero since sem_fluctuation is never called under inflow_type==2 -- these only feed mean_profile_U, used by genGridandIC to seed the IC mean
   Subroutine read_recycle_mean_profile
 
-    Integer(Int32) :: ncomp, n1, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy
-    Real(Int64), Allocatable :: frame(:,:,:)
+    Integer(Int32) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy
+    Real(Int64), Allocatable :: frame_U(:,:)
     Character(300) :: fname
 
-    Call read_recycle_meta(ncomp, n1, n2, nsnaps, colU, colV, colW, colT, colC)
+    Call read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC)
 
     If ( n1 /= nym_global ) Stop 'ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global'
     If ( n2 /= nzm_global ) Stop 'ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global'
@@ -405,22 +527,21 @@ Contains
     prof_y = ym_global
     prof_R11 = 0d0;  prof_R22 = 0d0;  prof_R33 = 0d0;  prof_R12 = 0d0
 
-    ! only rank 0 pays the O(ncomp*n1*n2) transient allocation+read for the donor's first
-    ! frame (unlike read_mean_profile's small text file, every rank independently reading
-    ! this full field slice would multiply a potentially large one-time cost by nprocs);
-    ! the result (prof_U, n1 reals) is tiny, so broadcast it instead
+    ! only rank 0 pays the O(n1*n2) transient allocation+read for the donor's first frame's
+    ! U block (the first block on disk, see the per-component block order written by
+    ! dopamine-ESEM); the result (prof_U, n1 reals) is tiny, so broadcast it instead
     If ( myid == 0 ) Then
-       Allocate( frame(ncomp,n1,n2) )
+       Allocate( frame_U(n1,n2) )
        Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
        Open(newunit=unit_in, file=Trim(fname), access='stream', form='unformatted', &
             status='old', action='read', iostat=ios)
        If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)'
-       Read(unit_in) frame
+       Read(unit_in) frame_U   ! U is always the first block of the first frame
        Close(unit_in)
        Do jy = 1, n1
-          prof_U(jy) = Sum(frame(colU,jy,:)) / Real(n2,8)
+          prof_U(jy) = Sum(frame_U(jy,:)) / Real(n2,8)
        End Do
-       Deallocate(frame)
+       Deallocate(frame_U)
     End If
 
     Call Mpi_bcast( prof_U, n_profile, MPI_real8, 0, MPI_COMM_WORLD, ierr )
@@ -438,9 +559,11 @@ Contains
     ! this rank owns the x=1 face iff it's in row 0 of the p_row/p_col grid (mirrors decomp's x_periodic_partner, avoiding a new decomp.f90 dependency here since sem.f90 is also compiled standalone by the tests/verify_* targets)
     If ( myid/p_col /= 0 ) Return
 
-    Call read_recycle_meta(rec_ncomp, rec_n1, rec_n2_global, rec_nsnaps, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C)
+    Call read_recycle_meta(rec_ncomp, rec_n1, rec_n1_v, rec_n2_global, rec_nsnaps, &
+         rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C)
 
     If ( rec_n1 /= nym_global ) Stop 'ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global'
+    If ( rec_n1_v /= ny_global ) Stop 'ERROR: inflow_recycle_file n1_V (V''s own y-face count) does not match this run''s ny_global'
     If ( rec_n2_global /= nzm_global ) Stop 'ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global'
     If ( rec_nsnaps < 2 ) Stop 'ERROR: inflow_recycle_file must contain at least 2 snapshots to interpolate in time'
     If ( boussinesq_flag >= 1 .And. rec_col_T == 0 ) Stop 'ERROR: boussinesq_flag>=1 with ' // &
@@ -456,10 +579,17 @@ Contains
     Read(u_times) rec_times
     Close(u_times)
 
-    ! this rank's local donor z-slab: same global 1-based interior cc convention write_slice_n used (kg_g = kg1_global(myid)+ka-2)
+    ! this rank's local donor z-slab: same global 1-based interior cc/face convention the writer used (kg_g = kg1_global(myid)+ka-2)
     rec_k1 = kg1_global(myid)
     rec_k2 = kg2_global(myid) - 2
-    rec_frame_bytes = 8_Int64 * Int(rec_ncomp,Int64) * Int(rec_n1,Int64) * Int(rec_n2_global,Int64)
+
+    ! each component's own block, fixed U,V,W,T,C disk order (only present ones actually occupy space)
+    rec_off_U = 0_Int64
+    rec_off_V = rec_off_U + 8_Int64*Int(rec_n1,  Int64)*Int(rec_n2_global,Int64)
+    rec_off_W = rec_off_V + 8_Int64*Int(rec_n1_v,Int64)*Int(rec_n2_global,Int64)
+    rec_off_T = rec_off_W + 8_Int64*Int(rec_n1,  Int64)*Int(rec_n2_global,Int64)
+    rec_off_C = rec_off_T + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, rec_col_T==1)
+    rec_frame_bytes = rec_off_C + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, rec_col_C==1)
 
     Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
     Open(newunit=rec_unit, file=Trim(fname), access='stream', form='unformatted', &
@@ -467,39 +597,46 @@ Contains
     If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)'
     rec_active = .True.
 
-    Allocate( rec_lo(rec_ncomp, rec_n1, rec_k2-rec_k1+1) )
-    Allocate( rec_hi(rec_ncomp, rec_n1, rec_k2-rec_k1+1) )
+    Allocate( rec_lo_U(rec_n1,   rec_k2-rec_k1+1) );  Allocate( rec_hi_U(rec_n1,   rec_k2-rec_k1+1) )
+    Allocate( rec_lo_V(rec_n1_v, rec_k2-rec_k1+1) );  Allocate( rec_hi_V(rec_n1_v, rec_k2-rec_k1+1) )
+    Allocate( rec_lo_W(rec_n1,   rec_k2-rec_k1+1) );  Allocate( rec_hi_W(rec_n1,   rec_k2-rec_k1+1) )
+    Allocate( rec_lo_T(Merge(rec_n1,0,rec_col_T==1), Merge(rec_k2-rec_k1+1,0,rec_col_T==1)) )
+    Allocate( rec_hi_T(Merge(rec_n1,0,rec_col_T==1), Merge(rec_k2-rec_k1+1,0,rec_col_T==1)) )
+    Allocate( rec_lo_C(Merge(rec_n1,0,rec_col_C==1), Merge(rec_k2-rec_k1+1,0,rec_col_C==1)) )
+    Allocate( rec_hi_C(Merge(rec_n1,0,rec_col_C==1), Merge(rec_k2-rec_k1+1,0,rec_col_C==1)) )
     rec_idx_lo = -1;  rec_idx_hi = -1
 
-    !$acc update device(rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1)
+    !$acc update device(rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v)
 
-    Call update_inflow_recycle(t)   ! prime rec_lo/rec_hi/rec_frac before the first BC application
+    Call update_inflow_recycle(t)   ! prime rec_lo_*/rec_hi_*/rec_frac before the first BC application
 
     Write(*,'(A,I0,A,A,A,I0,A)') ' Rank ', myid, ': recycled precursor inflow from ', &
          Trim(inflow_recycle_file), ' (', rec_nsnaps, ' donor snapshots)'
 
   End Subroutine init_inflow_recycle
 
-  !> Read one contiguous donor-z span (z0..z0+count-1, 1-based global donor z index, no shift/wrap applied by this routine) of frame frame_idx's local slab into buf(:,:,zoff:zoff+count-1); the donor's (ncomp,n1,n2) storage order (component fastest, then y, then z) makes any single z-span a contiguous disk read
-  Subroutine read_recycle_span(frame_idx, z0, count, buf, zoff)
+  !> Read one contiguous donor-z span (z0..z0+count-1, 1-based global donor z index, no shift/wrap applied by this routine) of one component's block (comp_off = that component's byte offset within a frame, comp_n1 = its own native n1) into buf(:,zoff:zoff+count-1); each component's own (n1_c,n2) block is plain column-major (n1_c fastest), so any single z-span is a contiguous disk read
+  Subroutine read_recycle_span(frame_idx, comp_off, comp_n1, z0, count, buf, zoff)
 
-    Integer(Int32), Intent(In)    :: frame_idx, z0, count, zoff
-    Real   (Int64), Intent(InOut) :: buf(:,:,:)
+    Integer(Int32), Intent(In)    :: frame_idx, comp_n1, z0, count, zoff
+    Integer(Int64), Intent(In)    :: comp_off
+    Real   (Int64), Intent(InOut) :: buf(:,:)
 
     Integer(Int64) :: byte_pos
 
     If ( count < 1 ) Return
-    byte_pos = Int(frame_idx-1,Int64)*rec_frame_bytes + &
-               Int(z0-1,Int64)*8_Int64*Int(rec_ncomp,Int64)*Int(rec_n1,Int64) + 1_Int64
-    Read(rec_unit, pos=byte_pos) buf(:,:,zoff:zoff+count-1)
+    byte_pos = Int(frame_idx-1,Int64)*rec_frame_bytes + comp_off + &
+               Int(z0-1,Int64)*8_Int64*Int(comp_n1,Int64) + 1_Int64
+    Read(rec_unit, pos=byte_pos) buf(:,zoff:zoff+count-1)
 
   End Subroutine read_recycle_span
 
-  !> Read one donor frame's local z-slab, circularly shifted by shift_z donor z-cells (spanwise shift, see update_inflow_recycle); this rank's unshifted span is [rec_k1,rec_k2], so the shifted span is that window rotated by shift_z within the donor's periodic z range [1,rec_n2_global] -- at most one wrap, split into two contiguous reads when it crosses the donor's z boundary
-  Subroutine read_recycle_frame(frame_idx, shift_z, buf)
+  !> Read one component's block from one donor frame's local z-slab, circularly shifted by shift_z donor z-cells (spanwise shift, see update_inflow_recycle); this rank's unshifted span is [rec_k1,rec_k2], so the shifted span is that window rotated by shift_z within the donor's periodic z range [1,rec_n2_global] -- at most one wrap, split into two contiguous reads when it crosses the donor's z boundary
+  Subroutine read_recycle_frame_comp(frame_idx, shift_z, comp_off, comp_n1, buf)
 
-    Integer(Int32), Intent(In)    :: frame_idx, shift_z
-    Real   (Int64), Intent(InOut) :: buf(:,:,:)
+    Integer(Int32), Intent(In)    :: frame_idx, shift_z, comp_n1
+    Integer(Int64), Intent(In)    :: comp_off
+    Real   (Int64), Intent(InOut) :: buf(:,:)
 
     Integer(Int32) :: nzloc, z_start, nA
 
@@ -507,11 +644,33 @@ Contains
     z_start = Modulo( rec_k1 - 1 + shift_z, rec_n2_global ) + 1
 
     If ( z_start + nzloc - 1 <= rec_n2_global ) Then
-       Call read_recycle_span(frame_idx, z_start, nzloc, buf, 1)
+       Call read_recycle_span(frame_idx, comp_off, comp_n1, z_start, nzloc, buf, 1)
     Else
        nA = rec_n2_global - z_start + 1
-       Call read_recycle_span(frame_idx, z_start, nA,         buf, 1)
-       Call read_recycle_span(frame_idx, 1,       nzloc-nA,   buf, nA+1)
+       Call read_recycle_span(frame_idx, comp_off, comp_n1, z_start, nA,       buf, 1)
+       Call read_recycle_span(frame_idx, comp_off, comp_n1, 1,       nzloc-nA, buf, nA+1)
+    End If
+
+  End Subroutine read_recycle_frame_comp
+
+  !> Read all active components' blocks for one donor frame (see read_recycle_frame_comp); dst_lo=.True. writes into the rec_lo_* buffers, .False. into rec_hi_*
+  Subroutine read_recycle_frame(frame_idx, shift_z, dst_lo)
+
+    Integer(Int32), Intent(In) :: frame_idx, shift_z
+    Logical,        Intent(In) :: dst_lo
+
+    If ( dst_lo ) Then
+       Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_U, rec_n1,   rec_lo_U)
+       Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_V, rec_n1_v, rec_lo_V)
+       Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_W, rec_n1,   rec_lo_W)
+       If ( rec_col_T == 1 ) Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_T, rec_n1, rec_lo_T)
+       If ( rec_col_C == 1 ) Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_C, rec_n1, rec_lo_C)
+    Else
+       Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_U, rec_n1,   rec_hi_U)
+       Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_V, rec_n1_v, rec_hi_V)
+       Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_W, rec_n1,   rec_hi_W)
+       If ( rec_col_T == 1 ) Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_T, rec_n1, rec_hi_T)
+       If ( rec_col_C == 1 ) Call read_recycle_frame_comp(frame_idx, shift_z, rec_off_C, rec_n1, rec_hi_C)
     End If
 
   End Subroutine read_recycle_frame
@@ -567,11 +726,14 @@ Contains
     changed = .False.
     If ( ilo /= rec_idx_lo .Or. ihi /= rec_idx_hi .Or. shift_z /= rec_idx_shift ) Then
        If ( ilo == rec_idx_hi .And. shift_z == rec_idx_shift ) Then
-          rec_lo = rec_hi                                 ! bracket slid forward, same shift: reuse, don't re-read
-          Call read_recycle_frame(ihi, shift_z, rec_hi)
+          ! bracket slid forward, same shift: reuse the old "hi" as the new "lo", don't re-read it
+          rec_lo_U = rec_hi_U;  rec_lo_V = rec_hi_V;  rec_lo_W = rec_hi_W
+          If ( rec_col_T == 1 ) rec_lo_T = rec_hi_T
+          If ( rec_col_C == 1 ) rec_lo_C = rec_hi_C
+          Call read_recycle_frame(ihi, shift_z, .False.)
        Else
-          Call read_recycle_frame(ilo, shift_z, rec_lo)    ! first call, a jump, or a fresh shift at a loop wrap
-          Call read_recycle_frame(ihi, shift_z, rec_hi)
+          Call read_recycle_frame(ilo, shift_z, .True.)    ! first call, a jump, or a fresh shift at a loop wrap
+          Call read_recycle_frame(ihi, shift_z, .False.)
        End If
        rec_idx_lo = ilo;  rec_idx_hi = ihi;  rec_idx_shift = shift_z
        changed = .True.
@@ -585,36 +747,39 @@ Contains
     rec_frac = Min( Max(rec_frac,0d0), 1d0 )
 
     If ( changed ) Then
-       !$acc update device(rec_lo, rec_hi)
+       !$acc update device(rec_lo_U, rec_hi_U, rec_lo_V, rec_hi_V, rec_lo_W, rec_hi_W, rec_lo_T, rec_hi_T, rec_lo_C, rec_hi_C)
     End If
     !$acc update device(rec_frac)
 
   End Subroutine update_inflow_recycle
 
-  !> Time-interpolated recycled-inflow value for component comp (1=U,2=V,3=W,4=T,5=C) at this rank's local ghost-array (j,k); j,k use the same (yg,zg)-ghost-inclusive index space as apply_inflow_bc_x/apply_inflow_bc_scalar_x -- the donor stored cell-centre-averaged U,V,W,T,C (see probe_output's cc_val), so this ignores the sub-cell y/z staggering offset for V/W, an accepted approximation at typical grid resolutions
+  !> Time-interpolated recycled-inflow value for component comp (1=U,2=V,3=W,4=T,5=C) at this rank's local array position (j,k). Each component now reads its OWN native-grid donor block (see dopamine-ESEM's per-component staggered-grid writer), so this is an EXACT lookup, no half-cell interpolation/index-shift approximation: U/W use apply_inflow_bc_x's (yg,zg)-ghost-inclusive index space (j-1/k-1, matching rec_n1/rec_k1..rec_k2's cell-centre convention exactly like before); V uses its OWN (y,zg) index space -- j directly (V's local array has no y-ghost, so j already IS the y-face index, no -1 shift) and k-1 in z (V is still z ghost-cell-centred); W keeps U's y-index convention (j-1) but uses k directly (its local array has no z-ghost, so k already IS the z-face index, matching this donor's z(:) left-face-of-cell storage)
   Real(Int64) Function recycle_value(comp, j, k) Result(val)
     !$acc routine seq
 
     Integer(Int32), Intent(In) :: comp, j, k
 
-    Integer(Int32) :: jy, kz, col
+    Integer(Int32) :: jy, kz, nzloc
 
-    jy = Max( 1, Min(rec_n1, j-1) )
-    kz = Max( 1, Min(Size(rec_lo,3), k-1) )
+    nzloc = rec_k2 - rec_k1 + 1
 
-    If ( comp == 1 ) Then
-       col = rec_col_U
-    Else If ( comp == 2 ) Then
-       col = rec_col_V
-    Else If ( comp == 3 ) Then
-       col = rec_col_W
-    Else If ( comp == 4 ) Then
-       col = rec_col_T
-    Else
-       col = rec_col_C
-    End If
-
-    val = rec_lo(col,jy,kz) + rec_frac*( rec_hi(col,jy,kz) - rec_lo(col,jy,kz) )
+    Select Case (comp)
+    Case (1)   ! U: (yg,zg) ghost cell-centre
+       jy = Max( 1, Min(rec_n1, j-1) );  kz = Max( 1, Min(nzloc, k-1) )
+       val = rec_lo_U(jy,kz) + rec_frac*( rec_hi_U(jy,kz) - rec_lo_U(jy,kz) )
+    Case (2)   ! V: (y,zg) y-face (no shift), z ghost cell-centre
+       jy = Max( 1, Min(rec_n1_v, j) );  kz = Max( 1, Min(nzloc, k-1) )
+       val = rec_lo_V(jy,kz) + rec_frac*( rec_hi_V(jy,kz) - rec_lo_V(jy,kz) )
+    Case (3)   ! W: (yg,z) y ghost cell-centre, z-face (no shift)
+       jy = Max( 1, Min(rec_n1, j-1) );  kz = Max( 1, Min(nzloc, k) )
+       val = rec_lo_W(jy,kz) + rec_frac*( rec_hi_W(jy,kz) - rec_lo_W(jy,kz) )
+    Case (4)   ! T: cell-centre, same convention as U
+       jy = Max( 1, Min(rec_n1, j-1) );  kz = Max( 1, Min(nzloc, k-1) )
+       val = rec_lo_T(jy,kz) + rec_frac*( rec_hi_T(jy,kz) - rec_lo_T(jy,kz) )
+    Case Default   ! C: cell-centre, same convention as U
+       jy = Max( 1, Min(rec_n1, j-1) );  kz = Max( 1, Min(nzloc, k-1) )
+       val = rec_lo_C(jy,kz) + rec_frac*( rec_hi_C(jy,kz) - rec_lo_C(jy,kz) )
+    End Select
 
   End Function recycle_value
 
