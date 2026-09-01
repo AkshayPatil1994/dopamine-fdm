@@ -19,8 +19,9 @@ Module initialization
 Contains
 
   ! Initialize everything
-  Subroutine initialize
-    
+  Subroutine initialize(input_file)
+
+    Character(*), Intent(In), Optional :: input_file
     Integer(Int32) :: i, j, k, kk, nzpe, pos, ipos
     Real   (Int64) :: dy1, dy2, det, a, b, c, r, Qflow_ref
     Real   (Int64) :: dy   ! uniform y spacing, periodic-y path only (y_bc_type==0)
@@ -53,8 +54,18 @@ Contains
     End If
 
     ! read parameters from standard input
-    If ( myid==0 ) Write(*,'(A)') ' [1/4] Reading input parameters ...'
-    Call read_input_parameters
+    If ( myid==0 ) Then
+       If ( Present(input_file) ) Then
+          Write(*,'(A)') ' [1/4] Reading input parameters from '//Trim(input_file)//' ...'
+       Else
+          Write(*,'(A)') ' [1/4] Reading input parameters ...'
+       End If
+    End If
+    If ( Present(input_file) ) Then
+       Call read_input_parameters(input_file)
+    Else
+       Call read_input_parameters
+    End If
 
 #ifdef GPU_POISSON
     ! single-GPU cuFFT Poisson solve (periodic or DCT-IV) only supports nprocs==1
