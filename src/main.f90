@@ -16,8 +16,16 @@ Program dopamine
   ! prevent implicit typing
   Implicit None
 
-  ! initialize everything and read input file and input flow field
-  Call initialize
+  Character(300) :: input_file
+
+  ! initialize everything and read input file and input flow field;
+  ! optional positional argument overrides the default ./input_parameters
+  If ( Command_Argument_Count() >= 1 ) Then
+     Call Get_Command_Argument(1, input_file)
+     Call initialize(Trim(input_file))
+  Else
+     Call initialize
+  End If
 
   ! initialise Reynolds stress budget module (allocates accumulators)
   Call init_rsb
