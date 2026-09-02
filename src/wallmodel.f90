@@ -89,6 +89,18 @@ Contains
 
   End Subroutine solve_u_tau_rough
 
+  !> Rough-wall counterpart to reichardt_uplus: u+ = ln(y/z0)/kappa at a given
+  !  (dimensional) height y_eval -- used by compute_ibm_wall_model to reconstruct
+  !  the image-point velocity at the ghost distance once u_tau is known
+  Pure Subroutine rough_uplus(y_eval, z0, uplus)
+    !$acc routine seq
+    Real(Int64), Intent(In)  :: y_eval, z0
+    Real(Int64), Intent(Out) :: uplus
+
+    uplus = Log( Max(y_eval, 2d0*z0) / Max(z0, 1d-8) ) / kappa_wm
+
+  End Subroutine rough_uplus
+
   !> Dispatch the friction-velocity solve: smooth Reichardt EQWM (mode 1) or
   !  rough z0 log law (mode 2); z0 is unused (but still passed) in mode 1
   Subroutine solve_u_tau_wall(u_ref, y_ref, z0, u_tau)
@@ -232,11 +244,11 @@ Contains
   Subroutine compute_ibm_wall_model(U_, V_, W_, nu_t_)
 
     Use ibm, Only : ghost_u_idx, ghost_u_img, ghost_u_wgt, ghost_u_ref, n_ghost_u, &
-                    ghost_u_nrm, ghost_u_yref,                                      &
+                    ghost_u_nrm, ghost_u_yref, ghost_u_objid,                      &
                     ghost_v_idx, ghost_v_img, ghost_v_wgt, ghost_v_ref, n_ghost_v, &
-                    ghost_v_nrm, ghost_v_yref,                                      &
+                    ghost_v_nrm, ghost_v_yref, ghost_v_objid,                      &
                     ghost_w_idx, ghost_w_img, ghost_w_wgt, ghost_w_ref, n_ghost_w, &
-                    ghost_w_nrm, ghost_w_yref,                                      &
+                    ghost_w_nrm, ghost_w_yref, ghost_w_objid,                      &
                     trilinear_interp_u, trilinear_interp_v, trilinear_interp_w, &
                     U_wall, V_wall, W_wall
 
@@ -245,7 +257,7 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(InOut) :: W_
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: nu_t_
 
-    Integer(Int32) :: n, i, j, k, ir, jr, kr
+    Integer(Int32) :: n, i, j, k, ir, jr, kr, oid
     Real   (Int64) :: u_ref, u_tau, y_ref
     Real   (Int64) :: uI_x, uI_y, uI_z   ! image-point velocity (all 3 components)
     Real   (Int64) :: uI_n                ! wall-normal projection of image velocity
@@ -256,10 +268,11 @@ Contains
     Real   (Int64) :: nx_, ny_, nz_       ! unit inward wall normal
 
     !--- EQWM for U ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,ghost_u_idx,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB)
+    !$acc parallel loop present(U_,V_,W_,ghost_u_idx,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_objid,ibm_z0)
     Do n = 1, n_ghost_u
        i  = ghost_u_idx(1,n);  j  = ghost_u_idx(2,n);  k  = ghost_u_idx(3,n)
        ir = ghost_u_ref(1,n);  jr = ghost_u_ref(2,n);  kr = ghost_u_ref(3,n)
+       oid = ghost_u_objid(n)
        nx_ = ghost_u_nrm(1,n);  ny_ = ghost_u_nrm(2,n);  nz_ = ghost_u_nrm(3,n)
 
        ! Reference-cell velocity averaging
@@ -278,13 +291,17 @@ Contains
        y_ref = ghost_u_yref(n)
        u_ref = u_tan
 
-       ! Newton solve using the Reichardt profile and nu only (excluding
-       ! nu_t avoids SGS contamination of the wall-law).
-       Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
-
+       ! Newton solve (smooth) or explicit log law (rough, per-object z0) for u_tau
+       ! using nu only (excluding nu_t avoids SGS contamination of the wall-law).
+       If ( ibm_z0(oid) > 0d0 ) Then
+          Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
+          Call rough_uplus( Min(ghost_u_dGB(n), y_ref), ibm_z0(oid), uplus_img )
+       Else
+          Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+          yplus = Min(ghost_u_dGB(n), y_ref) * u_tau / nu
+          Call reichardt_uplus(yplus, uplus_img, duplus_img)
+       End If
        ! EQWM image-point capping at y_ref
-       yplus = Min(ghost_u_dGB(n), y_ref) * u_tau / nu
-       Call reichardt_uplus(yplus, uplus_img, duplus_img)
        u_I_eqwm = u_tau * uplus_img
 
        ! Mirror formula: U_G = 2*U_wall - U_I_eqwm (r = 0.5 always).
@@ -297,10 +314,11 @@ Contains
     !$acc end parallel loop
 
     !--- EQWM for V ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,ghost_v_idx,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB)
+    !$acc parallel loop present(U_,V_,W_,ghost_v_idx,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_objid,ibm_z0)
     Do n = 1, n_ghost_v
        i  = ghost_v_idx(1,n);  j  = ghost_v_idx(2,n);  k  = ghost_v_idx(3,n)
        ir = ghost_v_ref(1,n);  jr = ghost_v_ref(2,n);  kr = ghost_v_ref(3,n)
+       oid = ghost_v_objid(n)
        nx_ = ghost_v_nrm(1,n);  ny_ = ghost_v_nrm(2,n);  nz_ = ghost_v_nrm(3,n)
 
        uI_x = 0.5d0 * (U_(ir-1, jr, kr) + U_(ir, jr, kr))
@@ -316,10 +334,14 @@ Contains
        y_ref = ghost_v_yref(n)
        u_ref = u_tan
 
-       Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
-
-       yplus = Min(ghost_v_dGB(n), y_ref) * u_tau / nu
-       Call reichardt_uplus(yplus, uplus_img, duplus_img)
+       If ( ibm_z0(oid) > 0d0 ) Then
+          Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
+          Call rough_uplus( Min(ghost_v_dGB(n), y_ref), ibm_z0(oid), uplus_img )
+       Else
+          Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+          yplus = Min(ghost_v_dGB(n), y_ref) * u_tau / nu
+          Call reichardt_uplus(yplus, uplus_img, duplus_img)
+       End If
        u_I_eqwm = u_tau * uplus_img
 
        If ( u_tan > 1d-14 ) Then
@@ -331,10 +353,11 @@ Contains
     !$acc end parallel loop
 
     !--- EQWM for W ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,ghost_w_idx,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB)
+    !$acc parallel loop present(U_,V_,W_,ghost_w_idx,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_objid,ibm_z0)
     Do n = 1, n_ghost_w
        i  = ghost_w_idx(1,n);  j  = ghost_w_idx(2,n);  k  = ghost_w_idx(3,n)
        ir = ghost_w_ref(1,n);  jr = ghost_w_ref(2,n);  kr = ghost_w_ref(3,n)
+       oid = ghost_w_objid(n)
        nx_ = ghost_w_nrm(1,n);  ny_ = ghost_w_nrm(2,n);  nz_ = ghost_w_nrm(3,n)
 
        uI_x = 0.5d0 * (U_(ir-1, jr, kr) + U_(ir, jr, kr))
@@ -350,10 +373,14 @@ Contains
        y_ref = ghost_w_yref(n)
        u_ref = u_tan
 
-       Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
-
-       yplus = Min(ghost_w_dGB(n), y_ref) * u_tau / nu
-       Call reichardt_uplus(yplus, uplus_img, duplus_img)
+       If ( ibm_z0(oid) > 0d0 ) Then
+          Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
+          Call rough_uplus( Min(ghost_w_dGB(n), y_ref), ibm_z0(oid), uplus_img )
+       Else
+          Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+          yplus = Min(ghost_w_dGB(n), y_ref) * u_tau / nu
+          Call reichardt_uplus(yplus, uplus_img, duplus_img)
+       End If
        u_I_eqwm = u_tau * uplus_img
 
        If ( u_tan > 1d-14 ) Then

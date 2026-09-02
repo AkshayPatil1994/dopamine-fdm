@@ -327,6 +327,12 @@ Module global
   Integer(Int32), Allocatable, Dimension(:,:) :: ghost_v_img   ! (3, n_ghost_v)
   Integer(Int32), Allocatable, Dimension(:,:) :: ghost_w_img   ! (3, n_ghost_w)
 
+  ! Per-ghost-point solid ID, resolved from ibm_obj_id at the ghost cell's own index
+  ! (mirrors ghost_cc_objid); used to look up per-object roughness (ibm_z0)
+  Integer(Int32), Allocatable, Dimension(:)   :: ghost_u_objid   ! (n_ghost_u)
+  Integer(Int32), Allocatable, Dimension(:)   :: ghost_v_objid   ! (n_ghost_v)
+  Integer(Int32), Allocatable, Dimension(:)   :: ghost_w_objid   ! (n_ghost_w)
+
   ! Distance from ghost cell G to boundary point B along the wall normal.
   ! Used for surface-integral force Method 2: dA = dV / dGB.
   Real(Int64), Allocatable, Dimension(:) :: ghost_u_dGB   ! (n_ghost_u)
@@ -415,7 +421,14 @@ Module global
   Integer(Int32), Parameter :: max_ibm_objects = 15
   Integer(Int32) :: ibm_T_bc_type(0:max_ibm_objects) = 0
   Real   (Int64) :: ibm_T_wall   (0:max_ibm_objects) = 0d0
-  !$acc declare create(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,ibm_T_bc_type,ibm_T_wall)
+  ! Per-object IBM momentum roughness length [m] (0 = smooth Reichardt EQWM, the
+  ! default); only consumed when ibm_wall_model_flag=1. Independent thermal
+  ! roughness (ibm_z0h) is not yet wired into the IBM thermal ghost-cell BC --
+  ! see apply_ghost_cell_ibm_scalar's plain adiabatic/isothermal mirror, which
+  ! would need its own reference-cell EQWM infrastructure (like ghost_u_ref/yref)
+  ! to support a flux-consistent rough BC; deferred.
+  Real   (Int64) :: ibm_z0(0:max_ibm_objects) = 0d0
+  !$acc declare create(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,ibm_T_bc_type,ibm_T_wall,ibm_z0)
   !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
   ! Temperature field (cell-centred: nxg x nyg x nzg)

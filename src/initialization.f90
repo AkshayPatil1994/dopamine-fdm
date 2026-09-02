@@ -603,7 +603,7 @@ Contains
     ! Push host values once for scalars `!$acc declare create`d in global.f90 (needed by !$acc routine seq procedures)
     !$acc update device(nx,ny,nz,nxg,nyg,nzg,nu,pi,inflow_type,inflow_Uconst,sem_n_eddies,sem_length_scale,sem_seed,sem_eddy_placement,sem_use_esem,sem_divergence_free)
     !$acc update device(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi,j_match_ylo,j_match_yhi)
-    !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall)
+    !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall,ibm_z0)
     !$acc update device(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
     ! OpenACC: static grid arrays copied once, scratch arrays created once, never re-transferred
     !$acc enter data copyin(y,yg,z,zg,weight_y_0,weight_y_1)
