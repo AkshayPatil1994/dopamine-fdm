@@ -21,8 +21,9 @@ Module wallmodel
   Real(Int64), Parameter :: REICH_A2  = 0.33d0
   Real(Int64), Parameter :: c_buf_wm  = B_wm - Log(kappa_wm)/kappa_wm
 
-  ! One-shot guard for the rough-wall y_ref/z0 sanity warning (compute_flat_wall_eqwm)
-  Logical :: rough_wall_ratio_warned = .False.
+  ! Minimum y/z0 ratio for a grid point to be trusted as the rough-EQWM matching
+  ! height (see j_match_ylo/yhi in global.f90)
+  Real(Int64), Parameter :: MATCH_RATIO_MIN = 20d0
 
 Contains
 
@@ -306,34 +307,26 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(In) :: W_
 
     Integer(Int32) :: i, k
-    Real   (Int64) :: u_ref
-    Real   (Int64) :: y_ref_lo, y_ref_hi
+    Real   (Int64) :: u_ref, u_match
+    Real   (Int64) :: y_ref_lo, y_ref_hi, y_match_lo, y_match_hi
     Real   (Int64) :: u_tau
     Real   (Int64) :: Delta_yg_lo, Delta_yg_hi
     Real   (Int64) :: alpha_lo, alpha_hi
-    Real   (Int64) :: W_at_pt
+    Real   (Int64) :: W_at_pt, W_match
 
-    ! Wall-normal reference distances (same for the entire wall plane)
+    ! Wall-normal reference distances (same for the entire wall plane). y_ref_*
+    ! is the actual first-interior-cell height the Robin BC extrapolates from
+    ! (j=2/nyg-1, always); y_match_* is where u_tau/theta_tau are sampled from --
+    ! the same point when flat_wall_model_flag/=2 (j_match_*=2/nyg-1, unshifted),
+    ! or a point further from the wall for the rough EQWM (see j_match_ylo/yhi).
     y_ref_lo    = yg(2)
     Delta_yg_lo = yg(2) - yg(1)
     y_ref_hi    = Ly - yg(nyg-1)
     Delta_yg_hi = yg(nyg) - yg(nyg-1)
     y_ref_lo    = Max(y_ref_lo, 1d-14)
     y_ref_hi    = Max(y_ref_hi, 1d-14)
-
-    ! One-time sanity check: a rough-wall log law is only reliable well above the
-    ! roughness sublayer (y_ref/z0 >~ 20); this uses the first grid cell as the
-    ! matching height, so a marginal ratio here means the EQWM's u_tau is poorly
-    ! conditioned (see the matching-height refinement tracked for a later phase)
-    If ( flat_wall_model_flag == 2 .And. .Not. rough_wall_ratio_warned .And. myid == 0 ) Then
-       If ( bc_face_ylo /= 2 .And. z0_ylo > 0d0 .And. y_ref_lo/z0_ylo < 20d0 ) &
-          Write(*,'(A,E12.4,A)') ' WARNING: y_ref/z0_ylo = ', y_ref_lo/z0_ylo, &
-             ' < 20 -- first grid cell is too close to the roughness sublayer for a reliable rough-wall u_tau'
-       If ( bc_face_yhi /= 2 .And. z0_yhi > 0d0 .And. y_ref_hi/z0_yhi < 20d0 ) &
-          Write(*,'(A,E12.4,A)') ' WARNING: y_ref/z0_yhi = ', y_ref_hi/z0_yhi, &
-             ' < 20 -- first grid cell is too close to the roughness sublayer for a reliable rough-wall u_tau'
-       rough_wall_ratio_warned = .True.
-    End If
+    y_match_lo  = Max(yg(j_match_ylo), 1d-14)
+    y_match_hi  = Max(Ly - yg(j_match_yhi), 1d-14)
 
     !  alpha_x : Robin slip-length for U (x-faces, nx × nyg × nzg)
     !$acc parallel loop collapse(2) present(U_,W_,alpha_x)
@@ -346,10 +339,17 @@ Contains
              W_at_pt  = 0.5d0*(W_(i, 2, k-1) + W_(i, 2, k))
              u_ref    = Sqrt(U_(i, 2, k)**2 + W_at_pt**2)
 
-             ! Newton solve (smooth) or explicit log law (rough) for u_tau using nu only
-             Call solve_u_tau_wall(u_ref, y_ref_lo, z0_ylo, u_tau)
+             ! Matching-height sample for the u_tau solve (== u_ref/j=2 unless
+             ! flat_wall_model_flag=2 shifted it further from the wall)
+             W_match  = 0.5d0*(W_(i, j_match_ylo, k-1) + W_(i, j_match_ylo, k))
+             u_match  = Sqrt(U_(i, j_match_ylo, k)**2 + W_match**2)
 
-             ! Robin alpha derivation
+             ! Newton solve (smooth) or explicit log law (rough) for u_tau using nu only
+             Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, u_tau)
+
+             ! Robin alpha derivation -- always referenced to the actual first
+             ! interior cell (u_ref/y_ref_lo), since that's what apply_Robin_bc_y
+             ! extrapolates from; only the u_tau solve above uses the matching height
              alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_lo*0.5d0
              alpha_x(i, 1, k) = Max(alpha_lo, 0d0)
@@ -362,7 +362,10 @@ Contains
              W_at_pt  = 0.5d0*(W_(i, nyg-1, k-1) + W_(i, nyg-1, k))
              u_ref    = Sqrt(U_(i, nyg-1, k)**2 + W_at_pt**2)
 
-             Call solve_u_tau_wall(u_ref, y_ref_hi, z0_yhi, u_tau)
+             W_match  = 0.5d0*(W_(i, j_match_yhi, k-1) + W_(i, j_match_yhi, k))
+             u_match  = Sqrt(U_(i, j_match_yhi, k)**2 + W_match**2)
+
+             Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, u_tau)
 
              alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_hi*0.5d0
@@ -395,7 +398,10 @@ Contains
              u_ref    = Sqrt((0.5d0*(U_(i-1, 2, k) + U_(i, 2, k)))**2 &
                            + W_(i, 2, k)**2)
 
-             Call solve_u_tau_wall(u_ref, y_ref_lo, z0_ylo, u_tau)
+             u_match  = Sqrt((0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k)))**2 &
+                           + W_(i, j_match_ylo, k)**2)
+
+             Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, u_tau)
 
              alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_lo*0.5d0
@@ -409,7 +415,10 @@ Contains
              u_ref    = Sqrt((0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k)))**2 &
                            + W_(i, nyg-1, k)**2)
 
-             Call solve_u_tau_wall(u_ref, y_ref_hi, z0_yhi, u_tau)
+             u_match  = Sqrt((0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k)))**2 &
+                           + W_(i, j_match_yhi, k)**2)
+
+             Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, u_tau)
 
              alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_hi*0.5d0
@@ -448,28 +457,35 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In) :: T_
 
     Integer(Int32) :: i, k
-    Real   (Int64) :: u_ref, u_tau, theta_tau, q_target
-    Real   (Int64) :: y_ref_lo, y_ref_hi, Delta_yg_lo, Delta_yg_hi
-    Real   (Int64) :: U_at_pt, W_at_pt, T_here, alpha_lo, alpha_hi
+    Real   (Int64) :: u_match, u_tau, theta_tau, q_target
+    Real   (Int64) :: y_ref_lo, y_ref_hi, y_match_lo, y_match_hi, Delta_yg_lo, Delta_yg_hi
+    Real   (Int64) :: U_at_pt, W_at_pt, T_here, T_match, alpha_lo, alpha_hi
 
     y_ref_lo    = Max(yg(2), 1d-14)
     Delta_yg_lo = yg(2) - yg(1)
     y_ref_hi    = Max(Ly - yg(nyg-1), 1d-14)
     Delta_yg_hi = yg(nyg) - yg(nyg-1)
+    y_match_lo  = Max(yg(j_match_ylo), 1d-14)
+    y_match_hi  = Max(Ly - yg(j_match_yhi), 1d-14)
 
+    ! u_tau/theta_tau are solved at the matching height (j_match_*, further from
+    ! the wall than j=2/nyg-1 when the near-wall grid is fine relative to z0/z0h);
+    ! the alpha_T formula still references the actual first interior cell
+    ! (T_here, y_ref_*), since that's what apply_Robin_bc_y_scalar extrapolates from
     !$acc parallel loop collapse(2) present(U_,W_,T_,alpha_T,yg)
     Do k = 2, nzg-1
        Do i = 2, nxg-1
 
           ! ---- bottom wall ----
           If ( T_bc_bot == 2 ) Then
-             U_at_pt = 0.5d0*(U_(i-1, 2, k) + U_(i, 2, k))
-             W_at_pt = 0.5d0*(W_(i, 2, Max(k-1,2)) + W_(i, 2, k))
-             u_ref   = Sqrt(U_at_pt**2 + W_at_pt**2)
+             U_at_pt = 0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k))
+             W_at_pt = 0.5d0*(W_(i, j_match_ylo, Max(k-1,2)) + W_(i, j_match_ylo, k))
+             u_match = Sqrt(U_at_pt**2 + W_at_pt**2)
              T_here  = T_(i, 2, k)
+             T_match = T_(i, j_match_ylo, k)
 
-             Call solve_u_tau_rough(u_ref, y_ref_lo, z0_ylo, u_tau)
-             Call solve_theta_tau_rough(T_here - T_wall_bot, y_ref_lo, z0h_ylo, theta_tau)
+             Call solve_u_tau_rough(u_match, y_match_lo, z0_ylo, u_tau)
+             Call solve_theta_tau_rough(T_match - T_wall_bot, y_match_lo, z0h_ylo, theta_tau)
 
              q_target = u_tau * theta_tau
              If ( Abs(q_target) > 1d-12 ) Then
@@ -482,13 +498,14 @@ Contains
 
           ! ---- top wall ----
           If ( T_bc_top == 2 ) Then
-             U_at_pt = 0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k))
-             W_at_pt = 0.5d0*(W_(i, nyg-1, Max(k-1,2)) + W_(i, nyg-1, k))
-             u_ref   = Sqrt(U_at_pt**2 + W_at_pt**2)
+             U_at_pt = 0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k))
+             W_at_pt = 0.5d0*(W_(i, j_match_yhi, Max(k-1,2)) + W_(i, j_match_yhi, k))
+             u_match = Sqrt(U_at_pt**2 + W_at_pt**2)
              T_here  = T_(i, nyg-1, k)
+             T_match = T_(i, j_match_yhi, k)
 
-             Call solve_u_tau_rough(u_ref, y_ref_hi, z0_yhi, u_tau)
-             Call solve_theta_tau_rough(T_here - T_wall_top, y_ref_hi, z0h_yhi, theta_tau)
+             Call solve_u_tau_rough(u_match, y_match_hi, z0_yhi, u_tau)
+             Call solve_theta_tau_rough(T_match - T_wall_top, y_match_hi, z0h_yhi, theta_tau)
 
              q_target = u_tau * theta_tau
              If ( Abs(q_target) > 1d-12 ) Then

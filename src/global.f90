@@ -258,7 +258,14 @@ Module global
   ! and thermal (z0h) roughness are independent, per wall
   Real   (Int64) :: z0_ylo  = 0d0, z0_yhi  = 0d0
   Real   (Int64) :: z0h_ylo = 0d0, z0h_yhi = 0d0
-  !$acc declare create(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi)
+
+  ! Rough-EQWM matching-height grid index (flat_wall_model_flag==2 only): the
+  ! u_tau/theta_tau log-law solves sample U/W/T here instead of the literal
+  ! first interior cell (j=2), so a fine near-wall grid doesn't put the sample
+  ! point inside the roughness sublayer; defaults to 2 (no shift) otherwise.
+  ! Computed once in initialization.f90 after the grid is built.
+  Integer(Int32) :: j_match_ylo = 2, j_match_yhi = 2
+  !$acc declare create(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi,j_match_ylo,j_match_yhi)
 
   ! wall-model Robin BC coefficient arrays
   Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_x, alpha_y, alpha_z

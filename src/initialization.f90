@@ -563,9 +563,43 @@ Contains
        alpha_T = 0d0
     End If
 
+    ! Rough-EQWM matching height: smallest interior j (bottom) / largest interior j
+    ! (top) whose distance to the wall clears 20*z0, so the log-law u_tau/theta_tau
+    ! solves in wallmodel.f90 aren't sampled from inside the roughness sublayer just
+    ! because the near-wall grid happens to be fine (same threshold as wallmodel.f90's
+    ! MATCH_RATIO_MIN -- kept as a literal here to avoid a new module dependency).
+    If ( flat_wall_model_flag == 2 ) Then
+       j_match_ylo = 2
+       If ( bc_face_ylo /= 2 .And. z0_ylo > 0d0 ) Then
+          Do j = 2, nyg/2
+             j_match_ylo = j
+             If ( yg(j)/z0_ylo >= 20d0 ) Exit
+          End Do
+          If ( myid==0 .And. yg(j_match_ylo)/z0_ylo < 20d0 ) Write(*,'(A)') &
+             ' WARNING: no grid point within the lower half-channel clears y/z0_ylo >= 20 for the rough EQWM matching height'
+       End If
+
+       j_match_yhi = nyg-1
+       If ( bc_face_yhi /= 2 .And. z0_yhi > 0d0 ) Then
+          Do j = nyg-1, nyg/2, -1
+             j_match_yhi = j
+             If ( (Ly - yg(j))/z0_yhi >= 20d0 ) Exit
+          End Do
+          If ( myid==0 .And. (Ly-yg(j_match_yhi))/z0_yhi < 20d0 ) Write(*,'(A)') &
+             ' WARNING: no grid point within the upper half-channel clears y/z0_yhi >= 20 for the rough EQWM matching height'
+       End If
+
+       If ( myid == 0 ) Then
+          Write(*,'(A,I0,A,E12.4)') '   rough EQWM matching height: j_match_ylo = ', j_match_ylo, &
+             ', y_match_lo = ', yg(j_match_ylo)
+          Write(*,'(A,I0,A,E12.4)') '   rough EQWM matching height: j_match_yhi = ', j_match_yhi, &
+             ', y_match_hi = ', Ly - yg(j_match_yhi)
+       End If
+    End If
+
     ! Push host values once for scalars `!$acc declare create`d in global.f90 (needed by !$acc routine seq procedures)
     !$acc update device(nx,ny,nz,nxg,nyg,nzg,nu,pi,inflow_type,inflow_Uconst,sem_n_eddies,sem_length_scale,sem_seed,sem_eddy_placement,sem_use_esem,sem_divergence_free)
-    !$acc update device(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi)
+    !$acc update device(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi,j_match_ylo,j_match_yhi)
     !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall)
     !$acc update device(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
     ! OpenACC: static grid arrays copied once, scratch arrays created once, never re-transferred
