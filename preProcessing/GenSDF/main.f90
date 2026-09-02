@@ -4,7 +4,7 @@ program generatesdf
     !
     use utils_io
     use narrowband_mod,   only : compute_scalar_distance_face, compute_narrowband_sdf
-    use flood_fill_mod,   only : fill_internal
+    use raycast_mod,      only : raycast_classify_domain
     use spatial_hash_mod, only : build_hash, free_hash
     use fast_sweep_mod,   only : fast_sweep_3d
     use mpi
@@ -96,6 +96,8 @@ program generatesdf
         error stop
     end if
 
+    call check_object_resolution(myid, vertices, faces, face_solid_id, nfaces, nsolids)
+
 #ifdef GPU_SDF
     ! Geometry is read-only and reused unchanged across the p/u/v/w passes below.
     !$acc enter data copyin(vertices, normals, faces, face_normals, face_solid_id)
@@ -140,10 +142,11 @@ program generatesdf
     if (myid == 0)        left_rank  = -1      ! Neumann BC at left boundary
     if (myid == nprocs-1) right_rank = nprocs  ! Neumann BC at right boundary
 
-    ! Build spatial hash once (shared geometry, reused for all stagger locations)
-    if (use_fast_sweep) then
-        call build_hash(vertices, faces, nfaces, bbox_min, bbox_max, dx, dy, minval(dz))
-    end if
+    ! Build spatial hash once (shared geometry, reused for all stagger locations).
+    ! Needed unconditionally now: raycast_classify_domain (the primary sign/objid
+    ! source, replacing flood_fill_mod's topological BFS) relies on it too, not
+    ! just the fast-sweep narrow-band path.
+    call build_hash(vertices, faces, nfaces, bbox_min, bbox_max, dx, dy, minval(dz))
 
     ! Allocate the full-domain array on all ranks (needed for broadcast before FSM)
     ! Only sdfp (cell-center) is calculated by default, compute_face_sdf = .true. handles face SDF 
@@ -175,7 +178,9 @@ program generatesdf
     if (myid == 0) where (objid_fill_arr == scalarvalue) objid_fill_arr = 0.0_dp
     call MPI_BARRIER(MPI_COMM_WORLD, ierror)
     if (myid == 0) &
-        call fill_internal(flood_fill_arr, size(xp), size(yp), size(zp), sx, sy, sz, ex, ey, ez, -scalarvalue)
+        call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
+                                     xp, yp, zp, sx, ex, sy, ey, sz, ez, scalarvalue, &
+                                     flood_fill_arr, objid_fill_arr)
     if (use_fast_sweep) then
         ! Broadcast sign-corrected grid to all ranks, run FSM in parallel on x-slabs
         call MPI_BCAST(flood_fill_arr, nx*ny*nz, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierror)
@@ -221,7 +226,9 @@ program generatesdf
                           1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         if (myid == 0) &
-            call fill_internal(flood_fill_arr, size(xf), size(yp), size(zp), sx, sy, sz, ex, ey, ez, -scalarvalue)
+            call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
+                                         xf, yp, zp, sx, ex, sy, ey, sz, ez, scalarvalue, &
+                                         flood_fill_arr, objid_fill_arr)
         if (use_fast_sweep) then
             call MPI_BCAST(flood_fill_arr, nx*ny*nz, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierror)
             allocate(fsm_local(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
@@ -258,7 +265,9 @@ program generatesdf
                           1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         if (myid == 0) &
-            call fill_internal(flood_fill_arr, size(xp), size(yf), size(zp), sx, sy, sz, ex, ey, ez, -scalarvalue)
+            call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
+                                         xp, yf, zp, sx, ex, sy, ey, sz, ez, scalarvalue, &
+                                         flood_fill_arr, objid_fill_arr)
         if (use_fast_sweep) then
             call MPI_BCAST(flood_fill_arr, nx*ny*nz, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierror)
             allocate(fsm_local(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
@@ -295,7 +304,9 @@ program generatesdf
                           1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         if (myid == 0) &
-            call fill_internal(flood_fill_arr, size(xp), size(yp), size(zf), sx, sy, sz, ex, ey, ez, -scalarvalue)
+            call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
+                                         xp, yp, zf, sx, ex, sy, ey, sz, ez, scalarvalue, &
+                                         flood_fill_arr, objid_fill_arr)
         if (use_fast_sweep) then
             call MPI_BCAST(flood_fill_arr, nx*ny*nz, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierror)
             allocate(fsm_local(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
@@ -323,6 +334,6 @@ program generatesdf
         print *, "*** SDF complete in", totalTime, "s ***"
     end if
 
-    if (use_fast_sweep) call free_hash()
+    call free_hash()
     call MPI_FINALIZE(ierror)
 end program generatesdf
