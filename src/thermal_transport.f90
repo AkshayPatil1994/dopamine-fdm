@@ -4,7 +4,8 @@ Module thermal_transport
   Use iso_fortran_env,  Only : Int32, Int64
   Use global
   Use mpi
-  Use boundary_conditions, Only : apply_periodic_bc_z, apply_inflow_bc_scalar_x, outflow_convection_velocity
+  Use boundary_conditions, Only : apply_periodic_bc_z, apply_inflow_bc_scalar_x, outflow_convection_velocity, &
+                                  apply_Robin_bc_y_scalar_lo, apply_Robin_bc_y_scalar_hi
   Use scalar_transport,    Only : compute_rhs_scalar_core, update_ghost_scalar
 
   Implicit None
@@ -51,18 +52,23 @@ Contains
     Call apply_periodic_bc_z(T_, 4)
     !$acc update host(T_)
 
-    ! y-bottom ghost: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet mirror)
+    ! y-bottom ghost: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet mirror),
+    ! 2=rough EQWM flux BC (Robin, alpha_T set by compute_flat_wall_thermal_eqwm)
     If ( T_bc_bot == 0 ) Then
        T_(:,1,:) = T_(:,2,:)
-    Else
+    Else If ( T_bc_bot == 1 ) Then
        T_(:,1,:) = 2d0*T_wall_bot - T_(:,2,:)
+    Else
+       Call apply_Robin_bc_y_scalar_lo(T_, alpha_T, T_wall_bot)
     End If
 
     ! y-top ghost
     If ( T_bc_top == 0 ) Then
        T_(:,nyg,:) = T_(:,nyg-1,:)
-    Else
+    Else If ( T_bc_top == 1 ) Then
        T_(:,nyg,:) = 2d0*T_wall_top - T_(:,nyg-1,:)
+    Else
+       Call apply_Robin_bc_y_scalar_hi(T_, alpha_T, T_wall_top)
     End If
 
     ! Fallback safety net inside IBM solid cells; apply_ghost_cell_ibm_scalar (ibm.f90) enforces the actual physical wall condition
