@@ -97,6 +97,16 @@ Contains
        If ( bc_face_yhi /= 2 .And. z0_yhi <= 0d0 ) &
           Stop 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_yhi > 0 for a no-slip top wall'
     End If
+    If ( T_bc_bot == 2 .Or. T_bc_top == 2 ) Then
+       If ( boussinesq_flag < 1 ) &
+          Stop 'ERROR: T_bc_bot/top=2 (rough EQWM flux BC) requires boussinesq_flag >= 1'
+       If ( flat_wall_model_flag /= 2 ) &
+          Stop 'ERROR: T_bc_bot/top=2 (rough EQWM flux BC) requires flat_wall_model_flag=2'
+       If ( T_bc_bot == 2 .And. z0h_ylo <= 0d0 ) &
+          Stop 'ERROR: T_bc_bot=2 requires z0h_ylo > 0'
+       If ( T_bc_top == 2 .And. z0h_yhi <= 0d0 ) &
+          Stop 'ERROR: T_bc_top=2 requires z0h_yhi > 0'
+    End If
 
     ! domain decomposition: resolves p_row/p_col (auto-factorized when both are 0, see decomp_auto_factorize), then builds this rank's x/z ownership ranges via 2decomp&fft's own distribute() algorithm, replicated locally -- no restriction that nx_global/nz_global divide evenly by p_row/p_col
     Call decomp_init_pencil
@@ -548,10 +558,16 @@ Contains
     alpha_y = 0d0
     alpha_z = 0d0
 
+    If ( boussinesq_flag >= 1 ) Then
+       Allocate( alpha_T(1:nxg,1:2,1:nzg) )
+       alpha_T = 0d0
+    End If
+
     ! Push host values once for scalars `!$acc declare create`d in global.f90 (needed by !$acc routine seq procedures)
     !$acc update device(nx,ny,nz,nxg,nyg,nzg,nu,pi,inflow_type,inflow_Uconst,sem_n_eddies,sem_length_scale,sem_seed,sem_eddy_placement,sem_use_esem,sem_divergence_free)
     !$acc update device(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi)
     !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall)
+    !$acc update device(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
     ! OpenACC: static grid arrays copied once, scratch arrays created once, never re-transferred
     !$acc enter data copyin(y,yg,z,zg,weight_y_0,weight_y_1)
     ! x,xg needed on device by compute_rhs_scalar_core (non-uniform-grid-style stencil, even though x itself is uniform)
@@ -567,6 +583,8 @@ Contains
     If ( boussinesq_flag >= 1 ) Then
        !$acc enter data create(Tscal,Tscal_o,Ft1,Ft2,Ft3)
        !$acc update device(Tscal,Tscal_o)
+       !$acc enter data create(alpha_T)
+       !$acc update device(alpha_T)
     End If
     ! Sediment scalar: device residency required by the shared compute_rhs_scalar_core (see scalar_transport.f90)
     If ( sediment_flag >= 1 ) Then

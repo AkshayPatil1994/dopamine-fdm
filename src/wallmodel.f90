@@ -103,6 +103,22 @@ Contains
 
   End Subroutine solve_u_tau_wall
 
+  !> Explicit fully-rough log law for the temperature scale theta_tau, from the
+  !  wall-normal potential-temperature difference (T_ref - T_wall) and the thermal
+  !  roughness z0h. Neutral limit only (psi_h=0) -- decoupled from u_tau, since in
+  !  this limit the momentum and thermal log laws don't interact.
+  Pure Subroutine solve_theta_tau_rough(dtheta, y_ref, z0h, theta_tau)
+    !$acc routine seq
+    Real(Int64), Intent(In)  :: dtheta, y_ref, z0h
+    Real(Int64), Intent(Out) :: theta_tau
+
+    Real(Int64) :: log_ratio
+
+    log_ratio = Log( Max(y_ref, 2d0*z0h) / Max(z0h, 1d-8) )
+    theta_tau = kappa_wm * dtheta / Max(log_ratio, 1d-3)
+
+  End Subroutine solve_theta_tau_rough
+
   !              Select wall model
   Subroutine compute_wall_model(U_,V_,W_,nu_t_)
 
@@ -121,6 +137,13 @@ Contains
        Call compute_constant_alpha
     End If
     ! alpha_y = 0 enforced inside compute_constant_alpha and compute_flat_wall_eqwm
+
+    ! Rough-wall thermal coupling (neutral EQWM): only meaningful alongside the rough
+    ! momentum EQWM, and only guarded here since Tscal is unallocated when Boussinesq is off
+    If ( boussinesq_flag >= 1 .And. flat_wall_model_flag == 2 .And. &
+         ( T_bc_bot == 2 .Or. T_bc_top == 2 ) ) Then
+       Call compute_flat_wall_thermal_eqwm(U_, W_, Tscal)
+    End If
 
     ! compute_pseudo_pressure_bc_for_robin_bc is host-only and reads alpha_y just written on-device
     !$acc update host(alpha_y)
@@ -411,6 +434,85 @@ Contains
     !$acc end kernels
 
   End Subroutine compute_flat_wall_eqwm
+
+  !> Flat-wall rough-EQWM thermal coupling (neutral limit: psi_h=0).
+  !  Computes the Robin slip-length alpha_T for Tscal's y-ghost cells from the
+  !  z0h log law, using the same numerical device as the momentum alpha_x/alpha_z:
+  !  alpha_T is chosen so that the discrete molecular-only flux (nu/Pr)*(T_ref-T_ghost)/dy
+  !  reproduces the target kinematic heat flux Q = u_tau*theta_tau. Only active on
+  !  walls where T_bc_bot/top==2; other walls leave alpha_T untouched (unused there).
+  Subroutine compute_flat_wall_thermal_eqwm(U_, W_, T_)
+
+    Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
+    Real(Int64), Dimension(nxg, nyg, nz ), Intent(In) :: W_
+    Real(Int64), Dimension(nxg, nyg, nzg), Intent(In) :: T_
+
+    Integer(Int32) :: i, k
+    Real   (Int64) :: u_ref, u_tau, theta_tau, q_target
+    Real   (Int64) :: y_ref_lo, y_ref_hi, Delta_yg_lo, Delta_yg_hi
+    Real   (Int64) :: U_at_pt, W_at_pt, T_here, alpha_lo, alpha_hi
+
+    y_ref_lo    = Max(yg(2), 1d-14)
+    Delta_yg_lo = yg(2) - yg(1)
+    y_ref_hi    = Max(Ly - yg(nyg-1), 1d-14)
+    Delta_yg_hi = yg(nyg) - yg(nyg-1)
+
+    !$acc parallel loop collapse(2) present(U_,W_,T_,alpha_T,yg)
+    Do k = 2, nzg-1
+       Do i = 2, nxg-1
+
+          ! ---- bottom wall ----
+          If ( T_bc_bot == 2 ) Then
+             U_at_pt = 0.5d0*(U_(i-1, 2, k) + U_(i, 2, k))
+             W_at_pt = 0.5d0*(W_(i, 2, Max(k-1,2)) + W_(i, 2, k))
+             u_ref   = Sqrt(U_at_pt**2 + W_at_pt**2)
+             T_here  = T_(i, 2, k)
+
+             Call solve_u_tau_rough(u_ref, y_ref_lo, z0_ylo, u_tau)
+             Call solve_theta_tau_rough(T_here - T_wall_bot, y_ref_lo, z0h_ylo, theta_tau)
+
+             q_target = u_tau * theta_tau
+             If ( Abs(q_target) > 1d-12 ) Then
+                alpha_lo = (nu/Pr) * (T_here - T_wall_bot) / q_target - Delta_yg_lo*0.5d0
+             Else
+                alpha_lo = 1.0e10_8   ! no resolved flux -> effectively adiabatic ghost
+             End If
+             alpha_T(i, 1, k) = Max(alpha_lo, 0d0)
+          End If
+
+          ! ---- top wall ----
+          If ( T_bc_top == 2 ) Then
+             U_at_pt = 0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k))
+             W_at_pt = 0.5d0*(W_(i, nyg-1, Max(k-1,2)) + W_(i, nyg-1, k))
+             u_ref   = Sqrt(U_at_pt**2 + W_at_pt**2)
+             T_here  = T_(i, nyg-1, k)
+
+             Call solve_u_tau_rough(u_ref, y_ref_hi, z0_yhi, u_tau)
+             Call solve_theta_tau_rough(T_here - T_wall_top, y_ref_hi, z0h_yhi, theta_tau)
+
+             q_target = u_tau * theta_tau
+             If ( Abs(q_target) > 1d-12 ) Then
+                alpha_hi = (nu/Pr) * (T_here - T_wall_top) / q_target - Delta_yg_hi*0.5d0
+             Else
+                alpha_hi = 1.0e10_8
+             End If
+             alpha_T(i, 2, k) = Max(alpha_hi, 0d0)
+          End If
+
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    ! Fill x-halo planes (periodic in x)
+    !$acc kernels present(alpha_T)
+    alpha_T(  1, :, :) = alpha_T(    2, :, :)
+    alpha_T(nxg, :, :) = alpha_T(nxg-1, :, :)
+    ! Fill z-halo planes (copy from nearest interior)
+    alpha_T(:, :,   1) = alpha_T(:, :,     2)
+    alpha_T(:, :, nzg) = alpha_T(:, :, nzg-1)
+    !$acc end kernels
+
+  End Subroutine compute_flat_wall_thermal_eqwm
 
   !> Set constant Robin BC alpha for y-walls (bc_face=1 -> Dirichlet no-slip alpha=0; bc_face=2 -> Neumann free-slip alpha=1e10)
   Subroutine compute_constant_alpha

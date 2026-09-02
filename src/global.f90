@@ -262,6 +262,9 @@ Module global
 
   ! wall-model Robin BC coefficient arrays
   Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_x, alpha_y, alpha_z
+
+  ! Thermal Robin-BC coefficient (flat-wall rough EQWM, T_bc_bot/top==2); cell-centred in x,z like alpha_z
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_T
   
   ! Auxillary data variables for roughness
   Real   (Int64) :: Utarget
@@ -382,7 +385,10 @@ Module global
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cscal, Cscal_o
   Real(Int64), Allocatable, Dimension(:,:,:) :: Fcs1, Fcs2, Fcs3  ! RK3 stage RHS
 
-  ! Boussinesq thermal stratification: boussinesq_flag 0=off,1=on; gravity acts along -y; T_bc_bot/top 0=adiabatic,1=isothermal
+  ! Boussinesq thermal stratification: boussinesq_flag 0=off,1=on; gravity acts along -y
+  ! T_bc_bot/top: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet against T_wall_bot/top),
+  ! 2=rough EQWM flux BC (isothermal target T_wall_bot/top, flux set via z0h_ylo/yhi log law;
+  ! requires flat_wall_model_flag=2)
   Integer(Int32) :: boussinesq_flag = 0
   Real   (Int64) :: beta_T   = 0d0    ! thermal expansion coefficient [1/K]
   Real   (Int64) :: T_ref    = 0d0    ! reference temperature for buoyancy [K]
@@ -397,6 +403,7 @@ Module global
   Integer(Int32) :: ibm_T_bc_type(0:max_ibm_objects) = 0
   Real   (Int64) :: ibm_T_wall   (0:max_ibm_objects) = 0d0
   !$acc declare create(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,ibm_T_bc_type,ibm_T_wall)
+  !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
   ! Temperature field (cell-centred: nxg x nyg x nzg)
   Real(Int64), Allocatable, Dimension(:,:,:) :: Tscal, Tscal_o

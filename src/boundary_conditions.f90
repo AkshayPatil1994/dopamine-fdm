@@ -541,6 +541,41 @@ Contains
     
   End Subroutine apply_Robin_bc_y
 
+  ! Robin (slip-length) BC in y for a scalar with a nonzero wall target value
+  ! (e.g. isothermal T_wall_bot/top under the rough-EQWM flux BC). F is cell-
+  ! centred (mirrors apply_Robin_bc_y's id==2 branch); working in G=F-F_wall
+  ! reduces this to the zero-target case, since the underlying diffusion
+  ! operator is linear. Split per wall (rather than one combined call) since
+  ! T_bc_bot/top are independent -- a common case is a rough ground (mode 2)
+  ! under an adiabatic cap (mode 0), not both walls in the same mode.
+  Subroutine apply_Robin_bc_y_scalar_lo(F, alpha, F_wall_lo)
+
+    Real   (Int64), Intent(InOut) :: F(:,:,:)
+    Real   (Int64), Intent(In)    :: alpha(:,:,:)
+    Real   (Int64), Intent(In)    :: F_wall_lo
+
+    !$acc kernels present(F,alpha,yg)
+    F(:,  1,:) = F_wall_lo + ( 2d0*alpha(:,1,:)/(yg(  2) - yg(    1)) - 1d0 ) &
+                           * ( F(:,    2,:) - F_wall_lo ) &
+                           / ( 2d0*alpha(:,1,:)/(yg(  2) - yg(    1)) + 1d0 )
+    !$acc end kernels
+
+  End Subroutine apply_Robin_bc_y_scalar_lo
+
+  Subroutine apply_Robin_bc_y_scalar_hi(F, alpha, F_wall_hi)
+
+    Real   (Int64), Intent(InOut) :: F(:,:,:)
+    Real   (Int64), Intent(In)    :: alpha(:,:,:)
+    Real   (Int64), Intent(In)    :: F_wall_hi
+
+    !$acc kernels present(F,alpha,yg)
+    F(:,nyg,:) = F_wall_hi + ( 2d0*alpha(:,2,:)/(yg(nyg) - yg(nyg-1)) - 1d0 ) &
+                           * ( F(:,nyg-1,:) - F_wall_hi ) &
+                           / ( 2d0*alpha(:,2,:)/(yg(nyg) - yg(nyg-1)) + 1d0 )
+    !$acc end kernels
+
+  End Subroutine apply_Robin_bc_y_scalar_hi
+
   !          Update ghost interior planes (z-direction, same row/adjacent column)
   !          Both directions (+z,-z) are exchanged concurrently via non-blocking MPI instead of two sequential blocking round trips
   Subroutine update_ghost_interior_planes(F,id)
