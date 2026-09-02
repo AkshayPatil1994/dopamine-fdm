@@ -402,7 +402,7 @@ See [LICENSE](LICENSE) for the full text.
 
 ## Acknowledgments
 
-The original form of the channel flow solver was shared by Adrian Lozano-Duran during my PhD and I am grateful for his generous help and support with the code.
+The original form of the channel flow solver was shared by Adrian Lozano-Duran during my PhD and I am grateful for his generous help and support with the code. A large portion of this code was written while listening to some wonderful music — thanks to [Myrath](https://www.myrath.com/), [Bloodywood](https://www.bloodywood.net/), [Leprous](https://leprous.net/), [Peekay](https://www.peekay.live/), [Ihsahn](https://ihsahn.com/), and [Gojira](https://gojira-music.com/) for the wonderful company during long debugging sessions.
 
 ## Citing this solver
 
