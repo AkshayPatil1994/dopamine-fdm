@@ -272,6 +272,12 @@ Module global
 
   ! Thermal Robin-BC coefficient (flat-wall rough EQWM, T_bc_bot/top==2); cell-centred in x,z like alpha_z
   Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_T
+
+  ! Persisted Obukhov length (nxg,nzg, cell-centred -- matches alpha_T's grid), seeded
+  ! neutral and iterated in place each call by solve_most (compute_flat_wall_thermal_eqwm);
+  ! carrying it across calls/timesteps keeps the fixed-point iteration's cost low once
+  ! the flow is quasi-steady. Only meaningful where T_bc_bot/top==2.
+  Real   (Int64), Allocatable, Dimension(:,:) :: L_obukhov_ylo, L_obukhov_yhi
   
   ! Auxillary data variables for roughness
   Real   (Int64) :: Utarget

@@ -120,6 +120,75 @@ Contains
 
   End Subroutine solve_theta_tau_rough
 
+  !> Businger-Dyer MOST stability functions psi_m/psi_h(zeta), zeta=y/L.
+  !  Unstable (Paulson 1970 / Dyer 1974 integrated form), stable (linear).
+  !  zeta is clipped to +-2 -- these empirical forms aren't trusted, and can
+  !  blow up, outside roughly that range.
+  Pure Subroutine most_stability_functions(zeta, psi_m, psi_h)
+    !$acc routine seq
+    Real(Int64), Intent(In)  :: zeta
+    Real(Int64), Intent(Out) :: psi_m, psi_h
+
+    Real(Int64) :: x, zeta_c
+
+    zeta_c = Max(Min(zeta, 2d0), -2d0)
+
+    If ( zeta_c < 0d0 ) Then
+       x     = (1d0 - 16d0*zeta_c)**0.25d0
+       psi_m = 2d0*Log((1d0+x)/2d0) + Log((1d0+x**2)/2d0) - 2d0*Atan(x) + pi/2d0
+       psi_h = 2d0*Log((1d0+x**2)/2d0)
+    Else
+       psi_m = -5d0*zeta_c
+       psi_h = -5d0*zeta_c
+    End If
+
+  End Subroutine most_stability_functions
+
+  !> Coupled MOST solve for (u_tau, theta_tau) and the Obukhov length L, via
+  !  fixed-point iteration of the Businger-Dyer-corrected log laws:
+  !    u_tau     = kappa*u_ref  / [ln(y_ref/z0 ) - psi_m(y_ref/L)]
+  !    theta_tau = kappa*dtheta / [ln(y_ref/z0h) - psi_h(y_ref/L)]
+  !    L         = u_tau^2 * T_ref / (kappa*grav*theta_tau)
+  !  L is seeded from the caller's persisted value (near-converged already once
+  !  the flow is quasi-steady, so this typically only needs 1-2 passes) and
+  !  updated in place. Reduces exactly to solve_u_tau_rough/solve_theta_tau_rough
+  !  in the neutral limit (psi_m=psi_h=0).
+  Subroutine solve_most(u_ref, dtheta, y_ref, z0, z0h, u_tau, theta_tau, L)
+    !$acc routine seq
+    Real(Int64), Intent(In)    :: u_ref, dtheta, y_ref, z0, z0h
+    Real(Int64), Intent(Out)   :: u_tau, theta_tau
+    Real(Int64), Intent(InOut) :: L
+
+    Integer(Int32), Parameter :: MOST_MAX_ITER = 10
+    Integer(Int32) :: iter
+    Real(Int64) :: zeta, psi_m, psi_h, log_m, log_h, L_new
+
+    Do iter = 1, MOST_MAX_ITER
+       zeta = y_ref / Sign(Max(Abs(L), 1d-3), L)
+       Call most_stability_functions(zeta, psi_m, psi_h)
+
+       log_m = Log( Max(y_ref, 2d0*z0 ) / Max(z0,  1d-8) ) - psi_m
+       log_h = Log( Max(y_ref, 2d0*z0h) / Max(z0h, 1d-8) ) - psi_h
+
+       u_tau     = kappa_wm * u_ref  / Max(log_m, 1d-3)
+       theta_tau = kappa_wm * dtheta / Max(log_h, 1d-3)
+
+       If ( Abs(theta_tau) > 1d-12 ) Then
+          L_new = u_tau**2 * T_ref / (kappa_wm * grav * theta_tau)
+       Else
+          L_new = Sign(1d10, L)   ! no flux -> neutral, huge |L|
+       End If
+       L_new = Sign( Max(Abs(L_new), 1d-3), L_new )
+
+       If ( Abs(L_new - L) < 1d-3*Abs(L_new) ) Then
+          L = L_new
+          Exit
+       End If
+       L = L_new
+    End Do
+
+  End Subroutine solve_most
+
   !              Select wall model
   Subroutine compute_wall_model(U_,V_,W_,nu_t_)
 
@@ -469,10 +538,18 @@ Contains
     y_match_hi  = Max(Ly - yg(j_match_yhi), 1d-14)
 
     ! u_tau/theta_tau are solved at the matching height (j_match_*, further from
-    ! the wall than j=2/nyg-1 when the near-wall grid is fine relative to z0/z0h);
-    ! the alpha_T formula still references the actual first interior cell
-    ! (T_here, y_ref_*), since that's what apply_Robin_bc_y_scalar extrapolates from
-    !$acc parallel loop collapse(2) present(U_,W_,T_,alpha_T,yg)
+    ! the wall than j=2/nyg-1 when the near-wall grid is fine relative to z0/z0h),
+    ! via the coupled Businger-Dyer MOST iteration (reduces to the neutral log
+    ! laws when the surface buoyancy flux is ~0). The alpha_T formula still
+    ! references the actual first interior cell (T_here, y_ref_*), since that's
+    ! what apply_Robin_bc_y_scalar extrapolates from.
+    !
+    ! Known scope limitation: this stability correction feeds alpha_T only.
+    ! alpha_x/alpha_z (momentum) stay on the neutral rough z0 EQWM from
+    ! compute_flat_wall_eqwm -- they sample at different index spaces (x-faces,
+    ! z-faces) than this cell-centred pass, so consistently stability-correcting
+    ! them needs their own persisted L state and is deferred.
+    !$acc parallel loop collapse(2) present(U_,W_,T_,alpha_T,L_obukhov_ylo,L_obukhov_yhi,yg)
     Do k = 2, nzg-1
        Do i = 2, nxg-1
 
@@ -484,8 +561,8 @@ Contains
              T_here  = T_(i, 2, k)
              T_match = T_(i, j_match_ylo, k)
 
-             Call solve_u_tau_rough(u_match, y_match_lo, z0_ylo, u_tau)
-             Call solve_theta_tau_rough(T_match - T_wall_bot, y_match_lo, z0h_ylo, theta_tau)
+             Call solve_most(u_match, T_match - T_wall_bot, y_match_lo, z0_ylo, z0h_ylo, &
+                              u_tau, theta_tau, L_obukhov_ylo(i,k))
 
              q_target = u_tau * theta_tau
              If ( Abs(q_target) > 1d-12 ) Then
@@ -504,8 +581,8 @@ Contains
              T_here  = T_(i, nyg-1, k)
              T_match = T_(i, j_match_yhi, k)
 
-             Call solve_u_tau_rough(u_match, y_match_hi, z0_yhi, u_tau)
-             Call solve_theta_tau_rough(T_match - T_wall_top, y_match_hi, z0h_yhi, theta_tau)
+             Call solve_most(u_match, T_match - T_wall_top, y_match_hi, z0_yhi, z0h_yhi, &
+                              u_tau, theta_tau, L_obukhov_yhi(i,k))
 
              q_target = u_tau * theta_tau
              If ( Abs(q_target) > 1d-12 ) Then
