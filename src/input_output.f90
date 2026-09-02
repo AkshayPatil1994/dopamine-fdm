@@ -32,6 +32,7 @@ Contains
 
     Namelist /PHYSICS/ nu, dPdx, dPdz, Ub_x, Ub_z, T_wave_x, T_wave_z, &
                        phi_wave_x, phi_wave_z, sgs_model, Cs_vreman, flat_wall_model_flag, &
+                       z0_ylo, z0_yhi, z0h_ylo, z0h_yhi, &
                        flow_forcing_mode, Ub_target, advection_scheme
 
     Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, &
@@ -259,6 +260,10 @@ Contains
        Write(*,'(A,I2)')     '   sgs_model                   = ', sgs_model
        Write(*,'(A,E12.4)')  '   Cs_vreman                   = ', Cs_vreman
        Write(*,'(A,I2)')     '   flat_wall_model_flag        = ', flat_wall_model_flag
+       If ( flat_wall_model_flag == 2 ) Then
+          Write(*,'(A,E12.4,A,E12.4)') '   z0_ylo, z0_yhi              = ', z0_ylo,  ', ', z0_yhi
+          Write(*,'(A,E12.4,A,E12.4)') '   z0h_ylo, z0h_yhi            = ', z0h_ylo, ', ', z0h_yhi
+       End If
        Write(*,'(A,2I3)')    '   BC y-walls (ylo/yhi)        = ', bc_face_ylo, bc_face_yhi
        Write(*,'(A,I2)')     '   x_bc_type (0=periodic,1=inflow/outflow) = ', x_bc_type
        Write(*,'(A,I2)')     '   y_bc_type (0=periodic,1=wall)           = ', y_bc_type
@@ -455,6 +460,10 @@ Contains
     Call Mpi_bcast ( sgs_model,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( Cs_vreman,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( flat_wall_model_flag, 1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( z0_ylo,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( z0_yhi,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( z0h_ylo,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( z0h_yhi,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( sediment_flag,        1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( sed_bc_bot,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )

@@ -21,6 +21,9 @@ Module wallmodel
   Real(Int64), Parameter :: REICH_A2  = 0.33d0
   Real(Int64), Parameter :: c_buf_wm  = B_wm - Log(kappa_wm)/kappa_wm
 
+  ! One-shot guard for the rough-wall y_ref/z0 sanity warning (compute_flat_wall_eqwm)
+  Logical :: rough_wall_ratio_warned = .False.
+
 Contains
 
   !> Reichardt (1951) smooth u+(y+) law of the wall
@@ -71,6 +74,35 @@ Contains
 
   End Subroutine solve_u_tau_reichardt
 
+  !> Explicit fully-rough log-law u_tau from (u_ref, y_ref, z0); no viscous
+  !  sublayer term -- valid once y_ref clears the roughness sublayer (y_ref >> z0)
+  Pure Subroutine solve_u_tau_rough(u_ref, y_ref, z0, u_tau)
+    !$acc routine seq
+    Real(Int64), Intent(In)  :: u_ref, y_ref, z0
+    Real(Int64), Intent(Out) :: u_tau
+
+    Real(Int64) :: log_ratio
+
+    log_ratio = Log( Max(y_ref, 2d0*z0) / Max(z0, 1d-8) )
+    u_tau     = kappa_wm * u_ref / Max(log_ratio, 1d-3)
+
+  End Subroutine solve_u_tau_rough
+
+  !> Dispatch the friction-velocity solve: smooth Reichardt EQWM (mode 1) or
+  !  rough z0 log law (mode 2); z0 is unused (but still passed) in mode 1
+  Subroutine solve_u_tau_wall(u_ref, y_ref, z0, u_tau)
+    !$acc routine seq
+    Real(Int64), Intent(In)  :: u_ref, y_ref, z0
+    Real(Int64), Intent(Out) :: u_tau
+
+    If ( flat_wall_model_flag == 2 ) Then
+       Call solve_u_tau_rough(u_ref, y_ref, z0, u_tau)
+    Else
+       Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+    End If
+
+  End Subroutine solve_u_tau_wall
+
   !              Select wall model
   Subroutine compute_wall_model(U_,V_,W_,nu_t_)
 
@@ -81,8 +113,8 @@ Contains
 
     If ( y_bc_type == 0 ) Return   ! no wall model meaning for periodic y
 
-    If ( flat_wall_model_flag == 1 ) Then
-       ! Flat-wall log-law EQWM: compute alpha from local u_tau
+    If ( flat_wall_model_flag == 1 .Or. flat_wall_model_flag == 2 ) Then
+       ! Flat-wall log-law EQWM (smooth Reichardt or rough z0): compute alpha from local u_tau
        Call compute_flat_wall_eqwm(U_, W_)
     Else
        ! Constant Robin alpha (no-slip or free-slip depending on bc_face_y*)
@@ -266,6 +298,20 @@ Contains
     y_ref_lo    = Max(y_ref_lo, 1d-14)
     y_ref_hi    = Max(y_ref_hi, 1d-14)
 
+    ! One-time sanity check: a rough-wall log law is only reliable well above the
+    ! roughness sublayer (y_ref/z0 >~ 20); this uses the first grid cell as the
+    ! matching height, so a marginal ratio here means the EQWM's u_tau is poorly
+    ! conditioned (see the matching-height refinement tracked for a later phase)
+    If ( flat_wall_model_flag == 2 .And. .Not. rough_wall_ratio_warned .And. myid == 0 ) Then
+       If ( bc_face_ylo /= 2 .And. z0_ylo > 0d0 .And. y_ref_lo/z0_ylo < 20d0 ) &
+          Write(*,'(A,E12.4,A)') ' WARNING: y_ref/z0_ylo = ', y_ref_lo/z0_ylo, &
+             ' < 20 -- first grid cell is too close to the roughness sublayer for a reliable rough-wall u_tau'
+       If ( bc_face_yhi /= 2 .And. z0_yhi > 0d0 .And. y_ref_hi/z0_yhi < 20d0 ) &
+          Write(*,'(A,E12.4,A)') ' WARNING: y_ref/z0_yhi = ', y_ref_hi/z0_yhi, &
+             ' < 20 -- first grid cell is too close to the roughness sublayer for a reliable rough-wall u_tau'
+       rough_wall_ratio_warned = .True.
+    End If
+
     !  alpha_x : Robin slip-length for U (x-faces, nx × nyg × nzg)
     !$acc parallel loop collapse(2) present(U_,W_,alpha_x)
     Do k = 2, nzg-1
@@ -277,8 +323,8 @@ Contains
              W_at_pt  = 0.5d0*(W_(i, 2, k-1) + W_(i, 2, k))
              u_ref    = Sqrt(U_(i, 2, k)**2 + W_at_pt**2)
 
-             ! Newton solve for u_tau using nu only
-             Call solve_u_tau_reichardt(u_ref, y_ref_lo, u_tau)
+             ! Newton solve (smooth) or explicit log law (rough) for u_tau using nu only
+             Call solve_u_tau_wall(u_ref, y_ref_lo, z0_ylo, u_tau)
 
              ! Robin alpha derivation
              alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) &
@@ -293,7 +339,7 @@ Contains
              W_at_pt  = 0.5d0*(W_(i, nyg-1, k-1) + W_(i, nyg-1, k))
              u_ref    = Sqrt(U_(i, nyg-1, k)**2 + W_at_pt**2)
 
-             Call solve_u_tau_reichardt(u_ref, y_ref_hi, u_tau)
+             Call solve_u_tau_wall(u_ref, y_ref_hi, z0_yhi, u_tau)
 
              alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_hi*0.5d0
@@ -326,7 +372,7 @@ Contains
              u_ref    = Sqrt((0.5d0*(U_(i-1, 2, k) + U_(i, 2, k)))**2 &
                            + W_(i, 2, k)**2)
 
-             Call solve_u_tau_reichardt(u_ref, y_ref_lo, u_tau)
+             Call solve_u_tau_wall(u_ref, y_ref_lo, z0_ylo, u_tau)
 
              alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_lo*0.5d0
@@ -340,7 +386,7 @@ Contains
              u_ref    = Sqrt((0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k)))**2 &
                            + W_(i, nyg-1, k)**2)
 
-             Call solve_u_tau_reichardt(u_ref, y_ref_hi, u_tau)
+             Call solve_u_tau_wall(u_ref, y_ref_hi, z0_yhi, u_tau)
 
              alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_hi*0.5d0
