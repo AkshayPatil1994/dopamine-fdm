@@ -51,7 +51,7 @@ Contains
 
     Namelist /IBM/ ibm_input_mode, ibm_wall_model_flag, &
                    ibm_sdf_file, ibm_objid_file, ks, nks, nsampling, ibm_surface_nsampling, &
-                   ibm_T_bc_type, ibm_T_wall
+                   ibm_T_bc_type, ibm_T_wall, ibm_z0
 
     Namelist /INITIAL_CONDITIONS/ Utarget, nstep_init, restart, &
                                    scalar_restart, ic_type, noise_percent
@@ -490,6 +490,7 @@ Contains
     Call Mpi_bcast ( T_ic_grad,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_T_bc_type, Size(ibm_T_bc_type), MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_T_wall,    Size(ibm_T_wall),    MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( ibm_z0,        Size(ibm_z0),        MPI_real8,   0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( rsb_active,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( rsb_freq,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )

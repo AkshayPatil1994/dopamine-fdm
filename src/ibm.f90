@@ -55,9 +55,9 @@ Contains
 
     ! Device-resident IBM data: phi (read once above) and the ghost-cell lists (built once above), never modified afterward
     !$acc enter data copyin(phi)
-    !$acc enter data copyin(ghost_u_idx,ghost_u_wgt,ghost_u_img,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB)
-    !$acc enter data copyin(ghost_v_idx,ghost_v_wgt,ghost_v_img,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB)
-    !$acc enter data copyin(ghost_w_idx,ghost_w_wgt,ghost_w_img,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB)
+    !$acc enter data copyin(ghost_u_idx,ghost_u_wgt,ghost_u_img,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_objid)
+    !$acc enter data copyin(ghost_v_idx,ghost_v_wgt,ghost_v_img,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_objid)
+    !$acc enter data copyin(ghost_w_idx,ghost_w_wgt,ghost_w_img,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_objid)
     ! Cell-centre ghost list: used both by the host-only Method-2 force diagnostic and (when boussinesq_flag>=1) by the device-resident apply_ghost_cell_ibm_scalar
     !$acc enter data copyin(ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc,ghost_cc_objid)
 
@@ -242,6 +242,7 @@ Contains
     Allocate ( ghost_u_xB(3, n_ghost_u) )
     Allocate ( ghost_u_img_cc(3, n_ghost_u) )
     Allocate ( ghost_u_wgt_cc(8, n_ghost_u) )
+    Allocate ( ghost_u_objid(n_ghost_u) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
     ng = 0
@@ -315,6 +316,7 @@ Contains
     ! Store dGB, boundary-point coords, and precomputed pressure stencil
     Do ng = 1, n_ghost_u
        i = ghost_u_idx(1,ng);  j = ghost_u_idx(2,ng);  k = ghost_u_idx(3,ng)
+       ghost_u_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
        ghost_u_dGB(ng)   = Abs( 0.5d0*(phi(i,j,k)+phi(i+1,j,k)) )
        ghost_u_xB(1,ng)  = x (i)  + ghost_u_dGB(ng)*ghost_u_nrm(1,ng)
        ghost_u_xB(2,ng)  = yg(j)  + ghost_u_dGB(ng)*ghost_u_nrm(2,ng)
@@ -391,6 +393,7 @@ Contains
     Allocate ( ghost_v_xB(3, n_ghost_v) )
     Allocate ( ghost_v_img_cc(3, n_ghost_v) )
     Allocate ( ghost_v_wgt_cc(8, n_ghost_v) )
+    Allocate ( ghost_v_objid(n_ghost_v) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
     ng = 0
@@ -443,6 +446,7 @@ Contains
 
     Do ng = 1, n_ghost_v
        i = ghost_v_idx(1,ng);  j = ghost_v_idx(2,ng);  k = ghost_v_idx(3,ng)
+       ghost_v_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
        ghost_v_dGB(ng)   = Abs( 0.5d0*(phi(i,j,k)+phi(i,j+1,k)) )
        ghost_v_xB(1,ng)  = xg(i)  + ghost_v_dGB(ng)*ghost_v_nrm(1,ng)
        ghost_v_xB(2,ng)  = y (j)  + ghost_v_dGB(ng)*ghost_v_nrm(2,ng)
@@ -517,6 +521,7 @@ Contains
     Allocate ( ghost_w_xB(3, n_ghost_w) )
     Allocate ( ghost_w_img_cc(3, n_ghost_w) )
     Allocate ( ghost_w_wgt_cc(8, n_ghost_w) )
+    Allocate ( ghost_w_objid(n_ghost_w) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
     ng = 0
@@ -569,6 +574,7 @@ Contains
 
     Do ng = 1, n_ghost_w
        i = ghost_w_idx(1,ng);  j = ghost_w_idx(2,ng);  k = ghost_w_idx(3,ng)
+       ghost_w_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
        ghost_w_dGB(ng)   = Abs( 0.5d0*(phi(i,j,k)+phi(i,j,k+1)) )
        ghost_w_xB(1,ng)  = xg(i)  + ghost_w_dGB(ng)*ghost_w_nrm(1,ng)
        ghost_w_xB(2,ng)  = yg(j)  + ghost_w_dGB(ng)*ghost_w_nrm(2,ng)
