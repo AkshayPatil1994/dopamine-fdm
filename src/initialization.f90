@@ -561,6 +561,9 @@ Contains
     If ( boussinesq_flag >= 1 ) Then
        Allocate( alpha_T(1:nxg,1:2,1:nzg) )
        alpha_T = 0d0
+       Allocate( L_obukhov_ylo(1:nxg,1:nzg), L_obukhov_yhi(1:nxg,1:nzg) )
+       L_obukhov_ylo = 1d10   ! neutral seed; solve_most iterates this in place each call
+       L_obukhov_yhi = 1d10
     End If
 
     ! Rough-EQWM matching height: smallest interior j (bottom) / largest interior j
@@ -619,6 +622,7 @@ Contains
        !$acc update device(Tscal,Tscal_o)
        !$acc enter data create(alpha_T)
        !$acc update device(alpha_T)
+       !$acc enter data copyin(L_obukhov_ylo,L_obukhov_yhi)
     End If
     ! Sediment scalar: device residency required by the shared compute_rhs_scalar_core (see scalar_transport.f90)
     If ( sediment_flag >= 1 ) Then
