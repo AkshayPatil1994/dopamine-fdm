@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from snapshot_io import parse_input_parameters, list_snapshots, read_snapshot
+from snapshot_io import parse_input_parameters, coords_from_grid
 
 try:
     import matplotlib
@@ -46,10 +46,25 @@ def _nearest_index(coords, value):
     return int(np.argmin(np.abs(coords - value)))
 
 
+SENTINEL_FRAC = 0.5   # matches GenSDF's flood_fill_mod.f90 SENTINEL_FRAC
+
 def _pcolor(ax, H, V, data, title, xlabel, ylabel, cmap='RdBu_r', symmetric=True):
-    vmax = np.abs(data).max() or 1.0
-    vmin = -vmax if symmetric else data.min()
-    pcm = ax.pcolormesh(H, V, data.T, shading='auto', cmap=cmap,
+    # GenSDF leaves cells outside its geometry-focused AABB at the raw background
+    # sentinel (scalarvalue, e.g. 1e10 — "far fluid, never computed"); including
+    # those in the color scale crushes the real near-wall SDF into invisibility.
+    scalarvalue = np.abs(data).max()
+    is_sentinel = np.abs(data) >= SENTINEL_FRAC * scalarvalue
+    finite = data[~is_sentinel]
+    masked = np.ma.masked_where(is_sentinel, data)
+
+    if finite.size:
+        vmax = np.abs(finite).max() or 1.0
+    else:
+        vmax = scalarvalue or 1.0
+    vmin = -vmax if symmetric else (finite.min() if finite.size else data.min())
+
+    ax.set_facecolor('lightgray')   # shows through masked (sentinel/uncomputed) cells
+    pcm = ax.pcolormesh(H, V, masked.T, shading='auto', cmap=cmap,
                         vmin=vmin, vmax=vmax)
     ax.set_title(title, fontsize=10)
     ax.set_xlabel(xlabel)
@@ -72,8 +87,9 @@ def load_sdf(sdf_path, params_path):
       axis 1 = y-wall-normal (ghost at indices 0 and nym+1)
       axis 2 = z-spanwise    (no ghost)
 
-    Grid coordinates are read from the most recent snapshot so that the
-    same non-uniform y-grid used by the solver is reproduced exactly.
+    Grid coordinates are read from fields/grid.out + fields/geometry.out
+    (written by genGridandIC.f90) so the same non-uniform y-grid used by
+    the solver is reproduced exactly, without needing a solver snapshot.
     """
     p = parse_input_parameters(params_path)
     nxm = p['nx'] - 1
@@ -97,15 +113,10 @@ def load_sdf(sdf_path, params_path):
     # Strip ghost layers in x and y
     phi = phi_full[1:-1, 1:-1, :]   # (nxm, nym, nzm)
 
-    # Read grid from the most-recent snapshot (avoids re-implementing the
-    # grid-type-6 stretching formula in Python)
-    fileout = p['fileout']
-    snaps = list_snapshots(str(Path(params_path).parent / 'fields'), fileout)
-    if not snaps:
-        sys.exit('No snapshots found in fields/ — needed for grid coordinates.')
-    _, fpath = snaps[-1]
-    snap = read_snapshot(fpath, sgs_model=int(p.get('sgs_model', 0)))
-    xm, ym, zm = snap['xm'], snap['ym'], snap['zm']
+    grid_path = Path(params_path).parent / 'fields' / 'grid.out'
+    if not grid_path.is_file():
+        sys.exit(f'{grid_path} not found — needed for grid coordinates.')
+    xm, ym, zm = coords_from_grid(grid_path)
 
     return phi, xm, ym, zm
 

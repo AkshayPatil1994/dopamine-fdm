@@ -201,34 +201,45 @@ Program dopamine_esem
 
      lbuf_U = 0d0;  lbuf_V = 0d0;  lbuf_W = 0d0
 
-     ! U: cell-centred in y and z
-     Do ka = 2, nzg-1
-        kg_g = kg1_global(myid) + ka - 2
-        Do ja = 2, nyg-1
-           jg = ja - 1
-           Call sem_fluctuation( 1, ja, ka, yg(ja), zg(ka), t_s, up, vp, wp )
-           lbuf_U(jg, kg_g) = mean_profile_U( yg(ja) ) + up
-        End Do
-     End Do
+     ! Only this rank's z-range (kg1_global/kg2_global) is keyed off col = Mod(myid,p_col)
+     ! (decomp_build_xz_ranges), so every rank sharing that col but a different row owns the
+     ! SAME z-slab and would compute IDENTICAL (deterministic) fluctuation values for it --
+     ! summing all of them below via Mpi_Reduce(...,MPI_SUM,...) would inflate the injected
+     ! field by a factor of p_row. Only the row==0 ranks (one per distinct z-column) compute;
+     ! everyone else leaves lbuf_* at zero, so the reduction picks up exactly one contribution
+     ! per z-index regardless of p_row.
+     If ( myid/p_col == 0 ) Then
 
-     ! V: y-face (all ny_global points, no ghost), z cell-centred
-     Do ka = 2, nzg-1
-        kg_g = kg1_global(myid) + ka - 2
-        Do jf = 1, ny
-           Call sem_fluctuation( 2, jf, ka, y(jf), zg(ka), t_s, up, vp, wp )
-           lbuf_V(jf, kg_g) = vp
+        ! U: cell-centred in y and z
+        Do ka = 2, nzg-1
+           kg_g = kg1_global(myid) + ka - 2
+           Do ja = 2, nyg-1
+              jg = ja - 1
+              Call sem_fluctuation( 1, ja, ka, yg(ja), zg(ka), t_s, up, vp, wp )
+              lbuf_U(jg, kg_g) = mean_profile_U( yg(ja) ) + up
+           End Do
         End Do
-     End Do
 
-     ! W: y cell-centred, z-face (left face of each cell, see z(:) above)
-     Do ka = 2, nz-1
-        kg_g = kg1_global(myid) + ka - 2
-        Do ja = 2, nyg-1
-           jg = ja - 1
-           Call sem_fluctuation( 3, ja, ka, yg(ja), z(ka), t_s, up, vp, wp )
-           lbuf_W(jg, kg_g) = wp
+        ! V: y-face (all ny_global points, no ghost), z cell-centred
+        Do ka = 2, nzg-1
+           kg_g = kg1_global(myid) + ka - 2
+           Do jf = 1, ny
+              Call sem_fluctuation( 2, jf, ka, y(jf), zg(ka), t_s, up, vp, wp )
+              lbuf_V(jf, kg_g) = vp
+           End Do
         End Do
-     End Do
+
+        ! W: y cell-centred, z-face (left face of each cell, see z(:) above)
+        Do ka = 2, nz-1
+           kg_g = kg1_global(myid) + ka - 2
+           Do ja = 2, nyg-1
+              jg = ja - 1
+              Call sem_fluctuation( 3, ja, ka, yg(ja), z(ka), t_s, up, vp, wp )
+              lbuf_W(jg, kg_g) = wp
+           End Do
+        End Do
+
+     End If
 
      Call Mpi_Reduce( lbuf_U, gbuf_U, nym_global*nzm_global, MPI_real8, MPI_SUM, 0, MPI_COMM_WORLD, ierr )
      Call Mpi_Reduce( lbuf_V, gbuf_V, ny_global*nzm_global,  MPI_real8, MPI_SUM, 0, MPI_COMM_WORLD, ierr )
