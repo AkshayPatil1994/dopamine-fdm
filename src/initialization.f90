@@ -91,6 +91,12 @@ Contains
     If ( y_bc_type == 0 .And. grid_type /= 1 ) Stop 'ERROR: y_bc_type=0 (periodic y) requires grid_type=1 (uniform y grid)'
     If ( ic_type == 6 .And. ( x_bc_type /= 0 .Or. y_bc_type /= 0 ) ) &
        Stop 'ERROR: ic_type=6 (Taylor-Green Vortex) requires x_bc_type=0 and y_bc_type=0 (fully periodic box)'
+    If ( flat_wall_model_flag == 2 ) Then
+       If ( bc_face_ylo /= 2 .And. z0_ylo <= 0d0 ) &
+          Stop 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_ylo > 0 for a no-slip bottom wall'
+       If ( bc_face_yhi /= 2 .And. z0_yhi <= 0d0 ) &
+          Stop 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_yhi > 0 for a no-slip top wall'
+    End If
 
     ! domain decomposition: resolves p_row/p_col (auto-factorized when both are 0, see decomp_auto_factorize), then builds this rank's x/z ownership ranges via 2decomp&fft's own distribute() algorithm, replicated locally -- no restriction that nx_global/nz_global divide evenly by p_row/p_col
     Call decomp_init_pencil
@@ -544,6 +550,7 @@ Contains
 
     ! Push host values once for scalars `!$acc declare create`d in global.f90 (needed by !$acc routine seq procedures)
     !$acc update device(nx,ny,nz,nxg,nyg,nzg,nu,pi,inflow_type,inflow_Uconst,sem_n_eddies,sem_length_scale,sem_seed,sem_eddy_placement,sem_use_esem,sem_divergence_free)
+    !$acc update device(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi)
     !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall)
     ! OpenACC: static grid arrays copied once, scratch arrays created once, never re-transferred
     !$acc enter data copyin(y,yg,z,zg,weight_y_0,weight_y_1)

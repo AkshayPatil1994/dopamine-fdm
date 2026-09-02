@@ -251,8 +251,14 @@ Module global
   Integer(Int32) :: sgs_model  = 0       ! default: DNS
   Real   (Int64) :: Cs_vreman  = 0.17d0   ! default Vreman constant
 
-  ! Flat-wall equilibrium wall model flag: 0=DNS no-slip (default), 1=log-law EQWM
+  ! Flat-wall equilibrium wall model flag: 0=DNS no-slip (default), 1=smooth log-law EQWM, 2=rough z0 EQWM
   Integer(Int32) :: flat_wall_model_flag = 0
+
+  ! Rough-wall EQWM roughness lengths [m] (used when flat_wall_model_flag==2); momentum (z0)
+  ! and thermal (z0h) roughness are independent, per wall
+  Real   (Int64) :: z0_ylo  = 0d0, z0_yhi  = 0d0
+  Real   (Int64) :: z0h_ylo = 0d0, z0h_yhi = 0d0
+  !$acc declare create(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi)
 
   ! wall-model Robin BC coefficient arrays
   Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_x, alpha_y, alpha_z
