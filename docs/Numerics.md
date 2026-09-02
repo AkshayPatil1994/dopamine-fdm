@@ -257,8 +257,8 @@ agree closely with the reference DNS:
 ## 7. Wall models
 
 Both flat-wall and IBM-surface wall models use an **equilibrium wall model (EQWM)**
-based on the classical log-law, applied when `flat_wall_model_flag = 1` (flat walls) or
-`ibm_wall_model_flag = 1` (IBM surfaces).
+based on the classical log-law, applied when `flat_wall_model_flag = 1` or `2` (flat
+walls) or `ibm_wall_model_flag = 1` (IBM surfaces).
 
 ### 7.1 Robin ghost-cell BC
 
@@ -282,6 +282,75 @@ with $\kappa = 0.41$ and $B = 5.2$ (Prandtl–Kármán constants). The iteration
 
 For IBM surfaces the reference velocity is the wall-tangential component of the velocity
 interpolated at the image-point location, projected onto the surface tangent plane.
+
+### 7.3 Rough-wall `z0` EQWM (flat walls, `flat_wall_model_flag = 2`)
+
+For a fully-rough surface (roughness length $z_0$), the log law has no viscous sublayer
+term and is explicit in $u_\tau$ -- no Newton iteration is needed:
+
+$$u^+ = \frac{1}{\kappa}\ln\!\left(\frac{y}{z_0}\right)
+\quad\Longrightarrow\quad
+u_\tau = \frac{\kappa\,u_\text{ref}}{\ln(y_\text{ref}/z_0)}$$
+
+Momentum ($z_0$, `z0_ylo`/`z0_yhi`) and thermal ($z_0^h$, `z0h_ylo`/`z0h_yhi`)
+roughness are independent inputs, matching real surfaces where the two transport
+mechanisms (bluff-body drag vs. molecular diffusion at the roughness elements) differ.
+The Robin coefficient $\alpha$ is still derived exactly as in §7.1/7.2 -- only the
+source of $u_\tau$ changes; $\alpha$ is a numerical device that makes the discrete
+ghost-to-first-cell flux reproduce $u_\tau^2$, independent of which log law produced it.
+
+### 7.4 Matching-height sampling
+
+The rough log law is only reliable once the sample point clears the roughness
+sublayer ($y/z_0 \gtrsim 20$). On a grid resolved fine enough for a smooth-wall/DNS
+run, the literal first grid cell can violate this badly (e.g. $y_\text{ref}/z_0
+\approx 1.85$ puts the sample point almost inside the roughness sublayer, where
+$u_\tau$ becomes extremely sensitive to noise in the sampled velocity). To avoid
+this, `flat_wall_model_flag = 2` resolves a **matching-height** grid index once at
+startup -- the nearest interior point whose distance to the wall clears
+$20\,z_0$ -- and samples $u_\tau$/$\theta_\tau$ there instead of at $j=2$. The Robin
+$\alpha$ itself still references the actual first interior cell, since that is what
+the ghost-cell extrapolation in §7.1 uses; only the log-law solve benefits from the
+better-conditioned sample point. A startup warning is printed if no grid point within
+the half-channel clears the ratio.
+
+### 7.5 MOST stability coupling (isothermal flat walls, `T_bc_bot/top = 2`)
+
+Under thermal stratification (`boussinesq_flag >= 1`), the isothermal rough-EQWM
+thermal BC (`T_bc_bot`/`T_bc_top = 2`) couples $u_\tau$, the temperature scale
+$\theta_\tau$, and the Obukhov length $L$ through Monin-Obukhov similarity theory:
+
+$$u_\tau = \frac{\kappa\,u_\text{ref}}{\ln(y/z_0) - \psi_m(y/L)}, \qquad
+\theta_\tau = \frac{\kappa\,(\theta_\text{ref}-\theta_\text{wall})}{\ln(y/z_0^h) - \psi_h(y/L)}, \qquad
+L = \frac{u_\tau^2\,T_\text{ref}}{\kappa\,g\,\theta_\tau}$$
+
+using the standard Businger-Dyer stability functions (Paulson 1970 / Dyer 1974
+integrated unstable branch; linear stable branch), with $\zeta = y/L$ clipped to
+$\pm 2$ since the empirical fits aren't trusted outside that range. The system is
+solved by fixed-point iteration, seeded from $L$'s value at the previous call
+(persisted per wall-parallel grid point) so the iteration is typically 1-2 passes
+once the flow is quasi-steady. $\psi_m = \psi_h = 0$ recovers §7.3 exactly in the
+neutral limit, and an adiabatic wall (zero surface buoyancy flux, $L \to \infty$) is
+always neutral regardless of ambient stratification -- so `T_bc_* = 0` never needs
+this coupling.
+
+This stability correction feeds the thermal Robin coefficient only. The momentum
+coefficients ($\alpha_x$, $\alpha_z$) stay on the neutral rough log law of §7.3 even
+under `T_bc_* = 2` -- they are sampled at different index spaces (x-faces, z-faces)
+than this cell-centred MOST pass, so consistently stability-correcting them would
+need their own persisted $L$ state; this is a known, documented scope limitation
+rather than an oversight.
+
+### 7.6 IBM per-object roughness
+
+IBM surfaces support a per-object momentum roughness length `ibm_z0(0:15)`, indexed
+by the solid ID field (`ibm_objid_file`). `ibm_z0(id) > 0` swaps the smooth Reichardt
+solve for the same explicit rough log law as §7.3, applied uniformly regardless of
+that object's thermal BC (`ibm_T_bc_type`) -- the momentum ghost-cell mirror formula
+doesn't reference temperature. There is currently no IBM counterpart to §7.4 or §7.5:
+the thermal ghost-cell BC (`ibm_T_bc_type`/`ibm_T_wall`) remains a plain Dirichlet
+mirror with no wall-model path, since it lacks the reference-cell/`yref` concept the
+momentum ghost lists already have.
 
 ## 8. Scalar transport (suspended sediment)
 

@@ -31,10 +31,13 @@ See [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]].
 | `phi_wave_z` | `0.0` | Phase offset $\varphi_z$ [rad] for spanwise oscillation; difference $\varphi_z - \varphi_x$ sets the cross-wave phase lag |
 | `sgs_model` | `0` | 0=DNS (ν_t=0), 1=Vreman SGS |
 | `Cs_vreman` | `0.17` | Smagorinsky-equivalent constant for Vreman model ($c_V = 2.5\\,C_s^2$) |
-| `flat_wall_model_flag` | `0` | 0=no-slip, 1=log-law EQWM on flat walls |
+| `flat_wall_model_flag` | `0` | 0=no-slip, 1=smooth log-law EQWM, 2=rough `z0` EQWM on flat walls |
+| `z0_ylo`, `z0_yhi` | `0.0` | Momentum roughness length [m] per wall (`flat_wall_model_flag=2` only); `Stop` at startup if `<= 0` on an active no-slip wall |
+| `z0h_ylo`, `z0h_yhi` | `0.0` | Thermal roughness length [m] per wall, independent of `z0_ylo/yhi` (used with `T_bc_bot/top=2`, see `&BOUSSINESQ`) |
 
-See [[Numerics § Forcing|Numerics#1-governing-equations]] and
-[[§ SGS model|Numerics#5-sub-grid-scale-model]].
+See [[Numerics § Forcing|Numerics#1-governing-equations]],
+[[§ SGS model|Numerics#5-sub-grid-scale-model]], and
+[[§ Wall models|Numerics#7-wall-models]].
 
 ## `&NUMERICS`
 | Parameter | Default | Description |
@@ -88,6 +91,7 @@ and the [[precursor/successor example|Examples#precursor_successor]].
 | `ibm_wall_model_flag` | `0` | 0=no-slip, 1=log-law EQWM on IBM surfaces |
 | `ibm_sdf_file` | `'SDF_in'` | Path to precomputed cell-centre SDF |
 | `ibm_objid_file` | `''` | Optional per-solid object-ID field (e.g. `GenSDF`'s `sdfp_objid.bin`), for per-object boundary conditions; `''` = a single uniform IBM condition applied to every solid |
+| `ibm_z0(0:15)` | `0.0` | Per-IBM-object momentum roughness length [m], indexed by object ID; `0` = smooth Reichardt EQWM (only meaningful with `ibm_wall_model_flag=1`). No thermal counterpart (`ibm_z0h`) yet -- see the note below |
 | `ks` | — | Roughness sublayer height (grid types 5–7) |
 | `nks` | `0` | Number of uniform cells in roughness sublayer |
 | `nsampling` | `0` | IBM force output interval (0 = disabled) |
@@ -97,6 +101,13 @@ and the [[precursor/successor example|Examples#precursor_successor]].
 > reads a precomputed cell-centre SDF from `ibm_sdf_file`. Generate that SDF ahead of
 > time with the `GenSDF` tool — see
 > [[Pre- and Post-Processing Tools § GenSDF|Tools#gensdf]].
+
+> **Note:** `ibm_z0` covers momentum only. IBM's thermal ghost-cell BC
+> (`ibm_T_bc_type`/`ibm_T_wall`, above) is a plain Dirichlet mirror with no wall-model
+> path at all -- there is no `ibm_z0h` and no MOST stability coupling for IBM surfaces.
+> Adding either needs a reference-cell/`yref` concept in the cell-centre ghost list
+> (`build_ghost_list_cc` in `ibm.f90`), which the momentum ghost lists already have
+> (`ghost_u_ref`/`ghost_u_yref` etc.) but the thermal one does not.
 
 ## `&INITIAL_CONDITIONS`
 | Parameter | Default | Description |
@@ -155,8 +166,8 @@ See [[Numerics § Scalar transport|Numerics#8-scalar-transport-suspended-sedimen
 | `grav` | — | Gravitational acceleration [m s⁻²] (shared with `&SEDIMENT`; a warning is printed if the two disagree) |
 | `Pr` | `0.7` | Molecular Prandtl number |
 | `Pr_t` | `0.85` | Turbulent Prandtl number |
-| `T_bc_bot`, `T_bc_top` | `0`, `0` | Wall BC type: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet) |
-| `T_wall_bot`, `T_wall_top` | `0.0`, `0.0` | Wall temperature (used when the corresponding `T_bc_*` is isothermal) |
+| `T_bc_bot`, `T_bc_top` | `0`, `0` | Wall BC type: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet), 2=rough EQWM flux BC (isothermal target `T_wall_*`, flux set via `z0h_ylo/yhi` and, under stratification, the iterated Businger-Dyer Obukhov length; requires `flat_wall_model_flag=2` and `boussinesq_flag>=1`) |
+| `T_wall_bot`, `T_wall_top` | `0.0`, `0.0` | Wall temperature (used when the corresponding `T_bc_*` is isothermal or the rough EQWM, mode 1 or 2) |
 | `T_ic_type` | `0` | Initial $T$ profile: 0=uniform `T_ref`, 1=linear gradient |
 | `T_ic_grad` | `0.0` | Gradient $\mathrm{d}T/\mathrm{d}y$ (used when `T_ic_type = 1`) |
 | `ibm_T_bc_type(0:15)` | `0` | Per-IBM-object thermal BC type (0=adiabatic, 1=isothermal), indexed by object ID |
@@ -165,7 +176,15 @@ See [[Numerics § Scalar transport|Numerics#8-scalar-transport-suspended-sedimen
 If `&BOUSSINESQ` is omitted entirely, the solver prints `INFO: no &BOUSSINESQ found,
 thermal stratification disabled` and runs without the temperature scalar or buoyancy
 coupling. See
-[[Numerics § Boussinesq buoyancy|Numerics#83-boussinesq-buoyancy-thermal-stratification]].
+[[Numerics § Boussinesq buoyancy|Numerics#83-boussinesq-buoyancy-thermal-stratification]]
+and [[Numerics § Wall models|Numerics#7-wall-models]].
+
+`T_bc_bot/top=2`'s MOST stability coupling (Businger-Dyer `psi_m`/`psi_h`, iterated
+Obukhov length) applies to the thermal EQWM only -- `alpha_x`/`alpha_z` (momentum) stay
+on the neutral rough `z0` log law even under this mode. This is a known, documented
+scope limitation (see `wallmodel.f90`'s `compute_flat_wall_thermal_eqwm`), not an
+oversight: the momentum Robin coefficients are sampled at different index spaces
+(x-faces, z-faces) than this cell-centred pass.
 
 ## `&STATISTICS` *(optional — omit to disable)*
 
