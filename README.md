@@ -11,7 +11,7 @@ This README covers the essentials. For a topic-by-topic reference — full numer
 - **Staggered MAC grid** — U on x-faces, V on y-faces, W on z-faces, pressure at cell centres
 - **Flexible vertical grid** — 7 stretching options (uniform, symmetric tanh, single-sided tanh, uniform roughness sublayer + tanh blend)
 - **Immersed boundary method (IBM)** — ghost-cell method (Tseng & Ferziger 2003) for complex rough surfaces; reads a precomputed cell-centre signed-distance field (SDF), generated ahead of time by the `GenSDF` tool; validated against DNS of turbulent flow over a wavy wall, see [Numerics § IBM Validation](docs/Numerics.md#63-validation--turbulent-flow-over-a-wavy-wall)
-- **Wall models** — flat-wall and IBM-surface equilibrium wall models (log-law EQWM); selectable per wall
+- **Wall models** — flat-wall and IBM-surface equilibrium wall models (log-law EQWM); selectable per wall. Flat walls also support a rough-wall `z0` EQWM with independent momentum/thermal roughness and Businger-Dyer MOST stability coupling (neutral/stable/unstable) for isothermal walls; IBM surfaces support per-object momentum roughness
 - **SGS turbulence model** — Vreman (2004) eddy-viscosity model; optional (set `sgs_model = 0` for DNS)
 - **Flexible boundary conditions** — Dirichlet (no-slip) or Neumann (free-slip) independently on top and bottom y-walls
 - **Initial conditions** — log-law profile, linear tent/ramp, inverse-linear anti-tent/inverted-ramp, zero mean, or Reichardt turbulent channel profile; all with configurable white-noise perturbation
@@ -194,7 +194,9 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `phi_wave_z` | `0.0` | Phase offset $\varphi_z$ [rad] for spanwise oscillation; difference $\varphi_z - \varphi_x$ sets the cross-wave phase lag |
 | `sgs_model` | `0` | 0=DNS (ν_t=0), 1=Vreman SGS |
 | `Cs_vreman` | `0.17` | Smagorinsky-equivalent constant for Vreman model ($c_V = 2.5\,C_s^2$) |
-| `flat_wall_model_flag` | `0` | 0=no-slip, 1=log-law EQWM on flat walls |
+| `flat_wall_model_flag` | `0` | 0=no-slip, 1=smooth log-law EQWM, 2=rough `z0` EQWM on flat walls |
+| `z0_ylo`, `z0_yhi` | `0.0` | Momentum roughness length [m] per wall (`flat_wall_model_flag=2` only) |
+| `z0h_ylo`, `z0h_yhi` | `0.0` | Thermal roughness length [m] per wall, independent of `z0_ylo/yhi` (used with `T_bc_bot/top=2`, see `&BOUSSINESQ`) |
 
 ### `&NUMERICS`
 | Parameter | Default | Description |
@@ -242,6 +244,7 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `ibm_wall_model_flag` | `0` | 0=no-slip, 1=log-law EQWM on IBM surfaces |
 | `ibm_sdf_file` | `'SDF_in'` | Path to precomputed cell-centre SDF |
 | `ibm_objid_file` | `''` | Optional per-solid object-ID field (e.g. `GenSDF`'s `sdfp_objid.bin`) for per-object BCs; `''` = single uniform IBM condition |
+| `ibm_z0(0:15)` | `0.0` | Per-IBM-object momentum roughness length [m], indexed by object ID; `0` = smooth Reichardt EQWM (only meaningful with `ibm_wall_model_flag=1`) |
 | `ks` | — | Roughness sublayer height (grid types 5–7) |
 | `nks` | `0` | Number of uniform cells in roughness sublayer |
 | `nsampling` | `0` | IBM force output interval (0 = disabled) |
