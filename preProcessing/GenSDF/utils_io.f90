@@ -567,6 +567,70 @@ contains
         end if
     end subroutine getbbox
 
+    ! Warn about solids that are too small, in any direction, relative to the local grid
+    ! spacing to be reliably captured: a solid narrower than ~2 cells can fail to enclose
+    ! any grid node at all, at which point no per-point sampling strategy (narrow-band or
+    ! brute-force) can detect it, and fill_internal's topological classification has no
+    ! shell of near-surface cells to close around it.
+    subroutine check_object_resolution(procid, vertices, faces, face_solid_id, nfaces, nsolids)
+        implicit none
+        integer,  intent(in) :: procid, nfaces, nsolids
+        real(dp), intent(in) :: vertices(:,:)
+        integer,  intent(in) :: faces(:,:)
+        integer,  intent(in) :: face_solid_id(:)
+        real(dp), allocatable :: smin(:,:), smax(:,:)
+        logical,  allocatable :: seen(:)
+        integer  :: fi, sid, vi, vidx, d, kk
+        real(dp) :: extent(3), local_dz, min_cells
+        real(dp), parameter :: MIN_CELLS_OK = 2.0_dp
+
+        if (procid /= 0) return
+
+        allocate(smin(3,nsolids), smax(3,nsolids), seen(nsolids))
+        seen = .false.
+
+        do fi = 1, nfaces
+            sid = face_solid_id(fi)
+            do vi = 1, 3
+                vidx = faces(vi,fi)
+                if (.not. seen(sid)) then
+                    smin(:,sid) = vertices(:,vidx)
+                    smax(:,sid) = vertices(:,vidx)
+                    seen(sid)   = .true.
+                else
+                    do d = 1, 3
+                        if (vertices(d,vidx) < smin(d,sid)) smin(d,sid) = vertices(d,vidx)
+                        if (vertices(d,vidx) > smax(d,sid)) smax(d,sid) = vertices(d,vidx)
+                    end do
+                end if
+            end do
+        end do
+
+        do sid = 1, nsolids
+            if (.not. seen(sid)) cycle
+            extent = smax(:,sid) - smin(:,sid)
+
+            ! Coarsest local z spacing spanned by this solid (dz may be non-uniform);
+            ! conservative on purpose so a stretched region isn't reported as resolved
+            ! just because the grid is fine somewhere else in the domain.
+            local_dz = dz(1)
+            do kk = 1, size(zp)
+                if (zp(kk) >= smin(3,sid) - dz(kk) .and. zp(kk) <= smax(3,sid) + dz(kk)) &
+                    local_dz = max(local_dz, dz(kk))
+            end do
+
+            min_cells = min(extent(1)/dx, extent(2)/dy, extent(3)/local_dz)
+            if (min_cells < MIN_CELLS_OK) then
+                print '(A,I0,A,F6.2,A)', 'WARNING: solid ', sid, &
+                    ' spans only ', min_cells, &
+                    ' grid cells in its narrowest direction — below reliable SDF ' // &
+                    'resolution (need >= 2); it may be dropped or misrepresented.'
+            end if
+        end do
+
+        deallocate(smin, smax, seen)
+    end subroutine check_object_resolution
+
     ! Tag grid points inside bounding box (with buffer) for focused SDF computation
     subroutine tagminmax(procid, xin, yin, zin, bbox_min, bbox_max, &
                           nx_in, ny_in, nz_in, dx_in, dy_in, dz_in, sdfresolution, &

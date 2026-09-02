@@ -264,14 +264,20 @@ contains
                                        nbw, distance, solid_id)
         !
         ! Narrow-band SDF computation using the spatial hash for candidate triangle queries.
-        ! For each cell, we query the hash to get nearby triangles and compute the exact
-        ! point-to-triangle distance, accepting the result only if it's within the narrow band.
+        ! For each cell, we query the hash for nearby triangles and compute the exact
+        ! point-to-triangle distance, accepting the result whenever the hash finds a
+        ! candidate — NOT gated by a separate `nbw` distance threshold. A fixed physical
+        ! band width can be smaller than the true nearest-triangle distance at some nodes
+        ! of a small/thin solid (e.g. sub-cell roughness), leaving those nodes at the
+        ! sentinel value; since fill_internal's interior/exterior test is a topological
+        ! BFS, such gaps let the exterior flood leak through and erase the object.
         !
         use mpi, only : MPI_WTIME
         implicit none
         integer,  intent(in)  :: procid, xstart, xend, ystart, yend, zstart, zend
         real(dp), intent(in),  dimension(:) :: xin, yin, zin
-        integer,  intent(in)  :: nfaces, nbw
+        integer,  intent(in)  :: nfaces
+        integer,  intent(in)  :: nbw   ! unused: kept for call-site compatibility, see header comment
         real(dp), intent(in),  dimension(:,:) :: input_vertices, input_normals
         integer,  intent(in),  dimension(:,:) :: input_faces, input_face_normals
         integer,  intent(in),  dimension(:)   :: input_face_solid_id
@@ -287,7 +293,7 @@ contains
         real(dp) :: query_point(3)
         real(dp) :: v1(3), v2(3), v3(3)
         real(dp) :: n1(3), n2(3), n3(3), avg_n(3), avg_n_inv
-        real(dp) :: d_try, best_d, nbw_dist
+        real(dp) :: d_try, best_d
         real(dp) :: stime
         integer  :: printrank
 
@@ -298,9 +304,6 @@ contains
         distance = scalarvalue
         solid_id = 0.0_dp
 
-        ! Narrow-band distance estimate: nbw cells * max grid spacing
-        nbw_dist = real(nbw, dp) * max(dx, dy, maxval(dz))
-
 #ifdef GPU_SDF
         !$acc data copyin(xin, yin, zin) copy(distance, solid_id) &
         !$acc      present(input_vertices, input_normals, input_faces, input_face_normals, input_face_solid_id)
@@ -308,8 +311,7 @@ contains
         !$acc    private(query_point, v1, v2, v3, n1, n2, n3, avg_n, avg_n_inv, d_try, best_d, best_fid, &
         !$acc            fc, fid, n_cand, cands) default(none) &
         !$acc    present(xin, yin, zin, distance, solid_id, input_vertices, input_normals, input_faces, &
-        !$acc            input_face_normals, input_face_solid_id) &
-        !$acc    firstprivate(nbw_dist)
+        !$acc            input_face_normals, input_face_solid_id)
         do kk = zstart, zend
             do jj = ystart, yend
                 do ii = xstart, xend
@@ -345,10 +347,10 @@ contains
                         end if
                     end do
 
-                    ! Accept only cells inside the narrow band.
-                    if (abs(best_d) < nbw_dist) then
+                    ! Accept whenever the hash found a candidate triangle.
+                    if (best_fid > 0) then
                        distance(ii, jj, kk) = best_d
-                       if (best_fid > 0) solid_id(ii, jj, kk) = real(input_face_solid_id(best_fid), dp)
+                       solid_id(ii, jj, kk) = real(input_face_solid_id(best_fid), dp)
                     end if
                 end do
             end do
@@ -396,10 +398,10 @@ contains
                     end do
                     ! no deallocate — cands is pre-allocated across iterations
 
-                    ! Accept only cells inside the narrow band.
-                    if (abs(best_d) < nbw_dist) then
+                    ! Accept whenever the hash found a candidate triangle.
+                    if (best_fid > 0) then
                        distance(ii, jj, kk) = best_d
-                       if (best_fid > 0) solid_id(ii, jj, kk) = real(input_face_solid_id(best_fid), dp)
+                       solid_id(ii, jj, kk) = real(input_face_solid_id(best_fid), dp)
                     end if
                 end do
             end do
