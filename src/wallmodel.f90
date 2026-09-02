@@ -408,6 +408,7 @@ Contains
     Real   (Int64) :: u_tau
     Real   (Int64) :: Delta_yg_lo, Delta_yg_hi
     Real   (Int64) :: alpha_lo, alpha_hi
+    Real   (Int64) :: nu_eff_lo, nu_eff_hi
     Real   (Int64) :: W_at_pt, W_match
 
     ! Wall-normal reference distances (same for the entire wall plane). y_ref_*
@@ -445,8 +446,21 @@ Contains
 
              ! Robin alpha derivation -- always referenced to the actual first
              ! interior cell (u_ref/y_ref_lo), since that's what apply_Robin_bc_y
-             ! extrapolates from; only the u_tau solve above uses the matching height
-             alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) &
+             ! extrapolates from; only the u_tau solve above uses the matching height.
+             ! Molecular nu governs the near-wall flux for the smooth EQWM (a real
+             ! viscous sublayer sits under y_ref_lo). The rough EQWM has no viscous
+             ! sublayer -- u_tau is set by roughness drag, not molecular diffusion --
+             ! so nu*u_ref/u_tau**2 collapses to ~1e-5 while Delta_yg_lo*0.5 is set by
+             ! the grid (typically 1e-3..1e-2), and alpha saturates at its zero floor
+             ! (molecular no-slip) regardless of z0, silently discarding u_tau. Using
+             ! the mixing-length eddy viscosity implied by the log law at y_ref_lo
+             ! (nu_eff = kappa*u_tau*y_ref_lo) instead keeps alpha in the grid's scale.
+             If ( flat_wall_model_flag == 2 ) Then
+                nu_eff_lo = kappa_wm * u_tau * y_ref_lo
+             Else
+                nu_eff_lo = nu
+             End If
+             alpha_lo = nu_eff_lo * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_lo*0.5d0
              alpha_x(i, 1, k) = Max(alpha_lo, 0d0)
           Else
@@ -463,7 +477,12 @@ Contains
 
              Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, u_tau)
 
-             alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) &
+             If ( flat_wall_model_flag == 2 ) Then
+                nu_eff_hi = kappa_wm * u_tau * y_ref_hi
+             Else
+                nu_eff_hi = nu
+             End If
+             alpha_hi = nu_eff_hi * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_hi*0.5d0
              alpha_x(i, 2, k) = Max(alpha_hi, 0d0)
           Else
@@ -499,7 +518,14 @@ Contains
 
              Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, u_tau)
 
-             alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) &
+             ! See the alpha_x bottom-wall block above for why nu is replaced
+             ! by a mixing-length nu_eff under the rough EQWM.
+             If ( flat_wall_model_flag == 2 ) Then
+                nu_eff_lo = kappa_wm * u_tau * y_ref_lo
+             Else
+                nu_eff_lo = nu
+             End If
+             alpha_lo = nu_eff_lo * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_lo*0.5d0
              alpha_z(i, 1, k) = Max(alpha_lo, 0d0)
           Else
@@ -516,7 +542,12 @@ Contains
 
              Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, u_tau)
 
-             alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) &
+             If ( flat_wall_model_flag == 2 ) Then
+                nu_eff_hi = kappa_wm * u_tau * y_ref_hi
+             Else
+                nu_eff_hi = nu
+             End If
+             alpha_hi = nu_eff_hi * u_ref / Max(u_tau**2, 1d-20) &
                       - Delta_yg_hi*0.5d0
              alpha_z(i, 2, k) = Max(alpha_hi, 0d0)
           Else
@@ -543,9 +574,12 @@ Contains
   !> Flat-wall rough-EQWM thermal coupling (neutral limit: psi_h=0).
   !  Computes the Robin slip-length alpha_T for Tscal's y-ghost cells from the
   !  z0h log law, using the same numerical device as the momentum alpha_x/alpha_z:
-  !  alpha_T is chosen so that the discrete molecular-only flux (nu/Pr)*(T_ref-T_ghost)/dy
-  !  reproduces the target kinematic heat flux Q = u_tau*theta_tau. Only active on
-  !  walls where T_bc_bot/top==2; other walls leave alpha_T untouched (unused there).
+  !  alpha_T is chosen so that the discrete flux (nu_eff/Pr)*(T_ref-T_ghost)/dy
+  !  reproduces the target kinematic heat flux Q = u_tau*theta_tau, where nu_eff
+  !  = kappa*u_tau*y_ref is the mixing-length eddy diffusivity (there is no
+  !  viscous sublayer under a rough wall, so molecular nu/Pr alone would leave
+  !  alpha_T saturated at its zero floor -- see compute_flat_wall_eqwm). Only
+  !  active on walls where T_bc_bot/top==2; other walls leave alpha_T untouched.
   Subroutine compute_flat_wall_thermal_eqwm(U_, W_, T_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
@@ -556,6 +590,7 @@ Contains
     Real   (Int64) :: u_match, u_tau, theta_tau, q_target
     Real   (Int64) :: y_ref_lo, y_ref_hi, y_match_lo, y_match_hi, Delta_yg_lo, Delta_yg_hi
     Real   (Int64) :: U_at_pt, W_at_pt, T_here, T_match, alpha_lo, alpha_hi
+    Real   (Int64) :: nu_eff_lo, nu_eff_hi
 
     y_ref_lo    = Max(yg(2), 1d-14)
     Delta_yg_lo = yg(2) - yg(1)
@@ -593,7 +628,12 @@ Contains
 
              q_target = u_tau * theta_tau
              If ( Abs(q_target) > 1d-12 ) Then
-                alpha_lo = (nu/Pr) * (T_here - T_wall_bot) / q_target - Delta_yg_lo*0.5d0
+                ! Same molecular-vs-turbulent mismatch as alpha_x/alpha_z (see
+                ! compute_flat_wall_eqwm): under the rough EQWM there is no viscous
+                ! sublayer, so nu/Pr is replaced with the mixing-length eddy
+                ! diffusivity implied by the log law at y_ref_lo.
+                nu_eff_lo = kappa_wm * u_tau * y_ref_lo
+                alpha_lo = (nu_eff_lo/Pr) * (T_here - T_wall_bot) / q_target - Delta_yg_lo*0.5d0
              Else
                 alpha_lo = 1.0e10_8   ! no resolved flux -> effectively adiabatic ghost
              End If
@@ -613,7 +653,8 @@ Contains
 
              q_target = u_tau * theta_tau
              If ( Abs(q_target) > 1d-12 ) Then
-                alpha_hi = (nu/Pr) * (T_here - T_wall_top) / q_target - Delta_yg_hi*0.5d0
+                nu_eff_hi = kappa_wm * u_tau * y_ref_hi
+                alpha_hi = (nu_eff_hi/Pr) * (T_here - T_wall_top) / q_target - Delta_yg_hi*0.5d0
              Else
                 alpha_hi = 1.0e10_8
              End If
