@@ -19,8 +19,14 @@ boundary-crossing case is also checked (`examples/uav_path_cross_rank`,
 2 ranks): the downwash footprint tracks the prescribed horizontal path
 smoothly straight through the rank boundary, confirming
 `apply_uav_forcing`'s per-rank local-cell contribution logic is correct,
-not just untested. Phases 3+ (mean wind, ABL turbulence) are still
-design-only, sketched below.
+not just untested. The disk's total thrust can also now follow its own
+prescribed schedule (`uav_thrust_active`/`uav_thrust_file`), independent
+of the path. Phase 3 (mean wind) is stability-checked
+(`examples/uav_wind_takeoff`); a clean wake-deflection diagnostic under
+ambient turbulence is still open (see section 5). Phase 4 (ABL turbulence
+injection) is still design-only. `postProcessing/generate_UAVpath.py`
+renders any `uav_path_file` as a moving-disk ParaView animation, exactly
+reproducing the solver's own interpolation.
 
 Goal: study how ambient turbulence and mean wind affect (and are affected
 by) a small rotorcraft UAV during takeoff, landing, and a prescribed flight
@@ -70,7 +76,13 @@ Two loading closures, selectable:
 1. **Prescribed thrust** `T(t)` (a lookup table or constant hover thrust
    trimmed to weight) — decouples the study from a rotor aerodynamic model
    entirely; good for the first pass at "how does ambient turbulence disturb
-   a UAV with a fixed control input".
+   a UAV with a fixed control input". **Done**: `uav_thrust_active`/
+   `uav_thrust_file` (same "t value" file format and Hermite interpolation
+   as `uav_path_file`) let the total thrust vary over the run instead of
+   staying fixed at `uav_hover_thrust` — e.g. a takeoff surge above hover
+   thrust, a reduced-thrust controlled descent, a landing flare. Markers
+   store a fractional share of the disk total rather than a baked-in
+   value, so the schedule doesn't require rebuilding the marker ring.
 2. **Momentum-theory closure** `T = 2*rho*A*a*(1-a)*|U_local + U_induced|^2`
    type relation (Rankine-Froude / Glauert), sampling `U_local` at the disk
    from the resolved+SGS field — lets ambient gusts feed back into
@@ -194,6 +206,39 @@ compare disk-load time series and near-ground wake statistics across runs.
   instantaneous thrust, disk-integrated induced velocity, and (mode 1) the
   induction factor per step to a small CSV, the same way `write_force_csv`
   already does for IBM.
+- `postProcessing/generate_UAVpath.py` -- **done**: renders `uav_path_file`
+  as a moving-disk `.pvd`/`.vtp` sequence for ParaView, reproducing
+  `uav_actuator.f90`'s own `uav_current_center`/`hermite_eval` construction
+  exactly (bit-for-bit the same interpolation, not an approximation), so
+  the rendered disk sits exactly where the force was actually applied.
+  Frames can be synced to an existing slice probe's `_times.bin` so the
+  disk animates in lockstep with the flow-field time series. Testing it
+  surfaced a real property of the path interpolation itself (not a
+  visualization bug, since the ported formula is identical): the
+  Catmull-Rom tangent construction produces a ~12% under/overshoot at
+  "flat-hold -> steep-climb" transitions in a waypoint file -- e.g. in
+  `examples/uav_path_takeoff`'s path, the disk actually dips slightly
+  below 0.30 m just before climbing and rises slightly above 1.50 m just
+  after arriving. Worth knowing when a study needs a strictly monotonic
+  altitude profile; switching to a monotone (Fritsch-Carlson-limited)
+  Hermite tangent in both `uav_actuator.f90` and this script would remove
+  it, but hasn't been needed yet.
+
+**Lesson from the Phase 3 mean-wind smoke test** (`examples/uav_wind_
+takeoff`): once ambient turbulence is present (here, the log-law EQWM
+ground's own near-wall turbulent boundary layer), a naive threshold on
+raw instantaneous velocity at a fixed-space probe can't cleanly isolate
+the disk's wake footprint from ambient turbulent structures of comparable
+magnitude -- an early attempt to track the wake's downstream drift this
+way produced a noisy, inconclusive signal, not because the physics is
+wrong but because the diagnostic doesn't separate the two sources. The
+run itself is unambiguously fine (CMFR held the crosswind at exactly the
+target speed from step 1, divergence stayed at machine precision
+throughout). A real wind-deflection study needs either phase/ensemble
+averaging, a disk-relative (moving-frame) diagnostic, or turning off
+ambient turbulence first (as the earlier quiescent-box cases did) to get
+a clean look at the disk's own signal before adding realistic turbulence
+on top.
 
 ## 6. Phased implementation plan
 
@@ -230,8 +275,13 @@ compare disk-load time series and near-ground wake statistics across runs.
    contributing only the local cells it actually owns. Still open: a full
    takeoff -> cruise -> landing profile combining vertical and horizontal
    motion in one path (each has only been exercised separately so far).
-3. **Add mean wind**: steady crosswind via `dPdx`/`Ub_target`; check wake
-   deflection and asymmetric loading make physical sense.
+3. **Add mean wind** -- **done** for stability (`examples/uav_wind_
+   takeoff`, CMFR `Ub_target=3` over a log-law ground): stays stable,
+   crosswind held exactly at target from step 1. Still open: a clean
+   wake-deflection *diagnostic* -- see the "Lesson from the Phase 3
+   mean-wind smoke test" note in section 5 above; the naive approach
+   (threshold raw velocity at a fixed probe) doesn't separate the disk's
+   wake from the ground's own ambient turbulent boundary layer.
 4. **Add ABL turbulence**: SEM (`inflow_type=1`) first (fast, parametric),
    then precursor-recycled (`inflow_type=2`) for a higher-fidelity gust
    case; sweep turbulence intensity/length scale and quantify disk-load

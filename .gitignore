@@ -49,6 +49,8 @@ ibm_surface/
 paraview/
 generateXMF.py
 decomp_2d_setup.log
+*.vtp
+*.pvd
 __pycache__/
 scripts/
 

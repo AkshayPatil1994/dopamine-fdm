@@ -205,15 +205,24 @@ tilted/cruise orientation).
 | `uav_kernel_ncell` | `2` | Regularized-delta (Gaussian) kernel support radius, in grid cells, used to spread each marker's force onto the `V` grid |
 | `uav_path_active` | `0` | 0=static disk at `(uav_xc,uav_yc,uav_zc)`, 1=follow `uav_path_file` |
 | `uav_path_file` | `''` | Waypoint file (required when `uav_path_active = 1`): free-form text, blank/`#` lines skipped, data rows `t x y z` [s, m, m, m] sorted by strictly increasing `t`. The disk centre is cubic-Hermite (Catmull-Rom tangent) interpolated between waypoints and clamped to the first/last waypoint outside the file's time range. Every rank reads the file independently (same convention as `inflow_profile_file`). |
+| `uav_thrust_active` | `0` | 0=fixed thrust `uav_hover_thrust` for the whole run, 1=follow `uav_thrust_file` |
+| `uav_thrust_file` | `''` | Thrust schedule (required when `uav_thrust_active = 1`): same format/interpolation/clamping convention as `uav_path_file`, but rows are `t T` [s, m⁴ s⁻²] -- e.g. a takeoff surge above hover thrust, a reduced-thrust controlled descent, a landing flare, all independent of the path itself |
 
 Known simplifications: the disk stays horizontal (normal = `+y`) even while
 following a path -- correct for a vertical takeoff/climb/hover/descent, not yet
 for a tilted cruise segment; only the vertical (`rhs_v`) force is applied; and
 the kernel support is not wrapped across periodic x/z boundaries -- keep the
 disk at least `uav_kernel_ncell * max(dx,dz)` away from a periodic edge for its
-whole path. See `examples/uav_hover_disk` (static), `examples/uav_ground_effect`
-(static, IGE/OGE comparison), and `examples/uav_path_takeoff` (path-following)
-for working cases.
+whole path. The Catmull-Rom tangent interpolation (shared by `uav_path_file`
+and `uav_thrust_file`) can under/overshoot by a few percent at a "flat-hold ->
+steep-change" transition in the waypoints -- see `docs/UAV_ActuatorDisk_
+Design.md` section 5 if a strictly monotonic profile matters for a given run.
+See `examples/uav_hover_disk` (static), `examples/uav_ground_effect`
+(static, IGE/OGE comparison), `examples/uav_path_takeoff` (path-following),
+`examples/uav_path_cross_rank` (path crossing an MPI rank boundary), and
+`examples/uav_wind_takeoff` (path-following under a mean crosswind) for
+working cases. `postProcessing/generate_UAVpath.py` renders a `uav_path_file`
+as a moving-disk ParaView animation.
 
 ## `&STATISTICS` *(optional — omit to disable)*
 
