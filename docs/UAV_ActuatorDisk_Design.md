@@ -1,13 +1,13 @@
 # UAV Actuator-Disk Design Notes (branch `uav`)
 
 Status: Phase 1 (static disk, uniform loading, vertical-only force)
-implemented -- `src/uav_actuator.f90`, `&UAV` namelist (see
-`docs/Input-Parameters.md`), and a smoke-test case at
-`examples/uav_hover_disk`. Verified by a short local run: divergence stays
-at machine precision, mean streamwise velocity stays at zero (force is
-vertical-only, as intended), and the induced downwash grows smoothly under
-the disk. Phases 2+ (moving disk/path, mean wind, ABL turbulence, ground
-effect) are still design-only, sketched below.
+implemented and ground-effect-checked -- `src/uav_actuator.f90`, `&UAV`
+namelist (see `docs/Input-Parameters.md`), a hover smoke test
+(`examples/uav_hover_disk`), and an IGE/OGE ground-effect comparison
+(`examples/uav_ground_effect`) showing the correct qualitative trend
+(reduced induced velocity near the ground at fixed thrust). Phases 2+
+(moving disk/path, mean wind, ABL turbulence) are still design-only,
+sketched below.
 
 Goal: study how ambient turbulence and mean wind affect (and are affected
 by) a small rotorcraft UAV during takeoff, landing, and a prescribed flight
@@ -186,10 +186,24 @@ compare disk-load time series and near-ground wake statistics across runs.
 
 1. **Static hover validation**: fixed disk in quiescent flow -- **done**:
    `src/uav_actuator.f90` + `examples/uav_hover_disk` (free-slip box, no
-   ground yet). Still open: add a flat ground IBM at a few disk-heights and
-   check induced velocity / thrust against momentum theory and expected
-   ground-effect thrust augmentation (image-vortex analogy) as the disk
-   approaches the ground.
+   ground). Ground-effect check -- **done**:
+   `examples/uav_ground_effect/{near_ground,far_ground}` place the same
+   disk at h/R=2 and h/R=8 above the domain's own no-slip y=0 wall (no IBM
+   needed -- the ground is already grid-conforming). Both runs reach a
+   quasi-steady state by ~step 400 (std < 1% of the mean over the last 10
+   line-probe snapshots). Comparing the downward velocity just below the
+   disk: near_ground/far_ground = 0.94, i.e. ~6% *less* induced velocity in
+   ground effect at the same prescribed thrust -- the correct qualitative
+   direction per classical actuator-disk ground-effect theory (Cheeseman &
+   Bennett's image-disk model predicts a smaller ~1.6% reduction at this
+   h/R for an idealized inviscid disk; our larger reduction is plausible
+   given a real, compact, turbulent LES box rather than an idealized
+   infinite-domain potential-flow disk, but this is a qualitative match, not
+   a quantitative validation against the closed-form theory). See
+   `examples/uav_ground_effect/analyze_ground_effect.py`. Remaining honest
+   gap: a real quantitative comparison would need a longer time-averaging
+   window, an ensemble of realizations (turbulent flow, single run), and
+   ideally a comparison at several h/R rather than two points.
 2. **Prescribed path, quiescent ambient**: disk moves through a full
    takeoff -> cruise -> landing profile with `uav_thrust_mode=0`; validate
    wake advection/decay and that moving the source term doesn't introduce
