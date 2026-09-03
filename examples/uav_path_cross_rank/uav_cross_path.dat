@@ -1,0 +1,8 @@
+# UAV horizontal path crossing the x=0.5 MPI rank boundary (p_row=2
+# splits x into two equal pencils; disk travels from rank 0's half of
+# the domain into rank 1's half). y, z held fixed.
+# t [s]   x [m]   y [m]   z [m]
+0.00      0.15    0.5     0.5
+0.10      0.15    0.5     0.5
+0.50      0.85    0.5     0.5
+0.60      0.85    0.5     0.5
