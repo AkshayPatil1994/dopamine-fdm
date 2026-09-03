@@ -5,9 +5,17 @@ implemented and ground-effect-checked -- `src/uav_actuator.f90`, `&UAV`
 namelist (see `docs/Input-Parameters.md`), a hover smoke test
 (`examples/uav_hover_disk`), and an IGE/OGE ground-effect comparison
 (`examples/uav_ground_effect`) showing the correct qualitative trend
-(reduced induced velocity near the ground at fixed thrust). Phases 2+
-(moving disk/path, mean wind, ABL turbulence) are still design-only,
-sketched below.
+(reduced induced velocity near the ground at fixed thrust). Phase 2
+(path-following disk) is also implemented and smoke-tested
+(`examples/uav_path_takeoff`): a vertical climb from h/R=2 to h/R=10
+stays stable (divergence at machine precision throughout) and the
+downwash signature in a fixed centreline probe visibly translates from
+near the ground up to the new altitude as the disk climbs -- with a
+noticeable lag behind the disk's instantaneous position, which is the
+flow's own inertia/recirculation, not a bug in the force placement
+(the force itself is applied at the disk's exact current position every
+RK sub-stage; what's lagging is the fluid's response). Phases 3+ (mean
+wind, ABL turbulence) are still design-only, sketched below.
 
 Goal: study how ambient turbulence and mean wind affect (and are affected
 by) a small rotorcraft UAV during takeoff, landing, and a prescribed flight
@@ -204,10 +212,15 @@ compare disk-load time series and near-ground wake statistics across runs.
    gap: a real quantitative comparison would need a longer time-averaging
    window, an ensemble of realizations (turbulent flow, single run), and
    ideally a comparison at several h/R rather than two points.
-2. **Prescribed path, quiescent ambient**: disk moves through a full
-   takeoff -> cruise -> landing profile with `uav_thrust_mode=0`; validate
-   wake advection/decay and that moving the source term doesn't introduce
-   spurious divergence or projection artifacts at rank boundaries.
+2. **Prescribed path, quiescent ambient** -- **done** for a vertical
+   climb (`examples/uav_path_takeoff`): moving the source term along
+   `uav_path_file` stays stable (no spurious divergence/projection
+   artifacts) and the wake visibly follows the disk. Still open: a full
+   takeoff -> cruise -> landing profile with horizontal motion and a
+   rank-boundary crossing (the current smoke test's disk stays within a
+   single rank's x/z columns throughout; moving across a rank boundary
+   exercises the "kernel support split across ranks" path in
+   `apply_uav_forcing` that hasn't been directly observed yet).
 3. **Add mean wind**: steady crosswind via `dPdx`/`Ub_target`; check wake
    deflection and asymmetric loading make physical sense.
 4. **Add ABL turbulence**: SEM (`inflow_type=1`) first (fast, parametric),
