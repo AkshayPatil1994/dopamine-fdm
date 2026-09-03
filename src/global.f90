@@ -451,6 +451,15 @@ Module global
   Integer(Int32) :: uav_n_theta       = 24
   Real   (Int64) :: uav_hover_thrust  = 0d0
   Integer(Int32) :: uav_kernel_ncell  = 2
+  ! Phase 2: path-following disk (still horizontal/untilted -- orientation
+  ! tilt for cruise segments is a later phase, see design doc). When
+  ! uav_path_active=0 (default) the disk stays at the fixed (uav_xc,uav_yc,
+  ! uav_zc) above; when 1, its centre instead follows uav_path_file (rows
+  ! "t x y z", monotonically increasing t) via cubic Hermite (Catmull-Rom
+  ! tangent) interpolation, clamped to the first/last waypoint outside the
+  ! file's time range.
+  Integer(Int32) :: uav_path_active   = 0
+  Character(200) :: uav_path_file     = ''
   !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
   ! Temperature field (cell-centred: nxg x nyg x nzg)

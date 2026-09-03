@@ -71,7 +71,8 @@ Contains
                           line_start, line_end, line_comps, line_fileout
 
     Namelist /UAV/ uav_active, uav_xc, uav_yc, uav_zc, uav_disk_radius, &
-                   uav_n_r, uav_n_theta, uav_hover_thrust, uav_kernel_ncell
+                   uav_n_r, uav_n_theta, uav_hover_thrust, uav_kernel_ncell, &
+                   uav_path_active, uav_path_file
 
     Namelist /TI_RESCALE/ ti_rescale_active, ti_rescale_x, ti_rescale_nstart, &
                           ti_rescale_freq, ti_rescale_relax, ti_rescale_clip, ti_rescale_abs_clip, &
@@ -497,6 +498,8 @@ Contains
     Call Mpi_bcast ( uav_n_theta,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_hover_thrust,     1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_kernel_ncell,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_path_active,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_path_file, Len(uav_path_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( boussinesq_flag,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( beta_T,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
