@@ -1,0 +1,75 @@
+! ================================================================
+! UAV actuator-disk Phase 1 smoke test: static hovering disk in a
+! quiescent, free-slip box (no ground, no ambient wind/turbulence yet --
+! see docs/UAV_ActuatorDisk_Design.md for the later phases: moving disk,
+! mean wind, ABL turbulence, ground effect).
+!
+! Purpose: check the disk force is stable and produces a plausible
+! downwash jet under the disk before adding any of the harder pieces
+! (ground IBM, inflow turbulence, path).
+! ================================================================
+
+&DOMAIN
+  nx         = 66,
+  ny         = 65,
+  nz         = 66,
+  Lx         = 1.0,
+  Ly         = 1.0,
+  Lz         = 1.0,
+  alpha_grid = 1.0,
+  grid_type  = 1,      ! uniform y: pure hover test, no wall shear to resolve
+/
+
+&PHYSICS
+  nu                   = 1.5e-5,   ! air kinematic viscosity [m^2/s]
+  dPdx                 = 0.0,
+  dPdz                 = 0.0,
+  sgs_model            = 1,        ! Vreman -- rotor wake is turbulent even from a laminar IC
+  Cs_vreman            = 0.17,
+  flat_wall_model_flag = 0,        ! walls are free-slip here (see &BOUNDARY_CONDITIONS), so unused
+/
+
+&NUMERICS
+  dt           = 1.0e-3,
+  nsteps       = 2000,
+  nsave        = 500,
+  nmonitor     = 50,
+  cfl_adaptive = 1,
+  cfl_target   = 0.5,
+  cfl_safety   = 0.9,
+  dt_min       = 1.0e-8,
+  dt_max       = 1.0e-2,
+/
+
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 2,   ! free-slip: quiescent-box test, not a ground-effect study yet
+  bc_face_yhi = 2,
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 0.0,
+  ic_type      = 3,      ! zero mean + small white noise
+  noise_percent = 0.1,
+  nstep_init     = 0,
+  restart        = 0,
+  scalar_restart = 1,
+/
+
+&IO
+  filein  = 'restart/uav_hover_disk.1',
+  fileout = 'uav_hover_disk',
+/
+
+! UAV actuator disk: centred mid-box, well clear (>2 radii) of every wall
+! so the Phase-1 kernel (no periodic-boundary wrapping) stays valid.
+&UAV
+  uav_active       = 1,
+  uav_xc           = 0.5,
+  uav_yc           = 0.5,
+  uav_zc           = 0.5,
+  uav_disk_radius  = 0.15,
+  uav_n_r          = 15,
+  uav_n_theta      = 24,
+  uav_hover_thrust = 4.0,   ! kinematic thrust T/rho [m^4/s^2] -- e.g. a ~0.5 kg UAV (T=m*g~4.9N) at rho_air~1.2 kg/m^3
+  uav_kernel_ncell = 2,
+/
