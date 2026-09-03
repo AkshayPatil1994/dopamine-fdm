@@ -14,8 +14,13 @@ near the ground up to the new altitude as the disk climbs -- with a
 noticeable lag behind the disk's instantaneous position, which is the
 flow's own inertia/recirculation, not a bug in the force placement
 (the force itself is applied at the disk's exact current position every
-RK sub-stage; what's lagging is the fluid's response). Phases 3+ (mean
-wind, ABL turbulence) are still design-only, sketched below.
+RK sub-stage; what's lagging is the fluid's response). The MPI rank-
+boundary-crossing case is also checked (`examples/uav_path_cross_rank`,
+2 ranks): the downwash footprint tracks the prescribed horizontal path
+smoothly straight through the rank boundary, confirming
+`apply_uav_forcing`'s per-rank local-cell contribution logic is correct,
+not just untested. Phases 3+ (mean wind, ABL turbulence) are still
+design-only, sketched below.
 
 Goal: study how ambient turbulence and mean wind affect (and are affected
 by) a small rotorcraft UAV during takeoff, landing, and a prescribed flight
@@ -212,15 +217,19 @@ compare disk-load time series and near-ground wake statistics across runs.
    gap: a real quantitative comparison would need a longer time-averaging
    window, an ensemble of realizations (turbulent flow, single run), and
    ideally a comparison at several h/R rather than two points.
-2. **Prescribed path, quiescent ambient** -- **done** for a vertical
-   climb (`examples/uav_path_takeoff`): moving the source term along
-   `uav_path_file` stays stable (no spurious divergence/projection
-   artifacts) and the wake visibly follows the disk. Still open: a full
-   takeoff -> cruise -> landing profile with horizontal motion and a
-   rank-boundary crossing (the current smoke test's disk stays within a
-   single rank's x/z columns throughout; moving across a rank boundary
-   exercises the "kernel support split across ranks" path in
-   `apply_uav_forcing` that hasn't been directly observed yet).
+2. **Prescribed path, quiescent ambient** -- **done**, including the
+   cross-rank case: `examples/uav_path_takeoff` (vertical climb, single
+   rank) and `examples/uav_path_cross_rank` (horizontal path, `p_row=2`,
+   `mpirun -np 2`, disk travels through x=0.5, the rank boundary). Both
+   stay stable (divergence at machine precision throughout, including the
+   crossing window) and an x-line probe through the disk's height/z shows
+   the downwash footprint tracking the prescribed x(t) smoothly straight
+   through the rank boundary -- no discontinuity, jump, or missing/doubled
+   force at x=0.5. This exercises exactly the code path a single-rank run
+   cannot: a marker whose kernel support spans two ranks, each
+   contributing only the local cells it actually owns. Still open: a full
+   takeoff -> cruise -> landing profile combining vertical and horizontal
+   motion in one path (each has only been exercised separately so far).
 3. **Add mean wind**: steady crosswind via `dPdx`/`Ub_target`; check wake
    deflection and asymmetric loading make physical sense.
 4. **Add ABL turbulence**: SEM (`inflow_type=1`) first (fast, parametric),
