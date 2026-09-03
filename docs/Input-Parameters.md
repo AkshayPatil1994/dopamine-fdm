@@ -188,26 +188,32 @@ oversight: the momentum Robin coefficients are sampled at different index spaces
 
 ## `&UAV` *(optional — omit to disable)*
 
-Phase 1 only: a **static** actuator disk with uniform loading, applying a purely
-vertical reaction force into `rhs_v`. No path/time-dependence, no horizontal force
-component, no OpenACC offload yet -- see `docs/UAV_ActuatorDisk_Design.md` for the
-planned path-following/moving-disk phases.
+An actuator disk with uniform loading, applying a purely vertical reaction force
+into `rhs_v`. The disk can be static or follow a prescribed path (Phase 1/2 -- no
+horizontal force component and no OpenACC offload yet; see
+`docs/UAV_ActuatorDisk_Design.md` for later phases: mean wind, ABL turbulence,
+tilted/cruise orientation).
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `uav_active` | `0` | 0=off, 1=on |
-| `uav_xc`, `uav_yc`, `uav_zc` | `0.0`, `0.0`, `0.0` | Fixed disk centre [m] |
+| `uav_xc`, `uav_yc`, `uav_zc` | `0.0`, `0.0`, `0.0` | Fixed disk centre [m] (used when `uav_path_active = 0`) |
 | `uav_disk_radius` | `0.15` | Disk radius [m] |
 | `uav_n_r` | `15` | Number of radial marker bands |
 | `uav_n_theta` | `24` | Number of azimuthal marker sectors per band |
 | `uav_hover_thrust` | `0.0` | Disk thrust in this solver's kinematic convention, i.e. (physical thrust)/(fluid density) [m⁴ s⁻²] -- matches `dPdx`'s convention; there is no explicit density anywhere in the solver |
 | `uav_kernel_ncell` | `2` | Regularized-delta (Gaussian) kernel support radius, in grid cells, used to spread each marker's force onto the `V` grid |
+| `uav_path_active` | `0` | 0=static disk at `(uav_xc,uav_yc,uav_zc)`, 1=follow `uav_path_file` |
+| `uav_path_file` | `''` | Waypoint file (required when `uav_path_active = 1`): free-form text, blank/`#` lines skipped, data rows `t x y z` [s, m, m, m] sorted by strictly increasing `t`. The disk centre is cubic-Hermite (Catmull-Rom tangent) interpolated between waypoints and clamped to the first/last waypoint outside the file's time range. Every rank reads the file independently (same convention as `inflow_profile_file`). |
 
-Known Phase 1 simplifications: the disk does not move; only the vertical (`rhs_v`)
-force is applied (correct for a level hovering/climbing/descending disk, not a
-tilted one); and the kernel support is not wrapped across periodic x/z boundaries
--- keep the disk at least `uav_kernel_ncell * max(dx,dz)` away from a periodic
-edge. See `examples/uav_hover_disk` for a working smoke-test case.
+Known simplifications: the disk stays horizontal (normal = `+y`) even while
+following a path -- correct for a vertical takeoff/climb/hover/descent, not yet
+for a tilted cruise segment; only the vertical (`rhs_v`) force is applied; and
+the kernel support is not wrapped across periodic x/z boundaries -- keep the
+disk at least `uav_kernel_ncell * max(dx,dz)` away from a periodic edge for its
+whole path. See `examples/uav_hover_disk` (static), `examples/uav_ground_effect`
+(static, IGE/OGE comparison), and `examples/uav_path_takeoff` (path-following)
+for working cases.
 
 ## `&STATISTICS` *(optional — omit to disable)*
 
