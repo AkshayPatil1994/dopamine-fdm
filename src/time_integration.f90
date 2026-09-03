@@ -126,7 +126,7 @@ Contains
     Call compute_rhs_w(U,V,W,Fw1)
     Call profiler_stop(PROF_RHS)
 
-    ! RK-stage velocity update, GPU-resident (Fu1/Fv1/Fw1 never leave device)
+    ! RK-stage velocity update, GPU-resident (Fu1/Fw1 never leave device; Fv1 round-trips to host inside apply_uav_forcing when uav_active>=1)
     Call profiler_start(PROF_RK_UPDATE)
     !$acc kernels present(U,V,W,Uo,Vo,Wo,Fu1,Fv1,Fw1)
     U(2:nx-1,2:nyg-1,2:nzg-1) = Uo(2:nx-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Fu1

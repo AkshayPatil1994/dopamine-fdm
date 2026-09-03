@@ -9,10 +9,11 @@
 !  of the force density times the local cell volume over its kernel support
 !  exactly reproduces that marker's thrust share -- conservative regardless
 !  of grid non-uniformity or how the kernel support is split across MPI
-!  ranks (a marker whose support straddles two ranks contributes only the
-!  cells each rank actually owns; no explicit rank-ownership bookkeeping is
-!  needed because xg/zg/y are already each rank's own local slice of the
-!  global grid).
+!  ranks: each rank deposits force only into the cells it actually owns, but
+!  normalizes against the marker's FULL kernel-box sum (computed arithmetically
+!  from the uniform x/z spacing, not by reading neighbour-rank cells) so a
+!  marker split across two ranks still contributes exactly its own thrust
+!  share in total, not double.
 !
 !  Known simplifications (see design doc for later phases):
 !   - the disk stays horizontal (normal = +y) even while translating along
@@ -22,8 +23,9 @@
 !   - kernel support is not wrapped across periodic x/z boundaries; keep the
 !     disk at least uav_kernel_ncell*max(dx,dz) away from a periodic edge
 !     for its whole path
-!   - no OpenACC offload yet (CPU builds only; GPU_POISSON builds still run
-!     this module on the host)
+!   - no OpenACC offload internal to this module; apply_uav_forcing runs on
+!     the host and the caller (equations.f90) syncs rhs_v with the device
+!     around the call on GPU_POISSON builds
 Module uav_actuator
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -300,6 +302,7 @@ Contains
 
     Integer(Int32) :: n, i, j, k, i0, j0, k0
     Integer(Int32) :: ilo, ihi, jlo, jhi, klo, khi
+    Integer(Int32) :: ifull_lo, ifull_hi, kfull_lo, kfull_hi
     Real(Int64) :: xc, yc, zc, xp, yp, zp, Qtot, Qn
     Real(Int64) :: sigx, sigz, sigy, dxp, dyp, dzp, wgt, norm, dVj
     Real(Int64) :: best
@@ -332,19 +335,30 @@ Contains
 
        If ( ilo > ihi .Or. jlo > jhi .Or. klo > khi ) Cycle   ! marker's support does not overlap this rank
 
+       ! full (un-clipped by this rank's x/z sub-domain) kernel box, for the normalization below
+       ifull_lo = i0 - uav_kernel_ncell;  ifull_hi = i0 + uav_kernel_ncell
+       kfull_lo = k0 - uav_kernel_ncell;  kfull_hi = k0 + uav_kernel_ncell
+
        sigx = Max(uav_kernel_ncell,1) * dx                    * 0.5d0
        sigz = Max(uav_kernel_ncell,1) * dz                    * 0.5d0
        sigy = Max(uav_kernel_ncell,1) * (yg(j0+1)-yg(j0))     * 0.5d0
 
-       ! Pass 1: normalization so that sum(wgt*dV) over the support equals the marker's thrust share exactly
+       ! Pass 1: normalization so that sum(wgt*dV) over the support equals the marker's thrust share exactly.
+       ! Summed over the marker's FULL kernel box (ifull_lo:ifull_hi, kfull_lo:kfull_hi), not just the
+       ! ilo:ihi/klo:khi cells this rank owns: x/z are uniform and dx/dz are the same on every rank, so
+       ! xg(i)-xp for any integer i is exactly xg(2)+(i-2)*dx-xp regardless of whether i is a valid local
+       ! index here -- computed arithmetically below without touching xg/zg out of bounds. Using only the
+       ! locally-owned range here would make each rank normalize its own partial sum back up to the full
+       ! thrust share, double-counting (or worse) whenever a marker's support straddles two ranks in x/z.
+       ! y is not MPI-decomposed, so jlo:jhi (already clipped at the physical wall, not a rank seam) is fine.
        norm = 0d0
-       Do k = klo, khi
-          dzp = zg(k) - zp
+       Do k = kfull_lo, kfull_hi
+          dzp = zg(2) + Real(k-2,Int64)*dz - zp
           Do j = jlo, jhi
              dVj = dx * dz * ( yg(j+1) - yg(j) )
              dyp = y(j) - yp
-             Do i = ilo, ihi
-                dxp = xg(i) - xp
+             Do i = ifull_lo, ifull_hi
+                dxp = xg(2) + Real(i-2,Int64)*dx - xp
                 wgt = Exp( -0.5d0*( (dxp/sigx)**2 + (dyp/sigy)**2 + (dzp/sigz)**2 ) )
                 norm = norm + wgt*dVj
              End Do

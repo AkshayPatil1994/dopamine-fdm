@@ -325,7 +325,14 @@ Contains
     End If
 
     ! UAV actuator disk: static-disk vertical reaction force (Phase 1, see docs/UAV_ActuatorDisk_Design.md)
-    If ( uav_active >= 1 ) Call apply_uav_forcing(rhs_v)
+    ! apply_uav_forcing is host-only (no OpenACC); on GPU builds rhs_v (Fv1/Fv2/Fv3) is a
+    ! separate device allocation from the terms computed above, so it must be pulled to the
+    ! host before the host loop touches it and pushed back before the RK update reads it on device.
+    If ( uav_active >= 1 ) Then
+       !$acc update host(rhs_v)
+       Call apply_uav_forcing(rhs_v)
+       !$acc update device(rhs_v)
+    End If
 
   End Subroutine compute_rhs_v
 
