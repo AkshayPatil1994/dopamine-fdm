@@ -39,6 +39,10 @@ build_*/
 fields/
 restart/
 stats/
+lines/
+slices/
+ibm_surface/
+decomp_2d_setup.log
 __pycache__/
 scripts/
 
