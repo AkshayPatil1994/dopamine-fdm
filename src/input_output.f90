@@ -70,6 +70,9 @@ Contains
                           n_lines,  line_freq,  line_dir,  line_pos1,  line_pos2,   &
                           line_start, line_end, line_comps, line_fileout
 
+    Namelist /UAV/ uav_active, uav_xc, uav_yc, uav_zc, uav_disk_radius, &
+                   uav_n_r, uav_n_theta, uav_hover_thrust, uav_kernel_ncell
+
     Namelist /TI_RESCALE/ ti_rescale_active, ti_rescale_x, ti_rescale_nstart, &
                           ti_rescale_freq, ti_rescale_relax, ti_rescale_clip, ti_rescale_abs_clip, &
                           ti_rescale_filter_alpha, ti_rescale_deadband, ti_rescale_relax_min, &
@@ -179,6 +182,14 @@ Contains
           If (ios /= 0) Stop 'ERROR: &STATISTICS present but failed to parse (check variable names)'
        Else
           Write(*,'(A)') ' INFO: no &STATISTICS found, Reynolds stress budget disabled'
+       End If
+
+       If ( namelist_group_present(unit_in, 'UAV') ) Then
+          Rewind(unit_in)
+          Read(unit_in, nml=UAV,                 iostat=ios)
+          If (ios /= 0) Stop 'ERROR: &UAV present but failed to parse (check variable names)'
+       Else
+          Write(*,'(A)') ' INFO: no &UAV found, UAV actuator disk disabled'
        End If
 
        If ( namelist_group_present(unit_in, 'TI_RESCALE') ) Then
@@ -476,6 +487,16 @@ Contains
     Call Mpi_bcast ( C_ref,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( C_ic_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( C_ic_height,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+
+    Call Mpi_bcast ( uav_active,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_xc,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_yc,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_zc,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_disk_radius,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_n_r,              1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_n_theta,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_hover_thrust,     1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_kernel_ncell,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( boussinesq_flag,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( beta_T,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )

@@ -429,6 +429,28 @@ Module global
   ! to support a flux-consistent rough BC; deferred.
   Real   (Int64) :: ibm_z0(0:max_ibm_objects) = 0d0
   !$acc declare create(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,ibm_T_bc_type,ibm_T_wall,ibm_z0)
+
+  ! UAV actuator disk (src/uav_actuator.f90): Phase 1 scope only -- a STATIC
+  ! disk centred at (uav_xc,uav_yc,uav_zc) with uniform loading, applying a
+  ! purely vertical (y) reaction force to the fluid. Path/time-dependence and
+  ! horizontal force components are later-phase extensions (see
+  ! docs/UAV_ActuatorDisk_Design.md).
+  ! uav_active:        0=off (default), 1=on
+  ! uav_hover_thrust:  disk thrust in this solver's KINEMATIC convention,
+  !                    i.e. (physical thrust)/(fluid density) [m^4/s^2] --
+  !                    matches dPdx's kinematic convention (this solver
+  !                    tracks P/rho, not P; there is no explicit rho anywhere)
+  ! uav_kernel_ncell:  regularized-delta (Gaussian) kernel support radius, in
+  !                    grid cells, used to spread each marker's force
+  Integer(Int32) :: uav_active        = 0
+  Real   (Int64) :: uav_xc            = 0d0
+  Real   (Int64) :: uav_yc            = 0d0
+  Real   (Int64) :: uav_zc            = 0d0
+  Real   (Int64) :: uav_disk_radius   = 0.15d0
+  Integer(Int32) :: uav_n_r           = 15
+  Integer(Int32) :: uav_n_theta       = 24
+  Real   (Int64) :: uav_hover_thrust  = 0d0
+  Integer(Int32) :: uav_kernel_ncell  = 2
   !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
   ! Temperature field (cell-centred: nxg x nyg x nzg)
