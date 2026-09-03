@@ -27,6 +27,19 @@ optional phase offsets (radians, default 0). Setting $T_{\mathrm{wave},x} = 0$ (
 $T_{\mathrm{wave},z} = 0$) disables oscillation in that direction, recovering steady
 forcing. Configured via `&PHYSICS` — see [[Input Parameters|Input-Parameters#physics]].
 
+Alternatively, `flow_forcing_mode = 1` (constant mass flux, CMFR) replaces the
+prescribed-`dPdx` forcing above with a bulk-velocity constraint: after each RK
+sub-stage, $U$ is shifted by a spatially uniform constant so the volume-averaged
+streamwise velocity exactly equals `Ub_target` (a uniform shift stays divergence-free,
+so this needs no extra projection); `dPdx` is diagnostic only in this mode, tracking the
+equivalent forcing. Requires `x_bc_type = 0` (periodic) and is incompatible with the
+oscillatory forcing above.
+
+The convective term $\partial(u_i u_j)/\partial x_j$ is discretised in either
+skew-symmetric form (`advection_scheme = 0`, the default — reduces aliasing error and
+better conserves kinetic energy) or pure central-difference (divergence) form
+(`advection_scheme = 1`).
+
 ## 2. Spatial discretisation
 
 ### 2.1 Staggered MAC grid
@@ -130,6 +143,18 @@ pencil-transpose routines (`transpose_y_to_x`, `transpose_x_to_y`, `transpose_y_
 $y \to x \to y \to z \to y\text{(Zgtsv)} \to z \to y \to x \to y$ and back for the
 inverse transform. See [§10 MPI parallelism](#10-mpi-parallelism) for how the pencil
 grid itself is set up.
+
+### 4.2 Solver validation — triply-periodic Taylor-Green vortex
+
+Validation against the triply-periodic Taylor-Green vortex (TGV). Below is a comparison
+of the time evolution of the kinetic energy and the kinetic energy dissipation rate
+against reference direct numerical simulations (DNS) using a similar numerical
+methodology. The data markers correspond to the various grid resolutions tested using
+`dopamine-fdm`: red = $N_g = 256^3$, blue = $N_g = 384^3$, black = $N_g = 512^3$. Using
+`advection_scheme = 0` (skew-symmetric, the default), the results compare well with the
+benchmark data.
+
+![Solver Validation & Grid Sensitivity Test](TGV_Validation.png)
 
 > **Reference (FFTW3):** Frigo, M. & Johnson, S.G. (2005). *The design and
 > implementation of FFTW3*. Proc. IEEE 93(2), 216–231. DOI:

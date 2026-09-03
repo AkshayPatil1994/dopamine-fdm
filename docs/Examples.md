@@ -2,7 +2,7 @@
 
 ← [[Home|Home]]
 
-Three runnable cases live under `examples/`, each a self-contained `input_parameters`
+Several runnable cases live under `examples/`, each a self-contained `input_parameters`
 (and, for the IBM case, a geometry). Copy a case's directory contents next to the
 `dopamine` executable (or point `filein`/paths at it), create the output directories
 (see [[Installation § Running|Installation#running]]), and launch with `mpirun`.
@@ -77,3 +77,34 @@ Both cases share the same domain size (`nx,ny,nz = 130,65,66`, `Lx,Ly,Lz = 12.0,
 **Running order**: run `precursor/` to completion first (so `slices/precursor*` exists
 and has enough recorded planes), then run `successor/` from its own directory, pointing
 `inflow_recycle_file` at the precursor's output.
+
+## UAV actuator disk (`examples/uav_*`)
+
+Five small, quick-running cases exercising the `&UAV` actuator-disk rotor model (see
+[[Input Parameters § &UAV|Input-Parameters#uav-optional--omit-to-disable]] for every
+parameter and [[UAV Actuator-Disk Design|UAV_ActuatorDisk_Design]] for the model, the
+phased validation results these cases produced, and known open issues). All five use a
+small `nx,ny,nz = 66,(65 or 129),66`, `Lx,Ly,Lz = 1.0,(1.0 or 2.0),1.0` box, `sgs_model = 0`
+(DNS), and a hover thrust `uav_hover_thrust = 4.0` (kinematic thrust for a ~0.5 kg UAV at
+`rho_air ~ 1.2 kg/m^3`).
+
+- **`uav_hover_disk`** — a static disk at box centre in an otherwise quiescent, free-slip
+  domain (no ground): the baseline hover check.
+- **`uav_ground_effect/{near_ground,far_ground}`** — a static disk over the domain's own
+  no-slip ground at `h/R = 2` and `h/R = 8` respectively (`ny = 129`, `Ly = 2.0`); compare
+  induced velocity just below the disk between the two with
+  `uav_ground_effect/analyze_ground_effect.py` to see the reduced-induced-velocity
+  ground-effect trend.
+- **`uav_path_takeoff`** — a single-rank vertical climb following `uav_takeoff_path.dat`
+  (`uav_path_active = 1`), from near the ground up to altitude, in quiescent air.
+- **`uav_path_cross_rank`** — the same idea but horizontal, with `p_row = 2` (2 MPI ranks
+  splitting $x$) so the path in `uav_cross_path.dat` carries the disk's kernel support
+  straight through the rank boundary; run with `mpirun -np 2`. This is the one case that
+  exercises `apply_uav_forcing`'s per-rank partial-cell force projection.
+- **`uav_wind_takeoff`** — `uav_path_takeoff`'s climb repeated under a steady mean
+  crosswind (`flow_forcing_mode = 1` constant-mass-flux forcing, `Ub_target = 3.0`) over
+  the rough-free log-law ground, following `uav_wind_path.dat`.
+
+`postProcessing/generate_UAVpath.py` renders any of these cases' path file as a
+moving-disk ParaView animation (see
+[[Pre- and Post-Processing Tools § generate_UAVpath.py|Tools#generate_uavpathpy]]).

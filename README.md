@@ -1,6 +1,6 @@
 # dopamine-fdm
 
-A finite-difference Navier–Stokes solver for turbulent channel and open-channel flows, with support for rough-wall immersed boundary methods (IBM), wall models, sub-grid scale (SGS) turbulence modelling, and an exact Reynolds stress budget analysis module.
+A finite-difference Navier–Stokes solver for turbulent channel and open-channel flows, with support for rough-wall immersed boundary methods (IBM), wall models, sub-grid scale (SGS) turbulence modelling, an exact Reynolds stress budget analysis module, and a moving UAV actuator-disk rotor model for takeoff/landing/wake studies.
 
 This README covers the essentials. For a topic-by-topic reference — full numerics writeup, every `input_parameters` field, example walkthroughs, and the pre-/post-processing tool reference — see the **[docs/ wiki](docs/Home.md)**.
 
@@ -18,8 +18,9 @@ This README covers the essentials. For a topic-by-topic reference — full numer
 - **Oscillatory / pulsatile forcing** — independent time-varying pressure gradients in $x$ and $z$: $f_x(t) = \mathrm{d}P/\mathrm{d}x_0 + U_{b,x}\,\omega_x\cos(\omega_x t)$, $f_z(t) = \mathrm{d}P/\mathrm{d}z_0 + U_{b,z}\,\omega_z\cos(\omega_z t)$; wave periods `T_wave_x` / `T_wave_z` are supplied directly and converted to $\omega = 2\pi/T$ internally; set to `0` for steady forcing; enables cross-wave boundary layer studies
 - **Suspended-sediment scalar transport** — passive scalar *C* (cell-centred) advected with a van Leer (1974) slope-limited MUSCL scheme (TVD, second-order on non-uniform grids); Soulsby (1997) settling velocity $w_s$; effective diffusivity $\kappa = \nu/Sc + \nu_t/Sc_t$; conservative cell-width flux normalisation; IBM-aware RHS masking; RK3 time-integration
 - **Reynolds stress budget** — windowed ensemble averaging of all six Pope §7.4 budget terms (production, pressure-strain, viscous diffusion, turbulent diffusion, pressure diffusion, resolved and SGS dissipation); growing binary output with restart-safe sample count
+- **UAV actuator disk** — a Lagrangian marker-ring rotor model (regularized-Gaussian projection onto the `V`-momentum RHS) for studying a small rotorcraft's wake/ground-effect during takeoff, landing, and prescribed flight; static or path-following (cubic-Hermite waypoint interpolation) disk position, a prescribed or scheduled thrust, MPI-rank-boundary-safe force projection, and reuse of the existing wall models/SGS/inflow machinery for the ambient wind/turbulence environment — see [UAV Actuator-Disk Design](docs/UAV_ActuatorDisk_Design.md) and [Input Parameters § &UAV](docs/Input-Parameters.md#uav-optional--omit-to-disable)
 - **Binary I/O** — Fortran stream unformatted, big-endian float64 for field snapshots; hot-restart supported; file-size sanity check on restart
-- **Post-processing** — `postProcessing/generateXMF.py` writes XDMF files for ParaView, including a combined velocity vector attribute via XDMF `JOIN`
+- **Post-processing** — `postProcessing/generateXMF.py` writes XDMF files for ParaView, including a combined velocity vector attribute via XDMF `JOIN`; `postProcessing/generate_UAVpath.py` renders a `uav_path_file` as a moving-disk ParaView animation, bit-for-bit reproducing the solver's own path interpolation
 
 ## Repository layout
 
@@ -52,10 +53,12 @@ fdm-dopamine/
 │   ├── monitor.f90          # Runtime statistics
 │   ├── reynolds_stress_budget.f90  # Pope §7.4 budget (all 6 components)
 │   ├── probe_output.f90     # Line/slice probe output
+│   ├── uav_actuator.f90     # UAV actuator-disk rotor forcing (moving marker ring)
 │   ├── finalization.f90
 │   └── main.f90             # Entry point
 ├── postProcessing/
-│   └── generateXMF.py       # Write XDMF metadata for ParaView
+│   ├── generateXMF.py       # Write XDMF metadata for ParaView
+│   └── generate_UAVpath.py  # Render a uav_path_file as a moving-disk ParaView animation (see docs/Tools.md for the rest)
 ├── preProcessing/
 │   └── GenSDF/              # Signed-distance field generator for IBM
 ├── input_parameters         # Runtime namelist (edit before running)
@@ -184,8 +187,11 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `nu` | — | Kinematic viscosity |
-| `dPdx` | — | Mean (steady) streamwise pressure gradient |
+| `dPdx` | — | Mean (steady) streamwise pressure gradient (ignored when `flow_forcing_mode = 1`) |
 | `dPdz` | — | Mean (steady) spanwise pressure gradient |
+| `advection_scheme` | `0` | 0=skew-symmetric convective form, 1=pure central-difference convective form |
+| `flow_forcing_mode` | `0` | 0=prescribed `dPdx`, 1=constant mass flux (CMFR): shift `U` by a uniform constant each step to hold the bulk streamwise velocity at `Ub_target`; requires `x_bc_type = 0` and no oscillatory forcing |
+| `Ub_target` | `0.0` | Target bulk streamwise velocity [m/s] (`flow_forcing_mode = 1` only) |
 | `Ub_x` | `0.0` | Streamwise oscillatory velocity amplitude |
 | `Ub_z` | `0.0` | Spanwise oscillatory velocity amplitude |
 | `T_wave_x` | `0.0` | Wave period $T_x$ [s] for streamwise forcing; `0` = steady; $\omega_x = 2\pi/T_x$ derived internally |
@@ -341,6 +347,22 @@ def load_rsb(base, term, nc, out_nx, out_ny, out_nz):
 Rij = load_rsb("stats/rsb", "Rij", 6, 1, 128, 1)
 # Rij[0, 0, :, 0, -1] → final-sample R_11 profile
 ```
+
+### `&UAV` *(optional — omit to disable)*
+
+A Lagrangian marker-ring actuator disk projecting a rotor's thrust as a regularized-Gaussian body force into the `V`-momentum RHS — static or path-following, with a fixed or scheduled thrust. See [UAV Actuator-Disk Design](docs/UAV_ActuatorDisk_Design.md) for the model and phased validation status, and [Input Parameters § &UAV](docs/Input-Parameters.md#uav-optional--omit-to-disable) for the full parameter reference.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `uav_active` | `0` | 0=off, 1=on |
+| `uav_xc`, `uav_yc`, `uav_zc` | `0.0`, `0.0`, `0.0` | Fixed disk centre [m] (used when `uav_path_active = 0`) |
+| `uav_disk_radius` | `0.15` | Disk radius [m] |
+| `uav_hover_thrust` | `0.0` | Disk thrust in kinematic convention, i.e. (physical thrust)/(fluid density) [m⁴ s⁻²] |
+| `uav_kernel_ncell` | `2` | Regularized-delta (Gaussian) kernel support radius, in grid cells |
+| `uav_path_active` | `0` | 0=static disk, 1=follow `uav_path_file` (cubic-Hermite waypoint interpolation) |
+| `uav_thrust_active` | `0` | 0=fixed `uav_hover_thrust`, 1=follow `uav_thrust_file` (same interpolation convention) |
+
+Example cases: `examples/uav_hover_disk`, `examples/uav_ground_effect`, `examples/uav_path_takeoff`, `examples/uav_path_cross_rank`, `examples/uav_wind_takeoff` — see [Examples](docs/Examples.md).
 
 ## Output files
 

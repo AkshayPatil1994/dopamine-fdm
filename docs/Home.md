@@ -4,7 +4,8 @@
 Navier–Stokes equations, targeting turbulent channel and open-channel flows. It supports
 rough-wall immersed boundary methods (IBM), equilibrium wall models, sub-grid scale (SGS)
 turbulence modelling, suspended-sediment scalar transport, Boussinesq buoyancy
-(thermal stratification), and an exact Reynolds stress budget analysis module.
+(thermal stratification), an exact Reynolds stress budget analysis module, and a moving
+UAV actuator-disk rotor model for takeoff/landing/wake studies.
 
 This wiki expands on the top-level [README](../README.md) with a page per topic. Start
 here, then jump to whichever page matches what you're doing.
@@ -20,7 +21,8 @@ here, then jump to whichever page matches what you're doing.
 | [[Installation & Running\|Installation]] | Dependencies, CPU/GPU build instructions, launching a run, output layout |
 | [[Input Parameters Reference\|Input-Parameters]] | Every namelist and parameter in `input_parameters`, grouped by section |
 | [[Numerics & Governing Equations\|Numerics]] | The discretisation, time integration, Poisson solver, SGS model, IBM, wall models, scalar transport, Reynolds stress budget, inflow/outflow BCs |
-| [[Examples\|Examples]] | Walkthroughs of the three bundled example cases |
+| [[Examples\|Examples]] | Walkthroughs of the bundled example cases |
+| [[UAV Actuator-Disk Design\|UAV_ActuatorDisk_Design]] | Rotor body-force model, phased implementation/validation status, and open questions for the takeoff/landing/wake UAV study |
 | [[Pre- and Post-Processing Tools\|Tools]] | `GenSDF` mesh/SDF generator and the Python scripts in `postProcessing/` |
 | [[Contributing & Citing\|Contributing]] | License, how to cite, acknowledgments, opening issues |
 
@@ -35,7 +37,8 @@ here, then jump to whichever page matches what you're doing.
 - **Physics** — DNS or Vreman-model LES, flat-wall/IBM log-law wall models, rough-wall
   ghost-cell IBM, oscillatory/pulsatile forcing, suspended-sediment transport, Boussinesq
   buoyancy (thermal stratification), periodic or inflow/outflow (synthetic-eddy-method)
-  streamwise boundary conditions.
+  streamwise boundary conditions, and a moving UAV actuator-disk rotor forcing (static or
+  path-following, prescribed or scheduled thrust) for takeoff/landing/wake studies.
 - **Diagnostics** — full Pope §7.4 Reynolds stress budget, line/slice probes, per-stage
   profiler summary at shutdown.
 

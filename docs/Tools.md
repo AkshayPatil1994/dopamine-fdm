@@ -87,6 +87,36 @@ coordinate arrays and a `.xmf` readable by ParaView ≥ 5 / VisIt ≥ 3:
 python3 postProcessing/generate_slice_xmf.py <base>_meta.txt [<base2>_meta.txt ...] [--dt DT] [--t0 T0]
 ```
 
+Each `<base>_meta.txt` records a `times = <base>_times.bin` key pointing at the exact
+simulation time of every snapshot (written by the solver, big-endian float64 — see
+`probe_output.f90`); the `.xmf`'s per-frame `<Time Value=...>` is read from that file
+when present, so it reflects the true (possibly adaptive-`dt`) write times rather than a
+uniform `t0 + s*dt` grid. `--dt`/`--t0` are only a fallback for when `<base>_times.bin`
+is missing. Point `generate_UAVpath.py --times-from <base>_times.bin` at the same file
+to get a UAV-disk animation whose frames land on exactly the same simulation times as
+this slice — with both loaded in ParaView, the shared time toolbar then keeps the disk
+and the wake co-located frame-for-frame.
+
+### `generate_UAVpath.py`
+
+Renders a `uav_path_file` (see `&UAV`'s `uav_path_file` in
+[[Input Parameters|Input-Parameters#uav-optional]]) as a moving-disk `.vtp`/`.pvd`
+animation, using the same cubic-Hermite interpolation as the solver's own
+`uav_current_center` (`uav_actuator.f90`) so the rendered disk sits exactly where the
+actuator-disk force was applied:
+
+```bash
+python3 postProcessing/generate_UAVpath.py uav_path_file.dat --radius 0.15
+python3 postProcessing/generate_UAVpath.py uav_path_file.dat --input-parameters input_parameters \
+    --times-from slices/y015_times.bin   # sync frames to a slice probe's exact write times
+```
+
+`--times-from` accepts a slice probe's `<base>_times.bin` (line probes don't write one)
+or any plain-text file with one time per line, in place of the default uniform grid
+spanning the path file's own time range. Open the resulting `uav_path.pvd` in ParaView
+alongside the flow-field `.pvd`/`.xmf` and use the shared time toolbar to animate both
+together.
+
 ### `plot_snapshot.py`
 
 Wall-normal profile plots (x-z averaged) from one or more field snapshots. Reads

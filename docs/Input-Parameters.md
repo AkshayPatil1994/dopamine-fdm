@@ -21,8 +21,11 @@ See [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]].
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `nu` | — | Kinematic viscosity |
-| `dPdx` | — | Mean (steady) streamwise pressure gradient |
+| `dPdx` | — | Mean (steady) streamwise pressure gradient (ignored when `flow_forcing_mode = 1`) |
 | `dPdz` | — | Mean (steady) spanwise pressure gradient |
+| `advection_scheme` | `0` | 0=skew-symmetric convective form, 1=pure central-difference convective form |
+| `flow_forcing_mode` | `0` | 0=prescribed `dPdx` (default), 1=constant mass flux (CMFR): `U` is shifted by a uniform constant each step so the volume-averaged bulk streamwise velocity hits `Ub_target` exactly (divergence-free, since the shift is spatially uniform); `dPdx` then tracks the equivalent forcing for diagnostics only. Requires `x_bc_type = 0` (periodic) and is incompatible with oscillatory forcing (`T_wave_x > 0`) — `Stop`s at startup otherwise |
+| `Ub_target` | `0.0` | Target bulk streamwise velocity [m/s] (`flow_forcing_mode = 1` only) |
 | `Ub_x` | `0.0` | Streamwise oscillatory velocity amplitude |
 | `Ub_z` | `0.0` | Spanwise oscillatory velocity amplitude |
 | `T_wave_x` | `0.0` | Wave period $T_x$ [s] for streamwise forcing; `0` = steady; $\omega_x = 2\pi/T_x$ derived internally |
