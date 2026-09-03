@@ -11,6 +11,7 @@ Module initialization
   Use ibmSetup
   Use scalar_transport, Only : compute_settling_velocity
   Use synthetic_eddy_method, Only : init_inflow, init_ti_rescale
+  Use uav_actuator, Only : setup_uav
 
   ! prevent implicit typing
   Implicit None
@@ -264,6 +265,10 @@ Contains
     If ( ibm_input_mode >= 1 ) Then
        Call readSDF
     End If
+
+    ! UAV actuator disk marker setup (no-op unless uav_active>=1); no grid
+    ! dependency but grouped here alongside IBM setup for readability
+    If ( uav_active >= 1 ) Call setup_uav
 
     ! Boundary conditions
     ! local velocity, initial z-planes

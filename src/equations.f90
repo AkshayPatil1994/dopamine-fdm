@@ -8,8 +8,9 @@ Module equations
                               nu, dPdx, dPdz, yg_m, nu_t, in1, in2,    &
                               weight_y_0, weight_y_1, dx, dz,         &
                               boussinesq_flag, beta_T, grav, T_ref, Tscal, &
-                              advection_scheme
+                              advection_scheme, uav_active
   Use interpolation
+  Use uav_actuator, Only : apply_uav_forcing
   
   ! prevent implicit typing
   Implicit None
@@ -322,6 +323,9 @@ Contains
        End Do
        !$acc end parallel loop
     End If
+
+    ! UAV actuator disk: static-disk vertical reaction force (Phase 1, see docs/UAV_ActuatorDisk_Design.md)
+    If ( uav_active >= 1 ) Call apply_uav_forcing(rhs_v)
 
   End Subroutine compute_rhs_v
 

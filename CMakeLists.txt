@@ -109,6 +109,7 @@ set(SRCS
     src/profiler.f90
     src/global.f90
     src/decomp.f90
+    src/uav_actuator.f90
     src/interpolation.f90
     src/sem.f90
     src/boundary_conditions.f90
