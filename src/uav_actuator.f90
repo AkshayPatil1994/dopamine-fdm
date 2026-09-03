@@ -1,6 +1,7 @@
 !> UAV actuator-disk body force (Phase 1: uniform loading, vertical-only
-!  reaction force; Phase 2: the disk centre can follow a prescribed path --
-!  see docs/UAV_ActuatorDisk_Design.md).
+!  reaction force; Phase 2: the disk centre can follow a prescribed path,
+!  and the total thrust can follow its own prescribed schedule instead of
+!  staying fixed -- see docs/UAV_ActuatorDisk_Design.md).
 !
 !  The disk is represented by a ring of Lagrangian markers carrying a share
 !  of the total kinematic thrust, spread onto the V (wall-normal momentum)
@@ -34,13 +35,23 @@ Module uav_actuator
   Integer(Int32) :: n_uav_markers = 0
   ! marker offsets relative to the (possibly moving) disk centre, and each
   ! marker's kinematic thrust share [m^4/s^2]
-  Real   (Int64), Allocatable :: uav_mk_dx(:), uav_mk_dz(:), uav_mk_Q(:)
+  ! uav_mk_frac: each marker's FRACTIONAL share of the disk's total thrust
+  ! (dimensionless, sums to 1 over all markers) -- the total is evaluated
+  ! separately each call (fixed uav_hover_thrust, or uav_current_thrust(t)
+  ! when uav_thrust_active=1) so a time-varying schedule doesn't require
+  ! rebuilding the marker ring.
+  Real   (Int64), Allocatable :: uav_mk_dx(:), uav_mk_dz(:), uav_mk_frac(:)
 
   ! Phase 2 path (uav_path_active==1 only): waypoints "t x y z", sorted by
   ! increasing t; the disk centre is cubic-Hermite (Catmull-Rom tangent)
   ! interpolated between them and clamped outside [path_t(1),path_t(n_path)]
   Integer(Int32) :: n_path = 0
   Real   (Int64), Allocatable :: path_t(:), path_x(:), path_y(:), path_z(:)
+
+  ! Thrust schedule (uav_thrust_active==1 only): waypoints "t T" [s, m^4/s^2
+  ! kinematic thrust], same interpolation/clamping convention as the path
+  Integer(Int32) :: n_thrust = 0
+  Real   (Int64), Allocatable :: thrust_t(:), thrust_val(:)
 
 Contains
 
@@ -53,7 +64,7 @@ Contains
     Real(Int64) :: dr, dtheta, r_mid, theta, area_disk, area_k
 
     n_uav_markers = uav_n_r * uav_n_theta
-    Allocate( uav_mk_dx(n_uav_markers), uav_mk_dz(n_uav_markers), uav_mk_Q(n_uav_markers) )
+    Allocate( uav_mk_dx(n_uav_markers), uav_mk_dz(n_uav_markers), uav_mk_frac(n_uav_markers) )
 
     dr        = uav_disk_radius / Real(uav_n_r, Int64)
     dtheta    = 2d0*pi / Real(uav_n_theta, Int64)
@@ -67,9 +78,9 @@ Contains
        Do ith = 1, uav_n_theta
           theta = ( Real(ith,Int64) - 0.5d0 ) * dtheta
           n = n + 1
-          uav_mk_dx(n) = r_mid*Cos(theta)
-          uav_mk_dz(n) = r_mid*Sin(theta)
-          uav_mk_Q(n)  = uav_hover_thrust * (area_k/area_disk)
+          uav_mk_dx(n)   = r_mid*Cos(theta)
+          uav_mk_dz(n)   = r_mid*Sin(theta)
+          uav_mk_frac(n) = area_k/area_disk
        End Do
     End Do
 
@@ -78,13 +89,22 @@ Contains
        Call read_uav_path
     End If
 
+    If ( uav_thrust_active >= 1 ) Then
+       If ( Len_Trim(uav_thrust_file) == 0 ) Stop 'ERROR: uav_thrust_active=1 but uav_thrust_file is empty'
+       Call read_uav_thrust
+    End If
+
     If ( myid==0 ) Then
-       Write(*,*) 'UAV: actuator disk active -- markers:', n_uav_markers, &
-                  ' radius:', uav_disk_radius, ' kinematic thrust:', uav_hover_thrust
+       Write(*,*) 'UAV: actuator disk active -- markers:', n_uav_markers, ' radius:', uav_disk_radius
        If ( uav_path_active >= 1 ) Then
           Write(*,*) 'UAV: following path from ', Trim(uav_path_file), ' (', n_path, ' waypoints)'
        Else
           Write(*,*) 'UAV: static centre:', uav_xc, uav_yc, uav_zc
+       End If
+       If ( uav_thrust_active >= 1 ) Then
+          Write(*,*) 'UAV: following thrust schedule from ', Trim(uav_thrust_file), ' (', n_thrust, ' points)'
+       Else
+          Write(*,*) 'UAV: fixed kinematic thrust:', uav_hover_thrust
        End If
     End If
 
@@ -135,6 +155,52 @@ Contains
     Close(unit_in)
 
   End Subroutine read_uav_path
+
+  !> Read the thrust schedule: free-form text, blank/'#' lines skipped,
+  !  each data row "t T" (T = kinematic thrust [m^4/s^2]), sorted by
+  !  strictly increasing t. Same per-rank-independent-read convention as
+  !  read_uav_path.
+  Subroutine read_uav_thrust
+
+    Integer(Int32) :: unit_in, ios, n
+    Real   (Int64) :: col(2)
+    Character(300) :: line
+
+    If ( myid==0 ) Write(*,'(A,A)') ' Reading UAV thrust schedule from ', Trim(uav_thrust_file)
+
+    Open(newunit=unit_in, file=Trim(uav_thrust_file), status='old', action='read', iostat=ios)
+    If ( ios /= 0 ) Stop 'ERROR: cannot open uav_thrust_file'
+
+    n_thrust = 0
+    Do
+       Read(unit_in,'(A)',iostat=ios) line
+       If ( ios /= 0 ) Exit
+       line = Adjustl(line)
+       If ( Len_Trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
+       n_thrust = n_thrust + 1
+    End Do
+    If ( n_thrust < 2 ) Stop 'ERROR: uav_thrust_file: fewer than 2 points found'
+
+    Allocate( thrust_t(n_thrust), thrust_val(n_thrust) )
+
+    Rewind(unit_in)
+    n = 0
+    Do
+       Read(unit_in,'(A)',iostat=ios) line
+       If ( ios /= 0 ) Exit
+       line = Adjustl(line)
+       If ( Len_Trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
+       n = n + 1
+       Read(line,*,iostat=ios) col(1:2)
+       If ( ios /= 0 ) Stop 'ERROR: uav_thrust_file: failed to parse a data row (need 2 columns: t T)'
+       thrust_t(n) = col(1);  thrust_val(n) = col(2)
+       If ( n > 1 ) Then
+          If ( thrust_t(n) <= thrust_t(n-1) ) Stop 'ERROR: uav_thrust_file: t column must be strictly increasing'
+       End If
+    End Do
+    Close(unit_in)
+
+  End Subroutine read_uav_thrust
 
   !> Cubic Hermite (Catmull-Rom tangent) interpolation of one path
   !  component at time tt, clamped outside [vals_t(1),vals_t(n)].
@@ -207,24 +273,43 @@ Contains
 
   End Subroutine uav_current_center
 
+  !> Current total kinematic thrust: the schedule interpolated from
+  !  uav_thrust_file (uav_thrust_active=1) or the fixed uav_hover_thrust
+  !  otherwise.
+  Pure Function uav_current_thrust(tt) Result(Qtot)
+
+    Real(Int64), Intent(In) :: tt
+    Real(Int64) :: Qtot
+
+    If ( uav_thrust_active >= 1 ) Then
+       Qtot = hermite_eval(tt, thrust_t, thrust_val, n_thrust)
+    Else
+       Qtot = uav_hover_thrust
+    End If
+
+  End Function uav_current_thrust
+
   !> Add the disk's vertical reaction force (downward on the fluid, opposing
   !  the upward thrust that supports the vehicle) into rhs_v, at the disk's
-  !  current centre (global `t`, from equations.f90's use of global). Called
-  !  once per RK3 sub-stage from compute_rhs_v, guarded by uav_active.
+  !  current centre and total thrust (global `t`, from equations.f90's use
+  !  of global). Called once per RK3 sub-stage from compute_rhs_v, guarded
+  !  by uav_active.
   Subroutine apply_uav_forcing(rhs_v)
 
     Real(Int64), Dimension(2:nxg-1,2:ny-1,2:nzg-1), Intent(InOut) :: rhs_v
 
     Integer(Int32) :: n, i, j, k, i0, j0, k0
     Integer(Int32) :: ilo, ihi, jlo, jhi, klo, khi
-    Real(Int64) :: xc, yc, zc, xp, yp, zp
+    Real(Int64) :: xc, yc, zc, xp, yp, zp, Qtot, Qn
     Real(Int64) :: sigx, sigz, sigy, dxp, dyp, dzp, wgt, norm, dVj
     Real(Int64) :: best
 
     Call uav_current_center(t, xc, yc, zc)
+    Qtot = uav_current_thrust(t)
 
     Do n = 1, n_uav_markers
 
+       Qn = Qtot * uav_mk_frac(n)
        xp = xc + uav_mk_dx(n);  yp = yc;  zp = zc + uav_mk_dz(n)
 
        ! locate the nearest local cell-centre index in x/z (uniform spacing)
@@ -276,7 +361,7 @@ Contains
              Do i = ilo, ihi
                 dxp = xg(i) - xp
                 wgt = Exp( -0.5d0*( (dxp/sigx)**2 + (dyp/sigy)**2 + (dzp/sigz)**2 ) )
-                rhs_v(i,j,k) = rhs_v(i,j,k) - uav_mk_Q(n) * wgt / norm
+                rhs_v(i,j,k) = rhs_v(i,j,k) - Qn * wgt / norm
              End Do
           End Do
        End Do

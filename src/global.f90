@@ -460,6 +460,15 @@ Module global
   ! file's time range.
   Integer(Int32) :: uav_path_active   = 0
   Character(200) :: uav_path_file     = ''
+  ! Time-varying thrust schedule: when uav_thrust_active=0 (default), the
+  ! disk uses the fixed uav_hover_thrust above for its whole run; when 1,
+  ! it instead uses uav_thrust_file (rows "t T", same interpolation as the
+  ! path) -- e.g. a takeoff surge above hover thrust, a reduced-thrust
+  ! controlled descent, and a landing flare, all as a function of time
+  ! (equivalently of position, since position is itself a function of time
+  ! along uav_path_file).
+  Integer(Int32) :: uav_thrust_active = 0
+  Character(200) :: uav_thrust_file   = ''
   !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
   ! Temperature field (cell-centred: nxg x nyg x nzg)
