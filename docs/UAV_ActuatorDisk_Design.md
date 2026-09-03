@@ -1,9 +1,18 @@
 # UAV Actuator-Disk Design Notes (branch `uav`)
 
-Status: design sketch, no source changes yet. Goal: study how ambient
-turbulence and mean wind affect (and are affected by) a small rotorcraft UAV
-during takeoff, landing, and a prescribed flight trajectory close to the
-ground, using fdm-dopamine's existing LES/ABL machinery.
+Status: Phase 1 (static disk, uniform loading, vertical-only force)
+implemented -- `src/uav_actuator.f90`, `&UAV` namelist (see
+`docs/Input-Parameters.md`), and a smoke-test case at
+`examples/uav_hover_disk`. Verified by a short local run: divergence stays
+at machine precision, mean streamwise velocity stays at zero (force is
+vertical-only, as intended), and the induced downwash grows smoothly under
+the disk. Phases 2+ (moving disk/path, mean wind, ABL turbulence, ground
+effect) are still design-only, sketched below.
+
+Goal: study how ambient turbulence and mean wind affect (and are affected
+by) a small rotorcraft UAV during takeoff, landing, and a prescribed flight
+trajectory close to the ground, using fdm-dopamine's existing LES/ABL
+machinery.
 
 ## 1. Why an actuator disk, not a moving IBM body
 
@@ -175,10 +184,12 @@ compare disk-load time series and near-ground wake statistics across runs.
 
 ## 6. Phased implementation plan
 
-1. **Static hover validation**: fixed disk in quiescent flow + flat ground
-   IBM at a few disk-heights; check induced velocity / thrust against
-   momentum theory and expected ground-effect thrust augmentation
-   (image-vortex analogy) as the disk approaches the ground.
+1. **Static hover validation**: fixed disk in quiescent flow -- **done**:
+   `src/uav_actuator.f90` + `examples/uav_hover_disk` (free-slip box, no
+   ground yet). Still open: add a flat ground IBM at a few disk-heights and
+   check induced velocity / thrust against momentum theory and expected
+   ground-effect thrust augmentation (image-vortex analogy) as the disk
+   approaches the ground.
 2. **Prescribed path, quiescent ambient**: disk moves through a full
    takeoff -> cruise -> landing profile with `uav_thrust_mode=0`; validate
    wake advection/decay and that moving the source term doesn't introduce
