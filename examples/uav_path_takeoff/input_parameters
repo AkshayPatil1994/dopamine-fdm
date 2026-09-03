@@ -33,8 +33,8 @@
 &NUMERICS
   dt           = 1.0e-3,
   nsteps       = 800,
-  nsave        = 800,
-  nmonitor     = 50,
+  nsave        = 20,
+  nmonitor     = 20,
   cfl_adaptive = 1,
   cfl_target   = 0.5,
   cfl_safety   = 0.9,
