@@ -570,6 +570,12 @@ Contains
 
     Integer(Int32) :: ios, u_times
     Character(300) :: fname
+    ! NVFORTRAN 23.3 fails to parse "Merge(...,rec_col_T==1)"/"...,rec_col_C==1)" inline
+    ! ("Syntax error at or near REC") -- a compiler parser bug specifically triggered by a
+    ! rec_-prefixed Integer compared inline as Merge's mask argument (confirmed in isolation;
+    ! renaming the identifier or precomputing the comparison both avoid it). Precompute the
+    ! masks into plain Logicals once instead of repeating the inline comparison at each site.
+    Logical :: has_T, has_C
 
     rec_unit = -1
     rec_active = .False.
@@ -603,13 +609,15 @@ Contains
     rec_k1 = kg1_global(myid)
     rec_k2 = kg2_global(myid) - 2
 
+    has_T = ( rec_col_T == 1 );  has_C = ( rec_col_C == 1 )
+
     ! each component's own block, fixed U,V,W,T,C disk order (only present ones actually occupy space)
     rec_off_U = 0_Int64
     rec_off_V = rec_off_U + 8_Int64*Int(rec_n1,  Int64)*Int(rec_n2_global,Int64)
     rec_off_W = rec_off_V + 8_Int64*Int(rec_n1_v,Int64)*Int(rec_n2_global,Int64)
     rec_off_T = rec_off_W + 8_Int64*Int(rec_n1,  Int64)*Int(rec_n2_global,Int64)
-    rec_off_C = rec_off_T + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, rec_col_T==1)
-    rec_frame_bytes = rec_off_C + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, rec_col_C==1)
+    rec_off_C = rec_off_T + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, has_T)
+    rec_frame_bytes = rec_off_C + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, has_C)
 
     Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
     Open(newunit=rec_unit, file=Trim(fname), access='stream', form='unformatted', &
@@ -620,10 +628,10 @@ Contains
     Allocate( rec_lo_U(rec_n1,   rec_k2-rec_k1+1) );  Allocate( rec_hi_U(rec_n1,   rec_k2-rec_k1+1) )
     Allocate( rec_lo_V(rec_n1_v, rec_k2-rec_k1+1) );  Allocate( rec_hi_V(rec_n1_v, rec_k2-rec_k1+1) )
     Allocate( rec_lo_W(rec_n1,   rec_k2-rec_k1+1) );  Allocate( rec_hi_W(rec_n1,   rec_k2-rec_k1+1) )
-    Allocate( rec_lo_T(Merge(rec_n1,0,rec_col_T==1), Merge(rec_k2-rec_k1+1,0,rec_col_T==1)) )
-    Allocate( rec_hi_T(Merge(rec_n1,0,rec_col_T==1), Merge(rec_k2-rec_k1+1,0,rec_col_T==1)) )
-    Allocate( rec_lo_C(Merge(rec_n1,0,rec_col_C==1), Merge(rec_k2-rec_k1+1,0,rec_col_C==1)) )
-    Allocate( rec_hi_C(Merge(rec_n1,0,rec_col_C==1), Merge(rec_k2-rec_k1+1,0,rec_col_C==1)) )
+    Allocate( rec_lo_T(Merge(rec_n1,0,has_T), Merge(rec_k2-rec_k1+1,0,has_T)) )
+    Allocate( rec_hi_T(Merge(rec_n1,0,has_T), Merge(rec_k2-rec_k1+1,0,has_T)) )
+    Allocate( rec_lo_C(Merge(rec_n1,0,has_C), Merge(rec_k2-rec_k1+1,0,has_C)) )
+    Allocate( rec_hi_C(Merge(rec_n1,0,has_C), Merge(rec_k2-rec_k1+1,0,has_C)) )
     rec_idx_lo = -1;  rec_idx_hi = -1
 
     !$acc update device(rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v, rec_v_native)
