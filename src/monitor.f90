@@ -82,7 +82,12 @@ Contains
     If ( myid==0 ) Then
 
        ! ── derived quantities ──────────────────────────────────────────
-       If ( bc_face_yhi == 1 ) Then
+       ! y_bc_type==0 (periodic y, e.g. the Taylor-Green vortex IC): there is no
+       ! wall at all, so a channel-style h_ref/Re_tau_est is meaningless -- leave
+       ! both at zero (the Re_tau_est>0d0 print guard below then skips the line)
+       If ( y_bc_type == 0 ) Then
+          h_ref = 0d0
+       Else If ( bc_face_yhi == 1 ) Then
           h_ref = 0.5d0 * Ly   ! half-height for closed channel
        Else
           h_ref = Ly            ! full height for open channel
