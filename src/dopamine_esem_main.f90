@@ -162,6 +162,10 @@ Program dopamine_esem
   Call init_inflow           ! sigma file, wall taper, Uconv_sem, length-scale/n_eddies auto-tune, place_eddies, build_ensemble_normalisation (now at this rank's cell-center slab)
 
   If ( .Not. duration_given ) duration = Real(sem_ensemble_periods,8) * Maxval(eddy_Tperiod)
+  If ( samples_given .And. n_samples < 2 ) Then
+     If ( myid == 0 ) Write(*,'(A,I0,A)') ' ERROR: --samples=', n_samples, ' must be >= 2'
+     Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+  End If
   If ( dt_given ) Then
      ! pin the sample spacing to (a submultiple of) the consuming run's actual dt instead of
      ! the fastest-eddy-transit-period default below, so successive donor frames are the same
