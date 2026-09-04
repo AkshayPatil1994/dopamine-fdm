@@ -120,6 +120,7 @@ and the [[precursor/successor example|Examples#precursor_successor]].
 | `Utarget` | — | Target bulk or centreline velocity |
 | `nstep_init` | — | Starting step number (non-zero for hot-start logging) |
 | `restart` | `0` | 0=fresh run, 1=hot-start from `filein` |
+| `t_start` | `-1.0` | Explicit restart start time [s] (`restart = 1` only); overrides `nstep_init * dt` when `>= 0`. Needed under `cfl_adaptive = 1`, where step count no longer maps to a fixed `dt * nstep_init`. Default `-1.0` means "not given, fall back to `nstep_init * dt`" |
 
 **IC type 4 — Reichardt profile** (`ic_type = 4`):
 Builds the Reichardt (1951) composite law-of-the-wall profile, scaled by $u_\tau$ derived
@@ -191,11 +192,13 @@ oversight: the momentum Robin coefficients are sampled at different index spaces
 
 ## `&UAV` *(optional — omit to disable)*
 
-An actuator disk with uniform loading, applying a purely vertical reaction force
-into `rhs_v`. The disk can be static or follow a prescribed path (Phase 1/2 -- no
-horizontal force component and no OpenACC offload yet; see
-`docs/UAV_ActuatorDisk_Design.md` for later phases: mean wind, ABL turbulence,
-tilted/cruise orientation).
+An actuator disk that applies a reaction force spread across `rhs_u`, `rhs_v`,
+`rhs_w`. By default the loading is uniform and the reaction force is purely
+vertical (the original flat-disk model); `uav_load_profile`, `uav_tilt_active`
+and `uav_swirl_frac` below opt into radial loading, an automatically-derived
+tilt for a translating disk, and an in-plane swirl (rotor-torque reaction)
+component, respectively. The disk can be static or follow a prescribed path,
+with a fixed or scheduled thrust.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -205,21 +208,27 @@ tilted/cruise orientation).
 | `uav_n_r` | `15` | Number of radial marker bands |
 | `uav_n_theta` | `24` | Number of azimuthal marker sectors per band |
 | `uav_hover_thrust` | `0.0` | Disk thrust in this solver's kinematic convention, i.e. (physical thrust)/(fluid density) [m⁴ s⁻²] -- matches `dPdx`'s convention; there is no explicit density anywhere in the solver |
-| `uav_kernel_ncell` | `2` | Regularized-delta (Gaussian) kernel support radius, in grid cells, used to spread each marker's force onto the `V` grid |
+| `uav_kernel_ncell` | `2` | Regularized-delta (Gaussian) kernel support radius, in grid cells, used to spread each marker's force onto the `U`/`V`/`W` grids |
 | `uav_path_active` | `0` | 0=static disk at `(uav_xc,uav_yc,uav_zc)`, 1=follow `uav_path_file` |
 | `uav_path_file` | `''` | Waypoint file (required when `uav_path_active = 1`): free-form text, blank/`#` lines skipped, data rows `t x y z` [s, m, m, m] sorted by strictly increasing `t`. The disk centre is cubic-Hermite (Catmull-Rom tangent) interpolated between waypoints and clamped to the first/last waypoint outside the file's time range. Every rank reads the file independently (same convention as `inflow_profile_file`). |
 | `uav_thrust_active` | `0` | 0=fixed thrust `uav_hover_thrust` for the whole run, 1=follow `uav_thrust_file` |
 | `uav_thrust_file` | `''` | Thrust schedule (required when `uav_thrust_active = 1`): same format/interpolation/clamping convention as `uav_path_file`, but rows are `t T` [s, m⁴ s⁻²] -- e.g. a takeoff surge above hover thrust, a reduced-thrust controlled descent, a landing flare, all independent of the path itself |
+| `uav_load_profile` | `0` | 0=uniform disk loading (default), 1=parabolic tip-taper: each marker's thrust share is weighted by `1-(r/R)^2` and renormalized to still sum to 1. A drop-in reweighting of the marker table -- no change to the force-application code path. |
+| `uav_tilt_active` | `0` | 0=disk stays horizontal (default -- identical to the original untilted model), 1=the disk normal is derived automatically each step from the path's own kinematic acceleration: a differentially-flat point-mass argument (as used in quadrotor minimum-snap trajectory generation) gives `n = normalize(ax, grav+ay, az)`, independent of vehicle mass. Requires `uav_path_active = 1` to have any effect (a static disk's path acceleration is identically zero, so `n` stays at `(0,1,0)`). |
+| `uav_tilt_tau` | `0.2` | Low-pass time constant [s] for the tilt-normal filter. The Catmull-Rom path interpolation is only C¹ (velocity-continuous, not acceleration-continuous), so the raw per-step acceleration has knot-to-knot jump discontinuities; the filter keeps the disk orientation -- and hence the force it applies -- from jumping at path waypoints. Direction only: this does not adjust `uav_hover_thrust`/`uav_thrust_file` to match the kinematically-required thrust magnitude, so the model is kinematically tilt-consistent but not dynamically trimmed. |
+| `uav_swirl_frac` | `0.0` | In-plane tangential (swirl) reaction force per marker, as a fraction of that marker's own thrust share -- represents rotor-torque reaction. A pure swirl field integrates to zero net linear force (only a net torque), so it does not by itself move the flow's bulk momentum the way tilt does; it is a local, not global, effect. Rotation sense is an arbitrary modelling choice, not derived from any tracked rotor RPM/direction. |
 
-Known simplifications: the disk stays horizontal (normal = `+y`) even while
-following a path -- correct for a vertical takeoff/climb/hover/descent, not yet
-for a tilted cruise segment; only the vertical (`rhs_v`) force is applied; and
-the kernel support is not wrapped across periodic x/z boundaries -- keep the
-disk at least `uav_kernel_ncell * max(dx,dz)` away from a periodic edge for its
-whole path. The Catmull-Rom tangent interpolation (shared by `uav_path_file`
-and `uav_thrust_file`) can under/overshoot by a few percent at a "flat-hold ->
-steep-change" transition in the waypoints -- see `docs/UAV_ActuatorDisk_
-Design.md` section 5 if a strictly monotonic profile matters for a given run.
+Known simplifications: swirl direction is arbitrary (no tracked rotor rotation
+sense); the kernel support is not wrapped across periodic x/z boundaries --
+keep the disk at least `uav_kernel_ncell * max(dx,dz)` away from a periodic
+edge for its whole path; and `uav_tilt_active` fixes the thrust *direction*
+consistent with the path's kinematics but does not solve for a dynamically
+self-consistent thrust *magnitude* (that stays whatever `uav_hover_thrust`/
+`uav_thrust_file` prescribes). The Catmull-Rom tangent interpolation (shared
+by `uav_path_file` and `uav_thrust_file`) can under/overshoot by a few percent
+at a "flat-hold -> steep-change" transition in the waypoints -- with
+`uav_tilt_active = 1` this same knot discontinuity shows up one derivative
+higher, in the raw tilt acceleration, which is why `uav_tilt_tau` exists.
 See `examples/uav_hover_disk` (static), `examples/uav_ground_effect`
 (static, IGE/OGE comparison), `examples/uav_path_takeoff` (path-following),
 `examples/uav_path_cross_rank` (path crossing an MPI rank boundary), and

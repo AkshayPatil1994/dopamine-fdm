@@ -80,10 +80,9 @@ and has enough recorded planes), then run `successor/` from its own directory, p
 
 ## UAV actuator disk (`examples/uav_*`)
 
-Five small, quick-running cases exercising the `&UAV` actuator-disk rotor model (see
+Six small, quick-running cases exercising the `&UAV` actuator-disk rotor model (see
 [[Input Parameters § &UAV|Input-Parameters#uav-optional--omit-to-disable]] for every
-parameter and [[UAV Actuator-Disk Design|UAV_ActuatorDisk_Design]] for the model, the
-phased validation results these cases produced, and known open issues). All five use a
+parameter). All six use a
 small `nx,ny,nz = 66,(65 or 129),66`, `Lx,Ly,Lz = 1.0,(1.0 or 2.0),1.0` box, `sgs_model = 0`
 (DNS), and a hover thrust `uav_hover_thrust = 4.0` (kinematic thrust for a ~0.5 kg UAV at
 `rho_air ~ 1.2 kg/m^3`).
@@ -104,6 +103,17 @@ small `nx,ny,nz = 66,(65 or 129),66`, `Lx,Ly,Lz = 1.0,(1.0 or 2.0),1.0` box, `sg
 - **`uav_wind_takeoff`** — `uav_path_takeoff`'s climb repeated under a steady mean
   crosswind (`flow_forcing_mode = 1` constant-mass-flux forcing, `Ub_target = 3.0`) over
   the rough-free log-law ground, following `uav_wind_path.dat`.
+- **`uav_tilt_translate`** — a takeoff → horizontal translate → land path
+  (`uav_tilt_path.dat`) that actually exercises `uav_tilt_active = 1` (unlike
+  `uav_path_takeoff`'s pure vertical climb, where the auto-tilt would stay at
+  `(0,1,0)` throughout even if enabled), together with `uav_load_profile = 1`
+  (parabolic tip-tapered loading) and `uav_swirl_frac = 0.05` (torque-reaction
+  swirl), on a `66x129x66` LES grid (`sgs_model = 1`). Confirms the combination is
+  stable (divergence stays at the same ~1e-12 level as the other UAV cases) and
+  that the tilt genuinely injects horizontal momentum: bulk `<U>` peaks around
+  `-0.26` during the translate/deceleration-into-landing phase, versus staying at
+  the noise floor (`~1e-3`) for the whole run with `uav_tilt_active = 0,
+  uav_swirl_frac = 0.0` as a control.
 
 `postProcessing/generate_UAVpath.py` renders any of these cases' path file as a
 moving-disk ParaView animation (see

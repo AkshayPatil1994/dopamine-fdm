@@ -22,7 +22,6 @@ here, then jump to whichever page matches what you're doing.
 | [[Input Parameters Reference\|Input-Parameters]] | Every namelist and parameter in `input_parameters`, grouped by section |
 | [[Numerics & Governing Equations\|Numerics]] | The discretisation, time integration, Poisson solver, SGS model, IBM, wall models, scalar transport, Reynolds stress budget, inflow/outflow BCs |
 | [[Examples\|Examples]] | Walkthroughs of the bundled example cases |
-| [[UAV Actuator-Disk Design\|UAV_ActuatorDisk_Design]] | Rotor body-force model, phased implementation/validation status, and open questions for the takeoff/landing/wake UAV study |
 | [[Pre- and Post-Processing Tools\|Tools]] | `GenSDF` mesh/SDF generator and the Python scripts in `postProcessing/` |
 | [[Contributing & Citing\|Contributing]] | License, how to cite, acknowledgments, opening issues |
 
