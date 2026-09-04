@@ -136,6 +136,7 @@ Contains
     Integer(Int32) :: i, j, k
     Logical        :: is_first_x, is_last_x
     Integer(Int32) :: partner_x
+    Integer(Int32) :: objid_max_local, objid_max_global
 
     If (Allocated(phi))       Deallocate(phi)
     If (Allocated(Umask_cc))  Deallocate(Umask_cc)
@@ -179,6 +180,18 @@ Contains
     If ( Len_Trim(ibm_objid_file) > 0 ) Then
        If ( myid==0 ) Write(*,*) 'IBM: reading per-object ID field from ', Trim(ibm_objid_file), '...'
        Call read_distributed_scalar_field(ibm_objid_file, ibm_obj_id)
+
+       ! every ghost_*_objid assignment below clamps into [0,max_ibm_objects]; catch an
+       ! out-of-range ID here instead of silently mis-mapping it onto the wrong object's
+       ! per-object BC/roughness settings
+       objid_max_local = Nint(Maxval(ibm_obj_id))
+       Call MPI_Allreduce(objid_max_local, objid_max_global, 1, MPI_INTEGER, MPI_MAX, MPI_COMM_WORLD, ierr)
+       If ( objid_max_global > max_ibm_objects ) Then
+          If ( myid==0 ) Write(*,'(A,I0,A,I0,A)') ' ERROR: ibm_objid_file contains object ID ', &
+               objid_max_global, ', but max_ibm_objects = ', max_ibm_objects, &
+               ' (per-object BC/roughness arrays only go that far)'
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
     End If
 
   End Subroutine read_phi_from_sdf_file
