@@ -91,7 +91,11 @@ Contains
     If ( y_bc_type == 0 .And. grid_type /= 1 ) Stop 'ERROR: y_bc_type=0 (periodic y) requires grid_type=1 (uniform y grid)'
     If ( ic_type == 6 .And. ( x_bc_type /= 0 .Or. y_bc_type /= 0 ) ) &
        Stop 'ERROR: ic_type=6 (Taylor-Green Vortex) requires x_bc_type=0 and y_bc_type=0 (fully periodic box)'
-    If ( flat_wall_model_flag == 2 ) Then
+    ! y_bc_type==0 (periodic y, e.g. Taylor-Green vortex): there is no wall at all,
+    ! so bc_face_ylo/yhi are meaningless here -- skip the wall-model check entirely
+    ! instead of possibly Stop-ing on a stale flat_wall_model_flag=2 left over from
+    ! a different (wall-bounded) namelist
+    If ( flat_wall_model_flag == 2 .And. y_bc_type /= 0 ) Then
        If ( bc_face_ylo /= 2 .And. z0_ylo <= 0d0 ) &
           Stop 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_ylo > 0 for a no-slip bottom wall'
        If ( bc_face_yhi /= 2 .And. z0_yhi <= 0d0 ) &
