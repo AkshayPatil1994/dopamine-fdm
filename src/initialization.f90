@@ -75,9 +75,14 @@ Contains
     If ( y_bc_type == 0 .And. x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
 #endif
 
-    ! time: on restart advance physical time to match nstep_init * dt
+    ! time: on restart, t_start (explicit) takes precedence over nstep_init*dt --
+    ! required under adaptive dt, where step count no longer maps to a fixed dt
     If ( restart == 1 ) Then
-       t = Real(nstep_init, Int64) * dt
+       If ( t_start >= 0d0 ) Then
+          t = t_start
+       Else
+          t = Real(nstep_init, Int64) * dt
+       End If
     Else
        t = 0d0
     End If

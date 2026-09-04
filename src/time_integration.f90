@@ -81,9 +81,13 @@ Contains
     End If
 
     ! nsave<0: shrink dt (even below dt_min) so t lands exactly on tsave_next, keeping physical-time-based snapshots uniformly spaced under adaptive dt
+    ! nsteps<0: likewise shrink dt so t lands exactly on sim_end_time instead of overshooting it under adaptive dt
     dt_presnap = dt
     If ( nsave < 0 .And. t + dt > tsave_next ) Then
        dt = tsave_next - t
+    End If
+    If ( nsteps < 0 .And. t + dt > sim_end_time ) Then
+       dt = sim_end_time - t
     End If
 
     ! save previous state

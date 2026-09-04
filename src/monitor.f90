@@ -100,7 +100,13 @@ Contains
           Re_tau_est = 0d0
           visc_cfl   = 0d0
        End If
-       t_end_s = Real(nsteps, Int64) * dt
+       ! nsteps>0: fixed step count from the current start time t (t_start/nstep_init*dt on
+       ! restart, else 0). nsteps<0: time-based stopping, end time is sim_end_time directly.
+       If ( nsteps > 0 ) Then
+          t_end_s = t + Real(nsteps, Int64) * dt
+       Else
+          t_end_s = sim_end_time
+       End If
        dy_max  = Maxval( yg_global(2:nyg_global) - yg_global(1:nyg_global-1) )
 
        ! ── label strings ───────────────────────────────────────────────
@@ -190,6 +196,7 @@ Contains
           Write(*,'(A,E12.4,A)') '    settling CFL (est.):  ', ws*dt/dymin, '  (ws*dt/dy_min)'
        End If
        Write(*,'(A,I8)')     '    nsteps             :  ', nsteps
+       Write(*,'(A,F12.4)')  '    t_start            :  ', t
        Write(*,'(A,F12.4)')  '    t_end              :  ', t_end_s
        Write(*,'(A,I8)')     '    nsave              :  ', nsave
        Write(*,'(A,I8)')     '    nmonitor           :  ', nmonitor
@@ -231,7 +238,8 @@ Contains
        Write(*,'(A,A)')         '    output prefix      :  ', Trim(fileout)
        Write(*,'(A)') ' +====================================================================+'
        Write(*,'(A)') ' '
-       Write(*,'(A,I0,A,F0.4)') '  Starting time loop   nsteps=', nsteps, '  t_end=', t_end_s
+       Write(*,'(A,I0,A,F0.4,A,F0.4)') '  Starting time loop   nsteps=', nsteps, &
+            '  t_start=', t, '  t_end=', t_end_s
        Write(*,'(A)') ' '
        Write(*,'(A)') '    step             t           <U>        |U|max        |div|       CFL_c       CFL_v' // &
                       '             dt   wall(s)'

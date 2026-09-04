@@ -31,6 +31,10 @@ Module global
   ! steps
   Integer(Int32) :: nsteps, nstep_init
   Real   (Int64) :: dt, t
+  ! explicit restart start time (overrides nstep_init*dt when >=0d0 -- needed
+  ! for restarts under adaptive dt, where step count no longer maps to a fixed
+  ! dt*nstep_init); default -1d0 means "not given, fall back to nstep_init*dt"
+  Real   (Int64) :: t_start = -1d0
 
   ! Time-based stopping/save control: sim_end_time/tsave override nsteps/nsave when negative; tsave_next is the next due save time
   Real   (Int64) :: sim_end_time = 1d30

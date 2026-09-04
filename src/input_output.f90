@@ -53,7 +53,7 @@ Contains
                    ibm_sdf_file, ibm_objid_file, ks, nks, nsampling, ibm_surface_nsampling, &
                    ibm_T_bc_type, ibm_T_wall, ibm_z0
 
-    Namelist /INITIAL_CONDITIONS/ Utarget, nstep_init, restart, &
+    Namelist /INITIAL_CONDITIONS/ Utarget, nstep_init, restart, t_start, &
                                    scalar_restart, ic_type, noise_percent
 
     Namelist /IO/ filein, fileout
@@ -351,6 +351,11 @@ Contains
           Write(*,'(A,F8.4)') '   cfl_safety                  = ', cfl_safety
        End If
        Write(*,'(A,I2)')     '   restart                     = ', restart
+       If ( restart == 1 ) Then
+          Write(*,'(A,I8)')    '   nstep_init                  = ', nstep_init
+          If ( t_start >= 0d0 ) &
+             Write(*,'(A,F12.6)') '   t_start                     = ', t_start
+       End If
        Write(*,'(A,I2)')     '   scalar_restart               = ', scalar_restart
        Write(*,'(A,I2)')     '   ic_type                     = ', ic_type
        Write(*,'(A,F7.2)')   '   noise_percent               = ', noise_percent
@@ -424,6 +429,7 @@ Contains
     Call Mpi_bcast ( Ub_target,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( nstep_init,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( t_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nsteps,               1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nsave,                1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nmonitor,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
