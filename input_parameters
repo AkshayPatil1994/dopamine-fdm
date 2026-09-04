@@ -440,12 +440,18 @@
 !
 ! noise_percent: white-noise amplitude as % of Utarget (applied to U,V,W
 !               for ic_types 1-3; ignored for ic_type=4; unused for ic_type=6)
+!
+! t_start: explicit restart start time [s] (restart=1 only); overrides
+!          nstep_init*dt when >=0. Needed under cfl_adaptive=1, where step
+!          count no longer maps to a fixed dt*nstep_init. Default -1.0 means
+!          "not given, fall back to nstep_init*dt".
 &INITIAL_CONDITIONS
   Utarget      = 0.068,
   ic_type      = 1,
   noise_percent  = 5.0,
   nstep_init     = 0,       ! starting step number (for hot-start)
   restart        = 0,       ! 0=fresh run, 1=hot-start from filein
+  t_start        = -1.0,    ! explicit restart time [s]; -1.0=fall back to nstep_init*dt
   scalar_restart = 1,       ! 1=read C from restart file (default)
                             ! 0=initialise C from IC even when restart=1
                             !   (use this when the restart file contains only
@@ -457,6 +463,103 @@
   filein  = 'restart/channel_test.1',
   fileout = 'channel_test',
 /
+
+! UAV actuator disk (optional — omit this group to disable)
+!
+! An actuator disk that applies a reaction force spread across rhs_u, rhs_v,
+! rhs_w. By default the loading is uniform and the reaction force is purely
+! vertical (the original flat-disk model); uav_load_profile, uav_tilt_active
+! and uav_swirl_frac below opt into radial loading, an automatically-derived
+! tilt for a translating disk, and an in-plane swirl (rotor-torque reaction)
+! component, respectively. The disk can be static or follow a prescribed
+! path, and its thrust can be fixed or follow a prescribed schedule.
+!
+! uav_active:        0=off (default), 1=on
+! uav_xc/yc/zc:       fixed disk centre [m] (used when uav_path_active=0)
+! uav_disk_radius:   disk radius [m]
+! uav_n_r/n_theta:   number of radial marker bands / azimuthal sectors per band
+! uav_hover_thrust:  disk thrust in this solver's kinematic convention, i.e.
+!                    (physical thrust)/(fluid density) [m^4/s^2] -- matches
+!                    dPdx's convention; there is no explicit density anywhere
+!                    in the solver
+! uav_kernel_ncell:  regularized-delta (Gaussian) kernel support radius, in
+!                    grid cells, used to spread each marker's force onto the
+!                    U/V/W grids
+! uav_path_active:   0=static disk at (uav_xc,uav_yc,uav_zc) (default),
+!                    1=follow uav_path_file
+! uav_path_file:     waypoint file (required when uav_path_active=1):
+!                    free-form text, blank/'#' lines skipped, data rows
+!                    "t x y z" [s, m, m, m] sorted by strictly increasing t.
+!                    The disk centre is cubic-Hermite (Catmull-Rom tangent)
+!                    interpolated between waypoints and clamped to the
+!                    first/last waypoint outside the file's time range.
+!                    Every rank reads the file independently (same
+!                    convention as inflow_profile_file).
+! uav_thrust_active: 0=fixed thrust uav_hover_thrust for the whole run
+!                    (default), 1=follow uav_thrust_file
+! uav_thrust_file:   thrust schedule (required when uav_thrust_active=1):
+!                    same format/interpolation/clamping convention as
+!                    uav_path_file, but rows are "t T" [s, m^4/s^2] -- e.g. a
+!                    takeoff surge above hover thrust, a reduced-thrust
+!                    controlled descent, a landing flare, all independent of
+!                    the path itself
+! uav_load_profile:  0=uniform disk loading (default), 1=parabolic tip-taper
+!                    (marker share weighted by 1-(r/R)^2, renormalized to
+!                    still sum to 1)
+! uav_tilt_active:   0=disk stays horizontal (default, identical to the
+!                    original untilted model), 1=disk normal is derived
+!                    automatically each step from the path's own kinematic
+!                    acceleration (differentially-flat point-mass tilt:
+!                    n ~ (ax, grav+ay, az)), low-pass filtered with time
+!                    constant uav_tilt_tau. Requires uav_path_active=1 to
+!                    have any effect. Direction only -- does not adjust the
+!                    thrust magnitude to match the kinematically-required
+!                    value, so this is kinematically tilt-consistent but
+!                    not dynamically trimmed.
+! uav_tilt_tau:      low-pass time constant [s] for the tilt filter above;
+!                    tames the Catmull-Rom path's knot-to-knot acceleration
+!                    discontinuities (same underlying under/overshoot noted
+!                    below, one derivative higher).
+! uav_swirl_frac:    0=no swirl (default); tangential (in-plane) reaction
+!                    force per marker as a fraction of that marker's own
+!                    thrust share (rotor-torque reaction). Integrates to
+!                    zero net linear force (only a net torque) -- a local,
+!                    not global, effect. Rotation sense is an arbitrary
+!                    modelling choice, not derived from any tracked rotor
+!                    RPM/direction.
+!
+! Known simplifications: swirl direction is arbitrary (no tracked rotor
+! rotation sense); the kernel support is not wrapped across periodic x/z
+! boundaries -- keep the disk at least uav_kernel_ncell*max(dx,dz) away from
+! a periodic edge for its whole path; and uav_tilt_active fixes the thrust
+! direction but not a dynamically self-consistent thrust magnitude. The
+! Catmull-Rom tangent interpolation (shared by uav_path_file and
+! uav_thrust_file) can under/overshoot by a few percent at a "flat-hold ->
+! steep-change" transition in the waypoints. See examples/uav_hover_disk
+! (static), examples/uav_ground_effect (static, IGE/OGE comparison),
+! examples/uav_path_takeoff (path-following), examples/uav_path_cross_rank
+! (path crossing an MPI rank boundary), and examples/uav_wind_takeoff
+! (path-following under a mean crosswind) for working cases.
+!
+!&UAV
+!  uav_active       = 1,
+!  uav_xc           = 0.3,
+!  uav_yc           = 0.5,
+!  uav_zc           = 0.15,
+!  uav_disk_radius  = 0.15,
+!  uav_n_r          = 15,
+!  uav_n_theta      = 24,
+!  uav_hover_thrust = 4.0,
+!  uav_kernel_ncell = 2,
+!  uav_path_active  = 0,
+!  uav_path_file    = '',
+!  uav_thrust_active = 0,
+!  uav_thrust_file   = '',
+!  uav_load_profile  = 0,
+!  uav_tilt_active   = 0,
+!  uav_tilt_tau      = 0.2,
+!  uav_swirl_frac    = 0.0,
+!/
 
 ! Reynolds stress budget (optional — omit this group to disable)
 !

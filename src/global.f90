@@ -434,11 +434,10 @@ Module global
   Real   (Int64) :: ibm_z0(0:max_ibm_objects) = 0d0
   !$acc declare create(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,ibm_T_bc_type,ibm_T_wall,ibm_z0)
 
-  ! UAV actuator disk (src/uav_actuator.f90): Phase 1 scope only -- a STATIC
-  ! disk centred at (uav_xc,uav_yc,uav_zc) with uniform loading, applying a
-  ! purely vertical (y) reaction force to the fluid. Path/time-dependence and
-  ! horizontal force components are later-phase extensions (see
-  ! docs/UAV_ActuatorDisk_Design.md).
+  ! UAV actuator disk (src/uav_actuator.f90): a disk with uniform loading,
+  ! applying a purely vertical (y) reaction force to the fluid; static or
+  ! path-following, with a fixed or scheduled thrust. Horizontal force
+  ! components are not modelled.
   ! uav_active:        0=off (default), 1=on
   ! uav_hover_thrust:  disk thrust in this solver's KINEMATIC convention,
   !                    i.e. (physical thrust)/(fluid density) [m^4/s^2] --
@@ -473,6 +472,29 @@ Module global
   ! along uav_path_file).
   Integer(Int32) :: uav_thrust_active = 0
   Character(200) :: uav_thrust_file   = ''
+  ! uav_load_profile:  0=uniform disk loading (default), 1=parabolic tip-taper
+  !                    (marker share weighted by 1-(r/R)^2, renormalized to
+  !                    still sum to 1) -- a drop-in reweighting of the marker
+  !                    table, no change to the force-application code path.
+  ! uav_tilt_active:   0=disk stays horizontal (default, i.e. identical to
+  !                    the untilted model above); 1=disk normal is derived
+  !                    automatically each step from the path's own kinematic
+  !                    acceleration (differentially-flat point-mass tilt:
+  !                    n ~ (ax, grav+ay, az)), low-pass filtered with time
+  !                    constant uav_tilt_tau to tame the Catmull-Rom path's
+  !                    knot-to-knot acceleration discontinuities. Requires
+  !                    uav_path_active=1 to have any effect (a static disk's
+  !                    path acceleration is identically zero).
+  ! uav_tilt_tau:      low-pass time constant [s] for the tilt filter above.
+  ! uav_swirl_frac:    0=no swirl (default); tangential (in-plane) reaction
+  !                    force per marker as a fraction of that marker's own
+  !                    thrust share, representing rotor torque reaction.
+  !                    Rotation sense is an arbitrary modelling choice, not
+  !                    derived from any tracked rotor RPM/direction.
+  Integer(Int32) :: uav_load_profile  = 0
+  Integer(Int32) :: uav_tilt_active   = 0
+  Real   (Int64) :: uav_tilt_tau      = 0.2d0
+  Real   (Int64) :: uav_swirl_frac    = 0d0
   !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
   ! Temperature field (cell-centred: nxg x nyg x nzg)
