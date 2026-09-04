@@ -721,6 +721,7 @@ Contains
     Logical, Intent(In) :: is_x_face, is_z_face
 
     Integer(Int32) :: nn(3), iproc, ix1, ix2, iz1, iz2, nxl, nzl
+    Integer(Int32) :: expect_n1, expect_n3
     Real(Int64), Allocatable :: global_buf(:,:,:)
     Type :: send_block_t
        Real(Int64), Allocatable :: d(:,:,:)
@@ -730,6 +731,21 @@ Contains
 
     If ( myid == 0 ) Then
        Read(unit_no) nn
+
+       ! nn is the field's global (nx1,nx2,nx3) block shape as written; cross-check
+       ! against what this call expects (x/z face-vs-ghost count per is_x_face/
+       ! is_z_face, y always the caller's own full local extent since y is never
+       ! MPI-decomposed) instead of trusting it blindly -- a mismatch here would
+       ! otherwise only surface later as an out-of-bounds/shape-mismatch crash (or,
+       ! worse, silently wrong data) inside the ix1:ix2,:,iz1:iz2 slice below.
+       expect_n1 = Merge(nx_global, nxg_global, is_x_face)
+       expect_n3 = Merge(nz_global, nzg_global, is_z_face)
+       If ( nn(1) /= expect_n1 .Or. nn(2) /= Size(field_local,2) .Or. nn(3) /= expect_n3 ) Then
+          Write(*,'(A,3(I0,1X),A,3(I0,1X))') ' ERROR: restart file field block size mismatch: found ', &
+               nn, ' expected ', expect_n1, Size(field_local,2), expect_n3
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+
        Allocate( global_buf(nn(1), nn(2), nn(3)) )
        Read(unit_no) global_buf
 
