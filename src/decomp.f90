@@ -3,7 +3,7 @@ Module decomp
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global,   Only : nx_global, ny_global, nz_global, p_row, p_col, x_bc_type
-  Use mpi,      Only : nprocs, myid, MPI_PROC_NULL, k1_global, k2_global, kg1_global, kg2_global, &
+  Use mpi,      Only : nprocs, myid, ierr, MPI_PROC_NULL, MPI_COMM_WORLD, k1_global, k2_global, kg1_global, kg2_global, &
                         i1_global, i2_global, ig1_global, ig2_global
   Use decomp_2d, Only : decomp_2d_init, decomp_2d_finalize, decomp_info, decomp_info_init, &
        d2d_xstart => xstart, d2d_xend => xend, d2d_xsize => xsize, &
@@ -73,7 +73,10 @@ Contains
        End If
     End Do
 
-    If ( .Not. found ) Stop 'ERROR: no valid p_row/p_col auto-split for nprocs; set explicitly'
+    If ( .Not. found ) Then
+       If ( myid==0 ) Write(*,*) 'ERROR: no valid p_row/p_col auto-split for nprocs; set explicitly'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
 
     p_row_out = best_row
     p_col_out = best_col
@@ -112,8 +115,14 @@ Contains
     Call distribute_1d( nx_global, p_row, xst_chk, xen_chk )
     Call y_pencil_local_range(chk_i1, chk_i2, chk_j1, chk_j2, chk_k1, chk_k2)
     row = myid / p_col
-    If ( xst_chk(row) /= chk_i1 .Or. xen_chk(row) /= chk_i2 ) &
-         Stop 'ERROR: rank<->(row,col) mapping assumption wrong -- cannot safely build x/z ownership'
+    If ( xst_chk(row) /= chk_i1 .Or. xen_chk(row) /= chk_i2 ) Then
+       ! this condition depends on 2decomp&fft's own (possibly row-dependent, e.g.
+       ! remainder-on-first-vs-last-rank) partitioning, so it can be true on some
+       ! ranks and false on others -- Mpi_Abort (not Stop) so a mismatch on a subset
+       ! of ranks can't leave the rest hanging in a later collective
+       Write(*,*) 'ERROR (rank ', myid, '): rank<->(row,col) mapping assumption wrong -- cannot safely build x/z ownership'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
     Deallocate ( xst_chk, xen_chk )
 
     Allocate ( xst(0:p_row-1), xen(0:p_row-1) )
