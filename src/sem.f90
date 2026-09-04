@@ -109,7 +109,8 @@ Module synthetic_eddy_method
   Integer(Int32) :: rec_unit    = -1
   Integer(Int32) :: rec_ncomp   = 0
   Integer(Int32) :: rec_n1      = 0   ! U/W/T/C's native n1 = nym_global (cell-centre y)
-  Integer(Int32) :: rec_n1_v    = 0   ! V's own native n1 = ny_global (y-face, no half-cell shift needed)
+  Integer(Int32) :: rec_n1_v    = 0   ! V's own native n1 = ny_global (y-face, no half-cell shift needed) when rec_v_native; else == rec_n1 (legacy shared-grid donor, see rec_v_native)
+  Logical        :: rec_v_native = .True.  ! .True.: donor meta had 'n1_V' (dopamine-ESEM / per-component-native-grid writer) -- V read at its own y-face index, no shift. .False.: older/generic probe_output.f90 x-normal slice donor, which cell-centre-interpolates V onto the same (nym_global) grid as U/W -- V must then be indexed with the same j-1 cell-centre shift as U/W (see recycle_value)
   Integer(Int32) :: rec_n2_global = 0 ! all components' donor n2 = nzm_global (U/V cell-centre z; W left-face-of-cell z)
   Integer(Int32) :: rec_col_U   = 0, rec_col_V = 0, rec_col_W = 0   ! presence flags (1 if the component is in the donor's comps, 0 if absent) -- U,V,W always required
   Integer(Int32) :: rec_col_T   = 0   ! 0 if the donor slice didn't record T (fine unless boussinesq_flag>=1, checked in init_inflow_recycle)
@@ -133,7 +134,7 @@ Module synthetic_eddy_method
   Real   (Int64), Allocatable :: rec_lo_C(:,:), rec_hi_C(:,:)
   Real   (Int64) :: rec_frac = 0d0   ! time-interpolation weight between rec_lo_* and rec_hi_*
 
-  !$acc declare create(rec_lo_U, rec_hi_U, rec_lo_V, rec_hi_V, rec_lo_W, rec_hi_W, rec_lo_T, rec_hi_T, rec_lo_C, rec_hi_C, rec_frac, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v)
+  !$acc declare create(rec_lo_U, rec_hi_U, rec_lo_V, rec_hi_V, rec_lo_W, rec_hi_W, rec_lo_T, rec_hi_T, rec_lo_C, rec_hi_C, rec_frac, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v, rec_v_native)
 
 Contains
 
@@ -449,10 +450,19 @@ Contains
 
   End Subroutine init_inflow
 
-  !> Parse a recycled-inflow donor's <inflow_recycle_file>_meta.txt (as written by dopamine-ESEM's per-component-native-grid writer); returns U/W/T/C's shared native n1 (cell-centre y), V's own native n1_v (y-face), the shared n2 (donor z), snapshot count, and per-component presence flags (1 if the component is in the donor's comps, 0 if absent)
-  Subroutine read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC)
+  !> Parse a recycled-inflow donor's <inflow_recycle_file>_meta.txt. Two donor formats are
+  !> accepted: (1) the per-component-native-grid format written by dopamine-ESEM, which
+  !> carries an explicit 'n1_V' key (V's own native y-face count, ny_global) alongside the
+  !> shared U/W/T/C native n1 (cell-centre y, nym_global); (2) the older/generic format
+  !> written by probe_output.f90's x-normal slice output (e.g. examples/precursor_successor),
+  !> which cell-centre-interpolates V onto the same nym_global grid as U/W and has no 'n1_V'
+  !> key -- for that format n1_v is defaulted to n1 and v_native returned .False., so the
+  !> caller (init_inflow_recycle) and recycle_value read/index V using the same cell-centre
+  !> convention as U/W instead of V's true (unavailable) face grid.
+  Subroutine read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native)
 
     Integer(Int32), Intent(Out) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC
+    Logical,        Intent(Out) :: v_native
 
     Integer(Int32) :: u_meta, ios, eqpos, ic
     Character(300) :: fname, line
@@ -467,6 +477,7 @@ Contains
     If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file meta (expected <inflow_recycle_file>_meta.txt)'
 
     ncomp = 0; n1 = 0; n1_v = 0; n2 = 0; nsnaps = 0; comps_str = ''
+    v_native = .False.
     Do
        Read(u_meta,'(A)', iostat=ios) line
        If ( ios /= 0 ) Exit
@@ -476,7 +487,7 @@ Contains
        Select Case ( Trim(key) )
        Case ('ncomp');  Read(line(eqpos+1:),*) ncomp
        Case ('n1');     Read(line(eqpos+1:),*) n1
-       Case ('n1_V');   Read(line(eqpos+1:),*) n1_v
+       Case ('n1_V');   Read(line(eqpos+1:),*) n1_v;  v_native = .True.
        Case ('n2');     Read(line(eqpos+1:),*) n2
        Case ('comps');  comps_str = Adjustl(line(eqpos+1:))
        Case ('nsnaps'); Read(line(eqpos+1:),*) nsnaps
@@ -488,10 +499,15 @@ Contains
     End Do
     Close(u_meta)
 
-    If ( ncomp < 1 .Or. n1 < 1 .Or. n1_v < 1 .Or. n2 < 1 .Or. nsnaps < 1 ) &
-         Stop 'ERROR: inflow_recycle_file meta is incomplete or malformed (expected the per-component-native-grid ' // &
-         'format written by the current dopamine-ESEM/sem.f90 -- a donor from an older build is missing n1_V and ' // &
-         'must be regenerated)'
+    If ( ncomp < 1 .Or. n1 < 1 .Or. n2 < 1 .Or. nsnaps < 1 ) &
+         Stop 'ERROR: inflow_recycle_file meta is incomplete or malformed (expected ncomp/n1/n2/comps/nsnaps, ' // &
+         'as written by probe_output.f90''s slice output or dopamine-ESEM)'
+
+    If ( .Not. v_native ) Then
+       n1_v = n1   ! legacy/generic donor: V shares U/W's cell-centre grid on disk
+       If ( myid == 0 ) Write(*,'(A)') ' NOTE: inflow_recycle_file has no n1_V -- treating as a generic ' // &
+            '(non-ESEM) donor: V is read cell-centre-interpolated like U/W, not on its own native face grid'
+    End If
 
     Do ic = 1, Len_trim(comps_str)
        If ( comps_str(ic:ic) >= 'a' .And. comps_str(ic:ic) <= 'z' ) &
@@ -513,10 +529,11 @@ Contains
   Subroutine read_recycle_mean_profile
 
     Integer(Int32) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy
+    Logical :: v_native
     Real(Int64), Allocatable :: frame_U(:,:)
     Character(300) :: fname
 
-    Call read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC)
+    Call read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native)
 
     If ( n1 /= nym_global ) Stop 'ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global'
     If ( n2 /= nzm_global ) Stop 'ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global'
@@ -560,10 +577,13 @@ Contains
     If ( myid/p_col /= 0 ) Return
 
     Call read_recycle_meta(rec_ncomp, rec_n1, rec_n1_v, rec_n2_global, rec_nsnaps, &
-         rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C)
+         rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_v_native)
 
     If ( rec_n1 /= nym_global ) Stop 'ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global'
-    If ( rec_n1_v /= ny_global ) Stop 'ERROR: inflow_recycle_file n1_V (V''s own y-face count) does not match this run''s ny_global'
+    If ( rec_v_native ) Then
+       If ( rec_n1_v /= ny_global ) &
+            Stop 'ERROR: inflow_recycle_file n1_V (V''s own y-face count) does not match this run''s ny_global'
+    End If
     If ( rec_n2_global /= nzm_global ) Stop 'ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global'
     If ( rec_nsnaps < 2 ) Stop 'ERROR: inflow_recycle_file must contain at least 2 snapshots to interpolate in time'
     If ( boussinesq_flag >= 1 .And. rec_col_T == 0 ) Stop 'ERROR: boussinesq_flag>=1 with ' // &
@@ -606,7 +626,7 @@ Contains
     Allocate( rec_hi_C(Merge(rec_n1,0,rec_col_C==1), Merge(rec_k2-rec_k1+1,0,rec_col_C==1)) )
     rec_idx_lo = -1;  rec_idx_hi = -1
 
-    !$acc update device(rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v)
+    !$acc update device(rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v, rec_v_native)
 
     Call update_inflow_recycle(t)   ! prime rec_lo_*/rec_hi_*/rec_frac before the first BC application
 
@@ -767,8 +787,14 @@ Contains
     Case (1)   ! U: (yg,zg) ghost cell-centre
        jy = Max( 1, Min(rec_n1, j-1) );  kz = Max( 1, Min(nzloc, k-1) )
        val = rec_lo_U(jy,kz) + rec_frac*( rec_hi_U(jy,kz) - rec_lo_U(jy,kz) )
-    Case (2)   ! V: (y,zg) y-face (no shift), z ghost cell-centre
-       jy = Max( 1, Min(rec_n1_v, j) );  kz = Max( 1, Min(nzloc, k-1) )
+    Case (2)   ! V: native-grid donor -- (y,zg) y-face (no shift); legacy/generic donor -- V was
+               ! cell-centre-interpolated onto the same grid as U/W, so index it the same way (j-1)
+       If ( rec_v_native ) Then
+          jy = Max( 1, Min(rec_n1_v, j) )
+       Else
+          jy = Max( 1, Min(rec_n1, j-1) )
+       End If
+       kz = Max( 1, Min(nzloc, k-1) )
        val = rec_lo_V(jy,kz) + rec_frac*( rec_hi_V(jy,kz) - rec_lo_V(jy,kz) )
     Case (3)   ! W: (yg,z) y ghost cell-centre, z-face (no shift)
        jy = Max( 1, Min(rec_n1, j-1) );  kz = Max( 1, Min(nzloc, k) )
