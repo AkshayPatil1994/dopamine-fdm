@@ -151,8 +151,8 @@ of the time evolution of the kinetic energy and the kinetic energy dissipation r
 against reference direct numerical simulations (DNS) using a similar numerical
 methodology. The data markers correspond to the various grid resolutions tested using
 `dopamine-fdm`: red = $N_g = 256^3$, blue = $N_g = 384^3$, black = $N_g = 512^3$. Using
-`advection_scheme = 0` (skew-symmetric, the default), the results compare well with the
-benchmark data.
+`advection_scheme = 1` (pure divergence-form central), the results compare well with the
+benchmark data. The dissipation rate can be calculated using two methods, (a) explicit gradient based calculation [empty circles], (b) Time rate of change of the Kinetic Energy i.e., $\epsilon = -dk/dt$ [dashed line].  
 
 ![Solver Validation & Grid Sensitivity Test](TGV_Validation.png)
 
