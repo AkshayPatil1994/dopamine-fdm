@@ -242,7 +242,6 @@ Contains
     Integer(Int32) :: partner
     Logical        :: is_first_x, is_last_x
     Integer(Int32) :: partner_x
-    Real(Int64), Allocatable :: buffer_px(:,:)
 
     ! x periodic ghost-fill (inflow/outflow needs none): only the row owning the
     ! domain's x tail is missing this point (nxp_global's periodic reduction), and
@@ -254,15 +253,11 @@ Contains
           rhs_p ( nxg-1, :, : ) = rhs_p ( 2, :, : )
           !$acc end kernels
        Elseif ( is_first_x ) Then
-          Allocate( buffer_px(nyg-2,nzg-1) )
           buffer_px = rhs_p ( 2, :, : )
           Call Mpi_send(buffer_px, (nyg-2)*(nzg-1), MPI_real8, partner_x, 0, MPI_COMM_WORLD, ierr)
-          Deallocate( buffer_px )
        Elseif ( is_last_x ) Then
-          Allocate( buffer_px(nyg-2,nzg-1) )
           Call Mpi_recv(buffer_px, (nyg-2)*(nzg-1), MPI_real8, partner_x, 0, MPI_COMM_WORLD, istat, ierr)
           rhs_p ( nxg-1, :, : ) = buffer_px
-          Deallocate( buffer_px )
        End If
     End If
 
@@ -305,16 +300,13 @@ Contains
   Subroutine update_ghost_interior_planes_pressure_x
 
     Integer(Int32) :: up, down
-    Real(Int64), Allocatable :: bs(:,:), br(:,:)
 
     Call x_halo_neighbors(up, down)
 
-    Allocate( bs(nyg-2,nzg-1), br(nyg-2,nzg-1) )
-    bs = rhs_p(2,:,:)
-    Call Mpi_sendrecv(bs, (nyg-2)*(nzg-1), Mpi_real8, down, 0,             &
-         br, (nyg-2)*(nzg-1), Mpi_real8, up,   0, MPI_COMM_WORLD, istat, ierr)
-    If ( up /= MPI_PROC_NULL ) rhs_p(nxg,:,:) = br
-    Deallocate( bs, br )
+    buffer_pgxs = rhs_p(2,:,:)
+    Call Mpi_sendrecv(buffer_pgxs, (nyg-2)*(nzg-1), Mpi_real8, down, 0,             &
+         buffer_pgxr, (nyg-2)*(nzg-1), Mpi_real8, up,   0, MPI_COMM_WORLD, istat, ierr)
+    If ( up /= MPI_PROC_NULL ) rhs_p(nxg,:,:) = buffer_pgxr
 
   End Subroutine update_ghost_interior_planes_pressure_x
 

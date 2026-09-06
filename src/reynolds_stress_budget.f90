@@ -349,28 +349,32 @@ Contains
   Subroutine output_rsb
 
     ! ── global (rank-0) arrays after MPI-reduce and hom. averaging ───────
-    Real(Int64), Allocatable :: g_U(:,:,:),  g_V(:,:,:),  g_W(:,:,:)
-    Real(Int64), Allocatable :: g_P(:,:,:)
-    Real(Int64), Allocatable :: g_UiUj(:,:,:,:)
-    Real(Int64), Allocatable :: g_GijRes(:,:,:,:), g_GijSGS(:,:,:,:)
-    Real(Int64), Allocatable :: g_PiStrain(:,:,:,:), g_PVel(:,:,:,:)
-    Real(Int64), Allocatable :: g_TijY(:,:,:,:)
-    Real(Int64), Allocatable :: g_TijX(:,:,:,:), g_TijZ(:,:,:,:)
-    Real(Int64), Allocatable :: g_T(:,:,:), g_TT(:,:,:), g_UiT(:,:,:,:)
+    ! Save + guarded Allocate below: these are always the same shape for the
+    ! whole run, so they're allocated once on the first call and reused every
+    ! rsb_freq window instead of paying Allocate/Deallocate heap churn on each
+    ! (rank-0-sized, multi-MB) array every window.
+    Real(Int64), Allocatable, Save :: g_U(:,:,:),  g_V(:,:,:),  g_W(:,:,:)
+    Real(Int64), Allocatable, Save :: g_P(:,:,:)
+    Real(Int64), Allocatable, Save :: g_UiUj(:,:,:,:)
+    Real(Int64), Allocatable, Save :: g_GijRes(:,:,:,:), g_GijSGS(:,:,:,:)
+    Real(Int64), Allocatable, Save :: g_PiStrain(:,:,:,:), g_PVel(:,:,:,:)
+    Real(Int64), Allocatable, Save :: g_TijY(:,:,:,:)
+    Real(Int64), Allocatable, Save :: g_TijX(:,:,:,:), g_TijZ(:,:,:,:)
+    Real(Int64), Allocatable, Save :: g_T(:,:,:), g_TT(:,:,:), g_UiT(:,:,:,:)
 
     ! ── budget term arrays (output grid: out_nx × out_ny × out_nz) ───────
-    Real(Int64), Allocatable :: Rij(:,:,:,:)     ! Reynolds stresses (central moments)
-    Real(Int64), Allocatable :: Pij(:,:,:,:)     ! production
-    Real(Int64), Allocatable :: epsRes(:,:,:,:)  ! resolved dissipation
-    Real(Int64), Allocatable :: epsSGS(:,:,:,:)  ! SGS dissipation
-    Real(Int64), Allocatable :: PiStrain(:,:,:,:)! pressure-strain
-    Real(Int64), Allocatable :: DTij(:,:,:,:)    ! turbulent diffusion
-    Real(Int64), Allocatable :: Dnuij(:,:,:,:)   ! viscous diffusion
-    Real(Int64), Allocatable :: PhiPij(:,:,:,:)  ! pressure diffusion
-    Real(Int64), Allocatable :: Umean(:,:,:,:)   ! mean velocities (3 components)
-    Real(Int64), Allocatable :: Resid(:,:,:,:)   ! budget residual
-    Real(Int64), Allocatable :: Tmean_g(:,:,:), Tvar_g(:,:,:), UiT_g(:,:,:,:), BuoyProd_g(:,:,:)
-    Real(Int64), Allocatable :: Tmean(:,:,:,:), Tvar(:,:,:,:), UiT(:,:,:,:), BuoyProd(:,:,:,:)
+    Real(Int64), Allocatable, Save :: Rij(:,:,:,:)     ! Reynolds stresses (central moments)
+    Real(Int64), Allocatable, Save :: Pij(:,:,:,:)     ! production
+    Real(Int64), Allocatable, Save :: epsRes(:,:,:,:)  ! resolved dissipation
+    Real(Int64), Allocatable, Save :: epsSGS(:,:,:,:)  ! SGS dissipation
+    Real(Int64), Allocatable, Save :: PiStrain(:,:,:,:)! pressure-strain
+    Real(Int64), Allocatable, Save :: DTij(:,:,:,:)    ! turbulent diffusion
+    Real(Int64), Allocatable, Save :: Dnuij(:,:,:,:)   ! viscous diffusion
+    Real(Int64), Allocatable, Save :: PhiPij(:,:,:,:)  ! pressure diffusion
+    Real(Int64), Allocatable, Save :: Umean(:,:,:,:)   ! mean velocities (3 components)
+    Real(Int64), Allocatable, Save :: Resid(:,:,:,:)   ! budget residual
+    Real(Int64), Allocatable, Save :: Tmean_g(:,:,:), Tvar_g(:,:,:), UiT_g(:,:,:,:), BuoyProd_g(:,:,:)
+    Real(Int64), Allocatable, Save :: Tmean(:,:,:,:), Tvar(:,:,:,:), UiT(:,:,:,:), BuoyProd(:,:,:,:)
 
     Integer(Int32) :: c, i, j, k
     Real(Int64)    :: dn   ! = 1 / n_accum (for averaging)
@@ -381,18 +385,20 @@ Contains
     dn = 1d0 / Real(n_accum, Int64)
 
     ! ── MPI-reduce accumulators to rank 0 ─────────────────────────────
-    Allocate( g_U      (  nxm_global, nym_global, nzm_global) )
-    Allocate( g_V      (  nxm_global, nym_global, nzm_global) )
-    Allocate( g_W      (  nxm_global, nym_global, nzm_global) )
-    Allocate( g_P      (  nxm_global, nym_global, nzm_global) )
-    Allocate( g_UiUj   (6,nxm_global, nym_global, nzm_global) )
-    Allocate( g_GijRes (6,nxm_global, nym_global, nzm_global) )
-    Allocate( g_GijSGS (6,nxm_global, nym_global, nzm_global) )
-    Allocate( g_PiStrain(6,nxm_global,nym_global, nzm_global) )
-    Allocate( g_PVel   (3,nxm_global, nym_global, nzm_global) )
-    Allocate( g_TijY   (6,nxm_global, nym_global, nzm_global) )
-    Allocate( g_TijX(6,nxm_global,nym_global,nzm_global) ); g_TijX = 0d0
-    Allocate( g_TijZ(6,nxm_global,nym_global,nzm_global) ); g_TijZ = 0d0
+    If ( .Not. Allocated(g_U) ) Then
+       Allocate( g_U      (  nxm_global, nym_global, nzm_global) )
+       Allocate( g_V      (  nxm_global, nym_global, nzm_global) )
+       Allocate( g_W      (  nxm_global, nym_global, nzm_global) )
+       Allocate( g_P      (  nxm_global, nym_global, nzm_global) )
+       Allocate( g_UiUj   (6,nxm_global, nym_global, nzm_global) )
+       Allocate( g_GijRes (6,nxm_global, nym_global, nzm_global) )
+       Allocate( g_GijSGS (6,nxm_global, nym_global, nzm_global) )
+       Allocate( g_PiStrain(6,nxm_global,nym_global, nzm_global) )
+       Allocate( g_PVel   (3,nxm_global, nym_global, nzm_global) )
+       Allocate( g_TijY   (6,nxm_global, nym_global, nzm_global) )
+       Allocate( g_TijX(6,nxm_global,nym_global,nzm_global) ); g_TijX = 0d0
+       Allocate( g_TijZ(6,nxm_global,nym_global,nzm_global) ); g_TijZ = 0d0
+    End If
 
     Call reduce_to_rank0(acc_U,      g_U,       nxm*nym_global*nzm)
     Call reduce_to_rank0(acc_V,      g_V,       nxm*nym_global*nzm)
@@ -408,9 +414,11 @@ Contains
     If ( .Not. hom_z ) Call reduce_to_rank0_4d(acc_TijZ,g_TijZ,6,nxm,nym_global,nzm)
 
     If ( boussinesq_flag >= 1 ) Then
-       Allocate( g_T (nxm_global, nym_global, nzm_global) )
-       Allocate( g_TT(nxm_global, nym_global, nzm_global) )
-       Allocate( g_UiT(3,nxm_global, nym_global, nzm_global) )
+       If ( .Not. Allocated(g_T) ) Then
+          Allocate( g_T (nxm_global, nym_global, nzm_global) )
+          Allocate( g_TT(nxm_global, nym_global, nzm_global) )
+          Allocate( g_UiT(3,nxm_global, nym_global, nzm_global) )
+       End If
        Call reduce_to_rank0(acc_T,   g_T,   nxm*nym_global*nzm)
        Call reduce_to_rank0(acc_TT,  g_TT,  nxm*nym_global*nzm)
        Call reduce_to_rank0_4d(acc_UiT, g_UiT, 3, nxm, nym_global, nzm)
@@ -432,16 +440,18 @@ Contains
        If ( .Not. hom_z ) g_TijZ = g_TijZ * dn
 
        ! allocate output budget arrays on the reduced (out_nx x out_ny x out_nz) grid
-       Allocate( Rij     (N_COMP, out_nx, out_ny, out_nz) )
-       Allocate( Pij     (N_COMP, out_nx, out_ny, out_nz) )
-       Allocate( epsRes  (N_COMP, out_nx, out_ny, out_nz) )
-       Allocate( epsSGS  (N_COMP, out_nx, out_ny, out_nz) )
-       Allocate( PiStrain(N_COMP, out_nx, out_ny, out_nz) )
-       Allocate( DTij    (N_COMP, out_nx, out_ny, out_nz) )
-       Allocate( Dnuij   (N_COMP, out_nx, out_ny, out_nz) )
-       Allocate( PhiPij  (N_COMP, out_nx, out_ny, out_nz) )
-       Allocate( Umean   (3,      out_nx, out_ny, out_nz) )
-       Allocate( Resid   (N_COMP, out_nx, out_ny, out_nz) )
+       If ( .Not. Allocated(Rij) ) Then
+          Allocate( Rij     (N_COMP, out_nx, out_ny, out_nz) )
+          Allocate( Pij     (N_COMP, out_nx, out_ny, out_nz) )
+          Allocate( epsRes  (N_COMP, out_nx, out_ny, out_nz) )
+          Allocate( epsSGS  (N_COMP, out_nx, out_ny, out_nz) )
+          Allocate( PiStrain(N_COMP, out_nx, out_ny, out_nz) )
+          Allocate( DTij    (N_COMP, out_nx, out_ny, out_nz) )
+          Allocate( Dnuij   (N_COMP, out_nx, out_ny, out_nz) )
+          Allocate( PhiPij  (N_COMP, out_nx, out_ny, out_nz) )
+          Allocate( Umean   (3,      out_nx, out_ny, out_nz) )
+          Allocate( Resid   (N_COMP, out_nx, out_ny, out_nz) )
+       End If
 
        ! compute central moments and all budget terms on the output grid
        Call compute_budget_terms( &
@@ -468,10 +478,12 @@ Contains
        If ( boussinesq_flag >= 1 ) Then
           g_T  = g_T  * dn;  g_TT = g_TT * dn;  g_UiT = g_UiT * dn
 
-          Allocate( Tmean_g   (  nxm_global,nym_global,nzm_global) )
-          Allocate( Tvar_g    (  nxm_global,nym_global,nzm_global) )
-          Allocate( UiT_g     (3,nxm_global,nym_global,nzm_global) )
-          Allocate( BuoyProd_g(  nxm_global,nym_global,nzm_global) )
+          If ( .Not. Allocated(Tmean_g) ) Then
+             Allocate( Tmean_g   (  nxm_global,nym_global,nzm_global) )
+             Allocate( Tvar_g    (  nxm_global,nym_global,nzm_global) )
+             Allocate( UiT_g     (3,nxm_global,nym_global,nzm_global) )
+             Allocate( BuoyProd_g(  nxm_global,nym_global,nzm_global) )
+          End If
 
           Do k = 1, nzm_global
              Do j = 1, nym_global
@@ -486,10 +498,12 @@ Contains
              End Do
           End Do
 
-          Allocate( Tmean   (1, out_nx, out_ny, out_nz) )
-          Allocate( Tvar    (1, out_nx, out_ny, out_nz) )
-          Allocate( UiT     (3, out_nx, out_ny, out_nz) )
-          Allocate( BuoyProd(1, out_nx, out_ny, out_nz) )
+          If ( .Not. Allocated(Tmean) ) Then
+             Allocate( Tmean   (1, out_nx, out_ny, out_nz) )
+             Allocate( Tvar    (1, out_nx, out_ny, out_nz) )
+             Allocate( UiT     (3, out_nx, out_ny, out_nz) )
+             Allocate( BuoyProd(1, out_nx, out_ny, out_nz) )
+          End If
 
           Call hom_avg_4d( Reshape(Tmean_g,   [1,nxm_global,nym_global,nzm_global]), 1, Tmean )
           Call hom_avg_4d( Reshape(Tvar_g,    [1,nxm_global,nym_global,nzm_global]), 1, Tvar  )
@@ -501,7 +515,6 @@ Contains
           Call write_rsb_slice('UiT',      UiT,      3)
           Call write_rsb_slice('BuoyProd', BuoyProd, 1)
 
-          Deallocate( Tmean_g, Tvar_g, UiT_g, BuoyProd_g, Tmean, Tvar, UiT, BuoyProd )
        End If
 
        ! update meta file
@@ -510,15 +523,7 @@ Contains
        Write(*,'(A,I8,A,I8,A)') ' RSB: wrote sample ', nsamples, &
             ' at step ', istep, '.'
 
-       Deallocate(Rij, Pij, epsRes, epsSGS, PiStrain)
-       Deallocate(DTij, Dnuij, PhiPij, Umean, Resid)
     End If
-
-    ! ── deallocate global buffers ─────────────────────────────────────────
-    Deallocate(g_U, g_V, g_W, g_P, g_UiUj, g_GijRes, g_GijSGS)
-    Deallocate(g_PiStrain, g_PVel, g_TijY)
-    Deallocate(g_TijX, g_TijZ)
-    If ( boussinesq_flag >= 1 ) Deallocate(g_T, g_TT, g_UiT)
 
     ! ── reset accumulators for next window ───────────────────────────────
     Call zero_accumulators
@@ -620,18 +625,41 @@ Contains
   End Subroutine reduce_to_rank0
 
 
-  !  reduce_to_rank0_4d — wraps reduce_to_rank0 for 4D (nc,nx,ny,nz) arrays
+  !  reduce_to_rank0_4d — gathers a 4D (nc,nx,ny,nz) array along the z decomposition
+  !  in a single MPI_Gatherv (nc is the fastest-varying dimension, so the whole
+  !  array is already one contiguous per-rank z-slab block; this was previously
+  !  nc separate reduce_to_rank0 calls, one per component, each paying its own
+  !  collective-call latency for no reason since nc components move together).
   Subroutine reduce_to_rank0_4d(local_arr, global_arr, nc, lnx, lny, lnz)
 
     Integer(Int32), Intent(In)  :: nc, lnx, lny, lnz
     Real(Int64),    Intent(In)  :: local_arr (nc, lnx, lny, lnz)
     Real(Int64),    Intent(Out) :: global_arr(nc, nxm_global, nym_global, nzm_global)
 
-    Integer(Int32) :: c
+    Integer(Int32) :: sendcount
+    Integer(Int32), Allocatable :: recvcounts(:), displs(:)
+    Integer(Int32) :: iproc, off
 
-    Do c = 1, nc
-       Call reduce_to_rank0(local_arr(c,:,:,:), global_arr(c,:,:,:), lnx*lny*lnz)
-    End Do
+    sendcount = nc*lnx*lny*lnz
+
+    If ( myid == 0 ) Then
+       Allocate(recvcounts(nprocs), displs(nprocs))
+       off = 0
+       Do iproc = 0, nprocs-1
+          recvcounts(iproc+1) = nc * nxm_global * nym_global * &
+               (kg2_global(iproc) - kg1_global(iproc) + 1 - 2)
+          displs(iproc+1) = off
+          off = off + recvcounts(iproc+1)
+       End Do
+       Call MPI_Gatherv(local_arr, sendcount, MPI_REAL8, &
+                        global_arr, recvcounts, displs, MPI_REAL8, &
+                        0, MPI_COMM_WORLD, ierr)
+       Deallocate(recvcounts, displs)
+    Else
+       Call MPI_Gatherv(local_arr, sendcount, MPI_REAL8, &
+                        global_arr, sendcount, 0, MPI_REAL8, &
+                        0, MPI_COMM_WORLD, ierr)
+    End If
 
   End Subroutine reduce_to_rank0_4d
 

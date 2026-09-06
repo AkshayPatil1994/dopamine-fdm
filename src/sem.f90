@@ -134,7 +134,7 @@ Module synthetic_eddy_method
   Real   (Int64), Allocatable :: rec_lo_C(:,:), rec_hi_C(:,:)
   Real   (Int64) :: rec_frac = 0d0   ! time-interpolation weight between rec_lo_* and rec_hi_*
 
-  !$acc declare create(rec_lo_U, rec_hi_U, rec_lo_V, rec_hi_V, rec_lo_W, rec_hi_W, rec_lo_T, rec_hi_T, rec_lo_C, rec_hi_C, rec_frac, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v, rec_v_native)
+  !$acc declare create(rec_lo_U, rec_hi_U, rec_lo_V, rec_hi_V, rec_lo_W, rec_hi_W, rec_lo_T, rec_hi_T, rec_lo_C, rec_hi_C, rec_frac, rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_n1, rec_n1_v, rec_v_native, rec_k1, rec_k2)
 
 Contains
 
@@ -608,6 +608,7 @@ Contains
     ! this rank's local donor z-slab: same global 1-based interior cc/face convention the writer used (kg_g = kg1_global(myid)+ka-2)
     rec_k1 = kg1_global(myid)
     rec_k2 = kg2_global(myid) - 2
+    !$acc update device(rec_k1, rec_k2)
 
     has_T = ( rec_col_T == 1 );  has_C = ( rec_col_C == 1 )
 
@@ -1204,13 +1205,16 @@ Contains
 
   End Subroutine read_sigma_profile
 
-  ! Generic piecewise-linear interpolation, clamped at the endpoints.
+  ! Generic piecewise-linear interpolation, clamped at the endpoints. xarr
+  ! must be non-decreasing (grid/profile y-nodes); bracket found by binary
+  ! search (was an O(n) linear scan -- hot in sem_fluctuation/mean_profile_*,
+  ! called at every inflow grid point, every RK sub-stage).
   Real(Int64) Function linterp(xarr, yarr, n, xq) Result(val)
     !$acc routine seq
 
     Real(Int64),    Intent(In) :: xarr(:), yarr(:), xq
     Integer(Int32), Intent(In) :: n
-    Integer(Int32) :: m
+    Integer(Int32) :: m, lo, hi
 
     If ( xq <= xarr(1) ) Then
        val = yarr(1)
@@ -1219,13 +1223,18 @@ Contains
        val = yarr(n)
        Return
     End If
-    Do m = 1, n-1
-       If ( xq >= xarr(m) .And. xq <= xarr(m+1) ) Then
-          val = yarr(m) + ( yarr(m+1)-yarr(m) ) * ( xq-xarr(m) ) / ( xarr(m+1)-xarr(m) )
-          Return
+    lo = 1
+    hi = n-1
+    Do While ( lo < hi )
+       m = (lo+hi)/2
+       If ( xarr(m+1) < xq ) Then
+          lo = m+1
+       Else
+          hi = m
        End If
     End Do
-    val = yarr(n)   ! unreachable, keeps the function well-defined
+    m = lo
+    val = yarr(m) + ( yarr(m+1)-yarr(m) ) * ( xq-xarr(m) ) / ( xarr(m+1)-xarr(m) )
 
   End Function linterp
 
@@ -1419,11 +1428,15 @@ Contains
 
   End Subroutine build_placement_cdf
 
+  ! cdf_val is non-decreasing by construction (trapezoidal integral of a
+  ! strictly-positive weight, see build_placement_cdf); bracket found by
+  ! binary search (was an O(n_cdf) linear scan -- hot in place_eddies/
+  ! eddy_realize, called per eddy per placement draw).
   Real(Int64) Function invert_cdf(u) Result(yq)
     !$acc routine seq
 
     Real(Int64), Intent(In) :: u
-    Integer(Int32) :: m
+    Integer(Int32) :: m, lo, hi
 
     If ( u <= cdf_val(1) ) Then
        yq = cdf_y(1)
@@ -1432,13 +1445,18 @@ Contains
        yq = cdf_y(n_cdf)
        Return
     End If
-    Do m = 1, n_cdf-1
-       If ( u >= cdf_val(m) .And. u <= cdf_val(m+1) ) Then
-          yq = cdf_y(m) + ( cdf_y(m+1)-cdf_y(m) ) * ( u-cdf_val(m) ) / ( cdf_val(m+1)-cdf_val(m) )
-          Return
+    lo = 1
+    hi = n_cdf-1
+    Do While ( lo < hi )
+       m = (lo+hi)/2
+       If ( cdf_val(m+1) < u ) Then
+          lo = m+1
+       Else
+          hi = m
        End If
     End Do
-    yq = cdf_y(n_cdf)
+    m = lo
+    yq = cdf_y(m) + ( cdf_y(m+1)-cdf_y(m) ) * ( u-cdf_val(m) ) / ( cdf_val(m+1)-cdf_val(m) )
 
   End Function invert_cdf
 
@@ -2021,6 +2039,7 @@ Contains
 
     Real(Int64) :: g_U(nym_global), g_V(nym_global), g_W(nym_global)
     Real(Int64) :: g_UU(nym_global), g_VV(nym_global), g_WW(nym_global), g_n(nym_global)
+    Real(Int64) :: send_buf(7*nym_global), recv_buf(7*nym_global)
     Real(Int64) :: mean_U(nym_global), mean_V(nym_global), mean_W(nym_global)
     Real(Int64) :: var_UU(nym_global), var_VV(nym_global), var_WW(nym_global)
     Real(Int64) :: R11m, R22m, R33m, ratio11, ratio22, ratio33, dev11, dev22, dev33
@@ -2034,13 +2053,25 @@ Contains
 
     If ( ti_rescale_active /= 1 ) Return
 
-    Call MPI_Allreduce(acc_ti_U,  g_U,  nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Call MPI_Allreduce(acc_ti_V,  g_V,  nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Call MPI_Allreduce(acc_ti_W,  g_W,  nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Call MPI_Allreduce(acc_ti_UU, g_UU, nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Call MPI_Allreduce(acc_ti_VV, g_VV, nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Call MPI_Allreduce(acc_ti_WW, g_WW, nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Call MPI_Allreduce(acc_ti_n,  g_n,  nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    ! Packed into one Allreduce instead of seven separate calls, to avoid paying
+    ! full collective latency seven times over for what's otherwise one round trip
+    send_buf(          1 :   nym_global) = acc_ti_U
+    send_buf(  nym_global+1 : 2*nym_global) = acc_ti_V
+    send_buf(2*nym_global+1 : 3*nym_global) = acc_ti_W
+    send_buf(3*nym_global+1 : 4*nym_global) = acc_ti_UU
+    send_buf(4*nym_global+1 : 5*nym_global) = acc_ti_VV
+    send_buf(5*nym_global+1 : 6*nym_global) = acc_ti_WW
+    send_buf(6*nym_global+1 : 7*nym_global) = acc_ti_n
+
+    Call MPI_Allreduce(send_buf, recv_buf, 7*nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+    g_U  = recv_buf(          1 :   nym_global)
+    g_V  = recv_buf(  nym_global+1 : 2*nym_global)
+    g_W  = recv_buf(2*nym_global+1 : 3*nym_global)
+    g_UU = recv_buf(3*nym_global+1 : 4*nym_global)
+    g_VV = recv_buf(4*nym_global+1 : 5*nym_global)
+    g_WW = recv_buf(5*nym_global+1 : 6*nym_global)
+    g_n  = recv_buf(6*nym_global+1 : 7*nym_global)
 
     Do j = 1, nym_global
        If ( g_n(j) > 0d0 ) Then

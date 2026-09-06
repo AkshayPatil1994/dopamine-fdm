@@ -809,6 +809,38 @@ Contains
 
   End Subroutine read_distributed_field_block
 
+  !> Skip past one x/z-decomposed field block on a stream unit open on rank 0 only,
+  !  without reading its payload into memory or distributing it over MPI -- used by
+  !  read_scalar_restart/read_temperature_restart to fast-forward past the U/V/W/P
+  !  blocks already consumed by read_input_data, which this restart pass doesn't need.
+  !  dim2_size/is_x_face/is_z_face as in read_distributed_field_block (dim2_size is
+  !  that routine's Size(field_local,2), since there's no local array here to ask).
+  Subroutine skip_distributed_field_block(unit_no, dim2_size, is_x_face, is_z_face)
+
+    Integer(Int32), Intent(In) :: unit_no, dim2_size
+    Logical, Intent(In) :: is_x_face, is_z_face
+
+    Integer(Int32) :: nn(3), expect_n1, expect_n3
+    Integer(Int64) :: cur_pos, payload_bytes
+
+    If ( myid == 0 ) Then
+       Read(unit_no) nn
+
+       expect_n1 = Merge(nx_global, nxg_global, is_x_face)
+       expect_n3 = Merge(nz_global, nzg_global, is_z_face)
+       If ( nn(1) /= expect_n1 .Or. nn(2) /= dim2_size .Or. nn(3) /= expect_n3 ) Then
+          Write(*,'(A,3(I0,1X),A,3(I0,1X))') ' ERROR: restart file field block size mismatch while skipping: found ', &
+               nn, ' expected ', expect_n1, dim2_size, expect_n3
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+
+       payload_bytes = Int(nn(1),Int64)*Int(nn(2),Int64)*Int(nn(3),Int64)*8_Int64
+       Inquire(unit=unit_no, POS=cur_pos)
+       Read(unit_no, POS=cur_pos+payload_bytes)   ! pure seek: no data item, so nothing is transferred
+    End If
+
+  End Subroutine skip_distributed_field_block
+
   !> Write one x/z-decomposed field block (3-int header + global-sized data) to a stream unit open on rank 0 only, gathering from every rank's local array. Every non-zero rank's contribution is received into its own buffer via a single posted-up-front Waitall instead of one-at-a-time blocking Mpi_recv, so the gather isn't serialized behind rank 0's receive order. is_x_face/is_z_face as in read_distributed_field_block.
   Subroutine write_distributed_field_block(unit_no, field_local, nxf_global, nyf_global, nzf_global, is_x_face, is_z_face)
 
@@ -940,8 +972,6 @@ Contains
   ! Read scalar C from a restart file; caller/layout details
   Subroutine read_scalar_restart
 
-    Real(Int64), Allocatable :: skip_U(:,:,:), skip_V(:,:,:), skip_W(:,:,:), skip_P(:,:,:)
-
     If ( myid == 0 ) Then
        Open(2, file=Trim(Adjustl(filein)), access='stream', &
             form='unformatted', action='read')
@@ -961,12 +991,10 @@ Contains
     End If
 
     ! Skip U, V, W, P blocks (discarded — this restart file's U/V/W/P were already consumed by read_input_data)
-    Allocate( skip_U(nx,nyg,nzg), skip_V(nxg,ny,nzg), skip_W(nxg,nyg,nz), skip_P(nxg,nyg,nzg) )
-    Call read_distributed_field_block(2, skip_U, .True.,  .False.)
-    Call read_distributed_field_block(2, skip_V, .False., .False.)
-    Call read_distributed_field_block(2, skip_W, .False., .True.)
-    Call read_distributed_field_block(2, skip_P, .False., .False.)
-    Deallocate( skip_U, skip_V, skip_W, skip_P )
+    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
+    Call skip_distributed_field_block(2, ny,  .False., .False.)
+    Call skip_distributed_field_block(2, nyg, .False., .True.)
+    Call skip_distributed_field_block(2, nyg, .False., .False.)
 
     ! C block
     Call read_distributed_field_block(2, Cscal, .False., .False.)
@@ -979,8 +1007,6 @@ Contains
 
   ! Read temperature T from a restart file; skips U,V,W,P and any C/nu_t blocks ahead of it
   Subroutine read_temperature_restart
-
-    Real(Int64), Allocatable :: skip_U(:,:,:), skip_V(:,:,:), skip_W(:,:,:), skip_P(:,:,:)
 
     If ( myid == 0 ) Then
        Open(2, file=Trim(Adjustl(filein)), access='stream', &
@@ -1000,19 +1026,16 @@ Contains
     End If
 
     ! U,V,W,P blocks (discarded — already consumed by read_input_data)
-    Allocate( skip_U(nx,nyg,nzg), skip_V(nxg,ny,nzg), skip_W(nxg,nyg,nz), skip_P(nxg,nyg,nzg) )
-    Call read_distributed_field_block(2, skip_U, .True.,  .False.)
-    Call read_distributed_field_block(2, skip_V, .False., .False.)
-    Call read_distributed_field_block(2, skip_W, .False., .True.)
-    Call read_distributed_field_block(2, skip_P, .False., .False.)
+    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
+    Call skip_distributed_field_block(2, ny,  .False., .False.)
+    Call skip_distributed_field_block(2, nyg, .False., .True.)
+    Call skip_distributed_field_block(2, nyg, .False., .False.)
 
     ! C block (only present if sediment was active when the file was written) — discarded
-    If ( sediment_flag >= 1 ) Call read_distributed_field_block(2, skip_P, .False., .False.)
+    If ( sediment_flag >= 1 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
 
     ! nu_t block (only present if LES was active when the file was written) — discarded
-    If ( sgs_model /= 0 ) Call read_distributed_field_block(2, skip_P, .False., .False.)
-
-    Deallocate( skip_U, skip_V, skip_W, skip_P )
+    If ( sgs_model /= 0 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
 
     ! T block
     Call read_distributed_field_block(2, Tscal, .False., .False.)

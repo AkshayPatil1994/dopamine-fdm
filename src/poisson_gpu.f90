@@ -40,9 +40,20 @@ Contains
     nz1    = Int(nzp_global)
     nslabs = nyg - 2
 
+    ! kxx/kzz are set once in initialization.f90 and never touched again, so a
+    ! one-time upload here (rather than gpu_solve_periodic_3d/
+    ! gpu_solve_tridiagonal_batched re-copying them from host on every call)
+    ! is all they ever need.
+    !$acc enter data create(kxx,kzz)
+    !$acc update device(kxx,kzz)
+
     If ( y_bc_type == 0 ) Then
 
        If ( x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
+
+       ! kyy only exists (is Allocated) in this periodic-y branch
+       !$acc enter data create(kyy)
+       !$acc update device(kyy)
 
        ! Same "last interior cell is a redundant duplicate of the first" convention as
        ! periodic x/z (nxp_global=nxm_global-1): the periodic y transform only covers
@@ -198,7 +209,7 @@ Contains
     mz_i = Int(mz,Int32)
     my_i = nslabs - 2   ! max 0-based y-mode index (nslabs-1 independent y samples)
 
-    !$acc data copyin(kxx,kyy,kzz) present(cube3d)
+    ! kxx/kyy/kzz are made persistently device-resident once in gpu_poisson_init
     !$acc parallel loop collapse(3) present(kxx,kyy,kzz,cube3d)
     Do iz = 0, mz_i
        Do iy = 0, my_i
@@ -212,7 +223,6 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
-    !$acc end data
 
   End Subroutine gpu_solve_periodic_3d
 
@@ -385,15 +395,20 @@ Contains
     ierr = cusparseCreate( cusparse_h )
     If ( ierr /= 0 ) Stop 'ERROR: cusparseCreate failed'
 
-    !$acc data copy(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
+    ! gtsv_dl/d/du/x are pure per-call scratch (fully overwritten before being
+    ! read each call in gpu_solve_tridiagonal_batched), so a one-time device
+    ! allocation here -- instead of create/destroy on every call -- is safe;
+    ! the placeholder values only need to be on-device for this sizing query.
+    !$acc enter data create(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
+    !$acc update device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
     !$acc host_data use_device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
     ierr = cusparseZgtsvInterleavedBatch_bufferSizeExt( cusparse_h, CUSPARSE_ALG1, gtsv_m, &
                  gtsv_dl, gtsv_d, gtsv_du, gtsv_x, gtsv_batch, bufsize )
     !$acc end host_data
-    !$acc end data
     If ( ierr /= 0 ) Stop 'ERROR: cusparseZgtsvInterleavedBatch_bufferSizeExt failed'
 
     Allocate( gtsv_buf(bufsize) )
+    !$acc enter data create(gtsv_buf)
 
     gtsv_created = .True.
 
@@ -409,10 +424,13 @@ Contains
     mx_i = Int(mx,Int32)
     mz_i = Int(mz,Int32)
 
-    ! rhs_p_hat is persistently device-resident (initialization.f90) -- present()
-    ! fails loudly instead of silently re-transferring if that assumption ever breaks
-    !$acc data copyin(Dyy,kxx,kzz) present(rhs_p_hat) &
-    !$acc      create(gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
+    ! rhs_p_hat/Dyy/kxx/kzz/gtsv_* are all persistently device-resident
+    ! (initialization.f90 for rhs_p_hat/Dyy, gpu_poisson_init for kxx/kzz,
+    ! gpu_gtsv_init for gtsv_*; Dyy's evolving Robin-BC elements are kept
+    ! current via wallmodel.f90's own targeted !$acc update device) --
+    ! present() fails loudly instead of silently re-transferring if that
+    ! assumption ever breaks
+    !$acc data present(Dyy,kxx,kzz,rhs_p_hat,gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
 
     !$acc parallel loop collapse(2) present(Dyy,kxx,kzz,rhs_p_hat,gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
     Do k = 0, mz_i

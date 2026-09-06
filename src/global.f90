@@ -29,7 +29,8 @@ Module global
   Real(Int64) :: Lx, Lz, Ly, Lxp, Lzp
 
   ! steps
-  Integer(Int32) :: nsteps, nstep_init
+  Integer(Int32) :: nsteps
+  Integer(Int32) :: nstep_init = 0
   Real   (Int64) :: dt, t
   ! explicit restart start time (overrides nstep_init*dt when >=0d0 -- needed
   ! for restarts under adaptive dt, where step count no longer maps to a fixed
@@ -137,7 +138,13 @@ Module global
   Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_us, buffer_ur
   Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_vs, buffer_vr
   Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_ws, buffer_wr
+  ! x-direction ghost-plane exchange (update_ghost_interior_planes_x): sized to the
+  ! largest (dim2,dim3) extent across the U/V/W/P fields it's called for (nyg,nzg);
+  ! calls for a smaller field just use a leading (1:n2,1:n3) subslice of the same buffer
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_bcxs1, buffer_bcxs2, buffer_bcxr1, buffer_bcxr2
   Real(Int64), Allocatable, Dimension(:,:)   :: buffer_ps, buffer_pr
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_px
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_pgxs, buffer_pgxr
   
   ! local pencil work arrays for the Poisson pencil-transpose chain (2decomp&fft); rhs_p_hat below (y-pencil, post z-FFT) is shared with the GPU_POISSON path
   Real   (Int64), Allocatable, Dimension(:,:,:) :: poisson_y_r   ! y-pencil, real: interfaces with rhs_p
@@ -206,7 +213,7 @@ Module global
   Real   (Int64) :: sem_wall_damping_Aplus  = 25d0
 
   ! device residency for the scalars sem.f90's per-step (!$acc routine seq) call chain reads directly
-  !$acc declare create(inflow_type, inflow_Uconst, sem_n_eddies, sem_length_scale, sem_seed, sem_eddy_placement, sem_use_esem, sem_divergence_free)
+  !$acc declare create(inflow_type, inflow_Uconst, sem_n_eddies, sem_length_scale, sem_seed, sem_eddy_placement, sem_use_esem, sem_divergence_free, sem_wall_damping)
 
   ! finite differences (second derivative)
   Real(Int64) :: ddx1, ddx2, ddx3

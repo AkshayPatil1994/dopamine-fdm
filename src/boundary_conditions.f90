@@ -649,39 +649,41 @@ Contains
     Integer(Int32) :: up, down
     Integer(Int32) :: n2, n3
     Integer(Int32) :: reqs(4)
-    Real(Int64), Allocatable :: bs1(:,:), bs2(:,:), br1(:,:), br2(:,:)
 
     Call x_halo_neighbors(up, down)
 
     n2 = Size(F,2)
     n3 = Size(F,3)
-    Allocate ( bs1(n2,n3), bs2(n2,n3), br1(n2,n3), br2(n2,n3) )
 
+    ! buffer_bcx{s,r}{1,2} are sized to the largest (n2,n3) this routine is ever
+    ! called with (nyg,nzg); the full persistent array is always sent/received
+    ! (see Mpi_isend/irecv counts below) so the actual argument stays contiguous
+    ! -- required since these buffers must remain valid until Mpi_waitall, and a
+    ! non-contiguous array-section argument could otherwise be copied into a
+    ! compiler temporary that doesn't outlive the call.
     If ( id == 1 ) Then
        ! F defined at x faces (U): interior faces are 2..nx-1
-       bs1 = F(nx-1,:,:) ! send buffer, towards +x
-       bs2 = F(2,:,:)    ! send buffer, towards -x
+       buffer_bcxs1(1:n2,1:n3) = F(nx-1,:,:) ! send buffer, towards +x
+       buffer_bcxs2(1:n2,1:n3) = F(2,:,:)    ! send buffer, towards -x
     Else
        ! F defined at x centres (V,W,scalars): interior centres are 2..nxg-1
-       bs1 = F(nxg-1,:,:) ! send buffer, towards +x
-       bs2 = F(2,:,:)     ! send buffer, towards -x
+       buffer_bcxs1(1:n2,1:n3) = F(nxg-1,:,:) ! send buffer, towards +x
+       buffer_bcxs2(1:n2,1:n3) = F(2,:,:)     ! send buffer, towards -x
     End If
 
-    Call Mpi_irecv(br1, n2*n3, Mpi_real8, down, 0, MPI_COMM_WORLD, reqs(1), ierr)
-    Call Mpi_irecv(br2, n2*n3, Mpi_real8, up,   0, MPI_COMM_WORLD, reqs(2), ierr)
-    Call Mpi_isend(bs1, n2*n3, Mpi_real8, up,   0, MPI_COMM_WORLD, reqs(3), ierr)
-    Call Mpi_isend(bs2, n2*n3, Mpi_real8, down, 0, MPI_COMM_WORLD, reqs(4), ierr)
+    Call Mpi_irecv(buffer_bcxr1, nyg*nzg, Mpi_real8, down, 0, MPI_COMM_WORLD, reqs(1), ierr)
+    Call Mpi_irecv(buffer_bcxr2, nyg*nzg, Mpi_real8, up,   0, MPI_COMM_WORLD, reqs(2), ierr)
+    Call Mpi_isend(buffer_bcxs1, nyg*nzg, Mpi_real8, up,   0, MPI_COMM_WORLD, reqs(3), ierr)
+    Call Mpi_isend(buffer_bcxs2, nyg*nzg, Mpi_real8, down, 0, MPI_COMM_WORLD, reqs(4), ierr)
     Call Mpi_waitall(4, reqs, MPI_STATUSES_IGNORE, ierr)
 
     If ( id == 1 ) Then
-       If ( down /= MPI_PROC_NULL ) F(1,:,:)  = br1 ! received from -x neighbour
-       If ( up   /= MPI_PROC_NULL ) F(nx,:,:) = br2 ! received from +x neighbour
+       If ( down /= MPI_PROC_NULL ) F(1,:,:)  = buffer_bcxr1(1:n2,1:n3) ! received from -x neighbour
+       If ( up   /= MPI_PROC_NULL ) F(nx,:,:) = buffer_bcxr2(1:n2,1:n3) ! received from +x neighbour
     Else
-       If ( down /= MPI_PROC_NULL ) F(1,:,:)   = br1 ! received from -x neighbour
-       If ( up   /= MPI_PROC_NULL ) F(nxg,:,:) = br2 ! received from +x neighbour
+       If ( down /= MPI_PROC_NULL ) F(1,:,:)   = buffer_bcxr1(1:n2,1:n3) ! received from -x neighbour
+       If ( up   /= MPI_PROC_NULL ) F(nxg,:,:) = buffer_bcxr2(1:n2,1:n3) ! received from +x neighbour
     End If
-
-    Deallocate(bs1, bs2, br1, br2)
 
   End Subroutine update_ghost_interior_planes_x
 

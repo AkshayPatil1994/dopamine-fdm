@@ -288,6 +288,9 @@ Contains
     Allocate ( buffer_vs(nxg, ny,2), buffer_vr(nxg, ny,2) )
     Allocate ( buffer_ws(nxg,nyg,2), buffer_wr(nxg,nyg,2) )
     Allocate ( buffer_ps(2:nxg-1,2:nyg-1), buffer_pr(2:nxg-1,2:nyg-1) )
+    Allocate ( buffer_px(nyg-2,nzg-1) )
+    Allocate ( buffer_pgxs(nyg-2,nzg-1), buffer_pgxr(nyg-2,nzg-1) )
+    Allocate ( buffer_bcxs1(nyg,nzg), buffer_bcxs2(nyg,nzg), buffer_bcxr1(nyg,nzg), buffer_bcxr2(nyg,nzg) )
 
     ! Fourier transform
     If ( myid==0 ) Write(*,'(A)') ' [4/4] Initializing FFT (2decomp&fft pencil transposes) ...'
@@ -478,6 +481,15 @@ Contains
     Dyy(nyg-1,nyg-2) = c
     coef_bc_2        = a
 
+    ! Persistently device-resident (GPU_POISSON): Dyy is later updated in-place
+    ! by wallmodel.f90's compute_pseudo_pressure_bc_for_robin_bc as the wall
+    ! model's Robin-BC coefficients evolve, which pushes just those changed
+    ! elements with a targeted !$acc update device -- must be registered here,
+    ! before the time loop's first call to that routine, or that update has no
+    ! device copy to target yet.
+    !$acc enter data create(Dyy)
+    !$acc update device(Dyy)
+
     Allocate ( bc_1(2:nxg-1,2:nzg-1), bc_2(2:nxg-1,2:nzg-1) )
     Allocate ( bc_1_hat(0:mx,0:mz),   bc_2_hat(0:mx,0:mz)   )
 
@@ -615,7 +627,7 @@ Contains
     End If
 
     ! Push host values once for scalars `!$acc declare create`d in global.f90 (needed by !$acc routine seq procedures)
-    !$acc update device(nx,ny,nz,nxg,nyg,nzg,nu,pi,inflow_type,inflow_Uconst,sem_n_eddies,sem_length_scale,sem_seed,sem_eddy_placement,sem_use_esem,sem_divergence_free)
+    !$acc update device(nx,ny,nz,nxg,nyg,nzg,nu,pi,inflow_type,inflow_Uconst,sem_n_eddies,sem_length_scale,sem_seed,sem_eddy_placement,sem_use_esem,sem_divergence_free,sem_wall_damping)
     !$acc update device(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi,j_match_ylo,j_match_yhi)
     !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall,ibm_z0)
     !$acc update device(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)

@@ -76,6 +76,10 @@ Module uav_actuator
   ! just the first raw sample, no special-case branch needed).
   Real   (Int64) :: uav_tilt_smooth(3) = (/ 0d0, 1d0, 0d0 /)
   Real   (Int64) :: uav_tilt_last_t    = -1d300
+  ! In-plane frame for uav_tilt_smooth, cached alongside it so repeated calls
+  ! at the same tt (once per RK sub-stage) skip the Gram-Schmidt rebuild too
+  Real   (Int64) :: uav_tilt_e1(3) = (/ 1d0, 0d0, 0d0 /)
+  Real   (Int64) :: uav_tilt_e2(3) = (/ 0d0, 0d0, 1d0 /)
 
 Contains
 
@@ -122,6 +126,22 @@ Contains
     If ( uav_path_active >= 1 ) Then
        If ( Len_Trim(uav_path_file) == 0 ) Stop 'ERROR: uav_path_active=1 but uav_path_file is empty'
        Call read_uav_path
+    End If
+
+    ! Seed the tilt low-pass filter at the run's actual start time t (0 on a
+    ! fresh run, the restart time under restart=1/t_start) rather than the
+    ! sentinel default: this makes the first uav_disk_state call a no-op
+    ! (tt==uav_tilt_last_t) since uav_tilt_smooth is already the raw normal
+    ! at t, avoiding a filter reset/orientation jump across a restart while
+    ! reproducing the original snap-to-raw behaviour on a fresh run.
+    If ( uav_tilt_active >= 1 .And. uav_path_active >= 1 ) Then
+       uav_tilt_smooth(1) = hermite_accel(t, path_t, path_x, n_path)
+       uav_tilt_smooth(2) = grav + hermite_accel(t, path_t, path_y, n_path)
+       uav_tilt_smooth(3) = hermite_accel(t, path_t, path_z, n_path)
+       If ( Sqrt( Sum(uav_tilt_smooth**2) ) > 1d-30 ) &
+          uav_tilt_smooth = uav_tilt_smooth / Sqrt( Sum(uav_tilt_smooth**2) )
+       Call uav_disk_frame(uav_tilt_smooth, uav_tilt_e1, uav_tilt_e2)
+       uav_tilt_last_t = t
     End If
 
     If ( uav_thrust_active >= 1 ) Then
@@ -421,24 +441,28 @@ Contains
 
     If ( uav_tilt_active >= 1 .And. uav_path_active >= 1 ) Then
 
-       ax = hermite_accel(tt, path_t, path_x, n_path)
-       ay = hermite_accel(tt, path_t, path_y, n_path)
-       az = hermite_accel(tt, path_t, path_z, n_path)
-
-       n_raw(1) = ax;  n_raw(2) = grav + ay;  n_raw(3) = az
-       norm_raw = Sqrt( n_raw(1)**2 + n_raw(2)**2 + n_raw(3)**2 )
-       If ( norm_raw > 1d-30 ) n_raw = n_raw / norm_raw
-
        If ( tt /= uav_tilt_last_t ) Then
+
+          ax = hermite_accel(tt, path_t, path_x, n_path)
+          ay = hermite_accel(tt, path_t, path_y, n_path)
+          az = hermite_accel(tt, path_t, path_z, n_path)
+
+          n_raw(1) = ax;  n_raw(2) = grav + ay;  n_raw(3) = az
+          norm_raw = Sqrt( n_raw(1)**2 + n_raw(2)**2 + n_raw(3)**2 )
+          If ( norm_raw > 1d-30 ) n_raw = n_raw / norm_raw
+
           dt_call = tt - uav_tilt_last_t
           alpha   = dt_call / (uav_tilt_tau + dt_call)   ! in (0,1]; ~1 on the first (huge dt_call) call
           uav_tilt_smooth = uav_tilt_smooth + alpha*(n_raw - uav_tilt_smooth)
           uav_tilt_smooth = uav_tilt_smooth / Sqrt( Sum(uav_tilt_smooth**2) )
+          Call uav_disk_frame(uav_tilt_smooth, uav_tilt_e1, uav_tilt_e2)
           uav_tilt_last_t = tt
+
        End If
 
        nvec = uav_tilt_smooth
-       Call uav_disk_frame(nvec, e1, e2)
+       e1   = uav_tilt_e1
+       e2   = uav_tilt_e2
 
     Else
 
