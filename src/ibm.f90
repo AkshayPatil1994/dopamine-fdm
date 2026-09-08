@@ -4,7 +4,7 @@ Module ibm
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors, x_periodic_partner
+  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner
 
   Implicit None
 
@@ -87,6 +87,33 @@ Contains
 
   End Subroutine exchange_phi_ghost_planes
 
+  !> Exchange phi x-ghost planes between x-neighbour ranks (interior-rank seams only; true
+  !> domain x-edges are handled by the caller's Neumann assignment, same split as z above).
+  !> Local buffers rather than the shared buffer_bcx* set (boundary_conditions module):
+  !> smooth_ibm_corners runs from readSDF, before those buffers are allocated (initialization.f90).
+  Subroutine exchange_phi_x_ghost_planes
+
+    Real   (Int64) :: buf_s(nyg,nzg), buf_r(nyg,nzg)
+    Integer(Int32) :: up, down
+
+    Call x_halo_neighbors(up, down)
+
+    ! Pass 1: send i=nxg-1 towards +x; receive from -x into i=1.
+    buf_s = phi(nxg-1,:,:)
+    Call MPI_Sendrecv( buf_s, nyg*nzg, MPI_real8, up,   0, &
+                       buf_r, nyg*nzg, MPI_real8, down, 0, &
+                       MPI_COMM_WORLD, istat, ierr )
+    If ( down /= MPI_PROC_NULL ) phi(1,:,:) = buf_r
+
+    ! Pass 2: send i=2 towards -x; receive from +x into i=nxg.
+    buf_s = phi(2,:,:)
+    Call MPI_Sendrecv( buf_s, nyg*nzg, MPI_real8, down, 0, &
+                       buf_r, nyg*nzg, MPI_real8, up,   0, &
+                       MPI_COMM_WORLD, istat, ierr )
+    If ( up /= MPI_PROC_NULL ) phi(nxg,:,:) = buf_r
+
+  End Subroutine exchange_phi_x_ghost_planes
+
   !> Read a distributed cell-centre scalar field from file: (nxg_global,nyg_global,nzm_global) Real(8), column-major, big-endian (x,y already ghosted in-file, z interior-only, same convention as xg_global/kg-based reads elsewhere)
   Subroutine read_distributed_scalar_field(filename, field)
 
@@ -163,6 +190,10 @@ Contains
     ! Overwrite interior-rank z ghost planes with actual neighbour values
     Call exchange_phi_ghost_planes
 
+    ! Optional SDF corner-rounding (see smooth_ibm): must run before Umask_cc/ghost lists are
+    ! derived from phi, so the rounded geometry is what the ghost-cell lists actually see
+    Call smooth_ibm_corners(is_first_x, is_last_x)
+
     ! Derive Umask_cc from sign of phi (positive = fluid)
     Do k = 1, nzg
        Do j = 1, nyg
@@ -195,6 +226,55 @@ Contains
     End If
 
   End Subroutine read_phi_from_sdf_file
+
+  !> Round sharp SDF corners by smooth_ibm passes of 6-point Jacobi averaging on phi (no-op
+  !> when smooth_ibm<=0, the default -- exact original sharp geometry). At a sharp corner the
+  !> ghost-cell surface normal (compute_normal_at_cc/_face_*) is discontinuous, and the
+  !> resulting rough near-body reconstruction has nothing to damp it once injected into the
+  !> (non-dissipative) skew-symmetric advection scheme, which is what produces Gibbs-like
+  !> ringing there. Smoothing phi directly blunts the corner by ~smooth_ibm grid cells, giving
+  !> the ghost-cell method a continuous normal to work with at the cost of that much geometric
+  !> fidelity right at the corner.
+  Subroutine smooth_ibm_corners(is_first_x, is_last_x)
+
+    Logical, Intent(In) :: is_first_x, is_last_x
+
+    Real   (Int64), Allocatable :: phi_new(:,:,:)
+    Integer(Int32) :: i, j, k, n
+
+    If ( smooth_ibm <= 0 ) Return
+
+    If ( myid==0 ) Write(*,'(A,I0,A)') ' IBM: rounding SDF corners (smooth_ibm = ', smooth_ibm, ' passes)...'
+
+    Allocate ( phi_new(nxg,nyg,nzg) )
+
+    Do n = 1, smooth_ibm
+       Do k = 2, nzg-1
+          Do j = 2, nyg-1
+             Do i = 2, nxg-1
+                phi_new(i,j,k) = ( phi(i,j,k) + phi(i-1,j,k) + phi(i+1,j,k) &
+                                  + phi(i,j-1,k) + phi(i,j+1,k) &
+                                  + phi(i,j,k-1) + phi(i,j,k+1) ) / 7d0
+             End Do
+          End Do
+       End Do
+       phi(2:nxg-1,2:nyg-1,2:nzg-1) = phi_new(2:nxg-1,2:nyg-1,2:nzg-1)
+
+       ! Refresh ghosts before the next pass: Neumann at true domain boundaries, MPI
+       ! exchange at interior-rank seams (both x and z; y is never decomposed)
+       If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
+       If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+       phi(:,1,:)   = phi(:,2,:)
+       phi(:,nyg,:) = phi(:,nyg-1,:)
+       phi(:,:,1)   = phi(:,:,2)
+       phi(:,:,nzg) = phi(:,:,nzg-1)
+       Call exchange_phi_x_ghost_planes
+       Call exchange_phi_ghost_planes
+    End Do
+
+    Deallocate ( phi_new )
+
+  End Subroutine smooth_ibm_corners
 
   !  Build ghost-cell list for U (defined at x-faces)
   Subroutine build_ghost_list_u

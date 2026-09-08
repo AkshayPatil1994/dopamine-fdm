@@ -70,6 +70,12 @@ Module global
   Integer(Int32) :: ibm_input_mode      = 0            ! default: no IBM body
   Character(200) :: ibm_sdf_file        = 'SDF_in'     ! cell-centre SDF file
   Character(200) :: ibm_objid_file      = ''           ! optional per-solid ID field (GenSDF sdfp_objid.bin); '' = single uniform IBM condition
+  ! smooth_ibm: number of 6-point Jacobi smoothing passes applied to phi before the ghost-cell
+  ! lists are built (0 = off, default -- exact original sharp SDF). Rounds sharp SDF corners by
+  ! ~smooth_ibm grid cells so the ghost-cell reconstruction's local surface normal stays
+  ! continuous there; a discontinuous corner normal otherwise injects a rough field that the
+  ! (non-dissipative) skew-symmetric advection scheme can't damp, producing Gibbs-like ringing.
+  Integer(Int32) :: smooth_ibm          = 0
   Integer(Int32) :: ibm_wall_model_flag = 0             ! default: DNS no-slip
 
   !  y-wall boundary condition type

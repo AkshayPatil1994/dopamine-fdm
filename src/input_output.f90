@@ -51,7 +51,7 @@ Contains
 
     Namelist /IBM/ ibm_input_mode, ibm_wall_model_flag, &
                    ibm_sdf_file, ibm_objid_file, ks, nks, nsampling, ibm_surface_nsampling, &
-                   ibm_T_bc_type, ibm_T_wall, ibm_z0
+                   ibm_T_bc_type, ibm_T_wall, ibm_z0, smooth_ibm
 
     Namelist /INITIAL_CONDITIONS/ Utarget, nstep_init, restart, t_start, &
                                    scalar_restart, ic_type, noise_percent
@@ -146,6 +146,7 @@ Contains
           nks                 = 0
           nsampling           = 0
           ibm_surface_nsampling = 0
+          smooth_ibm          = 0
        End If
 
        Rewind(unit_in)
@@ -335,6 +336,7 @@ Contains
        End If
        Write(*,'(A,I2)')     '   ibm_input_mode              = ', ibm_input_mode
        Write(*,'(A,I2)')     '   ibm_wall_model_flag         = ', ibm_wall_model_flag
+       Write(*,'(A,I4)')     '   smooth_ibm (SDF corner-rounding passes, 0=off) = ', smooth_ibm
        Write(*,'(A,I8)')     '   nsampling                   = ', nsampling
        Write(*,'(A,I8)')     '   ibm_surface_nsampling       = ', ibm_surface_nsampling
        Write(*,'(A,I2)')     '   cfl_adaptive                = ', cfl_adaptive
@@ -398,6 +400,7 @@ Contains
     Call Mpi_bcast ( ibm_sdf_file,  Len(ibm_sdf_file),  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_objid_file, Len(ibm_objid_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_wall_model_flag,  1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( smooth_ibm,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nks_global,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ks,                   1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
