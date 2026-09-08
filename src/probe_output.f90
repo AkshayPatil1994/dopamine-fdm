@@ -203,21 +203,24 @@ Contains
 
     Integer(Int32), Intent(In) :: n
 
-    Real(Int64), Allocatable :: lbuf(:,:), gbuf(:,:), out2d(:,:,:)
+    Real(Int64), Allocatable :: lbuf(:,:,:), gbuf(:,:,:)
     Integer(Int32) :: comp, c, ia, ja, ka, ig, jg, kg_g
     Integer(Int32) :: n1, n2, nc, fix_ia, fix_ja, fix_ka
 
     n1 = sli_n1(n);  n2 = sli_n2(n);  nc = sli_ncomp(n)
 
-    Allocate( lbuf(n1,n2) )
-    Allocate( gbuf(n1,n2) )
-    If (myid == 0) Allocate( out2d(nc,n1,n2) )
+    ! All nc selected components share one MPI_Reduce instead of one each: the
+    ! owning-rank condition (fix_ia/fix_ja/fix_ka in range) only depends on
+    ! sli_ax(n)/sli_idx(n), not on comp, so every selected component is filled
+    ! (or left zero) together and can be reduced together.
+    Allocate( lbuf(nc,n1,n2) )
+    Allocate( gbuf(nc,n1,n2) )
+    lbuf = 0d0
 
     c = 0
     Do comp = 1, 6
       If ( .Not. sli_cmask(comp,n) ) Cycle
       c = c + 1
-      lbuf = 0d0
 
       Select Case (sli_ax(n))
 
@@ -231,7 +234,7 @@ Contains
             If (kg_g < 1 .Or. kg_g > nzm_global) Cycle
             Do ja = 2, nyg-1
               jg = ja - 1
-              lbuf(jg, kg_g) = cc_val(comp, fix_ia, ja, ka)
+              lbuf(c, jg, kg_g) = cc_val(comp, fix_ia, ja, ka)
             End Do
           End Do
         End If
@@ -244,7 +247,7 @@ Contains
           If (kg_g < 1 .Or. kg_g > nzm_global) Cycle
           Do ia = 2, nxg-1
             ig = ig1_global(myid) + ia - 2   ! global 1-based interior cc x
-            lbuf(ig, kg_g) = cc_val(comp, ia, fix_ja, ka)
+            lbuf(c, ig, kg_g) = cc_val(comp, ia, fix_ja, ka)
           End Do
         End Do
 
@@ -257,22 +260,20 @@ Contains
             jg = ja - 1
             Do ia = 2, nxg-1
               ig = ig1_global(myid) + ia - 2   ! global 1-based interior cc x
-              lbuf(ig, jg) = cc_val(comp, ia, ja, fix_ka)
+              lbuf(c, ig, jg) = cc_val(comp, ia, ja, fix_ka)
             End Do
           End Do
         End If
 
       End Select
 
-      Call MPI_Reduce(lbuf(1,1), gbuf(1,1), n1*n2, MPI_REAL8, MPI_SUM, &
-                      0, MPI_COMM_WORLD, ierr)
-
-      If (myid == 0) out2d(c,:,:) = gbuf
-
     End Do
 
+    Call MPI_Reduce(lbuf, gbuf, nc*n1*n2, MPI_REAL8, MPI_SUM, &
+                    0, MPI_COMM_WORLD, ierr)
+
     If (myid == 0) Then
-      Write(sli_funit(n)) out2d
+      Write(sli_funit(n)) gbuf
       Write(sli_tunit(n)) t
       ! flush now (not just at finalize_probes' Close): _times.bin's tiny per-call
       ! writes can sit unflushed in the runtime buffer for the whole run, so a
@@ -283,7 +284,6 @@ Contains
       Flush(sli_tunit(n))
       sli_nwrit(n) = sli_nwrit(n) + 1
       Call update_slice_meta(n)
-      Deallocate(out2d)
     End If
 
     Deallocate(lbuf, gbuf)
@@ -297,21 +297,23 @@ Contains
 
     Integer(Int32), Intent(In) :: n
 
-    Real(Int64), Allocatable :: lbuf(:), gbuf(:), out1d(:,:)
+    Real(Int64), Allocatable :: lbuf(:,:), gbuf(:,:)
     Integer(Int32) :: comp, c, ia, ja, ka, ig_g, jg_g, kg_g, lp
     Integer(Int32) :: npts, nc, fix_ka, fix_ia, fix_ja
 
     npts = lin_npts(n);  nc = lin_ncomp(n)
 
-    Allocate( lbuf(npts) )
-    Allocate( gbuf(npts) )
-    If (myid == 0) Allocate( out1d(nc,npts) )
+    ! All nc selected components share one MPI_Reduce instead of one each (see
+    ! write_slice_n's identical rationale: the owning-rank condition doesn't
+    ! depend on comp, so every selected component is filled together)
+    Allocate( lbuf(nc,npts) )
+    Allocate( gbuf(nc,npts) )
+    lbuf = 0d0
 
     c = 0
     Do comp = 1, 6
       If ( .Not. lin_cmask(comp,n) ) Cycle
       c = c + 1
-      lbuf = 0d0
 
       Select Case (lin_ax(n))
 
@@ -324,7 +326,7 @@ Contains
             ig_g = lin_ks(n) + lp - 1   ! global 1-based cc x index
             If (ig_g < ig1_global(myid) .Or. ig_g > ig2_global(myid)-2) Cycle
             ia = ig_g - ig1_global(myid) + 2   ! local x ghost-array index
-            lbuf(lp) = cc_val(comp, ia, fix_ja, fix_ka)
+            lbuf(c, lp) = cc_val(comp, ia, fix_ja, fix_ka)
           End Do
         End If
 
@@ -336,7 +338,7 @@ Contains
           Do lp = 1, npts
             jg_g = lin_ks(n) + lp - 1
             ja   = jg_g + 1
-            lbuf(lp) = cc_val(comp, fix_ia, ja, fix_ka)
+            lbuf(c, lp) = cc_val(comp, fix_ia, ja, fix_ka)
           End Do
         End If
 
@@ -349,24 +351,21 @@ Contains
             kg_g = kg1_global(myid) + ka - 2   ! global 1-based cc z
             If (kg_g < lin_ks(n) .Or. kg_g > lin_ke(n)) Cycle
             lp = kg_g - lin_ks(n) + 1
-            lbuf(lp) = cc_val(comp, fix_ia, fix_ja, ka)
+            lbuf(c, lp) = cc_val(comp, fix_ia, fix_ja, ka)
           End Do
         End If
 
       End Select
 
-      Call MPI_Reduce(lbuf(1), gbuf(1), npts, MPI_REAL8, MPI_SUM, &
-                      0, MPI_COMM_WORLD, ierr)
-
-      If (myid == 0) out1d(c,:) = gbuf
-
     End Do
 
+    Call MPI_Reduce(lbuf, gbuf, nc*npts, MPI_REAL8, MPI_SUM, &
+                    0, MPI_COMM_WORLD, ierr)
+
     If (myid == 0) Then
-      Write(lin_funit(n)) out1d
+      Write(lin_funit(n)) gbuf
       lin_nwrit(n) = lin_nwrit(n) + 1
       Call update_line_meta(n)
-      Deallocate(out1d)
     End If
 
     Deallocate(lbuf, gbuf)

@@ -81,9 +81,13 @@ Contains
     End If
 
     ! nsave<0: shrink dt (even below dt_min) so t lands exactly on tsave_next, keeping physical-time-based snapshots uniformly spaced under adaptive dt
+    ! nsteps<0: likewise shrink dt so t lands exactly on sim_end_time instead of overshooting it under adaptive dt
     dt_presnap = dt
     If ( nsave < 0 .And. t + dt > tsave_next ) Then
        dt = tsave_next - t
+    End If
+    If ( nsteps < 0 .And. t + dt > sim_end_time ) Then
+       dt = sim_end_time - t
     End If
 
     ! save previous state
@@ -126,7 +130,7 @@ Contains
     Call compute_rhs_w(U,V,W,Fw1)
     Call profiler_stop(PROF_RHS)
 
-    ! RK-stage velocity update, GPU-resident (Fu1/Fv1/Fw1 never leave device)
+    ! RK-stage velocity update, GPU-resident (Fu1/Fw1 never leave device; Fv1 round-trips to host inside apply_uav_forcing when uav_active>=1)
     Call profiler_start(PROF_RK_UPDATE)
     !$acc kernels present(U,V,W,Uo,Vo,Wo,Fu1,Fv1,Fw1)
     U(2:nx-1,2:nyg-1,2:nzg-1) = Uo(2:nx-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Fu1
@@ -398,10 +402,10 @@ Contains
        Call profiler_stop(PROF_BC)
     End If
 
-    ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (IBM re-enforce below, RSB/TI-rescale accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
+    ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (IBM re-enforce below, RSB/inflow-optimization accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
     needs_final_sync = ( ibm_input_mode >= 1 ) .Or. &
          ( rsb_active == 1 .And. istep >= rsb_nstart ) .Or. &
-         ( ti_rescale_active == 1 .And. istep >= ti_rescale_nstart ) .Or. &
+         ( inflow_opt_active == 1 .And. istep >= inflow_opt_nstart ) .Or. &
          ( Mod(istep, nmonitor) == 0 ) .Or. &
          ( nsave > 0 .And. Mod(istep, nsave) == 0 ) .Or. &
          ( nsave < 0 .And. t >= tsave_next - 1d-10 ) .Or. &

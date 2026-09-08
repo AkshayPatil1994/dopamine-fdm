@@ -29,8 +29,13 @@ Module global
   Real(Int64) :: Lx, Lz, Ly, Lxp, Lzp
 
   ! steps
-  Integer(Int32) :: nsteps, nstep_init
+  Integer(Int32) :: nsteps
+  Integer(Int32) :: nstep_init = 0
   Real   (Int64) :: dt, t
+  ! explicit restart start time (overrides nstep_init*dt when >=0d0 -- needed
+  ! for restarts under adaptive dt, where step count no longer maps to a fixed
+  ! dt*nstep_init); default -1d0 means "not given, fall back to nstep_init*dt"
+  Real   (Int64) :: t_start = -1d0
 
   ! Time-based stopping/save control: sim_end_time/tsave override nsteps/nsave when negative; tsave_next is the next due save time
   Real   (Int64) :: sim_end_time = 1d30
@@ -65,6 +70,12 @@ Module global
   Integer(Int32) :: ibm_input_mode      = 0            ! default: no IBM body
   Character(200) :: ibm_sdf_file        = 'SDF_in'     ! cell-centre SDF file
   Character(200) :: ibm_objid_file      = ''           ! optional per-solid ID field (GenSDF sdfp_objid.bin); '' = single uniform IBM condition
+  ! smooth_ibm: number of 6-point Jacobi smoothing passes applied to phi before the ghost-cell
+  ! lists are built (0 = off, default -- exact original sharp SDF). Rounds sharp SDF corners by
+  ! ~smooth_ibm grid cells so the ghost-cell reconstruction's local surface normal stays
+  ! continuous there; a discontinuous corner normal otherwise injects a rough field that the
+  ! (non-dissipative) skew-symmetric advection scheme can't damp, producing Gibbs-like ringing.
+  Integer(Int32) :: smooth_ibm          = 0
   Integer(Int32) :: ibm_wall_model_flag = 0             ! default: DNS no-slip
 
   !  y-wall boundary condition type
@@ -133,7 +144,13 @@ Module global
   Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_us, buffer_ur
   Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_vs, buffer_vr
   Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_ws, buffer_wr
+  ! x-direction ghost-plane exchange (update_ghost_interior_planes_x): sized to the
+  ! largest (dim2,dim3) extent across the U/V/W/P fields it's called for (nyg,nzg);
+  ! calls for a smaller field just use a leading (1:n2,1:n3) subslice of the same buffer
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_bcxs1, buffer_bcxs2, buffer_bcxr1, buffer_bcxr2
   Real(Int64), Allocatable, Dimension(:,:)   :: buffer_ps, buffer_pr
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_px
+  Real(Int64), Allocatable, Dimension(:,:)   :: buffer_pgxs, buffer_pgxr
   
   ! local pencil work arrays for the Poisson pencil-transpose chain (2decomp&fft); rhs_p_hat below (y-pencil, post z-FFT) is shared with the GPU_POISSON path
   Real   (Int64), Allocatable, Dimension(:,:,:) :: poisson_y_r   ! y-pencil, real: interfaces with rhs_p
@@ -202,7 +219,7 @@ Module global
   Real   (Int64) :: sem_wall_damping_Aplus  = 25d0
 
   ! device residency for the scalars sem.f90's per-step (!$acc routine seq) call chain reads directly
-  !$acc declare create(inflow_type, inflow_Uconst, sem_n_eddies, sem_length_scale, sem_seed, sem_eddy_placement, sem_use_esem, sem_divergence_free)
+  !$acc declare create(inflow_type, inflow_Uconst, sem_n_eddies, sem_length_scale, sem_seed, sem_eddy_placement, sem_use_esem, sem_divergence_free, sem_wall_damping)
 
   ! finite differences (second derivative)
   Real(Int64) :: ddx1, ddx2, ddx3
@@ -429,6 +446,68 @@ Module global
   ! to support a flux-consistent rough BC; deferred.
   Real   (Int64) :: ibm_z0(0:max_ibm_objects) = 0d0
   !$acc declare create(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,ibm_T_bc_type,ibm_T_wall,ibm_z0)
+
+  ! UAV actuator disk (src/uav_actuator.f90): a disk with uniform loading,
+  ! applying a purely vertical (y) reaction force to the fluid; static or
+  ! path-following, with a fixed or scheduled thrust. Horizontal force
+  ! components are not modelled.
+  ! uav_active:        0=off (default), 1=on
+  ! uav_hover_thrust:  disk thrust in this solver's KINEMATIC convention,
+  !                    i.e. (physical thrust)/(fluid density) [m^4/s^2] --
+  !                    matches dPdx's kinematic convention (this solver
+  !                    tracks P/rho, not P; there is no explicit rho anywhere)
+  ! uav_kernel_ncell:  regularized-delta (Gaussian) kernel support radius, in
+  !                    grid cells, used to spread each marker's force
+  Integer(Int32) :: uav_active        = 0
+  Real   (Int64) :: uav_xc            = 0d0
+  Real   (Int64) :: uav_yc            = 0d0
+  Real   (Int64) :: uav_zc            = 0d0
+  Real   (Int64) :: uav_disk_radius   = 0.15d0
+  Integer(Int32) :: uav_n_r           = 15
+  Integer(Int32) :: uav_n_theta       = 24
+  Real   (Int64) :: uav_hover_thrust  = 0d0
+  Integer(Int32) :: uav_kernel_ncell  = 2
+  ! Phase 2: path-following disk (still horizontal/untilted -- orientation
+  ! tilt for cruise segments is a later phase, see design doc). When
+  ! uav_path_active=0 (default) the disk stays at the fixed (uav_xc,uav_yc,
+  ! uav_zc) above; when 1, its centre instead follows uav_path_file (rows
+  ! "t x y z", monotonically increasing t) via cubic Hermite (Catmull-Rom
+  ! tangent) interpolation, clamped to the first/last waypoint outside the
+  ! file's time range.
+  Integer(Int32) :: uav_path_active   = 0
+  Character(200) :: uav_path_file     = ''
+  ! Time-varying thrust schedule: when uav_thrust_active=0 (default), the
+  ! disk uses the fixed uav_hover_thrust above for its whole run; when 1,
+  ! it instead uses uav_thrust_file (rows "t T", same interpolation as the
+  ! path) -- e.g. a takeoff surge above hover thrust, a reduced-thrust
+  ! controlled descent, and a landing flare, all as a function of time
+  ! (equivalently of position, since position is itself a function of time
+  ! along uav_path_file).
+  Integer(Int32) :: uav_thrust_active = 0
+  Character(200) :: uav_thrust_file   = ''
+  ! uav_load_profile:  0=uniform disk loading (default), 1=parabolic tip-taper
+  !                    (marker share weighted by 1-(r/R)^2, renormalized to
+  !                    still sum to 1) -- a drop-in reweighting of the marker
+  !                    table, no change to the force-application code path.
+  ! uav_tilt_active:   0=disk stays horizontal (default, i.e. identical to
+  !                    the untilted model above); 1=disk normal is derived
+  !                    automatically each step from the path's own kinematic
+  !                    acceleration (differentially-flat point-mass tilt:
+  !                    n ~ (ax, grav+ay, az)), low-pass filtered with time
+  !                    constant uav_tilt_tau to tame the Catmull-Rom path's
+  !                    knot-to-knot acceleration discontinuities. Requires
+  !                    uav_path_active=1 to have any effect (a static disk's
+  !                    path acceleration is identically zero).
+  ! uav_tilt_tau:      low-pass time constant [s] for the tilt filter above.
+  ! uav_swirl_frac:    0=no swirl (default); tangential (in-plane) reaction
+  !                    force per marker as a fraction of that marker's own
+  !                    thrust share, representing rotor torque reaction.
+  !                    Rotation sense is an arbitrary modelling choice, not
+  !                    derived from any tracked rotor RPM/direction.
+  Integer(Int32) :: uav_load_profile  = 0
+  Integer(Int32) :: uav_tilt_active   = 0
+  Real   (Int64) :: uav_tilt_tau      = 0.2d0
+  Real   (Int64) :: uav_swirl_frac    = 0d0
   !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
   ! Temperature field (cell-centred: nxg x nyg x nzg)
@@ -442,25 +521,52 @@ Module global
   Character(200) :: rsb_hom_dir = 'x,z'
   Character(200) :: rsb_fileout = 'rsb'
 
-  ! in-situ SEM inflow TI-profile rescaling
-  Integer(Int32) :: ti_rescale_active = 0
-  Real   (Int64) :: ti_rescale_x      = 0d0
-  Integer(Int32) :: ti_rescale_nstart = 0      ! <0: auto-tuned from advection time and wall-shear timescale
-  Integer(Int32) :: ti_rescale_freq   = 1000   ! <=0: auto-tuned from the SEM eddy turnover time
-  Real   (Int64) :: ti_rescale_relax  = 0.3d0
-  Real   (Int64) :: ti_rescale_clip   = 1.5d0
-  Real   (Int64) :: ti_rescale_abs_clip = 2d0
-  Real   (Int64) :: ti_rescale_filter_alpha = 0.25d0   ! EMA smoothing of the measured variance across windows
-  Real   (Int64) :: ti_rescale_deadband = 0.03d0        ! skip the update where |ratio-1| is below this
-  Real   (Int64) :: ti_rescale_relax_min = 0.05d0       ! floor for the Robbins-Monro-decayed gain
-
-  ! mean-profile (U) companion to TI_RESCALE above: closes the loop on prof_U the same way TI_RESCALE closes it on prof_R11/22/33
-  Integer(Int32) :: ti_rescale_u_active   = 0
-  Real   (Int64) :: ti_rescale_u_relax    = 0.3d0
-  Real   (Int64) :: ti_rescale_u_relax_min = 0.05d0
-  Real   (Int64) :: ti_rescale_u_clip     = 0.5d0    ! max |correction| per window, as a fraction of Uconv_sem
-  Real   (Int64) :: ti_rescale_u_abs_clip = 1.0d0    ! anti-windup: max cumulative |prof_U-prof_U_target|, as a fraction of Uconv_sem
-  Real   (Int64) :: ti_rescale_u_deadband = 0.01d0   ! skip the update where |bias|/Uconv_sem is below this
+  ! Bezier-parametrized SEM inflow Reynolds-stress optimization: a single-run (online) realization
+  ! of Lamberti et al. 2018 (JWEIA 177:32-44) Sections 5-6.1. Matches the downstream v'^2/w'^2
+  ! profiles at a station to the wind-tunnel target by fitting Bezier control points: step0
+  ! (baseline) plus step1 (v'^2 AND w'^2 doubled together at the inflow, their Section 6.1 combined
+  ! perturbation) give a per-control-point scalar secant slope for each decision variable, then ONE
+  ! corrected profile is applied and verified. v'^2 and w'^2 are corrected independently (a real
+  ! run showed the paper's coupled 2-variable weighted least-squares fit, Eq. 5, can be dangerously
+  ! ill-conditioned: the two decision variables tend to move all three downstream stats in the same
+  ! direction, so their Jacobian columns can be nearly collinear at some heights, and even Tikhonov
+  ! regularization on the 2x2 solve wasn't enough to tame the resulting instability under real
+  ! turbulent measurement noise -- a decoupled scalar secant per component needs no matrix
+  ! inversion at all, so there is no collinearity to be unstable about). By default
+  ! (inflow_opt_max_iter=1) the algorithm stops after that one corrected step: the paper itself
+  ! only ever validates a single corrected step (Section 6.1) and explicitly lists further
+  ! iteration and an automatic stopping criterion as unsolved future work (Section 7) -- so this is
+  ! not an arbitrary simplification, it's matching what was actually shown to work. Continuing past
+  ! that single step (inflow_opt_max_iter>1) is this codebase's own, unvalidated-by-the-paper
+  ! extension: it secant-refines the slopes and keeps correcting with a Robbins-Monro-style step
+  ! size (inflow_opt_relax/iter, decaying so noisy sequential online measurements average out
+  ! instead of being chased), guarded by the same best-iterate/stall safety net either way. u'^2,
+  ! shear stress and the mean profile are not decision variables (per the paper) and are left
+  ! untouched. See docs/design-notes/sem.md.
+  Integer(Int32) :: inflow_opt_active = 0
+  Real   (Int64) :: inflow_opt_x      = 0d0
+  Integer(Int32) :: inflow_opt_nstart = -1     ! <0: auto-tuned from advection time and wall-shear timescale
+  Integer(Int32) :: inflow_opt_window = -1     ! <=0: auto-tuned from the SEM eddy turnover time; steps averaged per measurement phase
+  Integer(Int32) :: n_bezier          = 8      ! Bezier control points spanning prof_y; endpoints fixed to the target
+  ! A control point within wall_exclude_factor*wall_Ltaper_{lo,hi} of an active no-slip wall sits
+  ! inside sem_fluctuation's own taper zone (see sem.f90), which deterministically suppresses the
+  ! injected Reynolds stress toward zero there regardless of the Bezier target -- no correction can
+  ! close that gap since it isn't a response-model error, it's the no-slip enforcement working as
+  ! designed. Such control points are excluded from both the correction and the residual check.
+  ! This has no counterpart in the paper (its offline runs were reviewed by eye), but is needed
+  ! for an unattended online run to avoid chasing a structurally unfixable control point.
+  Real   (Int64) :: inflow_opt_wall_exclude = 1d0
+  ! A secant slope estimated from ONE fast online measurement window can be small/noisy at some
+  ! control points (near-zero measured response between step0 and step1, unlike the paper's fully
+  ! time-converged, independently-restarted offline perturbation runs), which blows up the Newton
+  ! step dx=-(measured-target)/slope regardless of whether v'^2/w'^2 are solved jointly or (as
+  ! here) independently -- a real run showed corrections up to ~30x target from this alone. This
+  ! is a numerical-robustness safeguard, not a paper-fidelity choice: it caps the applied step to
+  ! +-inflow_opt_trust of the target value at each control point.
+  Real   (Int64) :: inflow_opt_trust    = 0.5d0
+  Integer(Int32) :: inflow_opt_max_iter = 1    ! 1 (default): the paper's validated single corrected step. >1: this codebase's own experimental extension (see above)
+  Real   (Int64) :: inflow_opt_relax    = 0.7d0 ! base step-size scale for the experimental iter>1 extension only (effective scale = inflow_opt_relax/iter); unused when inflow_opt_max_iter=1
+  Real   (Int64) :: inflow_opt_tol      = 0.1d0 ! experimental extension only: stop iterating once the worst-case relative residual (|measured-target|/target, over u'^2/v'^2/w'^2 and all interior control points) drops below this
 
   ! 2-D planar slice probes: config and output file layout
   Integer(Int32), Parameter :: MAX_PROBES = 8

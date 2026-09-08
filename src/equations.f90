@@ -8,8 +8,9 @@ Module equations
                               nu, dPdx, dPdz, yg_m, nu_t, in1, in2,    &
                               weight_y_0, weight_y_1, dx, dz,         &
                               boussinesq_flag, beta_T, grav, T_ref, Tscal, &
-                              advection_scheme
+                              advection_scheme, uav_active
   Use interpolation
+  Use uav_actuator, Only : apply_uav_forcing_u, apply_uav_forcing_v, apply_uav_forcing_w
   
   ! prevent implicit typing
   Implicit None
@@ -163,6 +164,16 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+    ! UAV actuator disk: x-component reaction force (zero unless tilted/swirling)
+    ! apply_uav_forcing_u is host-only (no OpenACC); on GPU builds rhs_u (Fu1/Fu2/Fu3) is a
+    ! separate device allocation from the terms computed above, so it must be pulled to the
+    ! host before the host loop touches it and pushed back before the RK update reads it on device.
+    If ( uav_active >= 1 ) Then
+       !$acc update host(rhs_u)
+       Call apply_uav_forcing_u(rhs_u)
+       !$acc update device(rhs_u)
+    End If
 
   End Subroutine compute_rhs_u
 
@@ -323,6 +334,16 @@ Contains
        !$acc end parallel loop
     End If
 
+    ! UAV actuator disk: vertical reaction force, static or path-following
+    ! apply_uav_forcing is host-only (no OpenACC); on GPU builds rhs_v (Fv1/Fv2/Fv3) is a
+    ! separate device allocation from the terms computed above, so it must be pulled to the
+    ! host before the host loop touches it and pushed back before the RK update reads it on device.
+    If ( uav_active >= 1 ) Then
+       !$acc update host(rhs_v)
+       Call apply_uav_forcing_v(rhs_v)
+       !$acc update device(rhs_v)
+    End If
+
   End Subroutine compute_rhs_v
 
   !                Compute RHS for dw/dt
@@ -475,6 +496,16 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+    ! UAV actuator disk: z-component reaction force (zero unless tilted/swirling)
+    ! apply_uav_forcing_w is host-only (no OpenACC); on GPU builds rhs_w (Fw1/Fw2/Fw3) is a
+    ! separate device allocation from the terms computed above, so it must be pulled to the
+    ! host before the host loop touches it and pushed back before the RK update reads it on device.
+    If ( uav_active >= 1 ) Then
+       !$acc update host(rhs_w)
+       Call apply_uav_forcing_w(rhs_w)
+       !$acc update device(rhs_w)
+    End If
 
   End Subroutine compute_rhs_w
 

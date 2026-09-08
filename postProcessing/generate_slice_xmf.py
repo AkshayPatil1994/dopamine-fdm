@@ -40,6 +40,16 @@ Usage
 
   --dt    Physical time between slice outputs = slice_freq × solver_dt  [default 1.0]
   --t0    Physical time of the very first snapshot  [default 0.0]
+
+  --dt/--t0 are only a fallback: each meta file records a `times` key
+  pointing at a companion <base>_times.bin (big-endian float64, one exact
+  simulation time per snapshot -- written by the solver's slice-probe
+  module). When that file is present, its times are used instead, so the
+  resulting .xmf timeline matches the true (possibly adaptive-dt) write
+  times. Point generate_UAVpath.py's --times-from at the same
+  <base>_times.bin to get a UAV-disk animation whose frames land on
+  exactly the same simulation times as this slice, so ParaView's shared
+  time toolbar keeps the disk and the wake co-located frame-for-frame.
 """
 
 import argparse
@@ -207,6 +217,39 @@ def make_xmf(meta_path, snap_path=None, dt=1.0, t0=0.0):
         print(f'  SKIP {meta_path.name}: no snapshots written yet')
         return
 
+    # ── per-snapshot times ────────────────────────────────────────────────────
+    # meta['times'] (written by the solver, see probe_output.f90) names a
+    # companion <base>_times.bin: one big-endian float64 per snapshot, the
+    # exact simulation time it was written at. Prefer that over the uniform
+    # t0 + s*dt grid so this slice's animation timeline lines up exactly with
+    # anything else synced to the same file (e.g. generate_UAVpath.py
+    # --times-from <base>_times.bin) even when the solver's dt is adaptive.
+    times = None
+    times_key = meta.get('times')
+    if times_key:
+        # times_key is written by the solver relative to its run (case-root)
+        # working directory, same as the slice_fileout base itself -- so it
+        # is *not* relative to meta_path. Try, in order: alongside the
+        # meta/bin files themselves (the common case, and robust to the
+        # script being invoked from an unrelated cwd), then as given
+        # (cwd- or absolute-relative), in case the case dir was moved and
+        # only relative script invocation changed.
+        candidates = [Path(times_key)] if Path(times_key).is_absolute() else [
+            meta_path.parent / Path(times_key).name,
+            Path(times_key),
+        ]
+        times_path = next((c for c in candidates if c.is_file()), candidates[0])
+        if times_path.is_file():
+            times = np.fromfile(times_path, dtype='>f8')
+            if len(times) != nsnaps:
+                print(f'  NOTE: {times_path.name} has {len(times)} times, expected {nsnaps}; '
+                      'falling back to --dt/--t0')
+                times = None
+            else:
+                print(f'  Times: from {times_path.name} (exact simulation time per snapshot)')
+    if times is None:
+        times = t0 + np.arange(nsnaps) * dt
+
     # ── physical coordinates ──────────────────────────────────────────────────
     xm = ym = zm = None
 
@@ -313,7 +356,7 @@ def make_xmf(meta_path, snap_path=None, dt=1.0, t0=0.0):
         seek = s * snap_bytes
         parts.append(
             f'    <Grid Name="t{s:06d}">\n'
-            f'      <Time Value="{t0 + s * dt:.6f}"/>\n'
+            f'      <Time Value="{times[s]:.6f}"/>\n'
             f'      <Topology TopologyType="3DRectMesh" Dimensions="{d0} {d1} {d2}"/>\n'
             + geo
         )

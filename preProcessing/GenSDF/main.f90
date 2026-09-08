@@ -21,6 +21,7 @@ program generatesdf
     integer,  allocatable :: face_solid_id(:)
     real(dp) :: bbox_min(3), bbox_max(3)
     integer  :: sx, ex, sy, ey, sz, ez
+    integer  :: cx_lo, cx_hi   ! per-rank x-slab intersected with the AABB+buffer [sx,ex]
 
     !  SDF arrays
     real(dp), allocatable :: sdf(:,:,:)
@@ -107,21 +108,36 @@ program generatesdf
     call tagminmax(myid, xf, yp, zp, bbox_min, bbox_max, nx, ny, nz, dx, dy, dz(2), buffer_points, &
                    sx, ex, sy, ey, sz, ez)
 
-    !  domain decomposition (x-slab over AABB) 
-    mpi_dx = ceiling(real(ex-sx+1, dp) / real(nprocs, dp))
-    decomp_x_start(0) = sx
-    decomp_x_end(0)   = min(sx + mpi_dx - 1, ex)
+    !  domain decomposition (x-slab over the FULL domain, not just the AABB).
+    !  Restricting the slabs to [sx,ex] used to make fast_sweep_3d structurally
+    !  unable to reach x-cells outside the AABB+buffer box, leaving them stuck
+    !  at the raw sentinel scalarvalue forever (even with use_fast_sweep=.true.)
+    !  while the y/z directions — already using the full 1:ny/1:nz range below —
+    !  got a smooth Eikonal-propagated field all the way to the domain edges.
+    !  That asymmetry produced a hard scalarvalue-magnitude cliff in x right at
+    !  the AABB boundary. Decomposing over [1,nx] and only restricting the
+    !  actual near-surface computation (via cx_lo/cx_hi below) keeps that work
+    !  scoped to the AABB while letting the FSM pass fill the rest smoothly.
+    mpi_dx = ceiling(real(nx, dp) / real(nprocs, dp))
+    decomp_x_start(0) = 1
+    decomp_x_end(0)   = min(mpi_dx, nx)
     decomp_size(0)     = decomp_x_end(0) - decomp_x_start(0) + 1
     do ii = 1, nprocs-2
         decomp_x_start(ii) = decomp_x_end(ii-1) + 1
-        decomp_x_end(ii)   = min(decomp_x_start(ii) + mpi_dx - 1, ex)
+        decomp_x_end(ii)   = min(decomp_x_start(ii) + mpi_dx - 1, nx)
         decomp_size(ii)     = decomp_x_end(ii) - decomp_x_start(ii) + 1
     end do
     if (nprocs > 1) then
         decomp_x_start(nprocs-1) = decomp_x_end(nprocs-2) + 1
-        decomp_x_end(nprocs-1)   = ex
+        decomp_x_end(nprocs-1)   = nx
         decomp_size(nprocs-1)     = decomp_x_end(nprocs-1) - decomp_x_start(nprocs-1) + 1
     end if
+
+    ! This rank's x-slab intersected with the AABB+buffer box: the only range
+    ! where near-surface distance computation actually needs to run. Empty
+    ! (cx_lo > cx_hi) when this rank's slab lies entirely outside the AABB.
+    cx_lo = max(decomp_x_start(myid), sx)
+    cx_hi = min(decomp_x_end(myid),   ex)
 
     if (debug .and. myid == 0) then
         do ii = 0, nprocs-1
@@ -159,14 +175,18 @@ program generatesdf
     allocate(objid(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
     sdf = scalarvalue
     objid = 0.0_dp
-    if (use_fast_sweep) then
-        call compute_narrowband_sdf(myid, decomp_x_start(myid), decomp_x_end(myid), &
-                                    sy, ey, sz, ez, xp, yp, zp, nfaces, faces, face_normals, &
-                                    vertices, normals, face_solid_id, narrow_band_width, sdf, objid)
-    else
-        call compute_scalar_distance_face(myid, decomp_x_start(myid), decomp_x_end(myid), &
-                                          sy, ey, sz, ez, xp, yp, zp, nfaces, faces, face_normals, &
-                                          vertices, normals, face_solid_id, buffer_points, sdf, objid)
+    if (cx_lo <= cx_hi) then
+        if (use_fast_sweep) then
+            call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
+                                        sy, ey, sz, ez, xp, yp, zp, nfaces, faces, face_normals, &
+                                        vertices, normals, face_solid_id, narrow_band_width, &
+                                        sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+        else
+            call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
+                                              sy, ey, sz, ez, xp, yp, zp, nfaces, faces, face_normals, &
+                                              vertices, normals, face_solid_id, buffer_points, &
+                                              sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+        end if
     end if
     call MPI_BARRIER(MPI_COMM_WORLD, ierror)
     call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
@@ -212,14 +232,18 @@ program generatesdf
 
         ! U-faces
         sdf = scalarvalue
-        if (use_fast_sweep) then
-            call compute_narrowband_sdf(myid, decomp_x_start(myid), decomp_x_end(myid), &
-                                        sy, ey, sz, ez, xf, yp, zp, nfaces, faces, face_normals, &
-                                        vertices, normals, face_solid_id, narrow_band_width, sdf, objid)
-        else
-            call compute_scalar_distance_face(myid, decomp_x_start(myid), decomp_x_end(myid), &
-                                              sy, ey, sz, ez, xf, yp, zp, nfaces, faces, face_normals, &
-                                              vertices, normals, face_solid_id, buffer_points, sdf, objid)
+        if (cx_lo <= cx_hi) then
+            if (use_fast_sweep) then
+                call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
+                                            sy, ey, sz, ez, xf, yp, zp, nfaces, faces, face_normals, &
+                                            vertices, normals, face_solid_id, narrow_band_width, &
+                                            sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+            else
+                call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
+                                                  sy, ey, sz, ez, xf, yp, zp, nfaces, faces, face_normals, &
+                                                  vertices, normals, face_solid_id, buffer_points, &
+                                                  sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+            end if
         end if
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
@@ -251,14 +275,18 @@ program generatesdf
 
         ! V-faces
         sdf = scalarvalue
-        if (use_fast_sweep) then
-            call compute_narrowband_sdf(myid, decomp_x_start(myid), decomp_x_end(myid), &
-                                        sy, ey, sz, ez, xp, yf, zp, nfaces, faces, face_normals, &
-                                        vertices, normals, face_solid_id, narrow_band_width, sdf, objid)
-        else
-            call compute_scalar_distance_face(myid, decomp_x_start(myid), decomp_x_end(myid), &
-                                              sy, ey, sz, ez, xp, yf, zp, nfaces, faces, face_normals, &
-                                              vertices, normals, face_solid_id, buffer_points, sdf, objid)
+        if (cx_lo <= cx_hi) then
+            if (use_fast_sweep) then
+                call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
+                                            sy, ey, sz, ez, xp, yf, zp, nfaces, faces, face_normals, &
+                                            vertices, normals, face_solid_id, narrow_band_width, &
+                                            sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+            else
+                call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
+                                                  sy, ey, sz, ez, xp, yf, zp, nfaces, faces, face_normals, &
+                                                  vertices, normals, face_solid_id, buffer_points, &
+                                                  sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+            end if
         end if
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
@@ -290,14 +318,18 @@ program generatesdf
 
         ! W-faces
         sdf = scalarvalue
-        if (use_fast_sweep) then
-            call compute_narrowband_sdf(myid, decomp_x_start(myid), decomp_x_end(myid), &
-                                        sy, ey, sz, ez, xp, yp, zf, nfaces, faces, face_normals, &
-                                        vertices, normals, face_solid_id, narrow_band_width, sdf, objid)
-        else
-            call compute_scalar_distance_face(myid, decomp_x_start(myid), decomp_x_end(myid), &
-                                              sy, ey, sz, ez, xp, yp, zf, nfaces, faces, face_normals, &
-                                              vertices, normals, face_solid_id, buffer_points, sdf, objid)
+        if (cx_lo <= cx_hi) then
+            if (use_fast_sweep) then
+                call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
+                                            sy, ey, sz, ez, xp, yp, zf, nfaces, faces, face_normals, &
+                                            vertices, normals, face_solid_id, narrow_band_width, &
+                                            sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+            else
+                call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
+                                                  sy, ey, sz, ez, xp, yp, zf, nfaces, faces, face_normals, &
+                                                  vertices, normals, face_solid_id, buffer_points, &
+                                                  sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+            end if
         end if
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
         call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &

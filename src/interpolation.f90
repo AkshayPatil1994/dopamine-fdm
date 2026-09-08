@@ -101,6 +101,7 @@ Contains
     ! middle points
     Do j = 2, n1-1
        yref = yi(j)
+       jj   = ny-1  ! fallback bracket if yref is beyond y's range (clamp to last triple)
        Do j2 = 3, ny
           If ( y(j2)>=yref ) Then
              jj = j2-1
@@ -122,7 +123,6 @@ Contains
           Exit
        End If
     End Do
-    If ( jj==0 ) jj = ny
     w0   = ( yref - y(jj)   )*( yref - y(jj+1) )/( ( y(jj-1) - y(jj)   )*( y(jj-1) - y(jj+1) ) )
     w1   = ( yref - y(jj-1) )*( yref - y(jj+1) )/( ( y(jj  ) - y(jj-1) )*( y(jj)   - y(jj+1) ) )
     w2   = ( yref - y(jj-1) )*( yref - y(jj  ) )/( ( y(jj+1) - y(jj-1) )*( y(jj+1) - y(jj)   ) )
@@ -169,8 +169,9 @@ Contains
     ! middle points
     Do j = 2, n3-1
        yref = yi(j)
+       jj   = ny-1  ! fallback bracket if yref is beyond y's range (clamp to last triple)
        Do j2 = 3, ny
-          If ( y(j2)>yref ) Then
+          If ( y(j2)>=yref ) Then
              jj = j2-1
              Exit
           End If
@@ -185,7 +186,7 @@ Contains
     yref = yi(1)
     jj   = 2
     Do j2 = 3, ny
-       If ( y(j2)>yref ) Then
+       If ( y(j2)>=yref ) Then
           jj = j2-1
           Exit
        End If
@@ -199,7 +200,7 @@ Contains
     yref = yi(n3)
     jj   = ny-1
     Do j2 = 3, ny
-       If ( y(j2)>yref ) Then
+       If ( y(j2)>=yref ) Then
           jj = j2-1
           Exit
        End If

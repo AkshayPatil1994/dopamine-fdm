@@ -717,7 +717,8 @@ Contains
 
     Dyy(2,2) = b + c*p_bc2
     Dyy(2,3) = a + c*p_bc3
-    
+    !$acc update device(Dyy(2,2:3))
+
     ! top wall
     j        = nyg-1
     a        = 1d0/( y(j)-y(j-1) )/( yg(j+1) - yg(j) )
@@ -731,7 +732,8 @@ Contains
     
     Dyy(nyg-1,nyg-1) = b + a*p_bcn
     Dyy(nyg-1,nyg-2) = c + a*p_bcn1
-    
+    !$acc update device(Dyy(nyg-1,nyg-2:nyg-1))
+
   End Subroutine compute_pseudo_pressure_bc_for_robin_bc
 
 End Module wallmodel

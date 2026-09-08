@@ -30,6 +30,10 @@
 *.exe
 *.out
 *.app
+/examples/*/dopamine
+/examples/*/dopamine-ESEM
+/examples/*/*/dopamine
+/examples/*/*/dopamine-ESEM
 
 # CMake build tree
 build/
@@ -39,6 +43,14 @@ build_*/
 fields/
 restart/
 stats/
+lines/
+slices/
+ibm_surface/
+paraview/
+generateXMF.py
+decomp_2d_setup.log
+*.vtp
+*.pvd
 __pycache__/
 scripts/
 

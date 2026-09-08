@@ -109,6 +109,7 @@ set(SRCS
     src/profiler.f90
     src/global.f90
     src/decomp.f90
+    src/uav_actuator.f90
     src/interpolation.f90
     src/sem.f90
     src/boundary_conditions.f90
@@ -230,6 +231,36 @@ target_include_directories(verify_ti_profile BEFORE PRIVATE
 )
 
 target_link_libraries(verify_ti_profile
+    MPI::MPI_Fortran
+    ${FFTW_LIBRARIES}
+    LAPACK::LAPACK
+    BLAS::BLAS
+)
+
+#------------------------------------------------------------------------------
+# Standalone verification driver for the Bezier-parametrized inflow-optimization
+# helpers (src/sem.f90's bezier_point/bezier_eval/init_inflow_opt/
+# solve_inflow_opt_step2); not part of the dopamine executable, see
+# docs/Numerics.md#111-inlet--constant-or-synthetic-eddy-method
+#------------------------------------------------------------------------------
+add_executable(verify_inflow_opt
+    src/mpi.f90
+    src/global.f90
+    src/sem.f90
+    tests/verify_inflow_opt.f90
+)
+
+set_target_properties(verify_inflow_opt PROPERTIES Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mod/verify_inflow_opt")
+
+target_include_directories(verify_inflow_opt PRIVATE
+    ${FFTW_INCLUDE_DIRS}
+)
+
+target_include_directories(verify_inflow_opt BEFORE PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/mod/verify_inflow_opt"
+)
+
+target_link_libraries(verify_inflow_opt
     MPI::MPI_Fortran
     ${FFTW_LIBRARIES}
     LAPACK::LAPACK

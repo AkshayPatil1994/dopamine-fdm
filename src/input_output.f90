@@ -51,9 +51,9 @@ Contains
 
     Namelist /IBM/ ibm_input_mode, ibm_wall_model_flag, &
                    ibm_sdf_file, ibm_objid_file, ks, nks, nsampling, ibm_surface_nsampling, &
-                   ibm_T_bc_type, ibm_T_wall, ibm_z0
+                   ibm_T_bc_type, ibm_T_wall, ibm_z0, smooth_ibm
 
-    Namelist /INITIAL_CONDITIONS/ Utarget, nstep_init, restart, &
+    Namelist /INITIAL_CONDITIONS/ Utarget, nstep_init, restart, t_start, &
                                    scalar_restart, ic_type, noise_percent
 
     Namelist /IO/ filein, fileout
@@ -63,18 +63,21 @@ Contains
 
     Namelist /BOUSSINESQ/ boussinesq_flag, beta_T, T_ref, grav, Pr, Pr_t, &
                            T_bc_bot, T_bc_top, T_wall_bot, T_wall_top, &
-                           T_ic_type, T_ic_grad, ibm_T_bc_type, ibm_T_wall
+                           T_ic_type, T_ic_grad
 
     Namelist /STATISTICS/ rsb_active, rsb_freq, rsb_nstart, rsb_hom_dir, rsb_fileout, &
                           n_slices, slice_freq, slice_dir, slice_pos, slice_comps, slice_fileout, &
                           n_lines,  line_freq,  line_dir,  line_pos1,  line_pos2,   &
                           line_start, line_end, line_comps, line_fileout
 
-    Namelist /TI_RESCALE/ ti_rescale_active, ti_rescale_x, ti_rescale_nstart, &
-                          ti_rescale_freq, ti_rescale_relax, ti_rescale_clip, ti_rescale_abs_clip, &
-                          ti_rescale_filter_alpha, ti_rescale_deadband, ti_rescale_relax_min, &
-                          ti_rescale_u_active, ti_rescale_u_relax, ti_rescale_u_relax_min, &
-                          ti_rescale_u_clip, ti_rescale_u_abs_clip, ti_rescale_u_deadband
+    Namelist /UAV/ uav_active, uav_xc, uav_yc, uav_zc, uav_disk_radius, &
+                   uav_n_r, uav_n_theta, uav_hover_thrust, uav_kernel_ncell, &
+                   uav_path_active, uav_path_file, uav_thrust_active, uav_thrust_file, &
+                   uav_load_profile, uav_tilt_active, uav_tilt_tau, uav_swirl_frac
+
+    Namelist /INFLOW_OPT/ inflow_opt_active, inflow_opt_x, inflow_opt_nstart, inflow_opt_window, &
+                          n_bezier, inflow_opt_wall_exclude, inflow_opt_trust, inflow_opt_max_iter, &
+                          inflow_opt_relax, inflow_opt_tol
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -143,6 +146,7 @@ Contains
           nks                 = 0
           nsampling           = 0
           ibm_surface_nsampling = 0
+          smooth_ibm          = 0
        End If
 
        Rewind(unit_in)
@@ -181,10 +185,18 @@ Contains
           Write(*,'(A)') ' INFO: no &STATISTICS found, Reynolds stress budget disabled'
        End If
 
-       If ( namelist_group_present(unit_in, 'TI_RESCALE') ) Then
+       If ( namelist_group_present(unit_in, 'UAV') ) Then
           Rewind(unit_in)
-          Read(unit_in, nml=TI_RESCALE,          iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &TI_RESCALE present but failed to parse (check variable names)'
+          Read(unit_in, nml=UAV,                 iostat=ios)
+          If (ios /= 0) Stop 'ERROR: &UAV present but failed to parse (check variable names)'
+       Else
+          Write(*,'(A)') ' INFO: no &UAV found, UAV actuator disk disabled'
+       End If
+
+       If ( namelist_group_present(unit_in, 'INFLOW_OPT') ) Then
+          Rewind(unit_in)
+          Read(unit_in, nml=INFLOW_OPT,          iostat=ios)
+          If (ios /= 0) Stop 'ERROR: &INFLOW_OPT present but failed to parse (check variable names)'
        End If
 
        Close(unit_in)
@@ -308,29 +320,23 @@ Contains
              If ( sem_wall_damping == 1 ) Then
                 Write(*,'(A,F6.2)') '   sem_wall_damping=1, sem_wall_damping_Aplus = ', sem_wall_damping_Aplus
              End If
-             If ( ti_rescale_active == 1 ) Then
-                Write(*,'(A,F10.4)') '   ti_rescale_active=1, ti_rescale_x   = ', ti_rescale_x
-                Write(*,'(A,I8)')    '   ti_rescale_nstart           = ', ti_rescale_nstart
-                Write(*,'(A,I8)')    '   ti_rescale_freq             = ', ti_rescale_freq
-                Write(*,'(A,F6.3)')  '   ti_rescale_relax            = ', ti_rescale_relax
-                Write(*,'(A,F6.3)')  '   ti_rescale_clip             = ', ti_rescale_clip
-                Write(*,'(A,F6.3)')  '   ti_rescale_abs_clip         = ', ti_rescale_abs_clip
-                Write(*,'(A,F6.3)')  '   ti_rescale_filter_alpha     = ', ti_rescale_filter_alpha
-                Write(*,'(A,F6.3)')  '   ti_rescale_deadband         = ', ti_rescale_deadband
-                Write(*,'(A,F6.3)')  '   ti_rescale_relax_min        = ', ti_rescale_relax_min
-                If ( ti_rescale_u_active == 1 ) Then
-                   Write(*,'(A)')       '   ti_rescale_u_active=1 (mean-profile rescaling enabled)'
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_relax          = ', ti_rescale_u_relax
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_relax_min      = ', ti_rescale_u_relax_min
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_clip           = ', ti_rescale_u_clip
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_abs_clip       = ', ti_rescale_u_abs_clip
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_deadband       = ', ti_rescale_u_deadband
-                End If
+             If ( inflow_opt_active == 1 ) Then
+                Write(*,'(A,F10.4)') '   inflow_opt_active=1, inflow_opt_x = ', inflow_opt_x
+                Write(*,'(A,I8)')    '   inflow_opt_nstart           = ', inflow_opt_nstart
+                Write(*,'(A,I8)')    '   inflow_opt_window           = ', inflow_opt_window
+                Write(*,'(A,I4)')    '   n_bezier                    = ', n_bezier
+                Write(*,'(A,F6.3)')  '   inflow_opt_wall_exclude     = ', inflow_opt_wall_exclude
+                Write(*,'(A,F6.3)')  '   inflow_opt_trust            = ', inflow_opt_trust
+                Write(*,'(A,I4)')    '   inflow_opt_max_iter         = ', inflow_opt_max_iter
+                If ( inflow_opt_max_iter > 1 ) Write(*,'(A,F6.3)') &
+                     '   inflow_opt_relax (experimental iter>1 extension) = ', inflow_opt_relax
+                Write(*,'(A,F6.3)')  '   inflow_opt_tol              = ', inflow_opt_tol
              End If
           End If
        End If
        Write(*,'(A,I2)')     '   ibm_input_mode              = ', ibm_input_mode
        Write(*,'(A,I2)')     '   ibm_wall_model_flag         = ', ibm_wall_model_flag
+       Write(*,'(A,I4)')     '   smooth_ibm (SDF corner-rounding passes, 0=off) = ', smooth_ibm
        Write(*,'(A,I8)')     '   nsampling                   = ', nsampling
        Write(*,'(A,I8)')     '   ibm_surface_nsampling       = ', ibm_surface_nsampling
        Write(*,'(A,I2)')     '   cfl_adaptive                = ', cfl_adaptive
@@ -339,6 +345,11 @@ Contains
           Write(*,'(A,F8.4)') '   cfl_safety                  = ', cfl_safety
        End If
        Write(*,'(A,I2)')     '   restart                     = ', restart
+       If ( restart == 1 ) Then
+          Write(*,'(A,I8)')    '   nstep_init                  = ', nstep_init
+          If ( t_start >= 0d0 ) &
+             Write(*,'(A,F12.6)') '   t_start                     = ', t_start
+       End If
        Write(*,'(A,I2)')     '   scalar_restart               = ', scalar_restart
        Write(*,'(A,I2)')     '   ic_type                     = ', ic_type
        Write(*,'(A,F7.2)')   '   noise_percent               = ', noise_percent
@@ -389,6 +400,7 @@ Contains
     Call Mpi_bcast ( ibm_sdf_file,  Len(ibm_sdf_file),  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_objid_file, Len(ibm_objid_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_wall_model_flag,  1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( smooth_ibm,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nks_global,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ks,                   1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
@@ -412,6 +424,7 @@ Contains
     Call Mpi_bcast ( Ub_target,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( nstep_init,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( t_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nsteps,               1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nsave,                1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nmonitor,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -477,6 +490,24 @@ Contains
     Call Mpi_bcast ( C_ic_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( C_ic_height,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
+    Call Mpi_bcast ( uav_active,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_xc,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_yc,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_zc,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_disk_radius,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_n_r,              1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_n_theta,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_hover_thrust,     1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_kernel_ncell,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_path_active,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_path_file, Len(uav_path_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_thrust_active,    1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_thrust_file, Len(uav_thrust_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_load_profile,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_tilt_active,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_tilt_tau,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_swirl_frac,       1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+
     Call Mpi_bcast ( boussinesq_flag,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( beta_T,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_ref,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -515,22 +546,16 @@ Contains
     Call Mpi_bcast ( line_comps,   Len(line_comps(1))*MAX_PROBES,  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( line_fileout, Len(line_fileout(1))*MAX_PROBES,MPI_character, 0, MPI_COMM_WORLD, ierr )
 
-    Call Mpi_bcast ( ti_rescale_active,    1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_x,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_nstart,    1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_freq,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_relax,     1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_clip,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_abs_clip,  1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_filter_alpha, 1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_deadband,  1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_relax_min, 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_active,   1, MPI_integer,  0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_relax,    1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_relax_min,1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_clip,     1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_abs_clip, 1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_deadband, 1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_active,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_x,        1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_nstart,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_window,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( n_bezier,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_wall_exclude, 1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_trust,    1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_relax,    1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_max_iter, 1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_tol,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 
@@ -772,6 +797,38 @@ Contains
 
   End Subroutine read_distributed_field_block
 
+  !> Skip past one x/z-decomposed field block on a stream unit open on rank 0 only,
+  !  without reading its payload into memory or distributing it over MPI -- used by
+  !  read_scalar_restart/read_temperature_restart to fast-forward past the U/V/W/P
+  !  blocks already consumed by read_input_data, which this restart pass doesn't need.
+  !  dim2_size/is_x_face/is_z_face as in read_distributed_field_block (dim2_size is
+  !  that routine's Size(field_local,2), since there's no local array here to ask).
+  Subroutine skip_distributed_field_block(unit_no, dim2_size, is_x_face, is_z_face)
+
+    Integer(Int32), Intent(In) :: unit_no, dim2_size
+    Logical, Intent(In) :: is_x_face, is_z_face
+
+    Integer(Int32) :: nn(3), expect_n1, expect_n3
+    Integer(Int64) :: cur_pos, payload_bytes
+
+    If ( myid == 0 ) Then
+       Read(unit_no) nn
+
+       expect_n1 = Merge(nx_global, nxg_global, is_x_face)
+       expect_n3 = Merge(nz_global, nzg_global, is_z_face)
+       If ( nn(1) /= expect_n1 .Or. nn(2) /= dim2_size .Or. nn(3) /= expect_n3 ) Then
+          Write(*,'(A,3(I0,1X),A,3(I0,1X))') ' ERROR: restart file field block size mismatch while skipping: found ', &
+               nn, ' expected ', expect_n1, dim2_size, expect_n3
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+
+       payload_bytes = Int(nn(1),Int64)*Int(nn(2),Int64)*Int(nn(3),Int64)*8_Int64
+       Inquire(unit=unit_no, POS=cur_pos)
+       Read(unit_no, POS=cur_pos+payload_bytes)   ! pure seek: no data item, so nothing is transferred
+    End If
+
+  End Subroutine skip_distributed_field_block
+
   !> Write one x/z-decomposed field block (3-int header + global-sized data) to a stream unit open on rank 0 only, gathering from every rank's local array. Every non-zero rank's contribution is received into its own buffer via a single posted-up-front Waitall instead of one-at-a-time blocking Mpi_recv, so the gather isn't serialized behind rank 0's receive order. is_x_face/is_z_face as in read_distributed_field_block.
   Subroutine write_distributed_field_block(unit_no, field_local, nxf_global, nyf_global, nzf_global, is_x_face, is_z_face)
 
@@ -903,8 +960,6 @@ Contains
   ! Read scalar C from a restart file; caller/layout details
   Subroutine read_scalar_restart
 
-    Real(Int64), Allocatable :: skip_U(:,:,:), skip_V(:,:,:), skip_W(:,:,:), skip_P(:,:,:)
-
     If ( myid == 0 ) Then
        Open(2, file=Trim(Adjustl(filein)), access='stream', &
             form='unformatted', action='read')
@@ -924,12 +979,10 @@ Contains
     End If
 
     ! Skip U, V, W, P blocks (discarded — this restart file's U/V/W/P were already consumed by read_input_data)
-    Allocate( skip_U(nx,nyg,nzg), skip_V(nxg,ny,nzg), skip_W(nxg,nyg,nz), skip_P(nxg,nyg,nzg) )
-    Call read_distributed_field_block(2, skip_U, .True.,  .False.)
-    Call read_distributed_field_block(2, skip_V, .False., .False.)
-    Call read_distributed_field_block(2, skip_W, .False., .True.)
-    Call read_distributed_field_block(2, skip_P, .False., .False.)
-    Deallocate( skip_U, skip_V, skip_W, skip_P )
+    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
+    Call skip_distributed_field_block(2, ny,  .False., .False.)
+    Call skip_distributed_field_block(2, nyg, .False., .True.)
+    Call skip_distributed_field_block(2, nyg, .False., .False.)
 
     ! C block
     Call read_distributed_field_block(2, Cscal, .False., .False.)
@@ -942,8 +995,6 @@ Contains
 
   ! Read temperature T from a restart file; skips U,V,W,P and any C/nu_t blocks ahead of it
   Subroutine read_temperature_restart
-
-    Real(Int64), Allocatable :: skip_U(:,:,:), skip_V(:,:,:), skip_W(:,:,:), skip_P(:,:,:)
 
     If ( myid == 0 ) Then
        Open(2, file=Trim(Adjustl(filein)), access='stream', &
@@ -963,19 +1014,19 @@ Contains
     End If
 
     ! U,V,W,P blocks (discarded — already consumed by read_input_data)
-    Allocate( skip_U(nx,nyg,nzg), skip_V(nxg,ny,nzg), skip_W(nxg,nyg,nz), skip_P(nxg,nyg,nzg) )
-    Call read_distributed_field_block(2, skip_U, .True.,  .False.)
-    Call read_distributed_field_block(2, skip_V, .False., .False.)
-    Call read_distributed_field_block(2, skip_W, .False., .True.)
-    Call read_distributed_field_block(2, skip_P, .False., .False.)
+    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
+    Call skip_distributed_field_block(2, ny,  .False., .False.)
+    Call skip_distributed_field_block(2, nyg, .False., .True.)
+    Call skip_distributed_field_block(2, nyg, .False., .False.)
 
-    ! C block (only present if sediment was active when the file was written) — discarded
-    If ( sediment_flag >= 1 ) Call read_distributed_field_block(2, skip_P, .False., .False.)
+    ! C block (only present if sediment was active when the file was written) — discarded.
+    ! NOTE: gated on THIS run's sediment_flag/sgs_model, not what the file was actually written
+    ! with -- restarting with either flag flipped relative to the writing run desyncs this skip
+    ! from the file's real layout and silently misreads everything after it, including T below.
+    If ( sediment_flag >= 1 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
 
     ! nu_t block (only present if LES was active when the file was written) — discarded
-    If ( sgs_model /= 0 ) Call read_distributed_field_block(2, skip_P, .False., .False.)
-
-    Deallocate( skip_U, skip_V, skip_W, skip_P )
+    If ( sgs_model /= 0 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
 
     ! T block
     Call read_distributed_field_block(2, Tscal, .False., .False.)

@@ -1,0 +1,90 @@
+! ================================================================
+! UAV actuator-disk MPI correctness check: the disk travels
+! horizontally across the x=0.5 boundary between two MPI ranks
+! (p_row=2 explicitly splits x into two pencils). Run with
+! `mpirun -np 2`.
+!
+! This targets the one part of apply_uav_forcing (uav_actuator.f90)
+! that a single-rank run can never exercise: a marker whose kernel
+! support at some point spans two ranks, so each rank must contribute
+! only the local cells it actually owns while the disk crosses.
+! Otherwise identical to examples/uav_hover_disk (quiescent free-slip
+! box, no ground/wind/turbulence).
+! ================================================================
+
+&DOMAIN
+  nx         = 66,
+  ny         = 65,
+  nz         = 66,
+  Lx         = 1.0,
+  Ly         = 1.0,
+  Lz         = 1.0,
+  alpha_grid = 1.0,
+  grid_type  = 1,
+  p_row      = 2,    ! force an x-split across 2 ranks
+  p_col      = 1,
+/
+
+&PHYSICS
+  nu                   = 1.5e-5,
+  dPdx                 = 0.0,
+  dPdz                 = 0.0,
+  sgs_model            = 1,
+  Cs_vreman            = 0.17,
+  flat_wall_model_flag = 0,
+/
+
+&NUMERICS
+  dt           = 1.0e-3,
+  nsteps       = 1500,
+  nsave        = 1500,
+  nmonitor     = 100,
+  cfl_adaptive = 1,
+  cfl_target   = 0.5,
+  cfl_safety   = 0.9,
+  dt_min       = 1.0e-8,
+  dt_max       = 1.0e-2,
+/
+
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 2,   ! free-slip: this case is about MPI correctness, not ground effect
+  bc_face_yhi = 2,
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 0.0,
+  ic_type      = 3,
+  noise_percent = 0.1,
+  nstep_init     = 0,
+  restart        = 0,
+  scalar_restart = 1,
+/
+
+&IO
+  filein  = 'restart/uav_cross.1',
+  fileout = 'uav_cross',
+/
+
+&UAV
+  uav_active       = 1,
+  uav_disk_radius  = 0.15,
+  uav_n_r          = 15,
+  uav_n_theta      = 24,
+  uav_hover_thrust = 4.0,
+  uav_kernel_ncell = 2,
+  uav_path_active  = 1,
+  uav_path_file    = 'uav_cross_path.dat',
+/
+
+! Line probe along x at the disk's height/z, to see the downwash
+! footprint sweep smoothly across x (in particular across x=0.5,
+! the rank boundary) as the disk moves.
+&STATISTICS
+  n_lines = 1,
+  line_freq = 15,
+  line_dir(1)     = 'x',
+  line_pos1(1)    = 0.5,
+  line_pos2(1)    = 0.5,
+  line_comps(1)   = 'V',
+  line_fileout(1) = 'lines/xsweep',
+/

@@ -1,0 +1,92 @@
+! ================================================================
+! UAV actuator-disk Phase 3 smoke test: the same vertical takeoff as
+! ../uav_path_takeoff, now into a steady mean crosswind (constant mass
+! flux forcing, Ub_target) over the domain's rough-free log-law ground
+! (flat_wall_model_flag=1). No new UAV code -- this is a configuration
+! exercise on top of the existing moving-disk case.
+!
+! Purpose: check the disk's wake is visibly advected/deflected
+! downstream by the crosswind instead of rising straight up, and that
+! nothing destabilizes when the crosswind and the disk's own downwash
+! interact.
+! ================================================================
+
+&DOMAIN
+  nx         = 66,
+  ny         = 129,
+  nz         = 66,
+  Lx         = 1.0,
+  Ly         = 2.0,
+  Lz         = 1.0,
+  alpha_grid = 1.0,
+  grid_type  = 1,
+/
+
+&PHYSICS
+  nu                   = 1.5e-5,
+  sgs_model            = 1,
+  Cs_vreman            = 0.17,
+  flat_wall_model_flag = 1,     ! smooth log-law EQWM at the ground -- resolves the mean-wind profile at this coarse a grid
+  flow_forcing_mode    = 1,     ! constant mass flux: solve for dPdx internally, hold bulk streamwise velocity at Ub_target
+  Ub_target            = 3.0,   ! light steady crosswind [m/s]
+/
+
+&NUMERICS
+  dt           = 1.0e-3,
+  nsteps       = 800,
+  nsave        = 800,
+  nmonitor     = 50,
+  cfl_adaptive = 1,
+  cfl_target   = 0.5,
+  cfl_safety   = 0.9,
+  dt_min       = 1.0e-8,
+  dt_max       = 1.0e-2,
+/
+
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 1,   ! ground: log-law EQWM (see flat_wall_model_flag above)
+  bc_face_yhi = 2,   ! far top: free-slip (open)
+  x_bc_type   = 0,   ! periodic -- required by flow_forcing_mode=1 (CMFR)
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 3.0,     ! matches Ub_target: log-law IC already at roughly the right speed, no CMFR spin-up needed
+  ic_type      = 1,       ! log-law profile + noise (mirrors for free-slip top per genGridandIC.f90)
+  noise_percent = 5.0,
+  nstep_init     = 0,
+  restart        = 0,
+  scalar_restart = 1,
+/
+
+&IO
+  filein  = 'restart/uav_wind.1',
+  fileout = 'uav_wind',
+/
+
+&UAV
+  uav_active       = 1,
+  uav_disk_radius  = 0.15,
+  uav_n_r          = 15,
+  uav_n_theta      = 24,
+  uav_hover_thrust = 4.0,
+  uav_kernel_ncell = 2,
+  uav_path_active  = 1,
+  uav_path_file    = 'uav_wind_path.dat',
+/
+
+&STATISTICS
+  n_lines = 1,
+  line_freq = 20,
+  line_dir(1)     = 'y',
+  line_pos1(1)    = 0.5,
+  line_pos2(1)    = 0.5,
+  line_comps(1)   = 'V',
+  line_fileout(1) = 'lines/centerline',
+!
+  n_slices = 1,
+  slice_freq = 50,
+  slice_dir(1)     = 'y',
+  slice_pos(1)     = 0.15,   ! horizontal (x,z) plane near the ground, below the disk's whole climb range
+  slice_comps(1)   = 'UVW',
+  slice_fileout(1) = 'slices/y015',
+/

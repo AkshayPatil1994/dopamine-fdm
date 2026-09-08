@@ -1,0 +1,95 @@
+! ================================================================
+! UAV actuator-disk tilt/swirl/radial-loading smoke test: a takeoff ->
+! horizontal translate -> land path (uav_tilt_path.dat) that actually
+! exercises the auto-tilt mechanism -- unlike ../uav_path_takeoff (pure
+! vertical climb, tilt would stay at (0,1,0) throughout even if enabled).
+!
+! Purpose: check that uav_tilt_active=1 (differentially-flat tilt derived
+! from the path's own kinematic acceleration, low-pass filtered by
+! uav_tilt_tau), uav_swirl_frac (in-plane torque-reaction force), and
+! uav_load_profile=1 (parabolic tip-tapered loading) are stable together
+! on an LES grid, and that the tilt genuinely engages: the disk's tilted
+! thrust vector should inject real horizontal momentum into the flow
+! during the horizontal-acceleration/deceleration parts of the path,
+! visible as a clearly nonzero bulk <U> in the step monitor -- something
+! the original flat/vertical-only model cannot produce at all (rerun with
+! uav_tilt_active=0, uav_swirl_frac=0.0 as a control: <U> then stays at
+! the noise floor, ~1e-3, for the whole run instead of peaking near -0.26
+! during the translate/deceleration-into-landing phase).
+! ================================================================
+
+&DOMAIN
+  nx         = 66,
+  ny         = 129,
+  nz         = 66,
+  Lx         = 1.0,
+  Ly         = 2.0,
+  Lz         = 1.0,
+  alpha_grid = 1.0,
+  grid_type  = 1,
+/
+
+&PHYSICS
+  nu                   = 1.5e-5,
+  dPdx                 = 0.0,
+  dPdz                 = 0.0,
+  sgs_model            = 1,
+  Cs_vreman            = 0.17,
+  flat_wall_model_flag = 0,
+/
+
+&NUMERICS
+  dt           = 1.0e-3,
+  nsteps       = 1600,
+  nsave        = 40,
+  nmonitor     = 40,
+  cfl_adaptive = 1,
+  cfl_target   = 0.5,
+  cfl_safety   = 0.9,
+  dt_min       = 1.0e-8,
+  dt_max       = 1.0e-2,
+/
+
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 1,   ! ground: no-slip
+  bc_face_yhi = 2,   ! far top: free-slip (open)
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 0.0,
+  ic_type      = 3,
+  noise_percent = 0.1,
+  nstep_init     = 0,
+  restart        = 0,
+  scalar_restart = 1,
+/
+
+&IO
+  filein  = 'restart/uav_tilt_translate.1',
+  fileout = 'uav_tilt_translate',
+/
+
+&UAV
+  uav_active        = 1,
+  uav_disk_radius   = 0.15,
+  uav_n_r           = 15,
+  uav_n_theta       = 24,
+  uav_hover_thrust  = 4.0,
+  uav_kernel_ncell  = 2,
+  uav_path_active   = 1,
+  uav_path_file     = 'uav_tilt_path.dat',
+  uav_load_profile  = 1,
+  uav_tilt_active   = 1,
+  uav_tilt_tau      = 0.05,
+  uav_swirl_frac    = 0.05,
+/
+
+&STATISTICS
+  n_lines = 1,
+  line_freq = 20,
+  line_dir(1)     = 'y',
+  line_pos1(1)    = 0.5,
+  line_pos2(1)    = 0.5,
+  line_comps(1)   = 'V',
+  line_fileout(1) = 'lines/centerline',
+/
