@@ -117,6 +117,29 @@ spanning the path file's own time range. Open the resulting `uav_path.pvd` in Pa
 alongside the flow-field `.pvd`/`.xmf` and use the shared time toolbar to animate both
 together.
 
+### `generate_UAVdrone.py`
+
+Builds a scaled quadcopter body (not just the actuator disk) and a per-snapshot
+rigid-body transform table for the same `uav_path_file`. Geometry is written to disk
+exactly once (`--stl-out`, default `uav_drone.stl`, scaled so its propeller radius
+matches this case's `uav_disk_radius`); motion is carried entirely by a small
+`(time, position, 3x3 rotation)` table (`uav_transforms.npz`/`.csv`) applied on the fly
+by a generated ParaView Programmable Source script (`--pv-source-out`) -- no per-frame
+mesh duplication. Position reuses `hermite_eval`; `--tilt` additionally replays
+`uav_disk_state`'s auto-tilt low-pass filter (`uav_actuator.f90`, only meaningful with
+`uav_tilt_active=1`) over a dense `&NUMERICS dt` grid. Requires `trimesh` (`manifold3d`
+optional, for a proper boolean union):
+
+```bash
+python3 postProcessing/generate_UAVdrone.py uav_path_file.dat \
+    --input-parameters input_parameters --times-from slices/y015_times.bin --tilt
+```
+
+Paste the two scripts written to `uav_drone_paraview_source.py` into ParaView's
+Sources > Programmable Source (Output Type: `vtkPolyData`, main script + "Script
+(RequestInformation)"), Apply, then open the flow-field `.pvd`/`.xmf` alongside it and
+use the shared time toolbar.
+
 ### `plot_snapshot.py`
 
 Wall-normal profile plots (x-z averaged) from one or more field snapshots. Reads

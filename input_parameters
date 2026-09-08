@@ -59,6 +59,15 @@
 !       grid but with less aliasing error than either form alone -- reduces
 !       Gibbs-like ringing near sharp immersed-boundary gradients.
 !   1 = pure divergence-form central differencing (original scheme).
+!
+! flat_wall_model_flag: equilibrium wall model for the flat (non-IBM) y walls.
+!   0 = DNS no-slip (default)
+!   1 = smooth log-law EQWM
+!   2 = rough z0 EQWM: momentum roughness length z0_ylo/z0_yhi [m] must be
+!       set (>0) for whichever wall is no-slip (bc_face_ylo/yhi=1); a Stop
+!       fires at start-up otherwise. z0h_ylo/z0h_yhi (thermal roughness) are
+!       only needed if &BOUSSINESQ T_bc_bot/T_bc_top=2 (rough EQWM flux BC)
+!       is also used on that wall.
 &PHYSICS
   nu                   = 1.0e-6,
   dPdx                 = 1.225e-4,
@@ -71,7 +80,11 @@
   phi_wave_z           = 0.0,     ! phase offset [rad] for z-wave forcing
   sgs_model            = 0,       ! 0=DNS, 1=Vreman
   Cs_vreman            = 0.17,    ! Sub-grid model constant (Eq. 5)
-  flat_wall_model_flag = 0,       ! 0=no-slip, 1=log-law EQWM
+  flat_wall_model_flag = 0,       ! 0=no-slip, 1=smooth log-law EQWM, 2=rough z0 EQWM
+  z0_ylo               = 0.0,     ! momentum roughness length [m], bottom wall (flat_wall_model_flag=2 only)
+  z0_yhi               = 0.0,     ! momentum roughness length [m], top wall (flat_wall_model_flag=2 only)
+  z0h_ylo              = 0.0,     ! thermal roughness length [m], bottom wall (needs &BOUSSINESQ T_bc_bot=2)
+  z0h_yhi              = 0.0,     ! thermal roughness length [m], top wall (needs &BOUSSINESQ T_bc_top=2)
   flow_forcing_mode    = 0,       ! 0=prescribed dPdx (default), 1=constant mass flux
   Ub_target            = 0.068,   ! target bulk velocity, used only if flow_forcing_mode=1
   advection_scheme     = 0,       ! 0=skew-symmetric (default), 1=pure divergence-form central
@@ -389,9 +402,15 @@
 ! Immersed boundary method
 ! ibm_input_mode: 0=no IBM body (smooth walls)
 !                 1=SDF-based ghost-cell IBM (precomputed cell-centre SDF)
-! ibm_wall_model_flag: 0=DNS no-slip, 1=log-law EQWM
+! ibm_wall_model_flag: 0=DNS no-slip, 1=log-law EQWM (smooth Reichardt by
+!   default; set ibm_z0(id)>0 for a given solid ID to switch that object's
+!   EQWM to the rough log law instead -- only meaningful when
+!   ibm_wall_model_flag=1)
 ! ibm_objid_file: optional per-solid ID field from GenSDF's .list manifest mode; '' = single uniform IBM condition (index 0)
-! ibm_T_bc_type/ibm_T_wall are arrays indexed by solid ID (0..15); index 0 is the default/legacy slot
+! ibm_T_bc_type/ibm_T_wall/ibm_z0 are arrays indexed by solid ID (0..15); index 0 is the default/legacy slot
+! ibm_z0: per-object momentum roughness length [m] (0=smooth, the default);
+!   there is no independent IBM thermal-roughness counterpart yet -- the
+!   ghost-cell thermal BC always uses the smooth relation regardless of ibm_z0.
 ! Omit this group if no IBM body is present
 &IBM
   ibm_input_mode      = 0,
@@ -404,8 +423,10 @@
   ibm_surface_nsampling = 0, ! surface field dump interval -> ibm_surface/surface.<step>.bin (0=disabled)
   ibm_T_bc_type(0)    = 0,   ! immersed-boundary thermal condition: 0=adiabatic, 1=isothermal (needs &BOUSSINESQ boussinesq_flag=1)
   ibm_T_wall(0)       = 0.0, ! wall temperature [K], used when ibm_T_bc_type(0)=1
+  ibm_z0(0)           = 0.0, ! momentum roughness length [m]; 0=smooth log-law EQWM (needs ibm_wall_model_flag=1)
   ! ibm_T_bc_type(1)  = 1,   ! example: solid ID 1 (from ibm_objid_file) isothermal
   ! ibm_T_wall(1)     = 350.0,
+  ! ibm_z0(1)         = 0.001,   ! example: solid ID 1 uses the rough EQWM
 /
 
 ! Initial conditions
@@ -718,8 +739,13 @@
 !   T_bc_bot/T_bc_top: 0 = adiabatic (zero-gradient)
 !                      1 = isothermal (Dirichlet, mirrored against
 !                          T_wall_bot/T_wall_top)
+!                      2 = rough EQWM flux BC: heat flux set via the
+!                          &PHYSICS z0h_ylo/z0h_yhi rough log law toward the
+!                          isothermal target T_wall_bot/T_wall_top; requires
+!                          &PHYSICS flat_wall_model_flag=2 and the matching
+!                          z0h_ylo/z0h_yhi > 0 (Stop at start-up otherwise)
 !   T_wall_bot/T_wall_top = wall temperature [K] (used when the
-!                      corresponding T_bc_*=1)
+!                      corresponding T_bc_*=1 or 2)
 !
 ! Initial temperature profile:
 !   T_ic_type: 0 = uniform T_ref throughout domain
@@ -745,71 +771,97 @@
   T_ic_grad       = 0.0,
 /
 
-! In-situ SEM inflow TI-profile rescaling (optional — omit this group to
-! disable; only meaningful with &INFLOW inflow_type=1). Closes the loop
-! between the wind-tunnel target profile and what actually arrives at a
-! downstream station, without a manual pre-multiplier on
-! inflow_profile_file -- see docs/design-notes/sem.md's in-situ TI-profile
-! rescaling section.
+! SEM inflow Reynolds-stress optimization (optional — omit this group to
+! disable; only meaningful with &INFLOW inflow_type=1). A single-run (online)
+! realization of Lamberti et al. 2018 (JWEIA 177:32-44) Sections 5-6.1: fits
+! Bezier control points on the inflow v'^2/w'^2 profiles so that the
+! downstream statistics at a station match the wind-tunnel target. See
+! docs/design-notes/sem.md's inflow-optimization section.
 !
-! ti_rescale_active: 0=disabled (default), 1=enabled
-! ti_rescale_x:      streamwise station [m] to sample and match against the
+! Runs as a phase machine, in this order:
+!   step0 (baseline, inflow = target)      -- measured over inflow_opt_window steps
+!   step1 (inflow v'^2 AND w'^2 doubled together, the paper's Section 6.1
+!          combined perturbation)          -- measured over inflow_opt_window steps
+!   correction 1 (per-control-point scalar secant Newton step, independent
+!                 for v'^2 and w'^2) -- applied, then verified
+! v'^2 and w'^2 are corrected independently rather than via the paper's
+! coupled 2-variable weighted least-squares fit (Eq. 5): a real run showed
+! that coupled solve can be dangerously ill-conditioned (the two decision
+! variables tend to move all three downstream stats together, so their
+! sensitivities can be nearly collinear at some heights), amplifying ordinary
+! measurement noise into wild, unstable corrections even with numerical
+! regularization. A decoupled scalar secant needs no matrix inversion, so
+! there's no collinearity to be unstable about.
+!
+! By default (inflow_opt_max_iter=1) the profile freezes right after that one
+! verify measurement, reverting to the uncorrected baseline if the correction
+! measured worse than it. This matches what the paper itself actually
+! validates (Section 6.1): they only ever apply one corrected step, and
+! explicitly list further iteration and an automatic stopping criterion as
+! unsolved future work (Section 7) -- so a single step is not an arbitrary
+! simplification, it's what was shown to work.
+!
+! inflow_opt_max_iter>1 is this codebase's own experimental extension beyond
+! the paper: it secant-refines the slopes from each applied correction and
+! keeps going with a Robbins-Monro-style decaying step size (inflow_opt_relax
+! / iteration), stopping at inflow_opt_tol, inflow_opt_max_iter, or a
+! stalled (non-improving) residual -- guarded throughout by a best-iterate
+! safety net that reverts to whichever measured iterate had the lowest
+! residual. Since this goes past what the paper demonstrates, treat it as
+! experimental and check the printed per-iteration residuals.
+!
+! inflow_opt_active: 0=disabled (default), 1=enabled
+! inflow_opt_x:      streamwise station [m] to sample and match against the
 !                    wind-tunnel target (e.g. the location of a comparison
 !                    plot); nearest grid cell-centre is used
-! ti_rescale_nstart: step index at which sampling begins (skip the initial
-!                    transient before flow has developed past the station)
-! ti_rescale_freq:   accumulate every step; reduce + nudge the injected
-!                    profile every ti_rescale_freq steps
-! ti_rescale_relax:  damping exponent (0,1] on the per-window correction
-!                    ratio; smaller = slower/more stable convergence,
-!                    1 = jump straight to the measured ratio each window
-! ti_rescale_clip:   clamps each window's correction ratio to
-!                    [1/ti_rescale_clip, ti_rescale_clip] as a safety net
-!                    against noisy/small-sample windows
-! ti_rescale_abs_clip: anti-windup clamp on the cumulative profile, bounding
-!                    prof_R** to [target/ti_rescale_abs_clip,
-!                    target*ti_rescale_abs_clip] regardless of how many
-!                    windows have run -- ti_rescale_clip alone only bounds a
-!                    single window's step, not the drift compounded over a
-!                    long transient (see docs/design-notes/sem.md)
-! ti_rescale_filter_alpha: EMA smoothing factor (0,1] applied to the measured
-!                    variance across windows before computing the ratio;
-!                    smaller = more filtering of window-to-window noise
-! ti_rescale_deadband: skip the update where |ratio-1| is below this,
-!                    to avoid perturbing the profile in response to noise
-!                    once near convergence
-! ti_rescale_relax_min: floor on the Robbins-Monro-decayed gain
-!                    (ti_rescale_relax/sqrt(k+1)), so the controller keeps
-!                    responding to genuine drift indefinitely
-!
-! ti_rescale_u_active: 0=disabled (default), 1=also rescale the mean profile
-!                    prof_U toward inflow_profile_file's U(y), the same way
-!                    prof_R11/22/33 are rescaled above -- without this, only
-!                    the fluctuation variance is corrected and Iu=sqrt(R11)/U
-!                    can stay off-target if the simulated mean flow itself
-!                    drifts from the wind-tunnel U(y) (see docs/design-notes/
-!                    sem.md's mean-profile rescaling section)
-! ti_rescale_u_relax / ti_rescale_u_relax_min: additive-controller analogues
-!                    of ti_rescale_relax/ti_rescale_relax_min above
-! ti_rescale_u_clip: max |correction| per window, as a fraction of Uconv_sem
-! ti_rescale_u_abs_clip: anti-windup clamp, as a fraction of Uconv_sem
-! ti_rescale_u_deadband: skip the update where |bias|/Uconv_sem is below this
-&TI_RESCALE
-  ti_rescale_active = 0,
-  ti_rescale_x      = 20.0,
-  ti_rescale_nstart = 5000,
-  ti_rescale_freq   = 1000,
-  ti_rescale_relax  = 0.3,
-  ti_rescale_clip   = 1.5,
-  ti_rescale_abs_clip = 2.0,
-  ti_rescale_filter_alpha = 0.25,
-  ti_rescale_deadband = 0.03,
-  ti_rescale_relax_min = 0.05,
-  ti_rescale_u_active = 0,
-  ti_rescale_u_relax  = 0.3,
-  ti_rescale_u_relax_min = 0.05,
-  ti_rescale_u_clip   = 0.5,
-  ti_rescale_u_abs_clip = 1.0,
-  ti_rescale_u_deadband = 0.01,
+! inflow_opt_nstart: step index at which sampling begins (skip the initial
+!                    transient before flow has developed past the station);
+!                    <0 auto-tunes from the advection time to inflow_opt_x
+!                    and the wall-shear time scale
+! inflow_opt_window: number of steps averaged for each measurement (step0/
+!                    step1 and each verify iteration); <=0 auto-tunes from
+!                    the SEM eddy turnover time
+! n_bezier:          number of Bezier control points spanning the profile
+!                    height (endpoints fixed to the target, matching the
+!                    paper); n_bezier-2 interior points are optimized
+! inflow_opt_wall_exclude: a control point within this factor times the
+!                    no-slip wall's taper length (see sem_fluctuation) is
+!                    excluded from both the correction and the residual
+!                    check, since the injected variance there is
+!                    deterministically suppressed toward zero regardless of
+!                    the target -- no correction algorithm can close that
+!                    gap. Not part of the paper (its offline runs were
+!                    reviewed by eye); needed for an unattended online run
+! inflow_opt_trust:  numerical-robustness cap (not a paper-fidelity choice):
+!                    a secant slope estimated from one fast online
+!                    measurement window can be small/noisy enough at some
+!                    control points to blow the raw Newton step up to many
+!                    multiples of the target, unlike the paper's fully
+!                    time-converged offline perturbation runs -- this bounds
+!                    the applied step to +-inflow_opt_trust of the target
+!                    value at each control point
+! inflow_opt_max_iter: 1 (default): the paper's validated single corrected
+!                    step. >1: this codebase's own experimental extension
+!                    (see above); each additional iteration costs another
+!                    inflow_opt_window-step measurement
+! inflow_opt_relax:  base step-size scale for the experimental
+!                    inflow_opt_max_iter>1 extension only (effective scale =
+!                    inflow_opt_relax/iteration); unused at the default
+!                    inflow_opt_max_iter=1
+! inflow_opt_tol:    experimental extension only: stop iterating once the
+!                    worst-case relative residual (|measured-target|/target,
+!                    over u'^2/v'^2/w'^2 and all interior control points)
+!                    drops below this
+&INFLOW_OPT
+  inflow_opt_active = 0,
+  inflow_opt_x      = 20.0,
+  inflow_opt_nstart = -1,
+  inflow_opt_window = -1,
+  n_bezier          = 8,
+  inflow_opt_wall_exclude = 1.0,
+  inflow_opt_trust     = 0.5,
+  inflow_opt_max_iter = 1,
+  inflow_opt_relax    = 0.7,
+  inflow_opt_tol      = 0.1,
 /
 

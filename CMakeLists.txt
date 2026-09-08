@@ -238,6 +238,36 @@ target_link_libraries(verify_ti_profile
 )
 
 #------------------------------------------------------------------------------
+# Standalone verification driver for the Bezier-parametrized inflow-optimization
+# helpers (src/sem.f90's bezier_point/bezier_eval/init_inflow_opt/
+# solve_inflow_opt_step2); not part of the dopamine executable, see
+# docs/Numerics.md#111-inlet--constant-or-synthetic-eddy-method
+#------------------------------------------------------------------------------
+add_executable(verify_inflow_opt
+    src/mpi.f90
+    src/global.f90
+    src/sem.f90
+    tests/verify_inflow_opt.f90
+)
+
+set_target_properties(verify_inflow_opt PROPERTIES Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mod/verify_inflow_opt")
+
+target_include_directories(verify_inflow_opt PRIVATE
+    ${FFTW_INCLUDE_DIRS}
+)
+
+target_include_directories(verify_inflow_opt BEFORE PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/mod/verify_inflow_opt"
+)
+
+target_link_libraries(verify_inflow_opt
+    MPI::MPI_Fortran
+    ${FFTW_LIBRARIES}
+    LAPACK::LAPACK
+    BLAS::BLAS
+)
+
+#------------------------------------------------------------------------------
 # dopamine-ESEM: standalone ESEM inflow precursor generator (precomputes an
 # x-normal donor slice time series in probe_output.f90's format, consumed by
 # a separate inflow_type=2 run -- see src/dopamine_esem_main.f90). Needs the

@@ -10,7 +10,7 @@ Module initialization
   Use input_output
   Use ibmSetup
   Use scalar_transport, Only : compute_settling_velocity
-  Use synthetic_eddy_method, Only : init_inflow, init_ti_rescale
+  Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
   Use uav_actuator, Only : setup_uav
 
   ! prevent implicit typing
@@ -262,8 +262,8 @@ Contains
     ! inflow_type==1): must come after y_global/z_global/Ly/Lz are set
     Call init_inflow
 
-    ! in-situ TI-profile rescaling setup (no-op unless ti_rescale_active==1); must come after init_inflow (needs prof_R11/22/33 already read)
-    Call init_ti_rescale
+    ! inflow-optimization setup (no-op unless inflow_opt_active==1); must come after init_inflow (needs prof_R11/22/33 already read)
+    Call init_inflow_opt
 
     ! IBM setup: must come after xg/yg/zg/dxmin/dymin/dzmin are set
     ! (compute_normal_at_face_* divides by grid spacings).

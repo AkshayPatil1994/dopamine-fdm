@@ -515,25 +515,52 @@ Module global
   Character(200) :: rsb_hom_dir = 'x,z'
   Character(200) :: rsb_fileout = 'rsb'
 
-  ! in-situ SEM inflow TI-profile rescaling
-  Integer(Int32) :: ti_rescale_active = 0
-  Real   (Int64) :: ti_rescale_x      = 0d0
-  Integer(Int32) :: ti_rescale_nstart = 0      ! <0: auto-tuned from advection time and wall-shear timescale
-  Integer(Int32) :: ti_rescale_freq   = 1000   ! <=0: auto-tuned from the SEM eddy turnover time
-  Real   (Int64) :: ti_rescale_relax  = 0.3d0
-  Real   (Int64) :: ti_rescale_clip   = 1.5d0
-  Real   (Int64) :: ti_rescale_abs_clip = 2d0
-  Real   (Int64) :: ti_rescale_filter_alpha = 0.25d0   ! EMA smoothing of the measured variance across windows
-  Real   (Int64) :: ti_rescale_deadband = 0.03d0        ! skip the update where |ratio-1| is below this
-  Real   (Int64) :: ti_rescale_relax_min = 0.05d0       ! floor for the Robbins-Monro-decayed gain
-
-  ! mean-profile (U) companion to TI_RESCALE above: closes the loop on prof_U the same way TI_RESCALE closes it on prof_R11/22/33
-  Integer(Int32) :: ti_rescale_u_active   = 0
-  Real   (Int64) :: ti_rescale_u_relax    = 0.3d0
-  Real   (Int64) :: ti_rescale_u_relax_min = 0.05d0
-  Real   (Int64) :: ti_rescale_u_clip     = 0.5d0    ! max |correction| per window, as a fraction of Uconv_sem
-  Real   (Int64) :: ti_rescale_u_abs_clip = 1.0d0    ! anti-windup: max cumulative |prof_U-prof_U_target|, as a fraction of Uconv_sem
-  Real   (Int64) :: ti_rescale_u_deadband = 0.01d0   ! skip the update where |bias|/Uconv_sem is below this
+  ! Bezier-parametrized SEM inflow Reynolds-stress optimization: a single-run (online) realization
+  ! of Lamberti et al. 2018 (JWEIA 177:32-44) Sections 5-6.1. Matches the downstream v'^2/w'^2
+  ! profiles at a station to the wind-tunnel target by fitting Bezier control points: step0
+  ! (baseline) plus step1 (v'^2 AND w'^2 doubled together at the inflow, their Section 6.1 combined
+  ! perturbation) give a per-control-point scalar secant slope for each decision variable, then ONE
+  ! corrected profile is applied and verified. v'^2 and w'^2 are corrected independently (a real
+  ! run showed the paper's coupled 2-variable weighted least-squares fit, Eq. 5, can be dangerously
+  ! ill-conditioned: the two decision variables tend to move all three downstream stats in the same
+  ! direction, so their Jacobian columns can be nearly collinear at some heights, and even Tikhonov
+  ! regularization on the 2x2 solve wasn't enough to tame the resulting instability under real
+  ! turbulent measurement noise -- a decoupled scalar secant per component needs no matrix
+  ! inversion at all, so there is no collinearity to be unstable about). By default
+  ! (inflow_opt_max_iter=1) the algorithm stops after that one corrected step: the paper itself
+  ! only ever validates a single corrected step (Section 6.1) and explicitly lists further
+  ! iteration and an automatic stopping criterion as unsolved future work (Section 7) -- so this is
+  ! not an arbitrary simplification, it's matching what was actually shown to work. Continuing past
+  ! that single step (inflow_opt_max_iter>1) is this codebase's own, unvalidated-by-the-paper
+  ! extension: it secant-refines the slopes and keeps correcting with a Robbins-Monro-style step
+  ! size (inflow_opt_relax/iter, decaying so noisy sequential online measurements average out
+  ! instead of being chased), guarded by the same best-iterate/stall safety net either way. u'^2,
+  ! shear stress and the mean profile are not decision variables (per the paper) and are left
+  ! untouched. See docs/design-notes/sem.md.
+  Integer(Int32) :: inflow_opt_active = 0
+  Real   (Int64) :: inflow_opt_x      = 0d0
+  Integer(Int32) :: inflow_opt_nstart = -1     ! <0: auto-tuned from advection time and wall-shear timescale
+  Integer(Int32) :: inflow_opt_window = -1     ! <=0: auto-tuned from the SEM eddy turnover time; steps averaged per measurement phase
+  Integer(Int32) :: n_bezier          = 8      ! Bezier control points spanning prof_y; endpoints fixed to the target
+  ! A control point within wall_exclude_factor*wall_Ltaper_{lo,hi} of an active no-slip wall sits
+  ! inside sem_fluctuation's own taper zone (see sem.f90), which deterministically suppresses the
+  ! injected Reynolds stress toward zero there regardless of the Bezier target -- no correction can
+  ! close that gap since it isn't a response-model error, it's the no-slip enforcement working as
+  ! designed. Such control points are excluded from both the correction and the residual check.
+  ! This has no counterpart in the paper (its offline runs were reviewed by eye), but is needed
+  ! for an unattended online run to avoid chasing a structurally unfixable control point.
+  Real   (Int64) :: inflow_opt_wall_exclude = 1d0
+  ! A secant slope estimated from ONE fast online measurement window can be small/noisy at some
+  ! control points (near-zero measured response between step0 and step1, unlike the paper's fully
+  ! time-converged, independently-restarted offline perturbation runs), which blows up the Newton
+  ! step dx=-(measured-target)/slope regardless of whether v'^2/w'^2 are solved jointly or (as
+  ! here) independently -- a real run showed corrections up to ~30x target from this alone. This
+  ! is a numerical-robustness safeguard, not a paper-fidelity choice: it caps the applied step to
+  ! +-inflow_opt_trust of the target value at each control point.
+  Real   (Int64) :: inflow_opt_trust    = 0.5d0
+  Integer(Int32) :: inflow_opt_max_iter = 1    ! 1 (default): the paper's validated single corrected step. >1: this codebase's own experimental extension (see above)
+  Real   (Int64) :: inflow_opt_relax    = 0.7d0 ! base step-size scale for the experimental iter>1 extension only (effective scale = inflow_opt_relax/iter); unused when inflow_opt_max_iter=1
+  Real   (Int64) :: inflow_opt_tol      = 0.1d0 ! experimental extension only: stop iterating once the worst-case relative residual (|measured-target|/target, over u'^2/v'^2/w'^2 and all interior control points) drops below this
 
   ! 2-D planar slice probes: config and output file layout
   Integer(Int32), Parameter :: MAX_PROBES = 8

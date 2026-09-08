@@ -63,7 +63,7 @@ Contains
 
     Namelist /BOUSSINESQ/ boussinesq_flag, beta_T, T_ref, grav, Pr, Pr_t, &
                            T_bc_bot, T_bc_top, T_wall_bot, T_wall_top, &
-                           T_ic_type, T_ic_grad, ibm_T_bc_type, ibm_T_wall
+                           T_ic_type, T_ic_grad
 
     Namelist /STATISTICS/ rsb_active, rsb_freq, rsb_nstart, rsb_hom_dir, rsb_fileout, &
                           n_slices, slice_freq, slice_dir, slice_pos, slice_comps, slice_fileout, &
@@ -75,11 +75,9 @@ Contains
                    uav_path_active, uav_path_file, uav_thrust_active, uav_thrust_file, &
                    uav_load_profile, uav_tilt_active, uav_tilt_tau, uav_swirl_frac
 
-    Namelist /TI_RESCALE/ ti_rescale_active, ti_rescale_x, ti_rescale_nstart, &
-                          ti_rescale_freq, ti_rescale_relax, ti_rescale_clip, ti_rescale_abs_clip, &
-                          ti_rescale_filter_alpha, ti_rescale_deadband, ti_rescale_relax_min, &
-                          ti_rescale_u_active, ti_rescale_u_relax, ti_rescale_u_relax_min, &
-                          ti_rescale_u_clip, ti_rescale_u_abs_clip, ti_rescale_u_deadband
+    Namelist /INFLOW_OPT/ inflow_opt_active, inflow_opt_x, inflow_opt_nstart, inflow_opt_window, &
+                          n_bezier, inflow_opt_wall_exclude, inflow_opt_trust, inflow_opt_max_iter, &
+                          inflow_opt_relax, inflow_opt_tol
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -194,10 +192,10 @@ Contains
           Write(*,'(A)') ' INFO: no &UAV found, UAV actuator disk disabled'
        End If
 
-       If ( namelist_group_present(unit_in, 'TI_RESCALE') ) Then
+       If ( namelist_group_present(unit_in, 'INFLOW_OPT') ) Then
           Rewind(unit_in)
-          Read(unit_in, nml=TI_RESCALE,          iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &TI_RESCALE present but failed to parse (check variable names)'
+          Read(unit_in, nml=INFLOW_OPT,          iostat=ios)
+          If (ios /= 0) Stop 'ERROR: &INFLOW_OPT present but failed to parse (check variable names)'
        End If
 
        Close(unit_in)
@@ -321,24 +319,17 @@ Contains
              If ( sem_wall_damping == 1 ) Then
                 Write(*,'(A,F6.2)') '   sem_wall_damping=1, sem_wall_damping_Aplus = ', sem_wall_damping_Aplus
              End If
-             If ( ti_rescale_active == 1 ) Then
-                Write(*,'(A,F10.4)') '   ti_rescale_active=1, ti_rescale_x   = ', ti_rescale_x
-                Write(*,'(A,I8)')    '   ti_rescale_nstart           = ', ti_rescale_nstart
-                Write(*,'(A,I8)')    '   ti_rescale_freq             = ', ti_rescale_freq
-                Write(*,'(A,F6.3)')  '   ti_rescale_relax            = ', ti_rescale_relax
-                Write(*,'(A,F6.3)')  '   ti_rescale_clip             = ', ti_rescale_clip
-                Write(*,'(A,F6.3)')  '   ti_rescale_abs_clip         = ', ti_rescale_abs_clip
-                Write(*,'(A,F6.3)')  '   ti_rescale_filter_alpha     = ', ti_rescale_filter_alpha
-                Write(*,'(A,F6.3)')  '   ti_rescale_deadband         = ', ti_rescale_deadband
-                Write(*,'(A,F6.3)')  '   ti_rescale_relax_min        = ', ti_rescale_relax_min
-                If ( ti_rescale_u_active == 1 ) Then
-                   Write(*,'(A)')       '   ti_rescale_u_active=1 (mean-profile rescaling enabled)'
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_relax          = ', ti_rescale_u_relax
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_relax_min      = ', ti_rescale_u_relax_min
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_clip           = ', ti_rescale_u_clip
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_abs_clip       = ', ti_rescale_u_abs_clip
-                   Write(*,'(A,F6.3)')  '   ti_rescale_u_deadband       = ', ti_rescale_u_deadband
-                End If
+             If ( inflow_opt_active == 1 ) Then
+                Write(*,'(A,F10.4)') '   inflow_opt_active=1, inflow_opt_x = ', inflow_opt_x
+                Write(*,'(A,I8)')    '   inflow_opt_nstart           = ', inflow_opt_nstart
+                Write(*,'(A,I8)')    '   inflow_opt_window           = ', inflow_opt_window
+                Write(*,'(A,I4)')    '   n_bezier                    = ', n_bezier
+                Write(*,'(A,F6.3)')  '   inflow_opt_wall_exclude     = ', inflow_opt_wall_exclude
+                Write(*,'(A,F6.3)')  '   inflow_opt_trust            = ', inflow_opt_trust
+                Write(*,'(A,I4)')    '   inflow_opt_max_iter         = ', inflow_opt_max_iter
+                If ( inflow_opt_max_iter > 1 ) Write(*,'(A,F6.3)') &
+                     '   inflow_opt_relax (experimental iter>1 extension) = ', inflow_opt_relax
+                Write(*,'(A,F6.3)')  '   inflow_opt_tol              = ', inflow_opt_tol
              End If
           End If
        End If
@@ -552,22 +543,16 @@ Contains
     Call Mpi_bcast ( line_comps,   Len(line_comps(1))*MAX_PROBES,  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( line_fileout, Len(line_fileout(1))*MAX_PROBES,MPI_character, 0, MPI_COMM_WORLD, ierr )
 
-    Call Mpi_bcast ( ti_rescale_active,    1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_x,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_nstart,    1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_freq,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_relax,     1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_clip,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_abs_clip,  1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_filter_alpha, 1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_deadband,  1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_relax_min, 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_active,   1, MPI_integer,  0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_relax,    1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_relax_min,1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_clip,     1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_abs_clip, 1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ti_rescale_u_deadband, 1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_active,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_x,        1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_nstart,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_window,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( n_bezier,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_wall_exclude, 1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_trust,    1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_relax,    1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_max_iter, 1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( inflow_opt_tol,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 
@@ -1031,7 +1016,10 @@ Contains
     Call skip_distributed_field_block(2, nyg, .False., .True.)
     Call skip_distributed_field_block(2, nyg, .False., .False.)
 
-    ! C block (only present if sediment was active when the file was written) — discarded
+    ! C block (only present if sediment was active when the file was written) — discarded.
+    ! NOTE: gated on THIS run's sediment_flag/sgs_model, not what the file was actually written
+    ! with -- restarting with either flag flipped relative to the writing run desyncs this skip
+    ! from the file's real layout and silently misreads everything after it, including T below.
     If ( sediment_flag >= 1 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
 
     ! nu_t block (only present if LES was active when the file was written) — discarded

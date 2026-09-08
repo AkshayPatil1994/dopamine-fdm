@@ -11,7 +11,7 @@ Program dopamine
   Use finalization
   Use reynolds_stress_budget
   Use probe_output
-  Use synthetic_eddy_method, Only : accumulate_ti_rescale, apply_ti_rescale
+  Use synthetic_eddy_method, Only : accumulate_inflow_opt, advance_inflow_opt
   
   ! prevent implicit typing
   Implicit None
@@ -54,14 +54,11 @@ Program dopamine
         Call output_rsb
      End If
 
-     ! accumulate SEM inflow TI-rescale statistics (no-op when ti_rescale_active==0)
-     Call accumulate_ti_rescale
+     ! accumulate SEM inflow-optimization statistics (no-op when inflow_opt_active==0)
+     Call accumulate_inflow_opt
 
-     ! nudge the injected SEM target profile when a full window has been accumulated
-     If ( ti_rescale_active == 1 .And. istep > ti_rescale_nstart .And. &
-          Mod(istep - ti_rescale_nstart, ti_rescale_freq) == 0 ) Then
-        Call apply_ti_rescale
-     End If
+     ! advance the inflow-optimization phase machine once a full measurement window has accumulated
+     Call advance_inflow_opt
 
      ! output some key values
      Call output_monitor

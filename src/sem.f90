@@ -70,32 +70,64 @@ Module synthetic_eddy_method
   !$acc declare create(sem_norm)
   !$acc declare create(wall_active_lo, wall_active_hi, wall_y_lo, wall_y_hi, wall_Ltaper_lo, wall_Ltaper_hi)
 
-  ! in-situ TI-profile rescaling (ti_rescale_active==1): host-only bookkeeping
-  ! prof_R11_target/R22_target/R33_target: immutable copy of the originally-read profile; prof_R11/R22/R33 are the mutable, currently-injected profile that gets nudged
-  Real   (Int64), Allocatable :: prof_R11_target(:), prof_R22_target(:), prof_R33_target(:)
-  Integer(Int32) :: ti_i0 = 0                ! resolved global cc x-index of the sampling station
-  Real   (Int64), Allocatable :: ti_yg_cc(:)   ! cell-centre y-coords (nym_global), for interpolation
+  ! Bezier-parametrized SEM inflow Reynolds-stress optimization (inflow_opt_active==1): host-only
+  ! bookkeeping. Phase machine: 0=idle, 1=step0 (baseline) measurement, 2=step1 (v'^2 AND w'^2
+  ! doubled together, per the paper's Section 6.1) measurement -- builds the per-point scalar
+  ! secant slopes and applies the single correction the paper validates, 3=verify (default:
+  ! freezes here after one measurement; inflow_opt_max_iter>1 instead continues iterating as this
+  ! codebase's own experimental extension -- see the comment in global.f90), 4=done (frozen).
+  Integer(Int32) :: inflow_opt_phase      = 0
+  Integer(Int32) :: inflow_opt_step_count = 0
+  Integer(Int32) :: inflow_opt_iter       = 0   ! number of correction steps applied so far
+  Integer(Int32) :: opt_i0 = 0                  ! resolved global cc x-index of the sampling station
+  Real   (Int64), Allocatable :: opt_yg_cc(:)   ! cell-centre y-coords (nym_global), for interpolation
   ! raw-moment accumulators, one entry per y cell-centre, summed over local z and time
-  Real   (Int64), Allocatable :: acc_ti_U(:), acc_ti_V(:), acc_ti_W(:)
-  Real   (Int64), Allocatable :: acc_ti_UU(:), acc_ti_VV(:), acc_ti_WW(:), acc_ti_n(:)
-  ! EMA-filtered measured variance (on prof_y) and window counter, carried across apply_ti_rescale calls
-  Real   (Int64), Allocatable :: ti_R11_filt(:), ti_R22_filt(:), ti_R33_filt(:)
-  ! gain-decay is gated per-y-point on that point's own convergence, not a single profile-wide flag: a point whose target is physically unreachable (e.g. permanently anti-windup-clamped) must not hold the rest of the profile at undecayed gain forever
-  Integer(Int32), Allocatable :: ti_R_decay_k(:)   ! per-m windows since the variance loop's gain decay started at that y
-  Logical,        Allocatable :: ti_R_decaying(:)  ! per-m: has the variance loop's gain decay started at that y
-  Integer(Int32), Allocatable :: ti_U_decay_k(:)   ! per-m windows since the mean-U loop's gain decay started at that y
-  Logical,        Allocatable :: ti_U_decaying(:)  ! per-m: has the mean-U loop's gain decay started at that y
-  ! true once the EMA filters have been seeded with a real measurement; kept separate from the per-m decay counters so resetting one of them doesn't re-trigger the cold-start (unfiltered) branch and discard the accumulated filter history
-  Logical :: ti_filt_seeded = .False.
-  ! mean-profile (U) companion state: immutable target snapshot and EMA-filtered measured mean, mirrors prof_R11_target/ti_R11_filt above
-  Real   (Int64), Allocatable :: prof_U_target(:)
-  Real   (Int64), Allocatable :: ti_U_filt(:)
+  Real   (Int64), Allocatable :: acc_opt_U(:), acc_opt_V(:), acc_opt_W(:)
+  Real   (Int64), Allocatable :: acc_opt_UU(:), acc_opt_VV(:), acc_opt_WW(:), acc_opt_n(:)
 
-  ! persisted controller state for restart (see write/read_ti_rescale_restart)
-  Character(*), Parameter :: ti_rescale_restart_file = 'fields/ti_rescale_data.dat'
-  ! leading sentinel + version tag, so read_ti_rescale_restart can tell a current-format file (which starts with this magic) from a pre-ti_gain_decay_started file (which starts directly with n_profile, a small positive count that can never equal this magic)
-  Integer(Int32), Parameter :: ti_rescale_restart_magic = -987654321
-  Integer(Int32), Parameter :: ti_rescale_restart_version = 4
+  ! Bezier control points: y_cp (fixed heights, clustered toward the wall); x_cp_R22_target/
+  ! x_cp_R33_target/u_cp_target are the immutable target values sampled from the originally-read
+  ! inflow profile (used both as the inflow value and the downstream-station target, per the
+  ! paper); x_cp_R22/x_cp_R33 are the mutable, currently-injected control-point values
+  Real   (Int64), Allocatable :: y_cp(:)
+  Real   (Int64), Allocatable :: x_cp_R22_target(:), x_cp_R33_target(:), u_cp_target(:)
+  Real   (Int64), Allocatable :: x_cp_R22(:), x_cp_R33(:)
+
+  ! per-control-point measured [u'^2,v'^2,w'^2] at the downstream station, one column per phase;
+  ! stats_step0 also doubles as "iterate 0" for best-iterate tracking below
+  Real   (Int64), Allocatable :: stats_step0(:,:), stats_step1(:,:)   ! (3,n_bezier)
+
+  ! per-control-point scalar secant slopes d(v'^2_b)/d(v'^2_i) and d(w'^2_b)/d(w'^2_i), built once
+  ! from the step0/step1 pair (v'^2 and w'^2 doubled together in step1, per the paper). v'^2 and
+  ! w'^2 are corrected independently (a real run showed the coupled 2-variable Gauss-Newton normal
+  ! equations can be dangerously ill-conditioned -- the two decision variables tend to move all
+  ! three downstream stats in the same direction, making their Jacobian columns nearly collinear
+  ! at some heights, so ordinary measurement noise got amplified into wild, unstable corrections
+  ! even with ridge regularization); a decoupled scalar secant per component needs no matrix
+  ! inversion at all, so there is no collinearity to be ill-conditioned about. u'^2 is measured for
+  ! the residual check but was never a decision variable (per the paper) and has no slope here.
+  ! x_prev_R22/R33 and stats_prev are the control-point values and measured stats from immediately
+  ! before the most recently applied correction; only needed by the experimental iter>1
+  ! extension's secant refinement (see secant_update_slopes), unused for the default single-step run.
+  Real   (Int64), Allocatable :: slope_v(:), slope_w(:)             ! (n_bezier)
+  Real   (Int64), Allocatable :: x_prev_R22(:), x_prev_R33(:)       ! (n_bezier)
+  Real   (Int64), Allocatable :: stats_prev(:,:)                    ! (3,n_bezier)
+
+  ! Nothing stops a Gauss-Newton step from making the residual worse (the Jacobian is only ever a
+  ! local/secant estimate), so the single mandatory verify measurement -- and every measurement in
+  ! the experimental iter>1 extension -- is checked against the best (lowest-residual) iterate seen
+  ! so far -- including "iterate 0", the uncorrected target itself -- and the profile is frozen at
+  ! that best iterate rather than whatever the last measurement happened to produce. The extension
+  ! also stops early (before inflow_opt_max_iter) if the residual fails to improve for
+  ! inflow_opt_stall_patience consecutive corrections, since continuing to iterate on a worsening
+  ! trend just injects more extreme (and no more trustworthy) profiles into the flow.
+  Integer(Int32), Parameter :: inflow_opt_stall_patience = 2
+  Real   (Int64) :: best_resid = Huge(1d0)
+  Real   (Int64), Allocatable :: best_x_cp_R22(:), best_x_cp_R33(:)   ! (n_bezier)
+  Integer(Int32) :: inflow_opt_no_improve = 0
+
+  ! persisted phase-machine + control-point state for restart (see write/read_inflow_opt_restart)
+  Character(*), Parameter :: inflow_opt_restart_file = 'fields/inflow_opt_data.dat'
 
   ! ---- recycled precursor inflow (inflow_type==2) ------------------------
   ! rec_active is only .True. on the rank owning the x=1 face (row==0 in the
@@ -177,14 +209,14 @@ Contains
 
   End Function max_grid_spacing
 
-  !> Mean streamwise (x) grid spacing; used (paired with Uconv_sem) to estimate dt for the ti_rescale_freq/nstart auto-tuning -- unlike min_grid_spacing(), this deliberately excludes the wall-clustered y-spacing, since a near-wall cell's tiny spacing pairs with a near-zero local velocity there and is not representative of the convective step size that limits dt
+  !> Mean streamwise (x) grid spacing; used (paired with Uconv_sem) to estimate dt for the inflow_opt_window/nstart auto-tuning -- unlike min_grid_spacing(), this deliberately excludes the wall-clustered y-spacing, since a near-wall cell's tiny spacing pairs with a near-zero local velocity there and is not representative of the convective step size that limits dt
   Real(Int64) Function streamwise_grid_spacing() Result(dx)
 
     dx = ( x_global(nx_global) - x_global(1) ) / Real(nx_global-1,8)
 
   End Function streamwise_grid_spacing
 
-  !> Friction-velocity estimate from the imposed pressure gradient, or (dPdx~0, e.g. open-channel/free-stream) from the wall-normal derivative of the mean inflow profile; shared by init_ti_rescale's nstart auto-tuning and place_eddies' wall damping
+  !> Friction-velocity estimate from the imposed pressure gradient, or (dPdx~0, e.g. open-channel/free-stream) from the wall-normal derivative of the mean inflow profile; shared by init_inflow_opt's nstart auto-tuning and place_eddies' wall damping
   Real(Int64) Function estimate_u_tau() Result(u_tau)
 
     Real(Int64) :: dUdy_wall
@@ -1238,6 +1270,61 @@ Contains
 
   End Function linterp
 
+  !> De Casteljau evaluation of a 2D Bezier curve through control points (cp_y(i),cp_x(i)),
+  !> i=1..n, at parameter t in [0,1]. Host-only bookkeeping helper (inflow optimization);
+  !> called O(n_bezier) times per rebuild_bezier_profile call, not per grid point/step, so an
+  !> O(n^2) De Casteljau sweep over a handful of control points is cheap.
+  Subroutine bezier_point(cp_y, cp_x, n, t, y_t, x_t)
+
+    Real(Int64),    Intent(In)  :: cp_y(:), cp_x(:), t
+    Integer(Int32), Intent(In)  :: n
+    Real(Int64),    Intent(Out) :: y_t, x_t
+    Real(Int64) :: wy(n), wx(n)
+    Integer(Int32) :: k, i
+
+    wy = cp_y(1:n);  wx = cp_x(1:n)
+    Do k = 1, n-1
+       Do i = 1, n-k
+          wy(i) = (1d0-t)*wy(i) + t*wy(i+1)
+          wx(i) = (1d0-t)*wx(i) + t*wx(i+1)
+       End Do
+    End Do
+    y_t = wy(1);  x_t = wx(1)
+
+  End Subroutine bezier_point
+
+  !> Evaluates the Bezier curve's x-value at a query height yq, given fixed control-point heights
+  !> cp_y (monotonic, unchanged across calls -- see init_inflow_opt) and current control-point
+  !> values cp_x. Finds the parameter t via bisection on the curve's y(t), which is monotonic because
+  !> cp_y is monotonic, then evaluates x(t) at that t. Clamped at the endpoints, mirrors linterp.
+  Real(Int64) Function bezier_eval(cp_y, cp_x, n, yq) Result(val)
+
+    Real(Int64),    Intent(In) :: cp_y(:), cp_x(:), yq
+    Integer(Int32), Intent(In) :: n
+    Real(Int64) :: t_lo, t_hi, t_mid, y_mid, x_mid
+    Integer(Int32) :: iter
+    Integer(Int32), Parameter :: max_iter = 60
+
+    If ( yq <= cp_y(1) ) Then
+       val = cp_x(1);  Return
+    Else If ( yq >= cp_y(n) ) Then
+       val = cp_x(n);  Return
+    End If
+
+    t_lo = 0d0;  t_hi = 1d0;  x_mid = cp_x(1)
+    Do iter = 1, max_iter
+       t_mid = 0.5d0*(t_lo+t_hi)
+       Call bezier_point( cp_y, cp_x, n, t_mid, y_mid, x_mid )
+       If ( y_mid < yq ) Then
+          t_lo = t_mid
+       Else
+          t_hi = t_mid
+       End If
+    End Do
+    val = x_mid
+
+  End Function bezier_eval
+
   Real(Int64) Function interp_profile(col, yc) Result(val)
     !$acc routine seq
     Real(Int64), Intent(In) :: col(:), yc
@@ -1912,106 +1999,165 @@ Contains
 
   End Function unified_kernel_deriv
 
-  !> One-time TI-rescale setup: resolve the sampling x-station, snapshot the immutable target profile, allocate accumulators, auto-tune ti_rescale_freq/ti_rescale_nstart if requested. No-op unless ti_rescale_active==1.
-  Subroutine init_ti_rescale
+  !> One-time inflow-optimization setup: resolves the sampling x-station, places the Bezier
+  !> control points and snapshots their target values, allocates accumulators, and auto-tunes
+  !> inflow_opt_window/inflow_opt_nstart if requested. No-op unless inflow_opt_active==1.
+  Subroutine init_inflow_opt
 
     Integer(Int32) :: i, best
     Real(Int64) :: d, d_best
-    Logical :: auto_freq, auto_nstart
+    Logical :: auto_window, auto_nstart
     Real(Int64) :: dt_est, T_eddy, u_tau, t_adv, t_nstart_phys
     Real(Int64), Parameter :: N_eff_target = 100d0
 
-    If ( ti_rescale_active /= 1 ) Return
+    If ( inflow_opt_active /= 1 ) Return
 
     If ( x_bc_type /= 1 .Or. inflow_type /= 1 ) Stop &
-         'ERROR: ti_rescale_active=1 requires x_bc_type=1 and inflow_type=1 (SEM inflow)'
+         'ERROR: inflow_opt_active=1 requires x_bc_type=1 and inflow_type=1 (SEM inflow)'
+    If ( n_bezier < 3 ) Stop 'ERROR: inflow_opt_active=1 requires n_bezier >= 3'
 
-    ! nearest global interior cc x-index to ti_rescale_x; duplicates probe_output.f90's nearest_cc_global rather than Use it (compiles after sem.f90 / unlinked in standalone sem test targets)
+    ! nearest global interior cc x-index to inflow_opt_x; duplicates probe_output.f90's
+    ! nearest_cc_global rather than Use it (compiles after sem.f90 / unlinked in standalone sem test targets)
     best = 1
-    d_best = Abs(xg_global(2) - ti_rescale_x)
+    d_best = Abs(xg_global(2) - inflow_opt_x)
     Do i = 2, nxg_global-1
-       d = Abs(xg_global(i) - ti_rescale_x)
+       d = Abs(xg_global(i) - inflow_opt_x)
        If ( d < d_best ) Then;  d_best = d;  best = i - 1;  End If
     End Do
-    ti_i0 = Max(1, Min(nxm_global, best))
+    opt_i0 = Max(1, Min(nxm_global, best))
 
-    ! auto-tune ti_rescale_freq (<=0) / ti_rescale_nstart (<0) from Uconv_sem, sem_length_scale, and the profile's wall shear
-    auto_freq   = ( ti_rescale_freq   <= 0 )
-    auto_nstart = ( ti_rescale_nstart < 0 )
-    If ( auto_freq .Or. auto_nstart ) Then
+    ! auto-tune inflow_opt_window (<=0) / inflow_opt_nstart (<0) from Uconv_sem, sem_length_scale, and the profile's wall shear
+    auto_window = ( inflow_opt_window <= 0 )
+    auto_nstart = ( inflow_opt_nstart < 0 )
+    If ( auto_window .Or. auto_nstart ) Then
        dt_est = Min( Max( cfl_target*streamwise_grid_spacing()/Uconv_sem, dt_min ), dt_max )
        T_eddy = 2d0*sem_length_scale / Uconv_sem
     End If
 
-    If ( auto_freq ) Then
-       ti_rescale_freq = Max( 1, Nint( N_eff_target*T_eddy/dt_est ) )
+    If ( auto_window ) Then
+       inflow_opt_window = Max( 1, Nint( N_eff_target*T_eddy/dt_est ) )
        If ( myid == 0 ) Write(*,'(A,I10)') &
-            ' INFO: auto-tuned ti_rescale_freq (ti_rescale_freq<=0 requested) = ', ti_rescale_freq
+            ' INFO: auto-tuned inflow_opt_window (inflow_opt_window<=0 requested) = ', inflow_opt_window
     End If
 
     If ( auto_nstart ) Then
        u_tau = estimate_u_tau()
-       t_adv              = ti_rescale_x / Uconv_sem
+       t_adv              = inflow_opt_x / Uconv_sem
        t_nstart_phys      = Max( 3d0*t_adv, 15d0*(Ly/2d0)/Max(u_tau,1d-12) )
-       ti_rescale_nstart  = Max( 0, Nint( t_nstart_phys/dt_est ) )
+       inflow_opt_nstart  = Max( 0, Nint( t_nstart_phys/dt_est ) )
        If ( myid == 0 ) Write(*,'(A,I10)') &
-            ' INFO: auto-tuned ti_rescale_nstart (ti_rescale_nstart<0 requested) = ', ti_rescale_nstart
+            ' INFO: auto-tuned inflow_opt_nstart (inflow_opt_nstart<0 requested) = ', inflow_opt_nstart
     End If
 
     ! heuristic placement checks: no adaptation-length model exists (SEM literature calibrates this empirically)
-    If ( ti_rescale_x < 10d0*sem_length_scale ) Then
+    If ( inflow_opt_x < 10d0*sem_length_scale ) Then
        If ( myid == 0 ) Write(*,'(A,F10.4,A)') &
-            ' WARNING: ti_rescale_x is within 10*sem_length_scale of the inflow (', ti_rescale_x, &
+            ' WARNING: inflow_opt_x is within 10*sem_length_scale of the inflow (', inflow_opt_x, &
             ' m) -- SEM turbulence may not have adapted to the target statistics yet'
     End If
-    If ( (Lx - ti_rescale_x) < 2d0*sem_length_scale ) Then
+    If ( (Lx - inflow_opt_x) < 2d0*sem_length_scale ) Then
        If ( myid == 0 ) Write(*,'(A,F10.4,A)') &
-            ' WARNING: ti_rescale_x is within 2*sem_length_scale of the outflow (', ti_rescale_x, &
+            ' WARNING: inflow_opt_x is within 2*sem_length_scale of the outflow (', inflow_opt_x, &
             ' m) -- convective outflow BC may contaminate the sampled statistics'
     End If
 
-    Allocate( prof_R11_target(n_profile), prof_R22_target(n_profile), prof_R33_target(n_profile) )
-    prof_R11_target = prof_R11;  prof_R22_target = prof_R22;  prof_R33_target = prof_R33
+    Allocate( opt_yg_cc(nym_global) )
+    opt_yg_cc = yg_global(2:nyg_global-1)
 
-    Allocate( prof_U_target(n_profile) )
-    prof_U_target = prof_U
-    Allocate( ti_U_filt(n_profile) )
+    Allocate( acc_opt_U(nym_global), acc_opt_V(nym_global), acc_opt_W(nym_global) )
+    Allocate( acc_opt_UU(nym_global), acc_opt_VV(nym_global), acc_opt_WW(nym_global), acc_opt_n(nym_global) )
+    acc_opt_U = 0d0;  acc_opt_V = 0d0;  acc_opt_W = 0d0
+    acc_opt_UU = 0d0; acc_opt_VV = 0d0; acc_opt_WW = 0d0; acc_opt_n = 0d0
 
-    Allocate( ti_yg_cc(nym_global) )
-    ti_yg_cc = yg_global(2:nyg_global-1)
+    Call init_bezier_control_points
 
-    Allocate( acc_ti_U(nym_global), acc_ti_V(nym_global), acc_ti_W(nym_global) )
-    Allocate( acc_ti_UU(nym_global), acc_ti_VV(nym_global), acc_ti_WW(nym_global), acc_ti_n(nym_global) )
-    acc_ti_U = 0d0;  acc_ti_V = 0d0;  acc_ti_W = 0d0
-    acc_ti_UU = 0d0; acc_ti_VV = 0d0; acc_ti_WW = 0d0; acc_ti_n = 0d0
+    Block
+      Integer(Int32) :: m
+      Logical :: any_excluded
+      any_excluded = .False.
+      Do m = 2, n_bezier-1
+         If ( inflow_opt_wall_excluded(m) ) Then
+            If ( .Not. any_excluded .And. myid == 0 ) Write(*,'(A)') &
+                 ' Inflow optimization: control point(s) inside the no-slip taper zone are excluded ' // &
+                 '(correction cannot move injected variance past sem_fluctuation''s taper ceiling there):'
+            any_excluded = .True.
+            If ( myid == 0 ) Write(*,'(A,I3,A,F8.4)') '   excluding control point ', m, '  y_cp = ', y_cp(m)
+         End If
+      End Do
+    End Block
 
-    Allocate( ti_R11_filt(n_profile), ti_R22_filt(n_profile), ti_R33_filt(n_profile) )
+    Allocate( stats_step0(3,n_bezier), stats_step1(3,n_bezier) )
+    stats_step0 = 0d0;  stats_step1 = 0d0
 
-    Allocate( ti_R_decay_k(n_profile), ti_R_decaying(n_profile) )
-    ti_R_decay_k = 0;  ti_R_decaying = .False.
-    Allocate( ti_U_decay_k(n_profile), ti_U_decaying(n_profile) )
-    ti_U_decay_k = 0;  ti_U_decaying = .False.
+    Allocate( slope_v(n_bezier), slope_w(n_bezier) )
+    Allocate( x_prev_R22(n_bezier), x_prev_R33(n_bezier) )
+    Allocate( stats_prev(3,n_bezier) )
+    Allocate( best_x_cp_R22(n_bezier), best_x_cp_R33(n_bezier) )
+    slope_v = 0d0;  slope_w = 0d0;  x_prev_R22 = 0d0;  x_prev_R33 = 0d0;  stats_prev = 0d0
+    best_resid = Huge(1d0);  best_x_cp_R22 = 0d0;  best_x_cp_R33 = 0d0;  inflow_opt_no_improve = 0
 
-    ! resume controller state (live profile, EMA filters, gain-schedule counter) from a prior run; no-op if the file is missing
-    If ( restart == 1 ) Call read_ti_rescale_restart
+    inflow_opt_phase = 1;  inflow_opt_step_count = 0;  inflow_opt_iter = 0
 
-    If ( myid == 0 ) Write(*,'(A,F10.4,A,I6)') &
-         ' TI-rescale: sampling station x = ', xg_global(ti_i0+1), ', global cc index = ', ti_i0
+    ! resume the phase machine (control points, measured stats, phase/step counters, injected
+    ! profile) from a prior run; no-op if the file is missing
+    If ( restart == 1 ) Call read_inflow_opt_restart
 
-  End Subroutine init_ti_rescale
+    If ( myid == 0 ) Write(*,'(A,F10.4,A,I6,A,I4,A,I8,A,I3,A,F6.3)') &
+         ' Inflow optimization: sampling station x = ', xg_global(opt_i0+1), ', global cc index = ', opt_i0, &
+         ', n_bezier = ', n_bezier, ', window (steps) = ', inflow_opt_window, &
+         ', max_iter = ', inflow_opt_max_iter, ', tol = ', inflow_opt_tol
 
-  !> Per-step raw-moment accumulation at the TI-rescale sampling station, summed over the local z range (no MPI; cheap host loop, mirrors accumulate_rsb's style). No-op unless ti_rescale_active==1, istep>=ti_rescale_nstart, and this rank's x-row owns the sampling station.
-  Subroutine accumulate_ti_rescale
+  End Subroutine init_inflow_opt
+
+  !> One-time setup of the Bezier control-point state (heights + target values), called from
+  !> init_inflow_opt. Places n_bezier control-point heights y_cp spanning [prof_y(1),
+  !> prof_y(n_profile)], clustered toward the wall (quadratic in the normalized coordinate) since
+  !> that's where the profiles vary fastest -- mirrors the paper's denser control-point placement
+  !> below 0.5m. Control-point target values are sampled directly from the originally-read inflow
+  !> profile (not a least-squares Bezier fit): the resulting curve smooths rather than interpolates
+  !> the target between control points, which is the expected cost of the dimensionality
+  !> reduction, not a bug. Split out from init_inflow_opt so it can be exercised in isolation
+  !> (verify_inflow_opt) without also needing the full grid/SEM setup init_inflow_opt requires.
+  Subroutine init_bezier_control_points
+
+    Integer(Int32) :: i
+    Real(Int64) :: s
+
+    If ( n_bezier < 3 ) Stop 'ERROR: n_bezier >= 3 is required'
+
+    Allocate( y_cp(n_bezier) )
+    Do i = 1, n_bezier
+       s = Real(i-1,8) / Real(n_bezier-1,8)
+       y_cp(i) = prof_y(1) + (prof_y(n_profile)-prof_y(1)) * s*s
+    End Do
+
+    Allocate( x_cp_R22_target(n_bezier), x_cp_R33_target(n_bezier), u_cp_target(n_bezier) )
+    Allocate( x_cp_R22(n_bezier), x_cp_R33(n_bezier) )
+    Do i = 1, n_bezier
+       x_cp_R22_target(i) = linterp( prof_y, prof_R22, n_profile, y_cp(i) )
+       x_cp_R33_target(i) = linterp( prof_y, prof_R33, n_profile, y_cp(i) )
+       u_cp_target(i)     = linterp( prof_y, prof_R11, n_profile, y_cp(i) )
+    End Do
+    x_cp_R22 = x_cp_R22_target;  x_cp_R33 = x_cp_R33_target
+
+  End Subroutine init_bezier_control_points
+
+  !> Per-step raw-moment accumulation at the inflow-optimization sampling station, summed over the
+  !> local z range (no MPI; cheap host loop, mirrors accumulate_rsb's style). No-op unless
+  !> inflow_opt_active==1, a measurement phase (1-3) is in progress, istep>=inflow_opt_nstart, and
+  !> this rank's x-row owns the sampling station.
+  Subroutine accumulate_inflow_opt
 
     Integer(Int32) :: j, k, ia, jg
     Real(Int64) :: uc, vc, wc
 
-    If ( ti_rescale_active /= 1 ) Return
-    If ( istep < ti_rescale_nstart ) Return
-    ! ti_i0 is a global interior cc x-index; skip on ranks whose x-row doesn't own it
-    If ( ti_i0 < ig1_global(myid) .Or. ti_i0 > ig2_global(myid)-2 ) Return
+    If ( inflow_opt_active /= 1 ) Return
+    If ( inflow_opt_phase < 1 .Or. inflow_opt_phase > 3 ) Return
+    If ( istep < inflow_opt_nstart ) Return
+    ! opt_i0 is a global interior cc x-index; skip on ranks whose x-row doesn't own it
+    If ( opt_i0 < ig1_global(myid) .Or. opt_i0 > ig2_global(myid)-2 ) Return
 
-    ia = ti_i0 - ig1_global(myid) + 2   ! global cc index -> local ghost-array index
+    ia = opt_i0 - ig1_global(myid) + 2   ! global cc index -> local ghost-array index
 
     Do k = 2, nzg-1
        Do j = 2, nyg-1
@@ -2022,46 +2168,40 @@ Contains
           uc = 0.5d0*( U(ia-1,j,k) + U(ia,j,k) )
           vc = 0.5d0*( V(ia,j-1,k) + V(ia,j,k) )
           wc = 0.5d0*( W(ia,j,k-1) + W(ia,j,k) )
-          acc_ti_U(jg)  = acc_ti_U(jg)  + uc
-          acc_ti_V(jg)  = acc_ti_V(jg)  + vc
-          acc_ti_W(jg)  = acc_ti_W(jg)  + wc
-          acc_ti_UU(jg) = acc_ti_UU(jg) + uc*uc
-          acc_ti_VV(jg) = acc_ti_VV(jg) + vc*vc
-          acc_ti_WW(jg) = acc_ti_WW(jg) + wc*wc
-          acc_ti_n(jg)  = acc_ti_n(jg)  + 1d0
+          acc_opt_U(jg)  = acc_opt_U(jg)  + uc
+          acc_opt_V(jg)  = acc_opt_V(jg)  + vc
+          acc_opt_W(jg)  = acc_opt_W(jg)  + wc
+          acc_opt_UU(jg) = acc_opt_UU(jg) + uc*uc
+          acc_opt_VV(jg) = acc_opt_VV(jg) + vc*vc
+          acc_opt_WW(jg) = acc_opt_WW(jg) + wc*wc
+          acc_opt_n(jg)  = acc_opt_n(jg)  + 1d0
        End Do
     End Do
 
-  End Subroutine accumulate_ti_rescale
+  End Subroutine accumulate_inflow_opt
 
-  !> Periodic (every ti_rescale_freq steps) reduce + EMA-filtered, deadbanded, anti-windup-clamped multiplicative nudge of the injected SEM target profile toward the wind-tunnel target (per-y-point full gain until that point first lands inside the deadband, then per-point Robbins-Monro gain decay), plus an additive companion nudge of the mean profile prof_U when ti_rescale_u_active==1. No-op unless ti_rescale_active==1.
-  Subroutine apply_ti_rescale
+  !> Reduces this window's raw-moment accumulators across ranks, forms the measured Reynolds-
+  !> stress profile on opt_yg_cc, and samples [u'^2,v'^2,w'^2] at each Bezier control-point height.
+  Subroutine reduce_and_sample_bezier( stats )
+
+    Real(Int64), Intent(Out) :: stats(3,n_bezier)
 
     Real(Int64) :: g_U(nym_global), g_V(nym_global), g_W(nym_global)
     Real(Int64) :: g_UU(nym_global), g_VV(nym_global), g_WW(nym_global), g_n(nym_global)
     Real(Int64) :: send_buf(7*nym_global), recv_buf(7*nym_global)
     Real(Int64) :: mean_U(nym_global), mean_V(nym_global), mean_W(nym_global)
     Real(Int64) :: var_UU(nym_global), var_VV(nym_global), var_WW(nym_global)
-    Real(Int64) :: R11m, R22m, R33m, ratio11, ratio22, ratio33, dev11, dev22, dev33
-    Real(Int64) :: ratio11_raw, ratio22_raw, ratio33_raw
-    Real(Int64) :: clip_lo, clip_hi, max_dev, relax_k, max_dev_gain
-    Real(Int64) :: Um, bias, bias_raw, bias_clip, relax_k_u, max_dev_u, max_dev_u_gain
-    Character(3) :: max_dev_comp
-    Integer(Int32) :: max_dev_m, max_dev_u_m
-    Logical :: max_dev_sat, max_dev_u_sat
     Integer(Int32) :: j, m
-
-    If ( ti_rescale_active /= 1 ) Return
 
     ! Packed into one Allreduce instead of seven separate calls, to avoid paying
     ! full collective latency seven times over for what's otherwise one round trip
-    send_buf(          1 :   nym_global) = acc_ti_U
-    send_buf(  nym_global+1 : 2*nym_global) = acc_ti_V
-    send_buf(2*nym_global+1 : 3*nym_global) = acc_ti_W
-    send_buf(3*nym_global+1 : 4*nym_global) = acc_ti_UU
-    send_buf(4*nym_global+1 : 5*nym_global) = acc_ti_VV
-    send_buf(5*nym_global+1 : 6*nym_global) = acc_ti_WW
-    send_buf(6*nym_global+1 : 7*nym_global) = acc_ti_n
+    send_buf(          1 :   nym_global) = acc_opt_U
+    send_buf(  nym_global+1 : 2*nym_global) = acc_opt_V
+    send_buf(2*nym_global+1 : 3*nym_global) = acc_opt_W
+    send_buf(3*nym_global+1 : 4*nym_global) = acc_opt_UU
+    send_buf(4*nym_global+1 : 5*nym_global) = acc_opt_VV
+    send_buf(5*nym_global+1 : 6*nym_global) = acc_opt_WW
+    send_buf(6*nym_global+1 : 7*nym_global) = acc_opt_n
 
     Call MPI_Allreduce(send_buf, recv_buf, 7*nym_global, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
@@ -2084,164 +2224,343 @@ Contains
        End If
     End Do
 
-    clip_lo = 1d0/ti_rescale_clip;  clip_hi = ti_rescale_clip
-    max_dev = 0d0;  max_dev_comp = '---';  max_dev_m = 0;  max_dev_sat = .False.;  max_dev_gain = 0d0
-    Do m = 1, n_profile
-       ! Below the first resolved LES cell centre, linterp just clamps to that cell's value -- comparing it against a target sampled at (or inside) the wall-modelled sublayer isn't a like-for-like measurement, so skip it rather than let it dominate the diagnostics/correction with an unresolvable mismatch
-       If ( prof_y(m) < ti_yg_cc(1) ) Cycle
-
-       ! full undecayed gain at this y until its own deviation first falls inside the deadband (real, deterministic mismatch during the initial transient, not sampling noise); gated per-point rather than profile-wide, since one persistently-unreachable y (e.g. anti-windup-clamped) must not hold every other point at undecayed gain forever
-       If ( ti_R_decaying(m) ) Then
-          relax_k = Max( ti_rescale_relax / Sqrt(Real(ti_R_decay_k(m)+1,8)), ti_rescale_relax_min )
-       Else
-          relax_k = ti_rescale_relax
-       End If
-
-       R11m = linterp( ti_yg_cc, var_UU, nym_global, prof_y(m) )
-       R22m = linterp( ti_yg_cc, var_VV, nym_global, prof_y(m) )
-       R33m = linterp( ti_yg_cc, var_WW, nym_global, prof_y(m) )
-
-       ! EMA low-pass filter of the window's measured variance, to reject sampling noise instead of reacting to each noisy window
-       If ( .Not. ti_filt_seeded ) Then
-          ti_R11_filt(m) = R11m;  ti_R22_filt(m) = R22m;  ti_R33_filt(m) = R33m
-       Else
-          ti_R11_filt(m) = ti_rescale_filter_alpha*R11m + (1d0-ti_rescale_filter_alpha)*ti_R11_filt(m)
-          ti_R22_filt(m) = ti_rescale_filter_alpha*R22m + (1d0-ti_rescale_filter_alpha)*ti_R22_filt(m)
-          ti_R33_filt(m) = ti_rescale_filter_alpha*R33m + (1d0-ti_rescale_filter_alpha)*ti_R33_filt(m)
-       End If
-
-       ! unclipped ratios, kept only for the true-deviation diagnostic below -- the clipped ratio11/22/33 still drive the actual profile update
-       ratio11_raw = prof_R11_target(m) / Max(ti_R11_filt(m),1d-12)
-       ratio22_raw = prof_R22_target(m) / Max(ti_R22_filt(m),1d-12)
-       ratio33_raw = prof_R33_target(m) / Max(ti_R33_filt(m),1d-12)
-
-       ratio11 = Min( Max( ratio11_raw, clip_lo ), clip_hi )
-       ratio22 = Min( Max( ratio22_raw, clip_lo ), clip_hi )
-       ratio33 = Min( Max( ratio33_raw, clip_lo ), clip_hi )
-
-       ! deadband: don't perturb the profile chasing a ratio that's within noise of unity
-       If ( Abs(ratio11-1d0) < ti_rescale_deadband ) ratio11 = 1d0
-       If ( Abs(ratio22-1d0) < ti_rescale_deadband ) ratio22 = 1d0
-       If ( Abs(ratio33-1d0) < ti_rescale_deadband ) ratio33 = 1d0
-
-       prof_R11(m) = prof_R11(m) * ratio11**relax_k
-       prof_R22(m) = prof_R22(m) * ratio22**relax_k
-       prof_R33(m) = prof_R33(m) * ratio33**relax_k
-
-       ! anti-windup: clamp cumulative drift against prof_R**_target directly, since ti_rescale_clip alone only bounds one window's step
-       prof_R11(m) = Min( Max( prof_R11(m), prof_R11_target(m)/ti_rescale_abs_clip ), prof_R11_target(m)*ti_rescale_abs_clip )
-       prof_R22(m) = Min( Max( prof_R22(m), prof_R22_target(m)/ti_rescale_abs_clip ), prof_R22_target(m)*ti_rescale_abs_clip )
-       prof_R33(m) = Min( Max( prof_R33(m), prof_R33_target(m)/ti_rescale_abs_clip ), prof_R33_target(m)*ti_rescale_abs_clip )
-
-       ! track the worst-offending (y, component) pair and whether it's already pinned at the anti-windup bound, for the saturation diagnostic printed below; deviation uses the unclipped ratio so a saturated window still reports its true error instead of the clip bound
-       dev11 = Abs(ratio11_raw-1d0);  dev22 = Abs(ratio22_raw-1d0);  dev33 = Abs(ratio33_raw-1d0)
-       If ( dev11 >= max_dev ) Then
-          max_dev = dev11;  max_dev_comp = 'R11';  max_dev_m = m;  max_dev_gain = relax_k
-          max_dev_sat = ( prof_R11(m) <= (1d0+1d-6)*prof_R11_target(m)/ti_rescale_abs_clip .Or. &
-                           prof_R11(m) >= (1d0-1d-6)*prof_R11_target(m)*ti_rescale_abs_clip )
-       End If
-       If ( dev22 >= max_dev ) Then
-          max_dev = dev22;  max_dev_comp = 'R22';  max_dev_m = m;  max_dev_gain = relax_k
-          max_dev_sat = ( prof_R22(m) <= (1d0+1d-6)*prof_R22_target(m)/ti_rescale_abs_clip .Or. &
-                           prof_R22(m) >= (1d0-1d-6)*prof_R22_target(m)*ti_rescale_abs_clip )
-       End If
-       If ( dev33 >= max_dev ) Then
-          max_dev = dev33;  max_dev_comp = 'R33';  max_dev_m = m;  max_dev_gain = relax_k
-          max_dev_sat = ( prof_R33(m) <= (1d0+1d-6)*prof_R33_target(m)/ti_rescale_abs_clip .Or. &
-                           prof_R33(m) >= (1d0-1d-6)*prof_R33_target(m)*ti_rescale_abs_clip )
-       End If
-
-       ! per-point convergence gate: this y's own deviation (not the profile-wide worst case) decides whether its gain starts decaying
-       If ( .Not. ti_R_decaying(m) ) Then
-          If ( Max(dev11,dev22,dev33) < ti_rescale_deadband ) Then
-             ti_R_decaying(m) = .True.
-             ti_R_decay_k(m) = -1
-          End If
-       End If
-       ti_R_decay_k(m) = ti_R_decay_k(m) + 1
+    Do m = 1, n_bezier
+       stats(1,m) = linterp( opt_yg_cc, var_UU, nym_global, y_cp(m) )
+       stats(2,m) = linterp( opt_yg_cc, var_VV, nym_global, y_cp(m) )
+       stats(3,m) = linterp( opt_yg_cc, var_WW, nym_global, y_cp(m) )
     End Do
 
-    !$acc update device(prof_R11, prof_R22, prof_R33)
+  End Subroutine reduce_and_sample_bezier
 
-    ! mean-profile companion nudge: additive (not multiplicative -- U crosses/approaches zero at the wall, where a ratio-based law is ill-conditioned), same EMA filter and per-point Robbins-Monro gain schedule as the variance loop above
-    max_dev_u = 0d0;  max_dev_u_m = 0;  max_dev_u_sat = .False.;  max_dev_u_gain = 0d0
-    If ( ti_rescale_u_active == 1 ) Then
-       bias_clip = ti_rescale_u_clip * Uconv_sem
+  !> Rebuilds the full-resolution prof_R22/prof_R33 profile (read directly by sem_fluctuation)
+  !> from the current Bezier control-point values, evaluating the curve at each prof_y(i).
+  Subroutine rebuild_bezier_profile( x_cp, prof_out )
 
-       Do m = 1, n_profile
-          ! same rationale as the R_ii loop above: skip points below the first resolved LES cell centre
-          If ( prof_y(m) < ti_yg_cc(1) ) Cycle
+    Real(Int64), Intent(In)    :: x_cp(:)
+    Real(Int64), Intent(InOut) :: prof_out(:)
 
-          ! full undecayed gain at this y until its own bias first falls inside the deadband, gated per-point for the same reason as the variance loop above
-          If ( ti_U_decaying(m) ) Then
-             relax_k_u = Max( ti_rescale_u_relax / Sqrt(Real(ti_U_decay_k(m)+1,8)), ti_rescale_u_relax_min )
-          Else
-             relax_k_u = ti_rescale_u_relax
-          End If
+    Integer(Int32) :: i
 
-          Um = linterp( ti_yg_cc, mean_U, nym_global, prof_y(m) )
+    Do i = 1, n_profile
+       prof_out(i) = bezier_eval( y_cp, x_cp, n_bezier, prof_y(i) )
+    End Do
 
-          If ( .Not. ti_filt_seeded ) Then
-             ti_U_filt(m) = Um
-          Else
-             ti_U_filt(m) = ti_rescale_filter_alpha*Um + (1d0-ti_rescale_filter_alpha)*ti_U_filt(m)
-          End If
+  End Subroutine rebuild_bezier_profile
 
-          bias_raw = prof_U_target(m) - ti_U_filt(m)
-          bias = Min( Max(bias_raw, -bias_clip), bias_clip )
+  !> True if y_cp(m) sits within inflow_opt_wall_exclude*wall_Ltaper of an active no-slip wall --
+  !> i.e. inside sem_fluctuation's own taper zone, which deterministically suppresses the injected
+  !> Reynolds stress toward zero there regardless of the Bezier target (see the taper comment at
+  !> its use site). No correction algorithm can close that gap: it isn't a response-model error,
+  !> it's the no-slip enforcement working as designed, so such control points are excluded from
+  !> both the correction and the residual check rather than chased with an ever-larger target.
+  Logical Function inflow_opt_wall_excluded( m ) Result(excluded)
 
-          ! deadband: don't perturb the profile chasing a bias that's within noise of zero
-          If ( Abs(bias)/Max(Uconv_sem,1d-12) < ti_rescale_u_deadband ) bias = 0d0
+    Integer(Int32), Intent(In) :: m
 
-          prof_U(m) = prof_U(m) + relax_k_u*bias
+    excluded = .False.
+    If ( wall_active_lo == 1 .And. (y_cp(m)-wall_y_lo) < inflow_opt_wall_exclude*wall_Ltaper_lo ) &
+         excluded = .True.
+    If ( wall_active_hi == 1 .And. (wall_y_hi-y_cp(m)) < inflow_opt_wall_exclude*wall_Ltaper_hi ) &
+         excluded = .True.
 
-          ! anti-windup: clamp cumulative drift against prof_U_target directly, mirrors ti_rescale_abs_clip above
-          prof_U(m) = Min( Max( prof_U(m), prof_U_target(m)-ti_rescale_u_abs_clip*Uconv_sem ), &
-                                            prof_U_target(m)+ti_rescale_u_abs_clip*Uconv_sem )
+  End Function inflow_opt_wall_excluded
 
-          ! diagnostic uses the unclipped bias so a saturated window still reports its true error instead of the clip bound
-          If ( Abs(bias_raw)/Max(Uconv_sem,1d-12) >= max_dev_u ) Then
-             max_dev_u = Abs(bias_raw)/Max(Uconv_sem,1d-12);  max_dev_u_m = m;  max_dev_u_gain = relax_k_u
-             max_dev_u_sat = ( prof_U(m) <= prof_U_target(m)-(1d0-1d-6)*ti_rescale_u_abs_clip*Uconv_sem .Or. &
-                                prof_U(m) >= prof_U_target(m)+(1d0-1d-6)*ti_rescale_u_abs_clip*Uconv_sem )
-          End If
+  !> Worst-case relative residual |measured-target|/target over u'^2/v'^2/w'^2 and all interior,
+  !> non-wall-excluded control points, for the phase-2 convergence check and its printed diagnostic.
+  Real(Int64) Function inflow_opt_max_rel_residual( stats_ref ) Result(rmax)
 
-          ! per-point convergence gate, mirrors the variance loop above
-          If ( .Not. ti_U_decaying(m) ) Then
-             If ( Abs(bias_raw)/Max(Uconv_sem,1d-12) < ti_rescale_u_deadband ) Then
-                ti_U_decaying(m) = .True.
-                ti_U_decay_k(m) = -1
-             End If
-          End If
-          ti_U_decay_k(m) = ti_U_decay_k(m) + 1
+    Real(Int64), Intent(In) :: stats_ref(3,n_bezier)
+
+    Integer(Int32) :: m
+    Real(Int64) :: target3(3), r0(3)
+
+    rmax = 0d0
+    Do m = 2, n_bezier-1
+       If ( inflow_opt_wall_excluded(m) ) Cycle
+       target3 = (/ u_cp_target(m), x_cp_R22_target(m), x_cp_R33_target(m) /)
+       r0 = Abs( stats_ref(:,m) - target3 ) / Max(Abs(target3), 1d-12)
+       rmax = Max( rmax, Maxval(r0) )
+    End Do
+
+  End Function inflow_opt_max_rel_residual
+
+  !> Diagnostic breakdown of inflow_opt_max_rel_residual: prints, for each of u'^2/v'^2/w'^2
+  !> separately, the worst relative residual over interior control points and the height it
+  !> occurs at -- lets you see whether a correction that targets v'^2/w'^2 is doing so at the cost
+  !> of the uncontrolled u'^2 (or of the other corrected component), which the single aggregate
+  !> worst-case number can't distinguish.
+  Subroutine inflow_opt_print_breakdown( stats_ref )
+
+    Real(Int64), Intent(In) :: stats_ref(3,n_bezier)
+
+    Integer(Int32) :: m, i, mmax(3)
+    Real(Int64) :: target3(3), r0(3), rmax(3)
+
+    rmax = 0d0;  mmax = 2
+    Do m = 2, n_bezier-1
+       If ( inflow_opt_wall_excluded(m) ) Cycle
+       target3 = (/ u_cp_target(m), x_cp_R22_target(m), x_cp_R33_target(m) /)
+       r0 = Abs( stats_ref(:,m) - target3 ) / Max(Abs(target3), 1d-12)
+       Do i = 1, 3
+          If ( r0(i) > rmax(i) ) Then;  rmax(i) = r0(i);  mmax(i) = m;  End If
        End Do
-
-       !$acc update device(prof_U)
-    End If
-
-    acc_ti_U = 0d0;  acc_ti_V = 0d0;  acc_ti_W = 0d0
-    acc_ti_UU = 0d0; acc_ti_VV = 0d0; acc_ti_WW = 0d0; acc_ti_n = 0d0
-
-    ti_filt_seeded = .True.
-
-    ! persist controller state after every update so a restart can resume from here
-    Call write_ti_rescale_restart
+    End Do
 
     If ( myid == 0 ) Then
-       Write(*,'(A,I10,A,F8.4,A,F6.3,A,F8.4)') &
-            ' TI-rescale: nudged inflow profile at istep = ', istep, ', max |ratio-1| = ', max_dev, &
-            ', gain at worst y = ', max_dev_gain, ', max |U-bias|/Uconv = ', max_dev_u
-       Write(*,'(A,A,A,F10.4,A,L1)') &
-            '   -> R_ii driver: ', max_dev_comp, ' at y = ', prof_y(max_dev_m), ', pinned at ti_rescale_abs_clip = ', max_dev_sat
-       If ( ti_rescale_u_active == 1 ) Write(*,'(A,F10.4,A,F6.3,A,L1)') &
-            '   -> U driver: y = ', prof_y(max_dev_u_m), ', gain at worst y = ', max_dev_u_gain, &
-            ', pinned at ti_rescale_u_abs_clip = ', max_dev_u_sat
+       Write(*,'(A,F7.4,A,F8.4)') "   u'^2 worst relative residual = ", rmax(1), '  at y_cp = ', y_cp(mmax(1))
+       Write(*,'(A,F7.4,A,F8.4)') "   v'^2 worst relative residual = ", rmax(2), '  at y_cp = ', y_cp(mmax(2))
+       Write(*,'(A,F7.4,A,F8.4)') "   w'^2 worst relative residual = ", rmax(3), '  at y_cp = ', y_cp(mmax(3))
     End If
 
-  End Subroutine apply_ti_rescale
+  End Subroutine inflow_opt_print_breakdown
 
-  !> Writes the live TI-rescale controller state (nudged profile, EMA filters, gain-schedule counter) to fields/ti_rescale_data.dat; called after every apply_ti_rescale update so the file always reflects the latest state. Host-only; overwrites the previous snapshot.
-  Subroutine write_ti_rescale_restart
+  !> Seeds slope_v/slope_w -- the per-control-point scalar secant slopes d(v'^2_b)/d(v'^2_i) and
+  !> d(w'^2_b)/d(w'^2_i) -- from the step0/step1 pair (step1: v'^2 and w'^2 doubled together, per
+  !> the paper's Section 6.1). This is the only sensitivity estimate the default
+  !> (inflow_opt_max_iter=1) single-step run uses; secant_update_slopes refines it further only
+  !> for the experimental iter>1 extension.
+  Subroutine build_initial_slopes
+
+    Integer(Int32) :: m
+
+    Do m = 2, n_bezier-1
+       slope_v(m) = ( stats_step1(2,m) - stats_step0(2,m) ) / Max(x_cp_R22_target(m), 1d-12)
+       slope_w(m) = ( stats_step1(3,m) - stats_step0(3,m) ) / Max(x_cp_R33_target(m), 1d-12)
+    End Do
+
+  End Subroutine build_initial_slopes
+
+  !> Secant refinement of slope_v/slope_w at each interior control point, from the most recently
+  !> applied correction (Delta_x = current x_cp - x_prev_*) and its measured downstream response
+  !> (Delta_y = stats_now - stats_prev): slope <- Delta_y/Delta_x, independently for v'^2 and
+  !> w'^2. Used only by the experimental iter>1 extension (see advance_inflow_opt): the paper's
+  !> own validated procedure never goes past one correction, so this refinement has no counterpart
+  !> there. Left unchanged at a control point whose last step was ~0 (degenerate secant direction).
+  Subroutine secant_update_slopes( stats_now )
+
+    Real(Int64), Intent(In) :: stats_now(3,n_bezier)
+
+    Integer(Int32) :: m
+    Real(Int64) :: dxv, dy
+
+    Do m = 2, n_bezier-1
+       If ( inflow_opt_wall_excluded(m) ) Cycle
+       dxv = x_cp_R22(m) - x_prev_R22(m)
+       If ( Abs(dxv) > 1d-24 ) Then
+          dy = stats_now(2,m) - stats_prev(2,m)
+          slope_v(m) = dy/dxv
+       End If
+       dxv = x_cp_R33(m) - x_prev_R33(m)
+       If ( Abs(dxv) > 1d-24 ) Then
+          dy = stats_now(3,m) - stats_prev(3,m)
+          slope_w(m) = dy/dxv
+       End If
+    End Do
+
+  End Subroutine secant_update_slopes
+
+  !> Applies the paper's correction independently at each interior, non-wall-excluded Bezier
+  !> control point, as a scalar Newton update x_new = x_current + scale*dx (x_current being
+  !> whatever control-point value produced stats_ref), with dx = -(measured-target)/slope. v'^2
+  !> and w'^2 are corrected independently (no coupled 2x2 solve, so no cross-term for a
+  !> collinear-Jacobian instability to hide in -- see the comment on slope_v/slope_w above; u'^2
+  !> is measured for the residual check but was never a decision variable, per the paper).
+  !> scale=1 for the paper's single mandatory correction; the experimental iter>1 extension passes
+  !> a decaying Robbins-Monro-style scale (inflow_opt_relax/iter) instead of a trust-region cap,
+  !> since a fixed magnitude cap has no counterpart in the paper -- a shrinking step size is the
+  !> standard way to let sequential noisy online measurements average out rather than get chased.
+  !> Endpoints (m=1, m=n_bezier) and wall-excluded interior points stay pinned to the target.
+  Subroutine scalar_correction_step( stats_ref, scale )
+
+    Real(Int64), Intent(In) :: stats_ref(3,n_bezier)
+    Real(Int64), Intent(In) :: scale
+
+    Integer(Int32) :: m
+    Real(Int64) :: dv, dw, cap_v, cap_w
+    Real(Int64), Parameter :: slope_floor = 1d-12   ! degenerate sensitivity (e.g. no measurable response) -- leave the control point where it is
+
+    Do m = 2, n_bezier-1
+
+       If ( inflow_opt_wall_excluded(m) ) Cycle
+
+       dv = 0d0;  dw = 0d0
+       If ( Abs(slope_v(m)) > slope_floor ) dv = -( stats_ref(2,m) - x_cp_R22_target(m) ) / slope_v(m)
+       If ( Abs(slope_w(m)) > slope_floor ) dw = -( stats_ref(3,m) - x_cp_R33_target(m) ) / slope_w(m)
+
+       ! numerical-robustness cap (not a paper-fidelity choice, see the comment on
+       ! inflow_opt_trust in global.f90): a secant slope from one fast online measurement window
+       ! can be small/noisy enough at some control points to blow the raw Newton step up to many
+       ! multiples of the target -- bound it to +-inflow_opt_trust of the target value instead
+       cap_v = inflow_opt_trust * x_cp_R22_target(m)
+       cap_w = inflow_opt_trust * x_cp_R33_target(m)
+       dv = Sign( Min(Abs(dv), cap_v), dv )
+       dw = Sign( Min(Abs(dw), cap_w), dw )
+
+       x_cp_R22(m) = Max( x_cp_R22(m) + scale*dv, 1d-12 )
+       x_cp_R33(m) = Max( x_cp_R33(m) + scale*dw, 1d-12 )
+
+    End Do
+
+    If ( myid == 0 ) Then
+       Write(*,'(A,I3,A)') ' Inflow optimization: correction step ', inflow_opt_iter, &
+            ' (v''^2, w''^2), by height:'
+       Do m = 1, n_bezier
+          Write(*,'(A,F8.4,A,F10.5,A,F10.5,A,F10.5,A,F10.5)') &
+               '   y_cp = ', y_cp(m), '  v''^2: ', x_cp_R22_target(m), ' -> ', x_cp_R22(m), &
+               '   w''^2: ', x_cp_R33_target(m), ' -> ', x_cp_R33(m)
+       End Do
+    End If
+
+  End Subroutine scalar_correction_step
+
+  !> Drives the phase machine forward once a full measurement window has been accumulated:
+  !> step0 (baseline) -> step1 (v'^2 AND w'^2 doubled together, per the paper's Section 6.1) ->
+  !> builds the per-point scalar secant slopes and applies ONE correction (the paper's validated
+  !> procedure) -> phase 3 verifies it. By default (inflow_opt_max_iter=1) the profile freezes
+  !> there regardless of the residual, reverting to the uncorrected baseline if the single
+  !> correction measured worse than it -- matching what the paper actually demonstrated, not
+  !> chasing a tolerance it never claimed to guarantee. inflow_opt_max_iter>1 instead continues,
+  !> secant-refining the slopes and taking further Robbins-Monro-decayed corrections until the
+  !> residual drops below inflow_opt_tol, inflow_opt_max_iter is reached, or the residual stalls
+  !> -- this is this codebase's own experimental extension beyond the paper (see the comment in
+  !> global.f90). No-op unless inflow_opt_active==1, a measurement/iteration phase is in progress,
+  !> and istep>=inflow_opt_nstart.
+  Subroutine advance_inflow_opt
+
+    Real(Int64) :: stats_now(3,n_bezier), resid, scale
+    Logical :: improved, stalled, done
+
+    If ( inflow_opt_active /= 1 ) Return
+    If ( inflow_opt_phase < 1 .Or. inflow_opt_phase > 3 ) Return
+    If ( istep < inflow_opt_nstart ) Return
+
+    inflow_opt_step_count = inflow_opt_step_count + 1
+    If ( inflow_opt_step_count < inflow_opt_window ) Return
+
+    Call reduce_and_sample_bezier( stats_now )
+
+    Select Case ( inflow_opt_phase )
+    Case (1)
+       stats_step0 = stats_now
+       ! step1: double both v'^2 and w'^2 at the inflow together (the paper's single combined
+       ! perturbation, Section 6.1), not two separate one-at-a-time runs
+       x_cp_R22 = 2d0*x_cp_R22_target
+       x_cp_R33 = 2d0*x_cp_R33_target
+       Call rebuild_bezier_profile( x_cp_R22, prof_R22 )
+       Call rebuild_bezier_profile( x_cp_R33, prof_R33 )
+       inflow_opt_phase = 2
+       If ( myid == 0 ) Write(*,'(A,I10,A)') &
+            ' Inflow optimization: step0 (baseline) measured at istep = ', istep, &
+            ' -- doubling v''^2 and w''^2 together for step1'
+    Case (2)
+       stats_step1 = stats_now
+       ! restore both to target before computing/applying the correction: stats_step0 (the
+       ! residual reference scalar_correction_step's Newton update is based at) was measured with
+       ! the inflow at target, so x_cp_R22/R33 must be back at target too
+       x_cp_R22 = x_cp_R22_target;  x_cp_R33 = x_cp_R33_target
+       Call build_initial_slopes
+       ! "iterate 0": the uncorrected target itself -- the safe fallback if the single correction
+       ! (or, in the experimental extension, every subsequent one) turns out worse
+       best_resid = inflow_opt_max_rel_residual( stats_step0 )
+       best_x_cp_R22 = x_cp_R22;  best_x_cp_R33 = x_cp_R33   ! = target here
+       Call inflow_opt_print_breakdown( stats_step0 )
+       x_prev_R22 = x_cp_R22;  x_prev_R33 = x_cp_R33   ! = target: step0 was measured at the unperturbed inflow
+       stats_prev = stats_step0
+       inflow_opt_iter = 1
+       Call scalar_correction_step( stats_step0, 1d0 )   ! scale=1: the paper's single mandatory step, uncapped
+       Call rebuild_bezier_profile( x_cp_R22, prof_R22 )
+       Call rebuild_bezier_profile( x_cp_R33, prof_R33 )
+       inflow_opt_phase = 3
+       If ( myid == 0 ) Write(*,'(A,I10,A)') &
+            ' Inflow optimization: step1 measured at istep = ', istep, &
+            ' -- correction 1 applied, verifying...'
+    Case (3)
+       resid = inflow_opt_max_rel_residual( stats_now )
+       If ( myid == 0 ) Write(*,'(A,I10,A,I3,A,F7.4)') &
+            ' Inflow optimization: verify measured at istep = ', istep, ' after correction ', &
+            inflow_opt_iter, ' -- worst-case relative residual = ', resid
+       Call inflow_opt_print_breakdown( stats_now )
+
+       ! track the best (lowest-residual) iterate seen so far -- a Newton step can make things
+       ! worse (the slope is only ever a local/secant estimate), and there is no guarantee the
+       ! LAST measurement is the best one
+       improved = ( resid < best_resid )
+       If ( improved ) Then
+          best_resid = resid;  best_x_cp_R22 = x_cp_R22;  best_x_cp_R33 = x_cp_R33
+          inflow_opt_no_improve = 0
+       Else
+          inflow_opt_no_improve = inflow_opt_no_improve + 1
+       End If
+       stalled = ( inflow_opt_no_improve >= inflow_opt_stall_patience )
+       ! default (inflow_opt_max_iter=1): this single verify measurement always ends it, matching
+       ! the paper's own validated one-step procedure rather than continuing toward a tolerance it
+       ! never demonstrated. inflow_opt_max_iter>1 (experimental extension): keep going until
+       ! converged, out of iterations, or stalled
+       done = ( inflow_opt_iter >= inflow_opt_max_iter .Or. resid <= inflow_opt_tol .Or. stalled )
+
+       If ( done ) Then
+          If ( .Not. improved ) Then
+             ! current iterate isn't the best one seen -- revert to whichever was
+             If ( myid == 0 ) Write(*,'(A,F7.4,A,F7.4)') &
+                  ' Inflow optimization: reverting to the best iterate seen (residual = ', best_resid, &
+                  ') -- final iterate was worse (residual = ', resid, ')'
+             x_cp_R22 = best_x_cp_R22;  x_cp_R33 = best_x_cp_R33
+             Call rebuild_bezier_profile( x_cp_R22, prof_R22 )
+             Call rebuild_bezier_profile( x_cp_R33, prof_R33 )
+          End If
+          inflow_opt_phase = 4
+          If ( myid == 0 ) Then
+             If ( inflow_opt_max_iter <= 1 ) Then
+                Write(*,'(A,F7.4,A)') ' Inflow optimization: single corrected step verified ' // &
+                     '(paper-validated procedure) -- inflow profile frozen (best residual = ', best_resid, ')'
+             Else If ( resid <= inflow_opt_tol ) Then
+                Write(*,'(A,I3,A)') ' Inflow optimization: converged after ', inflow_opt_iter, &
+                     ' correction(s) -- inflow profile frozen'
+             Else If ( stalled ) Then
+                Write(*,'(A,I3,A,F7.4,A)') ' Inflow optimization: residual stopped improving after ', &
+                     inflow_opt_iter, ' correction(s) (best residual = ', best_resid, &
+                     ') -- inflow profile frozen at the best iterate'
+             Else
+                Write(*,'(A,I3,A,F7.4,A)') ' Inflow optimization: reached inflow_opt_max_iter = ', &
+                     inflow_opt_max_iter, ' without meeting inflow_opt_tol (best residual = ', best_resid, &
+                     ') -- inflow profile frozen at the best iterate'
+             End If
+          End If
+       Else
+          ! experimental iter>1 extension only (inflow_opt_max_iter>1): secant-refine the slopes
+          ! from the actual applied step and take another, Robbins-Monro-decayed correction
+          ! (scale shrinks as 1/iter so repeated noisy online measurements average out instead of
+          ! being chased -- see the comment in global.f90)
+          Call secant_update_slopes( stats_now )
+          x_prev_R22 = x_cp_R22;  x_prev_R33 = x_cp_R33
+          stats_prev = stats_now
+          inflow_opt_iter = inflow_opt_iter + 1
+          scale = inflow_opt_relax / Real(inflow_opt_iter,8)
+          If ( myid == 0 ) Write(*,'(A)') &
+               ' Inflow optimization: continuing past the paper''s single-step procedure ' // &
+               '(experimental inflow_opt_max_iter>1 extension)'
+          Call scalar_correction_step( stats_now, scale )
+          Call rebuild_bezier_profile( x_cp_R22, prof_R22 )
+          Call rebuild_bezier_profile( x_cp_R33, prof_R33 )
+       End If
+    End Select
+
+    !$acc update device(prof_R22, prof_R33)
+
+    acc_opt_U = 0d0;  acc_opt_V = 0d0;  acc_opt_W = 0d0
+    acc_opt_UU = 0d0; acc_opt_VV = 0d0; acc_opt_WW = 0d0; acc_opt_n = 0d0
+    inflow_opt_step_count = 0
+
+    ! persist phase-machine state after every transition so a restart can resume from here
+    Call write_inflow_opt_restart
+
+  End Subroutine advance_inflow_opt
+
+  !> Writes the live phase-machine state (phase, step count, control points, measured stats, and
+  !> the currently-injected prof_R22/prof_R33) to fields/inflow_opt_data.dat; called after every
+  !> phase transition so the file always reflects the latest state. Host-only; overwrites the
+  !> previous snapshot.
+  Subroutine write_inflow_opt_restart
 
     Integer(Int32) :: unit_out
 
@@ -2249,98 +2568,83 @@ Contains
 
     Call system('mkdir -p fields/')
 
-    Open( newunit=unit_out, file=Trim(ti_rescale_restart_file), access='stream', &
+    Open( newunit=unit_out, file=Trim(inflow_opt_restart_file), access='stream', &
           form='unformatted', status='replace', action='write' )
-    Write(unit_out) ti_rescale_restart_magic
-    Write(unit_out) ti_rescale_restart_version
-    Write(unit_out) n_profile
-    Write(unit_out) ti_filt_seeded
-    Write(unit_out) ti_R_decay_k, ti_R_decaying
-    Write(unit_out) ti_U_decay_k, ti_U_decaying
-    Write(unit_out) prof_R11, prof_R22, prof_R33, prof_U
-    Write(unit_out) ti_R11_filt, ti_R22_filt, ti_R33_filt, ti_U_filt
+    Write(unit_out) n_bezier
+    Write(unit_out) inflow_opt_phase, inflow_opt_step_count, inflow_opt_iter, inflow_opt_no_improve
+    Write(unit_out) x_cp_R22, x_cp_R33
+    Write(unit_out) x_prev_R22, x_prev_R33
+    Write(unit_out) stats_step0, stats_step1
+    Write(unit_out) stats_prev
+    Write(unit_out) slope_v, slope_w
+    Write(unit_out) best_resid
+    Write(unit_out) best_x_cp_R22, best_x_cp_R33
+    Write(unit_out) prof_R22, prof_R33
     Close(unit_out)
 
-  End Subroutine write_ti_rescale_restart
+  End Subroutine write_inflow_opt_restart
 
-  !> Reads controller state written by write_ti_rescale_restart, so a restart resumes the TI-rescale adaptation (nudged profile, EMA filters, per-y gain-decay counters) instead of restarting it from scratch; no-op (fresh start) if the file is missing, and falls back to restarting the per-y gain decay fresh (while keeping the restored profile/filters) for files predating the version-4 per-point layout. Called from init_ti_rescale when restart==1.
-  Subroutine read_ti_rescale_restart
+  !> Reads phase-machine state written by write_inflow_opt_restart, so a restart resumes the
+  !> inflow optimization (control points, measured stats, phase, and injected profile) instead of
+  !> restarting it from scratch; no-op (fresh start) if the file is missing. Called from
+  !> init_inflow_opt when restart==1.
+  Subroutine read_inflow_opt_restart
 
-    Integer(Int32) :: unit_in, n_profile_f, tag, version
+    Integer(Int32) :: unit_in, n_bezier_f
     Logical :: file_exists
 
-    If ( myid == 0 ) Inquire( file=Trim(ti_rescale_restart_file), exist=file_exists )
+    If ( myid == 0 ) Inquire( file=Trim(inflow_opt_restart_file), exist=file_exists )
     Call MPI_Bcast( file_exists, 1, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr )
 
     If ( .Not. file_exists ) Then
        If ( myid == 0 ) Write(*,'(A)') &
-            ' TI-rescale restart: no '//Trim(ti_rescale_restart_file)//' found; starting fresh.'
+            ' Inflow optimization restart: no '//Trim(inflow_opt_restart_file)//' found; starting fresh.'
        Return
     End If
 
     If ( myid == 0 ) Then
-       Open( newunit=unit_in, file=Trim(ti_rescale_restart_file), access='stream', &
+       Open( newunit=unit_in, file=Trim(inflow_opt_restart_file), access='stream', &
              form='unformatted', status='old', action='read' )
-       Read(unit_in) tag
-       If ( tag == ti_rescale_restart_magic ) Then
-          Read(unit_in) version
-          Read(unit_in) n_profile_f
-       Else
-          ! pre-magic file: the leading word we already consumed as "tag" is actually n_profile
-          n_profile_f = tag
-          version = 1
-          Write(*,'(A)') ' TI-rescale restart: pre-versioning file detected, reading as version 1 (no gain-decay-started flag).'
-       End If
-       If ( n_profile_f /= n_profile ) Stop &
-            'ERROR: fields/ti_rescale_data.dat n_profile mismatch with current inflow profile'
-
-       If ( version >= 4 ) Then
-          Read(unit_in) ti_filt_seeded
-          Read(unit_in) ti_R_decay_k, ti_R_decaying
-          Read(unit_in) ti_U_decay_k, ti_U_decaying
-       Else
-          ! pre-version-4 files carried a single profile-wide gain-decay flag/counter that doesn't map onto the per-y state below -- consume and discard those legacy fields (present unconditionally in v1-3), restart every point's gain decay fresh instead
-          Block
-            Integer(Int32) :: legacy_k
-            Logical :: legacy_gain_decay_started
-            Read(unit_in) legacy_k
-            If ( version >= 2 ) Read(unit_in) legacy_gain_decay_started
-          End Block
-          If ( version >= 3 ) Then
-             Read(unit_in) ti_filt_seeded
-          Else
-             ti_filt_seeded = .True.   ! filters restored below already hold real history from the prior run
-          End If
-          ti_R_decay_k = 0;  ti_R_decaying = .False.
-          ti_U_decay_k = 0;  ti_U_decaying = .False.
-       End If
-
-       Read(unit_in) prof_R11, prof_R22, prof_R33, prof_U
-       Read(unit_in) ti_R11_filt, ti_R22_filt, ti_R33_filt, ti_U_filt
+       Read(unit_in) n_bezier_f
+       If ( n_bezier_f /= n_bezier ) Stop &
+            'ERROR: fields/inflow_opt_data.dat n_bezier mismatch with current namelist n_bezier'
+       Read(unit_in) inflow_opt_phase, inflow_opt_step_count, inflow_opt_iter, inflow_opt_no_improve
+       Read(unit_in) x_cp_R22, x_cp_R33
+       Read(unit_in) x_prev_R22, x_prev_R33
+       Read(unit_in) stats_step0, stats_step1
+       Read(unit_in) stats_prev
+       Read(unit_in) slope_v, slope_w
+       Read(unit_in) best_resid
+       Read(unit_in) best_x_cp_R22, best_x_cp_R33
+       Read(unit_in) prof_R22, prof_R33
        Close(unit_in)
-       Write(*,'(A,I8,A)') ' TI-rescale restart: resumed controller state (format version ', &
-            version, ').'
+       Write(*,'(A,I2)') ' Inflow optimization restart: resumed at phase ', inflow_opt_phase
     End If
 
-    Call MPI_Bcast( ti_filt_seeded, 1, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( ti_R_decay_k,  n_profile, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( ti_R_decaying, n_profile, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( ti_U_decay_k,  n_profile, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( ti_U_decaying, n_profile, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( prof_R11,     n_profile, MPI_REAL8,   0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( prof_R22,     n_profile, MPI_REAL8,   0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( prof_R33,     n_profile, MPI_REAL8,   0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( prof_U,       n_profile, MPI_REAL8,   0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( ti_R11_filt,  n_profile, MPI_REAL8,   0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( ti_R22_filt,  n_profile, MPI_REAL8,   0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( ti_R33_filt,  n_profile, MPI_REAL8,   0, MPI_COMM_WORLD, ierr )
-    Call MPI_Bcast( ti_U_filt,    n_profile, MPI_REAL8,   0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( inflow_opt_phase,      1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( inflow_opt_step_count, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( inflow_opt_iter,       1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( inflow_opt_no_improve, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( x_cp_R22,    n_bezier,   MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( x_cp_R33,    n_bezier,   MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( x_prev_R22,  n_bezier,   MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( x_prev_R33,  n_bezier,   MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( stats_step0, 3*n_bezier, MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( stats_step1, 3*n_bezier, MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( stats_prev,  3*n_bezier, MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( slope_v,     n_bezier,   MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( slope_w,     n_bezier,   MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( best_resid,  1,          MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( best_x_cp_R22, n_bezier, MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( best_x_cp_R33, n_bezier, MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( prof_R22,    n_profile,  MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
+    Call MPI_Bcast( prof_R33,    n_profile,  MPI_REAL8, 0, MPI_COMM_WORLD, ierr )
 
-    !$acc update device(prof_R11, prof_R22, prof_R33, prof_U)
+    !$acc update device(prof_R22, prof_R33)
 
     ! flow field is already turbulent/adapted on restart -- skip the SEM-eddy advection warm-up wait so accumulation resumes immediately
-    ti_rescale_nstart = 0
+    inflow_opt_nstart = 0
 
-  End Subroutine read_ti_rescale_restart
+  End Subroutine read_inflow_opt_restart
 
 End Module synthetic_eddy_method

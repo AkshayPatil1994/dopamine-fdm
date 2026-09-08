@@ -402,10 +402,10 @@ Contains
        Call profiler_stop(PROF_BC)
     End If
 
-    ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (IBM re-enforce below, RSB/TI-rescale accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
+    ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (IBM re-enforce below, RSB/inflow-optimization accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
     needs_final_sync = ( ibm_input_mode >= 1 ) .Or. &
          ( rsb_active == 1 .And. istep >= rsb_nstart ) .Or. &
-         ( ti_rescale_active == 1 .And. istep >= ti_rescale_nstart ) .Or. &
+         ( inflow_opt_active == 1 .And. istep >= inflow_opt_nstart ) .Or. &
          ( Mod(istep, nmonitor) == 0 ) .Or. &
          ( nsave > 0 .And. Mod(istep, nsave) == 0 ) .Or. &
          ( nsave < 0 .And. t >= tsave_next - 1d-10 ) .Or. &
