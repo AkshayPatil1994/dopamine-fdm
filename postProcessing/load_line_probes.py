@@ -54,9 +54,14 @@ def read_meta(path):
 # ── component helper ──────────────────────────────────────────────────────────
 
 def comp_names(s):
-    """Return ordered component name list from the comps string."""
+    """Return ordered component name list from the comps string.
+
+    Order must match probe_output.f90's parse_comps/write loop, which always
+    emits components in fixed U,V,W,P,T,C order (not the order the user typed
+    them in the &... comps string) regardless of which subset is requested.
+    """
     upper = s.strip().upper()
-    names = [c for c in ('U', 'V', 'W', 'P') if c in upper]
+    names = [c for c in ('U', 'V', 'W', 'P', 'T', 'C') if c in upper]
     return names or ['U', 'V', 'W']
 
 

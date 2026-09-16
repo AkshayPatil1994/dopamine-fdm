@@ -58,6 +58,10 @@ def parse_args():
                    help='Kinematic viscosity ν. Defaults to value in input_parameters.')
     p.add_argument('--no_sgs', action='store_true',
                    help='Do not read nu_t even when sgs_model != 0.')
+    p.add_argument('--no_sediment', action='store_true',
+                   help='Do not read C even when sediment_flag >= 1.')
+    p.add_argument('--no_boussinesq', action='store_true',
+                   help='Do not read T even when boussinesq_flag >= 1.')
     p.add_argument('--out_fig', type=str, default='plots/stats.png')
     return p.parse_args()
 
@@ -356,7 +360,11 @@ def main():
     params    = snapshot_io.parse_input_parameters(case_dir / 'input_parameters')
     nu        = args.nu if args.nu is not None else float(params['nu'])
     sgs_model = 0 if args.no_sgs else int(params.get('sgs_model', 0))
-    print(f'ν = {nu:.6e},  sgs_model = {sgs_model}')
+    sediment_flag   = 0 if args.no_sediment   else int(params.get('sediment_flag',   0))
+    boussinesq_flag = 0 if args.no_boussinesq else int(params.get('boussinesq_flag', 0))
+    read_kw = dict(sgs_model=sgs_model, sediment_flag=sediment_flag, boussinesq_flag=boussinesq_flag)
+    print(f'ν = {nu:.6e},  sgs_model = {sgs_model},  sediment_flag = {sediment_flag},  '
+          f'boussinesq_flag = {boussinesq_flag}')
 
     # ── build snapshot list ───────────────────────────────────────────────────
     steps     = range(args.avg_start, args.avg_end + 1, args.interval)
@@ -376,7 +384,7 @@ def main():
 
     # ── probe grid from first snapshot ───────────────────────────────────────
     print(f'Reading grid from {snapfiles[0][1].name} …')
-    s0  = snapshot_io.read_snapshot(snapfiles[0][1], sgs_model=sgs_model)
+    s0  = snapshot_io.read_snapshot(snapfiles[0][1], **read_kw)
     xm  = s0['xm'];  ym  = s0['ym'];  zm  = s0['zm']
     nxm = xm.size;   nym = ym.size;   nzm = zm.size
     dx  = xm[1] - xm[0]   # uniform x
@@ -402,13 +410,18 @@ def main():
     acc_eps_sgs = np.zeros(nym)
     has_sgs     = False
 
+    # Boussinesq temperature: accumulate <T> and <T²> for mean/rms profiles
+    acc_T   = np.zeros(nym)
+    acc_TT  = np.zeros(nym)
+    has_T   = False
+
     N = 0  # snapshot counter
 
     # ── main averaging loop ───────────────────────────────────────────────────
     for step, fpath in snapfiles:
         print(f'  [{N+1:>4d}/{len(snapfiles)}]  step {step}', end='\r', flush=True)
 
-        snap = snapshot_io.read_snapshot(fpath, sgs_model=sgs_model)
+        snap = snapshot_io.read_snapshot(fpath, **read_kw)
         U    = snap['U']   # (nxm, nym, nzm)
         V    = snap['V']
         W    = snap['W']
@@ -444,6 +457,13 @@ def main():
             two_SijSij = (2.0 * (g['dU_dx']**2 + g['dV_dy']**2 + g['dW_dz']**2) +
                           4.0 * (S_12**2 + S_13**2 + S_23**2))
             acc_eps_sgs += xz_mean(nu_t * two_SijSij)
+
+        # Boussinesq temperature moments
+        if boussinesq_flag >= 1 and 'T' in snap:
+            has_T = True
+            T = snap['T']
+            acc_T  += xz_mean(T)
+            acc_TT += xz_mean(T * T)
 
         N += 1
 
@@ -482,6 +502,9 @@ def main():
                     - dW_dy_mean**2)
 
     eps_sgs = acc_eps_sgs / N if has_sgs else np.zeros(nym)
+
+    T_mean = acc_T / N if has_T else np.zeros(nym)
+    Trms   = np.sqrt(np.maximum(acc_TT / N - T_mean**2, 0.0)) if has_T else np.zeros(nym)
 
     # TKE production  P = -<u'v'> · dU/dy
     prod = -uv * dU_dy_mean
@@ -531,6 +554,12 @@ def main():
         'eps_sgs' : eps_sgs_s,
         'prod'    : prod_s,
     }
+    # T is not symmetrised: Boussinesq flows are generally NOT symmetric about
+    # the centreline (e.g. bottom-heated/top-cooled stratification), unlike
+    # the momentum statistics above for an unstratified channel.
+    if has_T:
+        results['T_mean'] = T_mean
+        results['Trms']   = Trms
 
     # Compressed NumPy archive (load with np.load)
     npz_path = stats_dir / f'stats_{args.prefix}_{args.avg_start}_{args.avg_end}.npz'

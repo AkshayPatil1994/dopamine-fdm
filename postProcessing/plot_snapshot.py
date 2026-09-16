@@ -71,9 +71,10 @@ def main():
     args = _parse_args()
 
     # ── case parameters ───────────────────────────────────────────────────────
-    prm          = parse_input_parameters(args.params)
-    sgs_model    = int(prm.get('sgs_model',    0))
-    sediment_flag = int(prm.get('sediment_flag', 0))
+    prm             = parse_input_parameters(args.params)
+    sgs_model       = int(prm.get('sgs_model',       0))
+    sediment_flag   = int(prm.get('sediment_flag',   0))
+    boussinesq_flag = int(prm.get('boussinesq_flag', 0))
     fileout      = str(prm.get('fileout',       'channel_test'))
     nu           = float(prm.get('nu',    1e-6))
     dPdx         = float(prm.get('dpdx',  0.0))
@@ -82,9 +83,10 @@ def main():
     utau             = _utau(dPdx, Ly)
     use_wall_units   = utau > 0.0
 
-    print(f'  sgs_model      = {sgs_model}')
-    print(f'  sediment_flag  = {sediment_flag}')
-    print(f'  fileout        = {fileout!r}')
+    print(f'  sgs_model       = {sgs_model}')
+    print(f'  sediment_flag   = {sediment_flag}')
+    print(f'  boussinesq_flag = {boussinesq_flag}')
+    print(f'  fileout         = {fileout!r}')
     if use_wall_units:
         Retau = utau * 0.5 * Ly / nu
         print(f'  u_tau (est.)   = {utau:.4g}  (Re_tau ~ {Retau:.1f})')
@@ -96,7 +98,7 @@ def main():
     print(f'  found {len(snaps)} snapshot(s): '
           f'steps {snaps[0][0]} … {snaps[-1][0]}')
 
-    read_kw = dict(sgs_model=sgs_model, sediment_flag=sediment_flag)
+    read_kw = dict(sgs_model=sgs_model, sediment_flag=sediment_flag, boussinesq_flag=boussinesq_flag)
 
     # ── load snapshot(s) ──────────────────────────────────────────────────────
     if args.all:
@@ -142,6 +144,8 @@ def main():
         panels.append('nu_t')
     if sediment_flag >= 1:
         panels.append('C')
+    if boussinesq_flag >= 1:
+        panels.append('T')
 
     ncols = len(panels)
     fig, axes = plt.subplots(1, ncols, figsize=(4.5 * ncols, 5.5), sharey=True)
@@ -186,6 +190,14 @@ def main():
         ax.plot(profile['C'], yplot, color='C2')
         ax.set_xlabel(r'$\langle C \rangle$')
         ax.set_title('Mean scalar concentration')
+        ax.grid(True, alpha=0.3)
+
+    # ── panel: mean Boussinesq temperature ────────────────────────────────────
+    if boussinesq_flag >= 1:
+        ax = axes[panels.index('T')]
+        ax.plot(profile['T'], yplot, color='C3')
+        ax.set_xlabel(r'$\langle T \rangle$')
+        ax.set_title('Mean temperature')
         ax.grid(True, alpha=0.3)
 
     plt.tight_layout()

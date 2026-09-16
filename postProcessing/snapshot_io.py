@@ -19,6 +19,7 @@ Binary layout (big-endian float64, Fortran stream, no record markers):
       P    (nxg, nyg, nzg)   cell-centre pressure    — always present
       C    (nxg, nyg, nzg)   scalar concentration    — only if sediment_flag >= 1
       nu_t (nxg, nyg, nzg)   SGS turbulent viscosity — only if sgs_model != 0
+      T    (nxg, nyg, nzg)   Boussinesq temperature  — only if boussinesq_flag >= 1
 
   Ghost-cell convention: nxg = nxm+2, nyg = nym+2, nzg = nzm+2.
   ny and nz in the V and W headers are face-point counts (no ghost cells on
@@ -150,7 +151,7 @@ def _to_cell_centre(U_face, V_face, W_face, P_raw):
 
 # ── public API ────────────────────────────────────────────────────────────────
 
-def read_snapshot(fpath, *, sgs_model=0, sediment_flag=0):
+def read_snapshot(fpath, *, sgs_model=0, sediment_flag=0, boussinesq_flag=0):
     """
     Read one fdm-dopamine binary snapshot and return cell-centred fields.
 
@@ -163,6 +164,10 @@ def read_snapshot(fpath, *, sgs_model=0, sediment_flag=0):
         after P, or after C if sediment is also active).
     sediment_flag : int
         0 = no scalar transport.  >= 1 = C block present after P.
+    boussinesq_flag : int
+        0 = no thermal transport.  >= 1 = T block present after P, C and nu_t
+        (in that order — must match the solver's write order exactly, see
+        input_output.f90's snapshot writer).
 
     Returns
     -------
@@ -176,6 +181,8 @@ def read_snapshot(fpath, *, sgs_model=0, sediment_flag=0):
                        [present only when sediment_flag >= 1]
         nu_t         — SGS turbulent viscosity,          shape (nxm, nym, nzm)
                        [present only when sgs_model != 0]
+        T            — Boussinesq temperature,           shape (nxm, nym, nzm)
+                       [present only when boussinesq_flag >= 1]
 
     Axis convention: 0 = x (streamwise), 1 = y (wall-normal), 2 = z (spanwise).
     """
@@ -209,6 +216,11 @@ def read_snapshot(fpath, *, sgs_model=0, sediment_flag=0):
     if sgs_model != 0:
         _, nut_raw = r.read_field()      # (nxg, nyg, nzg)
         snap['nu_t'] = nut_raw[1:-1, 1:-1, 1:-1]
+
+    # ── optional: Boussinesq temperature ──────────────────────────────────────
+    if boussinesq_flag >= 1:
+        _, T_raw = r.read_field()        # (nxg, nyg, nzg)
+        snap['T'] = T_raw[1:-1, 1:-1, 1:-1]
 
     return snap
 

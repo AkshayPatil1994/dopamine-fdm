@@ -23,6 +23,7 @@ Output (in ./paraview/ subdirectory):
 import struct
 import numpy as np
 import os
+import sys
 
 # ── paths ──────────────────────────────────────────────────────────────────────
 CASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -71,9 +72,26 @@ field_name_prefix, STEPS = detect_field_prefix_and_steps()
 DT = 1
 
 # ── optional fields ────────────────────────────────────────────────────────────
-# Must match the run that produced the files: blocks are appended C then nu_t, after P.
-HAS_SEDIMENT = False   # scalar C block after P (sediment_flag >= 1)
-HAS_SGS      = True    # nu_t block after P/C (sgs_model != 0)
+# Must match the run that produced the files: blocks are appended C, then nu_t,
+# then T, after P (same order as input_output.f90's snapshot writer).
+# Auto-detected from input_parameters when present; edit the fallbacks below
+# only if that file is unavailable.
+HAS_SEDIMENT   = False   # scalar C block after P (sediment_flag >= 1)
+HAS_SGS        = True    # nu_t block after P/C (sgs_model != 0)
+HAS_BOUSSINESQ = False   # T block after P/C/nu_t (boussinesq_flag >= 1)
+
+try:
+    sys.path.insert(0, CASE_DIR)
+    import snapshot_io
+    _params = snapshot_io.parse_input_parameters(os.path.join(CASE_DIR, 'input_parameters'))
+    HAS_SEDIMENT   = int(_params.get('sediment_flag',   0)) >= 1
+    HAS_SGS        = int(_params.get('sgs_model',       0)) != 0
+    HAS_BOUSSINESQ = int(_params.get('boussinesq_flag', 0)) >= 1
+    print(f'Auto-detected from input_parameters: sediment={HAS_SEDIMENT}, '
+          f'sgs={HAS_SGS}, boussinesq={HAS_BOUSSINESQ}')
+except Exception as e:
+    print(f'NOTE: could not auto-detect flags from input_parameters ({e}); '
+          f'using the hardcoded HAS_SEDIMENT/HAS_SGS/HAS_BOUSSINESQ above.')
 
 # ── header probe ──────────────────────────────────────────────────────────────
 def probe_snapshot(fpath):
@@ -128,17 +146,22 @@ def probe_snapshot(fpath):
     nutn    = None
     cn      = None
     off_C   = None
+    Tn      = None
+    off_T   = None
     if HAS_SEDIMENT:
         cn = ri3();  off_C = pos[0];  skip8(cn[0] * cn[1] * cn[2])
     if HAS_SGS:
-        nutn = ri3();  off_nut = pos[0]
+        nutn = ri3();  off_nut = pos[0];  skip8(nutn[0] * nutn[1] * nutn[2])
+    if HAS_BOUSSINESQ:
+        Tn = ri3();  off_T = pos[0]
 
     return dict(nxm=nxm, nym=nym, nzm=nzm,
                 xm=xm, ym=ym, zm=zm,
                 un=un, vn=vn, wn=wn, pn=pn,
                 off_U=off_U, off_V=off_V, off_W=off_W, off_P=off_P,
                 cn=cn, off_C=off_C,
-                nutn=nutn, off_nut=off_nut)
+                nutn=nutn, off_nut=off_nut,
+                Tn=Tn, off_T=off_T)
 
 
 # ── coordinate writer ─────────────────────────────────────────────────────────
@@ -178,6 +201,8 @@ cn     = info['cn']
 offC   = info['off_C']
 nutn   = info['nutn']
 offNut = info['off_nut']
+Tn     = info['Tn']
+offT   = info['off_T']
 
 # ── write XDMF ────────────────────────────────────────────────────────────────
 # Binary files are big-endian Fortran column-major (x varies fastest).
@@ -316,6 +341,9 @@ for step in STEPS:
     if HAS_SGS and offNut is not None:
         ntx, nty, ntz = nutn   # same shape as P: (nxg, nyg, nzg)
         lines += xdmf_hyperslab('nu_t', f'{ntz} {nty} {ntx}', '1 1 1', offNut, frel)
+    if HAS_BOUSSINESQ and offT is not None:
+        Tx, Ty, Tz = Tn   # same shape as P: (nxg, nyg, nzg)
+        lines += xdmf_hyperslab('T', f'{Tz} {Ty} {Tx}', '1 1 1', offT, frel)
     lines.append('      </Grid>')
 
 lines += [
