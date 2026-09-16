@@ -28,17 +28,18 @@ Contains
     Real   (Int64) :: T_wave_x, T_wave_z
 
     ! ---- Namelist group declarations --------------------------------
-    Namelist /DOMAIN/ nx, ny, nz, Lx, Ly, Lz, alpha_grid, grid_type, p_row, p_col
+    Namelist /DOMAIN/ nx, ny, nz, Lx, Ly, Lz, alpha_grid, grid_type, p_row, p_col, alpha_grid_z
 
     Namelist /PHYSICS/ nu, dPdx, dPdz, Ub_x, Ub_z, T_wave_x, T_wave_z, &
                        phi_wave_x, phi_wave_z, sgs_model, Cs_vreman, flat_wall_model_flag, &
                        z0_ylo, z0_yhi, z0h_ylo, z0h_yhi, &
-                       flow_forcing_mode, Ub_target, advection_scheme
+                       flow_forcing_mode, Ub_target, advection_scheme, &
+                       rotation_active, Omega_x
 
     Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, &
                         cfl_adaptive, cfl_target, cfl_safety, dt_min, dt_max
 
-    Namelist /BOUNDARY_CONDITIONS/ bc_face_ylo, bc_face_yhi, x_bc_type, y_bc_type
+    Namelist /BOUNDARY_CONDITIONS/ bc_face_ylo, bc_face_yhi, x_bc_type, y_bc_type, z_bc_type
 
     Namelist /INFLOW/ inflow_type, inflow_Uconst, inflow_profile_file, inflow_temperature_file, &
                        sem_profile_format, sem_Lscale_ratio_y, sem_Lscale_ratio_z, &
@@ -226,11 +227,33 @@ Contains
        dPdx_ref = dPdx
        dPdz_t   = dPdz
 
+       ! Rotation axis (streamwise, x) passes through the domain centerline
+       y0_rot = 0.5d0 * Ly_i
+       z0_rot = 0.5d0 * Lz_i
+
        If ( flow_forcing_mode == 1 .And. T_wave_x > 0d0 ) Then
           Stop 'ERROR: flow_forcing_mode=1 (constant mass flux) is incompatible with oscillatory forcing (T_wave_x)'
        End If
        If ( flow_forcing_mode == 1 .And. x_bc_type /= 0 ) Then
           Stop 'ERROR: flow_forcing_mode=1 (constant mass flux) requires periodic streamwise BC (x_bc_type=0)'
+       End If
+       ! 4-wall duct: the coupled 2D (y,z) pressure solve (solve_poisson_equation) needs the full
+       ! z-extent locally available within the y-pencil for every rank, which only holds when z is
+       ! not MPI-split -- i.e. p_col==1 (x-only decomposition, via p_row). Auto mode (p_row=p_col=0)
+       ! handles this itself (decomp_auto_factorize forces p_col=1 for this BC combination); an
+       ! explicit p_col/=1 request is rejected here rather than silently doing the wrong thing.
+       If ( alpha_grid_z > 0d0 .And. z_bc_type == 0 ) Then
+          Stop 'ERROR: alpha_grid_z>0 (spanwise grid stretching) requires z_bc_type=1 -- periodic z ' // &
+               '(z_bc_type=0) is FFT-based and needs uniform spacing'
+       End If
+       If ( z_bc_type == 1 .And. flat_wall_model_flag == 2 ) Then
+          Stop 'ERROR: flat_wall_model_flag=2 (rough EQWM) is not yet supported for z walls (z_bc_type=1) ' // &
+               '-- use flat_wall_model_flag=0 (DNS no-slip) or 1 (smooth Reichardt EQWM) with a spanwise wall'
+       End If
+       If ( y_bc_type == 1 .And. z_bc_type == 1 .And. p_col > 1 ) Then
+          Stop 'ERROR: y_bc_type=1 and z_bc_type=1 (4-wall duct) requires p_col=1 (decompose only in ' // &
+               'x, via p_row) -- the 2D (y,z) pressure solve needs the full z-extent local to every ' // &
+               'rank; leave p_row/p_col=0 for auto, or set p_col=1 explicitly'
        End If
 
        Write(*,'(A)') ' Input parameters read from namelist file.'
@@ -246,6 +269,10 @@ Contains
        End If
        Write(*,'(A,E12.4)')  '   dPdx                        = ', dPdx
        Write(*,'(A,E12.4)')  '   dPdz                        = ', dPdz
+       If ( rotation_active >= 1 ) Then
+          Write(*,'(A,E12.4)') '   Omega_x (streamwise rotation) = ', Omega_x
+          Write(*,'(A,2E12.4)') '   rotation axis (y0_rot,z0_rot) = ', y0_rot, z0_rot
+       End If
        If ( T_wave_x > 0d0 ) Then
           Write(*,'(A,E12.4)') '   Ub_x                        = ', Ub_x
           Write(*,'(A,E12.4)') '   T_wave_x                    = ', T_wave_x
@@ -279,6 +306,10 @@ Contains
        Write(*,'(A,2I3)')    '   BC y-walls (ylo/yhi)        = ', bc_face_ylo, bc_face_yhi
        Write(*,'(A,I2)')     '   x_bc_type (0=periodic,1=inflow/outflow) = ', x_bc_type
        Write(*,'(A,I2)')     '   y_bc_type (0=periodic,1=wall)           = ', y_bc_type
+       Write(*,'(A,I2)')     '   z_bc_type (0=periodic,1=wall DNS no-slip) = ', z_bc_type
+       If ( z_bc_type == 1 .And. alpha_grid_z > 0d0 ) Then
+          Write(*,'(A,E12.4)') '   alpha_grid_z (spanwise stretching)      = ', alpha_grid_z
+       End If
        If ( x_bc_type == 1 ) Then
           If ( inflow_type == 0 ) Then
              Write(*,'(A,E12.4)') '   inflow_type=0 (uniform), inflow_Uconst = ', inflow_Uconst
@@ -390,6 +421,7 @@ Contains
     Call Mpi_bcast ( Lz_i,                 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( alphaGrid,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( alpha_grid_z,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( grid_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( Utarget,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
@@ -423,6 +455,11 @@ Contains
     Call Mpi_bcast ( flow_forcing_mode,    1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( Ub_target,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
+    Call Mpi_bcast ( rotation_active,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( Omega_x,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( y0_rot,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( z0_rot,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+
     Call Mpi_bcast ( nstep_init,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( t_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nsteps,               1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -446,6 +483,7 @@ Contains
     Call Mpi_bcast ( bc_face_yhi,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( x_bc_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( y_bc_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( z_bc_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( inflow_type,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( inflow_Uconst,        1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( inflow_profile_file,  Len(inflow_profile_file), MPI_character, 0, MPI_COMM_WORLD, ierr )

@@ -4,7 +4,7 @@ Module sgs_models
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors
+  Use decomp, Only : z_halo_neighbors, z_periodic_partner
   Use boundary_conditions, Only : apply_periodic_bc_z
 
   Implicit None
@@ -47,6 +47,8 @@ Contains
 
     ! local scalars
     Integer(Int32) :: i, j, k
+    Logical        :: is_first, is_last
+    Integer(Int32) :: partner
     Real   (Int64) :: dx_c, dy_c, dz_c          ! local filter widths (IBM pass only)
     Real   (Int64) :: dx2, dz2                  ! uniform-grid squares
     Real   (Int64) :: inv_dx, inv_dz            ! 1/dx, 1/dz
@@ -249,9 +251,22 @@ Contains
     ! Ring exchange for intermediate ranks (host-only); rank-0/rank-(nprocs-1) wrap handled below.
     Call update_ghost_interior_planes_nut(nu_t_)
 
-    ! Push host state to device before apply_periodic_bc_z, which runs device-resident at nprocs==1 and would otherwise have its z-wrap fill clobbered by a later blanket update device
+    ! Push host state to device before the z-boundary fill below, which runs device-resident
+    ! at nprocs==1 and would otherwise have its result clobbered by a later blanket update device
     !$acc update device(nu_t_)
-    Call apply_periodic_bc_z(nu_t_, 4)
+    If ( z_bc_type == 0 ) Then
+       Call apply_periodic_bc_z(nu_t_, 4)
+    Else
+       ! No-slip/wall-model z walls: zero nu_t at the wall faces (mirrors the y-wall
+       ! zeroing above) instead of periodically wrapping from the opposite domain
+       ! edge -- z is domain-decomposed, so only the rank(s) owning the z=0/z=Lz
+       ! physical boundary act (as in apply_Dirichlet_bc_z/apply_Robin_bc_z).
+       Call z_periodic_partner(is_first, is_last, partner)
+       !$acc kernels present(nu_t_)
+       If ( is_first ) nu_t_(:,:,1)   = 0d0
+       If ( is_last  ) nu_t_(:,:,nzg) = 0d0
+       !$acc end kernels
+    End If
     ! Sync back to host for output_data's snapshot write and compute_wall_model's host-only bits
     !$acc update host(nu_t_)
 

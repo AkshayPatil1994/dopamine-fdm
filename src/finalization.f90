@@ -20,8 +20,10 @@ Contains
     Real(Int64) :: total_wall_time
 
     ! finalize FFTW
-    Call dfftw_destroy_plan(plan_fz_fwd)
-    Call dfftw_destroy_plan(plan_fz_inv)
+    If ( z_bc_type == 0 ) Then
+       Call dfftw_destroy_plan(plan_fz_fwd)
+       Call dfftw_destroy_plan(plan_fz_inv)
+    End If
     If ( x_bc_type == 0 ) Then
        Call dfftw_destroy_plan(plan_fx_fwd)
        Call dfftw_destroy_plan(plan_fx_inv)

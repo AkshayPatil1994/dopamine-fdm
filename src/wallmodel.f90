@@ -209,29 +209,41 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(InOut) :: W_
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: nu_t_
 
-    If ( y_bc_type == 0 ) Return   ! no wall model meaning for periodic y
+    If ( y_bc_type == 0 .And. z_bc_type == 0 ) Return   ! no wall model meaning without a wall in either direction
 
-    If ( flat_wall_model_flag == 1 .Or. flat_wall_model_flag == 2 ) Then
-       ! Flat-wall log-law EQWM (smooth Reichardt or rough z0): compute alpha from local u_tau
-       Call compute_flat_wall_eqwm(U_, W_)
-    Else
-       ! Constant Robin alpha (no-slip or free-slip depending on bc_face_y*)
-       Call compute_constant_alpha
+    If ( y_bc_type == 1 ) Then
+       If ( flat_wall_model_flag == 1 .Or. flat_wall_model_flag == 2 ) Then
+          ! Flat-wall log-law EQWM (smooth Reichardt or rough z0): compute alpha from local u_tau
+          Call compute_flat_wall_eqwm(U_, W_)
+       Else
+          ! Constant Robin alpha (no-slip or free-slip depending on bc_face_y*)
+          Call compute_constant_alpha
+       End If
+       ! alpha_y = 0 enforced inside compute_constant_alpha and compute_flat_wall_eqwm
+
+       ! Rough-wall thermal coupling (neutral EQWM): only meaningful alongside the rough
+       ! momentum EQWM, and only guarded here since Tscal is unallocated when Boussinesq is off
+       If ( boussinesq_flag >= 1 .And. flat_wall_model_flag == 2 .And. &
+            ( T_bc_bot == 2 .Or. T_bc_top == 2 ) ) Then
+          Call compute_flat_wall_thermal_eqwm(U_, W_, Tscal)
+       End If
+
+       ! compute_pseudo_pressure_bc_for_robin_bc is host-only and reads alpha_y just written on-device
+       !$acc update host(alpha_y)
+
+       ! Compute boundary conditions for pseudo-pressure (flat walls)
+       Call compute_pseudo_pressure_bc_for_robin_bc
     End If
-    ! alpha_y = 0 enforced inside compute_constant_alpha and compute_flat_wall_eqwm
 
-    ! Rough-wall thermal coupling (neutral EQWM): only meaningful alongside the rough
-    ! momentum EQWM, and only guarded here since Tscal is unallocated when Boussinesq is off
-    If ( boussinesq_flag >= 1 .And. flat_wall_model_flag == 2 .And. &
-         ( T_bc_bot == 2 .Or. T_bc_top == 2 ) ) Then
-       Call compute_flat_wall_thermal_eqwm(U_, W_, Tscal)
+    ! Spanwise (z) wall: smooth Reichardt EQWM only (flat_wall_model_flag==2 rough is
+    ! rejected together with z_bc_type==1 at input-read time). No pressure-BC mutation
+    ! needed here -- the wall-normal (W) Robin coefficient is always exactly 0, so Dzz's
+    ! Neumann-pressure boundary rows (built once in initialization.f90) already apply
+    ! unchanged, exactly mirroring why alpha_y==0 makes compute_pseudo_pressure_bc_for_robin_bc
+    ! a no-op for the y wall today.
+    If ( z_bc_type == 1 .And. flat_wall_model_flag == 1 ) Then
+       Call compute_flat_wall_eqwm_z(U_, V_)
     End If
-
-    ! compute_pseudo_pressure_bc_for_robin_bc is host-only and reads alpha_y just written on-device
-    !$acc update host(alpha_y)
-
-    ! Compute boundary conditions for pseudo-pressure (flat walls)
-    Call compute_pseudo_pressure_bc_for_robin_bc
 
     ! IBM surface wall model (ghost-cell EQWM)
     If ( ibm_input_mode >= 1 .And. ibm_wall_model_flag == 1 ) Then
@@ -570,6 +582,104 @@ Contains
     !$acc end kernels
 
   End Subroutine compute_flat_wall_eqwm
+
+  !> Spanwise (z) flat-wall EQWM: smooth Reichardt log law only (flat_wall_model_flag==2
+  !  rough is rejected together with z_bc_type==1 at input-read time). U and V are the
+  !  two components tangential to a z wall; W (wall-normal) stays exact no-penetration.
+  !  z is domain-decomposed (unlike y), so only the rank(s) owning the z=0/z=Lz physical
+  !  boundary compute real values here -- mirrors apply_Dirichlet_bc_z/apply_Robin_bc_z.
+  Subroutine compute_flat_wall_eqwm_z(U_, V_)
+
+    Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
+    Real(Int64), Dimension(nxg, ny,  nzg), Intent(In) :: V_
+
+    Integer(Int32) :: i, j
+    Real   (Int64) :: u_ref, v_ref, u_tau
+    Real   (Int64) :: z_ref_lo, z_ref_hi, Delta_zg_lo, Delta_zg_hi
+    Real   (Int64) :: alpha_lo, alpha_hi
+    Real   (Int64) :: V_at_pt, U_at_pt
+    Logical        :: is_first, is_last
+    Integer(Int32) :: partner
+
+    Call z_periodic_partner(is_first, is_last, partner)
+
+    z_ref_lo    = Max(zg(2), 1d-14)
+    Delta_zg_lo = zg(2) - zg(1)
+    z_ref_hi    = Max(Lz - zg(nzg-1), 1d-14)
+    Delta_zg_hi = zg(nzg) - zg(nzg-1)
+
+    !  alpha_z_u: Robin slip-length for U (x-faces, y-centres, at z walls)
+    If ( is_first ) Then
+       !$acc parallel loop collapse(2) present(U_,V_,alpha_z_u)
+       Do j = 2, nyg-1
+          Do i = 2, nx-1
+             V_at_pt  = 0.25d0*(V_(i,j-1,2) + V_(i,j,2) + V_(i+1,j-1,2) + V_(i+1,j,2))
+             u_ref    = Sqrt(U_(i,j,2)**2 + V_at_pt**2)
+             Call solve_u_tau_reichardt(u_ref, z_ref_lo, u_tau)
+             alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) - Delta_zg_lo*0.5d0
+             alpha_z_u(i,j,1) = Max(alpha_lo, 0d0)
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+    If ( is_last ) Then
+       !$acc parallel loop collapse(2) present(U_,V_,alpha_z_u)
+       Do j = 2, nyg-1
+          Do i = 2, nx-1
+             V_at_pt  = 0.25d0*(V_(i,j-1,nzg-1) + V_(i,j,nzg-1) + V_(i+1,j-1,nzg-1) + V_(i+1,j,nzg-1))
+             u_ref    = Sqrt(U_(i,j,nzg-1)**2 + V_at_pt**2)
+             Call solve_u_tau_reichardt(u_ref, z_ref_hi, u_tau)
+             alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) - Delta_zg_hi*0.5d0
+             alpha_z_u(i,j,2) = Max(alpha_hi, 0d0)
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+
+    ! Fill x/y halo planes (nearest-interior copy; sufficient for the Robin BC's read pattern)
+    !$acc kernels present(alpha_z_u)
+    alpha_z_u(  1,:,:) = alpha_z_u(   2,:,:)
+    alpha_z_u( nx,:,:) = alpha_z_u( nx-1,:,:)
+    alpha_z_u(:,  1,:) = alpha_z_u(:,   2,:)
+    alpha_z_u(:,nyg,:) = alpha_z_u(:,nyg-1,:)
+    !$acc end kernels
+
+    !  alpha_z_v: Robin slip-length for V (x-centres, y-faces, at z walls)
+    If ( is_first ) Then
+       !$acc parallel loop collapse(2) present(U_,V_,alpha_z_v)
+       Do j = 2, ny-1
+          Do i = 2, nxg-1
+             U_at_pt  = 0.25d0*(U_(i-1,j,2) + U_(i,j,2) + U_(i-1,j+1,2) + U_(i,j+1,2))
+             v_ref    = Sqrt(V_(i,j,2)**2 + U_at_pt**2)
+             Call solve_u_tau_reichardt(v_ref, z_ref_lo, u_tau)
+             alpha_lo = nu * v_ref / Max(u_tau**2, 1d-20) - Delta_zg_lo*0.5d0
+             alpha_z_v(i,j,1) = Max(alpha_lo, 0d0)
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+    If ( is_last ) Then
+       !$acc parallel loop collapse(2) present(U_,V_,alpha_z_v)
+       Do j = 2, ny-1
+          Do i = 2, nxg-1
+             U_at_pt  = 0.25d0*(U_(i-1,j,nzg-1) + U_(i,j,nzg-1) + U_(i-1,j+1,nzg-1) + U_(i,j+1,nzg-1))
+             v_ref    = Sqrt(V_(i,j,nzg-1)**2 + U_at_pt**2)
+             Call solve_u_tau_reichardt(v_ref, z_ref_hi, u_tau)
+             alpha_hi = nu * v_ref / Max(u_tau**2, 1d-20) - Delta_zg_hi*0.5d0
+             alpha_z_v(i,j,2) = Max(alpha_hi, 0d0)
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+
+    !$acc kernels present(alpha_z_v)
+    alpha_z_v(  1,:,:) = alpha_z_v(    2,:,:)
+    alpha_z_v(nxg,:,:) = alpha_z_v(nxg-1,:,:)
+    alpha_z_v(:,  1,:) = alpha_z_v(:,   2,:)
+    alpha_z_v(:, ny,:) = alpha_z_v(:, ny-1,:)
+    !$acc end kernels
+
+  End Subroutine compute_flat_wall_eqwm_z
 
   !> Flat-wall rough-EQWM thermal coupling (neutral limit: psi_h=0).
   !  Computes the Robin slip-length alpha_T for Tscal's y-ghost cells from the

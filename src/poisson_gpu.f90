@@ -4,7 +4,8 @@ Module poisson_gpu
   Use iso_fortran_env, Only : Int32, Int64
   Use cufft
   Use cusparse
-  Use global, Only : nxp_global, nzp_global, mx, mz, nyg, rhs_p, rhs_p_hat, Dyy, kxx, kyy, kzz, x_bc_type, y_bc_type, pi
+  Use global, Only : nxp_global, nzp_global, mx, mz, nyg, rhs_p, rhs_p_hat, Dyy, kxx, kyy, kzz, x_bc_type, y_bc_type, pi, &
+                     z_bc_type, nzm_global, Qz, sqrt_w_z, lambda_z
 
   Implicit None
 
@@ -29,12 +30,21 @@ Module poisson_gpu
   Complex(Int64), Allocatable :: gtsv_dl(:), gtsv_d(:), gtsv_du(:), gtsv_x(:)
   Character(1), Allocatable :: gtsv_buf(:)
 
+  ! 4-wall duct (z_bc_type==1 .And. y_bc_type==1) state: x FFT (x_bc_type==0 only, so
+  ! far) + device-resident z-eigenbasis (Qz/sqrt_w_z/lambda_z, built once on the host
+  ! at init from Dzz -- see initialization.f90) applied per x-mode, then a batched
+  ! y-tridiagonal cuSPARSE solve per (x-mode, z-eigenmode) pair -- mirrors
+  ! gpu_solve_tridiagonal_batched but with lambda_z(m) standing in for kzz(k)
+  Integer :: plan_duct_x_fwd, plan_duct_x_bwd
+  Complex(Int64), Allocatable :: duct_c(:,:,:)   ! (nx1, nyg-2, nzm_global): x-mode, y, z (physical, then eigenmode)
+  Real(Int64), Allocatable :: Qz_gpu(:,:), sqrt_w_z_gpu(:), lambda_z_gpu(:)
+
 Contains
 
   !> Create the batched cuFFT plans once, on first use; branches on x_bc_type
   Subroutine gpu_poisson_init
 
-    Integer :: ierr, nx1, nz1
+    Integer :: ierr, nx1, nz1, ny_i
 
     nx1    = Int(nxp_global)
     nz1    = Int(nzp_global)
@@ -47,7 +57,34 @@ Contains
     !$acc enter data create(kxx,kzz)
     !$acc update device(kxx,kzz)
 
-    If ( y_bc_type == 0 ) Then
+    If ( z_bc_type == 1 ) Then
+
+       ! Case (a), 4-wall duct only; case (b) (z wall alone, y periodic) is not yet
+       ! GPU-ported -- guarded at init time already (initialization.f90), Stop here
+       ! too as a defensive check against this module being reached any other way
+       If ( y_bc_type /= 1 .Or. x_bc_type /= 0 ) &
+            Stop 'ERROR: GPU_POISSON z_bc_type=1 only implemented for y_bc_type=1, x_bc_type=0 (4-wall duct, periodic x)'
+
+       ny_i = nyg - 2
+       nz1  = Int(nzm_global)
+
+       Allocate( duct_c(nx1, ny_i, nz1) )
+       !$acc enter data create(duct_c)
+
+       ierr =         cufftPlanMany( plan_duct_x_fwd, 1, [nx1], [nx1], 1, nx1, [nx1], 1, nx1, CUFFT_Z2Z, ny_i*nz1 )
+       ierr = ierr + cufftPlanMany( plan_duct_x_bwd, 1, [nx1], [nx1], 1, nx1, [nx1], 1, nx1, CUFFT_Z2Z, ny_i*nz1 )
+       If ( ierr /= 0 ) Stop 'ERROR: cuFFT duct x-transform plan creation failed'
+
+       ! Qz/sqrt_w_z/lambda_z are built once on the host in initialization.f90 (tiny
+       ! LAPACK dstev call, nzm_global x nzm_global) -- just upload them here
+       Allocate( Qz_gpu(nzm_global,nzm_global), sqrt_w_z_gpu(nzm_global), lambda_z_gpu(nzm_global) )
+       Qz_gpu       = Qz
+       sqrt_w_z_gpu = sqrt_w_z
+       lambda_z_gpu = lambda_z
+       !$acc enter data create(Qz_gpu,sqrt_w_z_gpu,lambda_z_gpu)
+       !$acc update device(Qz_gpu,sqrt_w_z_gpu,lambda_z_gpu)
+
+    Else If ( y_bc_type == 0 ) Then
 
        If ( x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
 
@@ -483,5 +520,165 @@ Contains
     !$acc end data
 
   End Subroutine gpu_solve_tridiagonal_batched
+
+  !> Forward x-FFT (x_bc_type==0 only) then z-eigenmode transform of every interior point of rhs_p into rhs_p_hat, batched; z_bc_type==1 .And. y_bc_type==1 (4-wall duct) only. Fully device-resident.
+  Subroutine gpu_forward_transform_duct
+
+    Integer :: ix, jy, iz, i, m, k, ierr, nx1, ny_i, nz1
+    Complex(Int64) :: acc
+
+    If ( .Not. plans_created ) Call gpu_poisson_init
+
+    nx1  = Int(nxp_global)
+    ny_i = nyg - 2
+    nz1  = Int(nzm_global)
+
+    !$acc parallel loop collapse(3) present(rhs_p,duct_c)
+    Do iz = 1, nz1
+       Do jy = 1, ny_i
+          Do ix = 1, nx1
+             duct_c(ix,jy,iz) = dcmplx( rhs_p(ix+1,jy+1,iz+1) )
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !$acc host_data use_device(duct_c)
+    ierr = cufftExecZ2Z( plan_duct_x_fwd, duct_c, duct_c, CUFFT_FORWARD )
+    !$acc end host_data
+    If ( ierr /= 0 ) Stop 'ERROR: cuFFT duct x-forward exec failed'
+
+    ! z-eigenmode transform per x-mode (mirrors the CPU path's Matmul(z_hat,Qz) in
+    ! projection.f90, scaled first by sqrt_w_z to recover Dzz's own eigenbasis from
+    ! Qz's orthonormal one -- see global.f90's lambda_z/Qz/sqrt_w_z comment)
+    !$acc parallel loop collapse(3) private(acc) present(duct_c,Qz_gpu,sqrt_w_z_gpu,rhs_p_hat)
+    Do i = 0, Int(mx,Int32)
+       Do jy = 1, ny_i
+          Do m = 0, nz1-1
+             acc = (0d0,0d0)
+             Do k = 1, nz1
+                acc = acc + duct_c(i+1,jy,k) * sqrt_w_z_gpu(k) * Qz_gpu(k,m+1)
+             End Do
+             rhs_p_hat(jy+1, i, m) = acc
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+  End Subroutine gpu_forward_transform_duct
+
+  !> Inverse of gpu_forward_transform_duct: inverse z-eigenmode transform then inverse x-FFT, normalised by nxp_global; z_bc_type==1 .And. y_bc_type==1 only
+  Subroutine gpu_inverse_transform_duct
+
+    Integer :: ix, jy, iz, i, m, k, ierr, nx1, ny_i, nz1
+    Real(Int64) :: norm
+    Complex(Int64) :: acc
+
+    nx1  = Int(nxp_global)
+    ny_i = nyg - 2
+    nz1  = Int(nzm_global)
+    norm = Real(nx1,Int64)
+
+    ! inverse z-eigenmode transform (Qz orthonormal -> inverse == transpose), then
+    ! unscale by sqrt_w_z to recover Dzz's own eigenbasis
+    !$acc parallel loop collapse(3) private(acc) present(duct_c,Qz_gpu,sqrt_w_z_gpu,rhs_p_hat)
+    Do i = 0, Int(mx,Int32)
+       Do jy = 1, ny_i
+          Do k = 1, nz1
+             acc = (0d0,0d0)
+             Do m = 0, nz1-1
+                acc = acc + rhs_p_hat(jy+1,i,m) * Qz_gpu(k,m+1)
+             End Do
+             duct_c(i+1,jy,k) = acc / sqrt_w_z_gpu(k)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !$acc host_data use_device(duct_c)
+    ierr = cufftExecZ2Z( plan_duct_x_bwd, duct_c, duct_c, CUFFT_INVERSE )
+    !$acc end host_data
+    If ( ierr /= 0 ) Stop 'ERROR: cuFFT duct x-inverse exec failed'
+
+    !$acc parallel loop collapse(3) present(duct_c,rhs_p)
+    Do iz = 1, nz1
+       Do jy = 1, ny_i
+          Do ix = 1, nx1
+             rhs_p(ix+1,jy+1,iz+1) = Real(duct_c(ix,jy,iz),Int64) / norm
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+  End Subroutine gpu_inverse_transform_duct
+
+  !> Pack rhs_p_hat (already forward z-eigenmode-transformed by gpu_forward_transform_duct), batch-solve one y-tridiagonal system per (x-mode, z-eigenmode) pair via cuSPARSE, unpack back; z_bc_type==1 .And. y_bc_type==1 (4-wall duct) only -- lambda_z(m) stands in for kzz(k) in gpu_solve_tridiagonal_batched
+  Subroutine gpu_solve_duct_tridiagonal_batched
+
+    Integer :: imode, m, b, ii, j, idx, ierr, mx_i, null_m
+
+    If ( .Not. gtsv_created ) Call gpu_gtsv_init
+
+    mx_i = Int(mx,Int32)
+
+    ! null_m: 0-based index of the z-eigenmode nearest zero (Dzz's null mode, always
+    ! the LAST/ascending-largest eigenvalue of lambda_z -- see initialization.f90);
+    ! found on the host once per call, cheap (nzm_global small)
+    null_m = Maxloc( lambda_z, dim=1 ) - 1
+
+    !$acc data present(Dyy,kxx,lambda_z_gpu,rhs_p_hat,gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
+
+    !$acc parallel loop collapse(2) present(Dyy,kxx,lambda_z_gpu,rhs_p_hat,gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
+    Do m = 0, nzm_global-1
+       Do imode = 0, mx_i
+          b = m*(mx_i+1) + imode
+          Do ii = 0, gtsv_m-1
+             j   = ii + 2
+             idx = ii*gtsv_batch + b + 1
+             gtsv_d(idx) = Dyy(j,j) + kxx(imode) + lambda_z_gpu(m+1)
+             If ( ii > 0 ) Then
+                gtsv_dl(idx) = Dyy(j,j-1)
+             Else
+                gtsv_dl(idx) = (0d0,0d0)
+             End If
+             If ( ii < gtsv_m-1 ) Then
+                gtsv_du(idx) = Dyy(j,j+1)
+             Else
+                gtsv_du(idx) = (0d0,0d0)
+             End If
+             gtsv_x(idx) = rhs_p_hat(j,imode,m)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    ! Remove singularity of the 00 mode (x_bc_type==0's zero x-wavenumber paired with
+    ! z's null eigenmode); ii=0,imode=0,m=null_m -> idx=null_m*(mx_i+1)+1
+    !$acc kernels present(gtsv_d)
+    If ( x_bc_type == 0 ) gtsv_d( null_m*(mx_i+1) + 1 ) = 3d0/2d0*gtsv_d( null_m*(mx_i+1) + 1 )
+    !$acc end kernels
+
+    !$acc host_data use_device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
+    ierr = cusparseZgtsvInterleavedBatch( cusparse_h, CUSPARSE_ALG1, gtsv_m, &
+                 gtsv_dl, gtsv_d, gtsv_du, gtsv_x, gtsv_batch, gtsv_buf )
+    !$acc end host_data
+    If ( ierr /= 0 ) Stop 'ERROR: cusparseZgtsvInterleavedBatch (duct) failed'
+
+    !$acc parallel loop collapse(2) present(rhs_p_hat,gtsv_x)
+    Do m = 0, nzm_global-1
+       Do imode = 0, mx_i
+          b = m*(mx_i+1) + imode
+          Do ii = 0, gtsv_m-1
+             j   = ii + 2
+             idx = ii*gtsv_batch + b + 1
+             rhs_p_hat(j,imode,m) = gtsv_x(idx)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !$acc end data
+
+  End Subroutine gpu_solve_duct_tridiagonal_batched
 
 End Module poisson_gpu

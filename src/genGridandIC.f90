@@ -27,10 +27,21 @@ Contains
 			x_global(i) = Lx_i * Real(i-1,8) / Real(nx_global-1,8)
 		End Do
 
-		! ---- z grid: uniform face locations --------------------------
-		Do i = 1, nz_global
-			z_global(i) = Lz_i * Real(i-1,8) / Real(nz_global-1,8)
-		End Do
+		! ---- z grid: uniform face locations, or symmetric tanh stretching (z_bc_type==1
+		! only -- periodic z is FFT-based and needs uniform spacing) via alpha_grid_z>0,
+		! mirroring y's grid_type=2 (fine at both walls, coarse at centre) ----
+		If ( z_bc_type == 1 .And. alpha_grid_z > 0d0 ) Then
+			Do i = 1, nz_global
+				eta = Real(i-1,8) / Real(nz_global-1,8)
+				z_global(i) = Lz_i * 0.5d0 * &
+					( 1d0 + dtanh(alpha_grid_z*(eta - 0.5d0)) &
+					       / dtanh(0.5d0*alpha_grid_z) )
+			End Do
+		Else
+			Do i = 1, nz_global
+				z_global(i) = Lz_i * Real(i-1,8) / Real(nz_global-1,8)
+			End Do
+		End If
 
 		! ---- y grid: V-face locations (tanh stretching; options 5-7 add a
 		!  uniform roughness sublayer [0,ks] before the stretched region) ----

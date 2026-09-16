@@ -2,7 +2,7 @@
 Module decomp
 
   Use iso_fortran_env, Only : Int32, Int64
-  Use global,   Only : nx_global, ny_global, nz_global, p_row, p_col, x_bc_type
+  Use global,   Only : nx_global, ny_global, nz_global, p_row, p_col, x_bc_type, y_bc_type, z_bc_type
   Use mpi,      Only : nprocs, myid, ierr, MPI_PROC_NULL, MPI_COMM_WORLD, k1_global, k2_global, kg1_global, kg2_global, &
                         i1_global, i2_global, ig1_global, ig2_global
   Use decomp_2d, Only : decomp_2d_init, decomp_2d_finalize, decomp_info, decomp_info_init, &
@@ -43,6 +43,14 @@ Contains
     Integer(Int32) :: nxm_g, nzm_g, row_cap, col_cap, trial_row, trial_col, best_row, best_col
     Real   (Int64) :: target_ratio, score, best_score
     Logical        :: found
+
+    ! 4-wall duct: the 2D (y,z) pressure solve needs z fully local to every rank (p_col==1),
+    ! so decompose only in x regardless of the usual z-split preference below
+    If ( y_bc_type == 1 .And. z_bc_type == 1 ) Then
+       p_row_out = nprocs
+       p_col_out = 1
+       Return
+    End If
 
     nxm_g = nx_global - 1
     nzm_g = nz_global - 1
@@ -127,15 +135,19 @@ Contains
 
     Allocate ( xst(0:p_row-1), xen(0:p_row-1) )
     Allocate ( zst(0:p_col-1), zen(0:p_col-1) )
-    ! Distribute decomp_poisson's own (periodic-reduced) point count, not nx_global-1/nz_global-1, so the two independent "remainder on last ranks" splits can't disagree on a middle rank and silently truncate its rhs_p write-back; z is always periodic, x only for x_bc_type==0 (DCT-IV keeps the full count); the dropped point is restored on the true last rank/column below
+    ! Distribute decomp_poisson's own (periodic-reduced) point count, not nx_global-1/nz_global-1, so the two independent "remainder on last ranks" splits can't disagree on a middle rank and silently truncate its rhs_p write-back; periodic (x_bc_type==0 / z_bc_type==0) drops the redundant duplicate point, non-periodic (inflow/outflow / wall) keeps the full count; the dropped point is restored on the true last rank/column below
     If ( x_bc_type == 0 ) Then
        Call distribute_1d( nx_global-2, p_row, xst, xen )
        xen(p_row-1) = xen(p_row-1) + 1
     Else
        Call distribute_1d( nx_global-1, p_row, xst, xen )
     End If
-    Call distribute_1d( nz_global-2, p_col, zst, zen )
-    zen(p_col-1) = zen(p_col-1) + 1
+    If ( z_bc_type == 0 ) Then
+       Call distribute_1d( nz_global-2, p_col, zst, zen )
+       zen(p_col-1) = zen(p_col-1) + 1
+    Else
+       Call distribute_1d( nz_global-1, p_col, zst, zen )
+    End If
 
     Allocate (  i1_global(0:nprocs-1),  i2_global(0:nprocs-1) )
     Allocate ( ig1_global(0:nprocs-1), ig2_global(0:nprocs-1) )

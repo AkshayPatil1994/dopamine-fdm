@@ -179,6 +179,12 @@ Module global
   ! wall-normal (y) pressure/velocity BC selector: 0=periodic, 1=wall (uses bc_face_ylo/yhi as today)
   Integer(Int32) :: y_bc_type  = 1
 
+  ! spanwise (z) pressure/velocity BC selector: 0=periodic (default), 1=wall (DNS no-slip only --
+  ! no wall model yet). y_bc_type==1 .And. z_bc_type==1 simultaneously is not supported: that needs
+  ! a coupled 2D (y-z) elliptic pressure solve, not the independent 1D tridiagonal solves this
+  ! selector adds (validated at input read time, see read_input_parameters).
+  Integer(Int32) :: z_bc_type  = 0
+
   ! &INFLOW streamwise inflow condition (x_bc_type==1 only): inflow_type 0=constant, 1=SEM, 2=recycled precursor slice
   Integer(Int32) :: inflow_type        = 0
   Real   (Int64) :: inflow_Uconst      = 0d0
@@ -231,6 +237,30 @@ Module global
   Integer (Int32), Dimension(:),   Allocatable :: pivot  
   Complex (Int64), Dimension(:),   Allocatable :: D, DL, DU
   Complex (Int64), Dimension(:,:), Allocatable :: Dyy
+  Complex (Int64), Dimension(:,:), Allocatable :: Dzz   ! spanwise (z) wall pressure operator (z_bc_type==1 only), global extent -- see Dyy
+
+  ! 4-wall duct (y_bc_type==1 .And. z_bc_type==1 only): eigendecomposition of the z-wall operator's
+  ! interior tridiagonal part, used to decouple z from the coupled 2D (y,z) pressure Poisson
+  ! problem into nzm_global independent 1D y-tridiagonal solves, one per z-eigenmode, each
+  ! reusing the same Zgtsv-in-y machinery as the y_bc_type==1/z periodic case (just adding
+  ! lambda_z(m) to the diagonal instead of kzz). See solve_poisson_equation.
+  !
+  ! Dzz itself is symmetric only for a UNIFORM z grid; a stretched z (alpha_grid_z>0) makes it
+  ! non-symmetric, so we diagonalise the similarity-transformed S = W^(1/2) Dzz W^(-1/2) instead
+  ! (W = diag(cell widths) -- a standard finite-volume trick: W*Dzz is exactly symmetric by
+  ! construction, so S is too), which shares Dzz's eigenvalues and has orthonormal eigenvectors
+  ! Qz. Dzz's own (non-orthogonal in general) eigenvectors are V = W^(-1/2)*Qz, so the forward/
+  ! inverse transforms in solve_poisson_equation pre/post-multiply by sqrt_w_z = sqrt(diag(W)).
+  ! Reduces exactly to the plain uniform-grid case when sqrt_w_z is constant (cancels out).
+  Real (Int64), Dimension(:),   Allocatable :: lambda_z    ! eigenvalues, ascending, length nzm_global
+  Real (Int64), Dimension(:,:), Allocatable :: Qz          ! orthonormal eigenvectors of S, nzm_global x nzm_global
+  Real (Int64), Dimension(:),   Allocatable :: sqrt_w_z    ! sqrt(cell width), length nzm_global
+  ! Complex copies of Qz/sqrt_w_z (Zgtsv/Matmul in solve_poisson_equation both work in Complex),
+  ! and the z_hat scratch buffer -- all built once at init instead of every solve_poisson_equation
+  ! call (was Allocate/Deallocate + Dcmplx conversion on every RK substage, i.e. 3x per step)
+  Complex (Int64), Dimension(:,:), Allocatable :: Qz_c
+  Complex (Int64), Dimension(:),   Allocatable :: sqrt_w_z_c
+  Complex (Int64), Dimension(:,:), Allocatable :: z_hat_duct
 
   ! pressure gradients
   Real(Int64) :: dPdx, dPdy, dPdz, dPdx_ref, dPdx0
@@ -243,6 +273,13 @@ Module global
   Integer(Int32) :: flow_forcing_mode
   Real(Int64) :: Ub_target
   Real(Int64) :: dPdx_cmfr   ! diagnostic-only equivalent forcing under CMFR; never fed back into compute_rhs_u
+
+  ! Rigid-body rotation about the streamwise (x) axis: rotation_active 0=off,1=on.
+  ! Adds Coriolis + centrifugal forcing about the duct centerline (y0_rot,z0_rot),
+  ! set to the domain centerline (Ly/2,Lz/2) once Ly_i/Lz_i are known.
+  Integer(Int32) :: rotation_active = 0
+  Real(Int64) :: Omega_x = 0d0
+  Real(Int64) :: y0_rot, z0_rot
 
   ! interpolation weights 
   Integer(Int32) :: in1, in2
@@ -287,6 +324,12 @@ Module global
   ! wall-model Robin BC coefficient arrays
   Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_x, alpha_y, alpha_z
 
+  ! spanwise (z) wall-model Robin BC coefficients (z_bc_type==1, flat_wall_model_flag==1 only --
+  ! smooth Reichardt EQWM; rough (flag==2) is not yet supported for z walls). U,V are tangential
+  ! to a z wall (Robin); W is the wall-normal component and stays exactly no-penetration, so
+  ! there is no alpha_z_w -- mirrors how alpha_y (V, wall-normal at a y wall) is always 0.
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_z_u, alpha_z_v
+
   ! Thermal Robin-BC coefficient (flat-wall rough EQWM, T_bc_bot/top==2); cell-centred in x,z like alpha_z
   Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_T
 
@@ -300,6 +343,11 @@ Module global
   Real   (Int64) :: Utarget
   Real   (Int64) :: Lx_i, Ly_i, Lz_i
   Real   (Int64) :: alphaGrid
+
+  ! Spanwise (z) grid stretching (z_bc_type==1 only -- periodic z is FFT-based and needs
+  ! uniform spacing): 0 (default) = uniform, matching all existing behaviour; >0 = symmetric
+  ! tanh clustering at both z walls, same formula/parameter convention as grid_type=2's alphaGrid.
+  Real   (Int64) :: alpha_grid_z = 0d0
 
   ! Initial condition type (ic_type 1-6; 6=Taylor-Green Vortex, requires x_bc_type=0 and y_bc_type=0) and noise_percent
   Integer(Int32) :: ic_type      = 1
@@ -356,6 +404,16 @@ Module global
   Real(Int64), Allocatable, Dimension(:) :: ghost_v_dGB   ! (n_ghost_v)
   Real(Int64), Allocatable, Dimension(:) :: ghost_w_dGB   ! (n_ghost_w)
 
+  ! Distance from ghost cell G to image point I along the wall normal:
+  ! Max(2*dGB, n_image_layers*dymin), clamped up from the mirror distance 2*dGB
+  ! when the true dGB is small compared to the local grid spacing (small/thin
+  ! features on a coarse grid) so I reliably lands outside G's own grid cell.
+  ! Ghost reconstruction uses the general two-point form with r = dGB/dGI
+  ! (reduces to the textbook r=0.5 mirror when dGI is not clamped).
+  Real(Int64), Allocatable, Dimension(:) :: ghost_u_dGI   ! (n_ghost_u)
+  Real(Int64), Allocatable, Dimension(:) :: ghost_v_dGI   ! (n_ghost_v)
+  Real(Int64), Allocatable, Dimension(:) :: ghost_w_dGI   ! (n_ghost_w)
+
   ! Physical coordinates of boundary point B = G + dGB * nrm.
   ! Used for pressure interpolation in force Method 2.
   Real(Int64), Allocatable, Dimension(:,:) :: ghost_u_xB  ! (3, n_ghost_u)
@@ -375,6 +433,7 @@ Module global
   Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_idx     ! (3, n_ghost_cc)
   Real   (Int64), Allocatable, Dimension(:,:) :: ghost_cc_nrm     ! (3, n_ghost_cc)
   Real   (Int64), Allocatable, Dimension(:)   :: ghost_cc_dGB     ! (   n_ghost_cc)
+  Real   (Int64), Allocatable, Dimension(:)   :: ghost_cc_dGI     ! (   n_ghost_cc) image distance, see ghost_u_dGI
   Integer(Int32), Allocatable, Dimension(:,:) :: ghost_cc_img_cc  ! (3, n_ghost_cc)
   Real   (Int64), Allocatable, Dimension(:,:) :: ghost_cc_wgt_cc  ! (8, n_ghost_cc)
   Integer(Int32), Allocatable, Dimension(:)   :: ghost_cc_objid   ! (   n_ghost_cc) per-ghost-point solid ID, resolved from ibm_obj_id

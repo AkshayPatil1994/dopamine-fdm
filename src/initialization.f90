@@ -73,6 +73,10 @@ Contains
     If ( nprocs /= 1 ) Stop 'ERROR: GPU_POISSON build only supports nprocs=1 (single-GPU); rebuild without ENABLE_GPU for multi-rank runs'
     If ( x_bc_type /= 0 .And. x_bc_type /= 1 ) Stop 'ERROR: GPU_POISSON build only supports x_bc_type=0 or 1'
     If ( y_bc_type == 0 .And. x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
+    If ( z_bc_type == 1 .And. ( y_bc_type /= 1 .Or. x_bc_type /= 0 ) ) &
+         Stop 'ERROR: GPU_POISSON build only supports z_bc_type=1 (spanwise wall) combined with ' // &
+              'y_bc_type=1 and x_bc_type=0 (4-wall duct, periodic x); other z-wall combinations ' // &
+              '(spanwise wall alone, or duct with inflow/outflow x) need the CPU build'
 #endif
 
     ! time: on restart, t_start (explicit) takes precedence over nstep_init*dt --
@@ -307,8 +311,14 @@ Contains
        Lxp        = Lx
        nxp_global = nxm_global
     End If
-    Lzp = Lz - dz
-    nzp_global = nzm_global - 1
+    ! Length for periodic domain, or full physical extent for a z-wall (no periodic-reduction point dropped)
+    If ( z_bc_type == 0 ) Then
+       Lzp        = Lz - dz
+       nzp_global = nzm_global - 1
+    Else
+       Lzp        = Lz
+       nzp_global = nzm_global
+    End If
 
     ! global indices for fourier modes starting from 0
     mx_global = nxp_global - 1
@@ -337,7 +347,8 @@ Contains
     Allocate ( poisson_y_c ( decomp_poisson%ysz(1), decomp_poisson%ysz(2), decomp_poisson%ysz(3) ) )
     Allocate ( poisson_z_c ( decomp_poisson%zsz(1), decomp_poisson%zsz(2), decomp_poisson%zsz(3) ) )
 
-    ! local (non-MPI) batched complex 1-D FFT in z, dimension 3 (fully local in the z-pencil)
+    ! local (non-MPI) batched complex 1-D FFT in z, dimension 3 (fully local in the z-pencil); periodic z only (z_bc_type==0) -- the wall case (z_bc_type==1) solves z via Zgtsv/Dzz instead, see below
+    If ( z_bc_type == 0 ) Then
     plan_fz_fwd = fftw_plan_many_dft( 1_C_INT, [Int(nzp_global,C_INT)],                          &
              Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT),                             &
              poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
@@ -348,6 +359,7 @@ Contains
              poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
              poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
              FFTW_BACKWARD, FFTW_MEASURE )
+    End If
 
     If ( x_bc_type == 0 ) Then
 
@@ -374,12 +386,14 @@ Contains
           kxx(i) = 2d0*( dcos(2d0*pi*Real(-nxp_global+i,8)/Real(nxp_global,8)) - 1d0 )/dx**2d0
        End do
 
-       Do k = 0, Ceiling( Real(nzp_global)/2d0 )
-          kzz(k) = 2d0*( dcos(2d0*pi*Real(k,8)/Real(nzp_global,8)) - 1d0 )/dz**2d0
-       End do
-       Do k = Ceiling( Real(nzp_global)/2d0 )+1, mz_global
-          kzz(k) = 2d0*( dcos(2d0*pi*Real(-nzp_global+k,8)/Real(nzp_global,8)) - 1d0 )/dz**2d0
-       End do
+       If ( z_bc_type == 0 ) Then
+          Do k = 0, Ceiling( Real(nzp_global)/2d0 )
+             kzz(k) = 2d0*( dcos(2d0*pi*Real(k,8)/Real(nzp_global,8)) - 1d0 )/dz**2d0
+          End do
+          Do k = Ceiling( Real(nzp_global)/2d0 )+1, mz_global
+             kzz(k) = 2d0*( dcos(2d0*pi*Real(-nzp_global+k,8)/Real(nzp_global,8)) - 1d0 )/dz**2d0
+          End do
+       End If
 
     Else
 
@@ -396,12 +410,14 @@ Contains
           kxx(i) = 2d0*( dcos( pi*Real(2*i+1,8)/(2d0*Real(nxp_global,8)) ) - 1d0 )/dx**2d0
        End Do
        kzz = 0d0
-       Do k = 0, Ceiling( Real(nzp_global)/2d0 )
-          kzz(k) = 2d0*( dcos(2d0*pi*Real(k,8)/Real(nzp_global,8)) - 1d0 )/dz**2d0
-       End do
-       Do k = Ceiling( Real(nzp_global)/2d0 )+1, mz_global
-          kzz(k) = 2d0*( dcos(2d0*pi*Real(-nzp_global+k,8)/Real(nzp_global,8)) - 1d0 )/dz**2d0
-       End do
+       If ( z_bc_type == 0 ) Then
+          Do k = 0, Ceiling( Real(nzp_global)/2d0 )
+             kzz(k) = 2d0*( dcos(2d0*pi*Real(k,8)/Real(nzp_global,8)) - 1d0 )/dz**2d0
+          End do
+          Do k = Ceiling( Real(nzp_global)/2d0 )+1, mz_global
+             kzz(k) = 2d0*( dcos(2d0*pi*Real(-nzp_global+k,8)/Real(nzp_global,8)) - 1d0 )/dz**2d0
+          End do
+       End If
 
     End If
 
@@ -442,12 +458,22 @@ Contains
 
     End If
 
-    ! Tridiagonal linear solver
+    ! Tridiagonal linear solver: builds Dyy always (cheap), and Dzz too when the spanwise
+    ! direction is wall-bounded. D/DL/DU are the shared Zgtsv scratch arrays, sized to whichever
+    ! direction the innermost tridiagonal solve in solve_poisson_equation actually runs along:
+    ! z (Zgtsv-in-z, z_bc_type==1 .And. y_bc_type==0) or y (Zgtsv-in-y, every other case,
+    ! including the 4-wall duct's per-z-eigenmode solve -- see the Qz/lambda_z block below).
     If ( myid==0 ) Write(*,*) 'initializing pressure solver...'
     Allocate ( pivot(nyg) )
     Allocate ( Dyy(2:nyg-1,2:nyg-1) )
-    Allocate ( D(2:nyg-1), DL(2:nyg-2), DU(2:nyg-2) )
-     
+    Allocate ( Dzz(2:nzg_global-1,2:nzg_global-1) )
+    Dzz = 0d0
+    If ( z_bc_type == 1 .And. y_bc_type == 0 ) Then
+       Allocate ( D(2:nzg_global-1), DL(2:nzg_global-2), DU(2:nzg_global-2) )
+    Else
+       Allocate ( D(2:nyg-1), DL(2:nyg-2), DU(2:nyg-2) )
+    End If
+
     ! second derivative matrix for pressure (full data in y assumed)
     Dyy = 0d0
     Do j=3,nyg-2
@@ -490,11 +516,102 @@ Contains
     !$acc enter data create(Dyy)
     !$acc update device(Dyy)
 
+    ! Spanwise (z) wall: same second-derivative-matrix construction as Dyy above, but
+    ! using the GLOBAL z_global/zg_global grid (z is domain-decomposed, unlike y, so the
+    ! local zg here would only cover this rank's slice -- the Zgtsv-in-z solve runs in a
+    ! fully-local-in-z pencil during the Poisson solve and needs the true global operator).
+    If ( z_bc_type == 1 ) Then
+
+       Do k=3,nzg_global-2
+
+          a = 1d0/( z_global(k)-z_global(k-1) )/( zg_global(k+1) - zg_global(k) )
+          b = 1d0/( z_global(k)-z_global(k-1) )*( -1d0/( zg_global(k+1) - zg_global(k) ) -1d0/( zg_global(k) - zg_global(k-1) ) )
+          c = 1d0/( z_global(k)-z_global(k-1) )/( zg_global(k) - zg_global(k-1) )
+
+          Dzz(k,k+1) = a
+          Dzz(k,k-1) = c
+          Dzz(k,k  ) = b
+
+       End Do
+
+       k = 2
+       a = 1d0/( z_global(k)-z_global(k-1) )/( zg_global(k+1) - zg_global(k) )
+       b = 1d0/( z_global(k)-z_global(k-1) )*( -1d0/( zg_global(k+1) - zg_global(k) ) -1d0/( zg_global(k) - zg_global(k-1) ) )
+       c = 1d0/( z_global(k)-z_global(k-1) )/( zg_global(k) - zg_global(k-1) )
+       ! Dirichlet in W: p(1)==p(2)
+       Dzz(2,2) = b + c
+       Dzz(2,3) = a
+
+       k = nzg_global-1
+       a = 1d0/( z_global(k)-z_global(k-1) )/( zg_global(k+1) - zg_global(k) )
+       b = 1d0/( z_global(k)-z_global(k-1) )*( -1d0/( zg_global(k+1) - zg_global(k) ) -1d0/( zg_global(k) - zg_global(k-1) ) )
+       c = 1d0/( z_global(k)-z_global(k-1) )/( zg_global(k) - zg_global(k-1) )
+       ! Dirichlet in W: p(nzg_global)==p(nzg_global-1)
+       Dzz(nzg_global-1,nzg_global-1) = a + b
+       Dzz(nzg_global-1,nzg_global-2) = c
+
+       !$acc enter data create(Dzz)
+       !$acc update device(Dzz)
+
+    End If
+
+    ! 4-wall duct (y_bc_type==1 .And. z_bc_type==1): the 2D (y,z) pressure problem doesn't
+    ! separate via FFT in either direction, so instead diagonalise Dzz's interior tridiagonal
+    ! part via LAPACK's symmetric-tridiagonal eigensolver. Dzz itself is symmetric only for a
+    ! uniform z grid (a==c at every row, confirmed by construction above); a stretched z
+    ! (alpha_grid_z>0) breaks that, so we diagonalise the similarity-transformed, exactly
+    ! symmetric S = W^(1/2) Dzz W^(-1/2) instead (W = diag(cell widths) -- see global.f90's
+    ! lambda_z/Qz/sqrt_w_z comment for the full derivation). S shares Dzz's eigenvalues; the
+    ! sqrt_w_z weighting recovers Dzz's own eigenvectors at the point of use in
+    ! solve_poisson_equation. Reduces to the plain (unweighted) uniform-grid case when
+    ! sqrt_w_z is constant. Each resulting z-eigenmode then reduces the coupled problem to an
+    ! independent 1D y-tridiagonal solve, exactly like the periodic-z case's kzz, but using
+    ! lambda_z(m) instead of a closed-form wavenumber.
+    If ( y_bc_type == 1 .And. z_bc_type == 1 ) Then
+
+       Allocate ( lambda_z(nzm_global), Qz(nzm_global,nzm_global), sqrt_w_z(nzm_global) )
+       Block
+         Real(Int64), Allocatable :: tz_diag(:), tz_sub(:), eig_work(:), cell_w(:)
+         Integer(Int32) :: eig_info
+         Allocate ( tz_diag(nzm_global), tz_sub(nzm_global-1), eig_work(Max(1,2*nzm_global-2)) )
+         Allocate ( cell_w(nzm_global) )
+         ! cell_w(m) = width of the interior cell at local index m (global row m+1 of Dzz),
+         ! i.e. the same z_global(k)-z_global(k-1) factor Dzz's own construction divides by
+         Do k = 1, nzm_global
+            cell_w(k) = z_global(k+1) - z_global(k)
+         End Do
+         sqrt_w_z = Sqrt(cell_w)
+         Do k = 1, nzm_global
+            tz_diag(k) = Real( Dzz(k+1,k+1), Int64 )   ! S's diagonal == Dzz's diagonal (unchanged by the similarity transform)
+         End Do
+         Do k = 1, nzm_global-1
+            ! S(k,k+1) = S(k+1,k) = 1 / [ (zg(k+2)-zg(k+1)) * sqrt(cell_w(k)*cell_w(k+1)) ]
+            tz_sub(k) = 1d0 / ( ( zg_global(k+2) - zg_global(k+1) ) * Sqrt( cell_w(k) * cell_w(k+1) ) )
+         End Do
+         Call dstev( 'V', nzm_global, tz_diag, tz_sub, Qz, nzm_global, eig_work, eig_info )
+         If ( eig_info /= 0 ) Stop 'ERROR: dstev failed to diagonalise the spanwise (z) wall operator (4-wall duct init)'
+         lambda_z = tz_diag   ! dstev overwrites the diagonal argument with the eigenvalues, ascending
+         Deallocate ( tz_diag, tz_sub, eig_work, cell_w )
+       End Block
+
+       ! Complex copies + z_hat scratch, built once here instead of every
+       ! solve_poisson_equation call -- see global.f90's comment on Qz_c/sqrt_w_z_c/z_hat_duct
+       Allocate ( Qz_c(nzm_global,nzm_global), sqrt_w_z_c(nzm_global) )
+       Allocate ( z_hat_duct(decomp_poisson%ysz(2),decomp_poisson%ysz(3)) )
+       Qz_c       = Dcmplx(Qz)
+       sqrt_w_z_c = Dcmplx(sqrt_w_z)
+
+    End If
+
     Allocate ( bc_1(2:nxg-1,2:nzg-1), bc_2(2:nxg-1,2:nzg-1) )
     Allocate ( bc_1_hat(0:mx,0:mz),   bc_2_hat(0:mx,0:mz)   )
 
     ! some parameters for linear solver
-    nr   = nym
+    If ( z_bc_type == 1 .And. y_bc_type == 0 ) Then
+       nr = nzm_global
+    Else
+       nr = nym
+    End If
     nrhs = 1
 
     ! interpolation weights
@@ -578,11 +695,15 @@ Contains
     ! ui = alpha_i dui/dy
     Allocate( alpha_x(1:nx ,1:2,1:nzg) )
     Allocate( alpha_y(1:nxg,1:2,1:nzg) )
-    Allocate( alpha_z(1:nxg,1:2,1:nz ) )    
+    Allocate( alpha_z(1:nxg,1:2,1:nz ) )
+    Allocate( alpha_z_u(1:nx ,1:nyg,1:2) )
+    Allocate( alpha_z_v(1:nxg,1:ny ,1:2) )
 
-    alpha_x = 0d0
-    alpha_y = 0d0
-    alpha_z = 0d0
+    alpha_x   = 0d0
+    alpha_y   = 0d0
+    alpha_z   = 0d0
+    alpha_z_u = 0d0
+    alpha_z_v = 0d0
 
     If ( boussinesq_flag >= 1 ) Then
        Allocate( alpha_T(1:nxg,1:2,1:nzg) )
@@ -641,7 +762,7 @@ Contains
     ! One-time initial sync: enter data create only allocates, so push host U,V,W or step 1 runs on uninitialized device data
     !$acc update device(U,V,W)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
-    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z)
+    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,alpha_z_u,alpha_z_v)
     ! Boussinesq temperature: stays device-resident end-to-end so compute_rhs_v can read it directly
     If ( boussinesq_flag >= 1 ) Then
        !$acc enter data create(Tscal,Tscal_o,Ft1,Ft2,Ft3)
@@ -658,6 +779,13 @@ Contains
 #ifdef GPU_POISSON
     ! rhs_p_hat stays device-resident end-to-end through the whole Poisson stage
     !$acc enter data create(rhs_p_hat)
+    ! P itself is host-only (only ever touched at rk_step==3, 1-in-3 RK substages),
+    ! but solve_poisson_equation's ghost/periodic-BC fill for it reuses the same
+    ! apply_periodic_bc_x/z routines the device-resident U/V/W use, which assume
+    ! their argument is already present on device -- register P here so that
+    ! shared !$acc kernels code doesn't fail, and round-trip it via a targeted
+    ! update device/host pair around just that fill (see projection.f90)
+    !$acc enter data create(P)
 #endif
 
     ! Done
