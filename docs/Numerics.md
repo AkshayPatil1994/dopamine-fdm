@@ -40,6 +40,16 @@ skew-symmetric form (`advection_scheme = 0`, the default — reduces aliasing er
 better conserves kinetic energy) or pure central-difference (divergence) form
 (`advection_scheme = 1`).
 
+**Rigid-body rotation about the streamwise axis** (`rotation_active = 1`, e.g. for a
+rotating duct) adds Coriolis and centrifugal forcing to the $v$- and $w$-momentum
+equations, for a rotation rate $\Omega_x$ about $x$:
+
+$$f_v = 2\Omega_x w + \Omega_x^2 (y - y_0), \qquad f_w = -2\Omega_x v + \Omega_x^2 (z - z_0)$$
+
+where $(y_0, z_0)$ is the domain centreline ($L_y/2$, $L_z/2$), fixed rather than
+user-configurable. Configured via `&PHYSICS` — see
+[[Input Parameters § PHYSICS|Input-Parameters#physics]].
+
 ## 2. Spatial discretisation
 
 ### 2.1 Staggered MAC grid
@@ -54,11 +64,18 @@ Velocities are stored on a **marker-and-cell (MAC)** staggered grid (Harlow & We
 | $W$ | $z$-face centres — array `(nxg, nyg, nz)` |
 | $P$, scalars, $\nu_t$ | Cell centres — array `(nxg, nyg, nzg)` |
 
-The grid is **uniform** in the homogeneous $x$ and $z$ directions (spacing $\Delta x$,
-$\Delta z$) and **non-uniform** in the wall-normal $y$ direction. Seven vertical-grid
-options are provided (uniform, symmetric/single-sided hyperbolic tangent stretching, and
+The grid is always **uniform** in the streamwise $x$ direction (spacing $\Delta x$) and
+**non-uniform** in the wall-normal $y$ direction. Seven vertical-grid options are
+provided (uniform, symmetric/single-sided hyperbolic tangent stretching, and
 roughness-sublayer variants), configured via `grid_type` and `alpha_grid` — see
 [[Input Parameters § DOMAIN|Input-Parameters#domain]].
+
+The spanwise $z$ direction is uniform (spacing $\Delta z$) when periodic (`z_bc_type =
+0`, the default — required, since periodic $z$ uses a spectral FFT that needs uniform
+spacing), but may optionally be stretched, symmetric tanh clustering at both walls
+(mirroring `grid_type = 2`'s $y$ formula), when $z$ is instead wall-bounded (`z_bc_type =
+1`) via `alpha_grid_z > 0` — see [§4.1](#41-spectral-poisson-solver) below for how the
+pressure solve adapts, and [[Input Parameters § BOUNDARY_CONDITIONS|Input-Parameters#boundary_conditions]].
 
 ### 2.2 Finite differences
 
@@ -143,6 +160,34 @@ pencil-transpose routines (`transpose_y_to_x`, `transpose_x_to_y`, `transpose_y_
 $y \to x \to y \to z \to y\text{(Zgtsv)} \to z \to y \to x \to y$ and back for the
 inverse transform. See [§10 MPI parallelism](#10-mpi-parallelism) for how the pencil
 grid itself is set up.
+
+**Spanwise wall (`z_bc_type = 1`), $y$ still periodic.** The chain above is mirrored: $y$
+is FFT'd instead of $z$, then a `Zgtsv` tridiagonal solve runs *in $z$* (in the z-pencil,
+reusing the same transpose the periodic-$z$ FFT would have used), against a
+finite-volume second-derivative operator $D_{zz}$ built directly from the (possibly
+stretched) $z$ grid — the same construction as $y$'s own operator $D_{yy}$, just applied
+to $z$.
+
+**4-wall duct (`y_bc_type = 1` and `z_bc_type = 1` together).** Neither direction
+separates via FFT, so the coupled 2-D $(y,z)$ Poisson problem is decoupled instead by
+diagonalising $D_{zz}$'s interior tridiagonal part: each of its $n_{zm}$ eigenmodes
+reduces the problem to an independent 1-D $y$-tridiagonal `Zgtsv` solve (the same
+machinery as the periodic-$y$/wall-$z$ case above, with the $z$-eigenvalue $\lambda_z$
+standing in for the closed-form wavenumber $k_z^2$). $D_{zz}$ itself is symmetric only
+for a *uniform* $z$ grid; a stretched $z$ (`alpha_grid_z > 0`) breaks that, so the solver
+diagonalises the similarity-transformed $S = W^{1/2} D_{zz} W^{-1/2}$ instead, where $W =
+\mathrm{diag}(\Delta z_k)$ is the diagonal matrix of local cell widths — a standard
+finite-volume trick, since $W D_{zz}$ is exactly symmetric by construction. $S$ shares
+$D_{zz}$'s eigenvalues; a $\sqrt{\Delta z_k}$ weighting on the forward/inverse transforms
+recovers $D_{zz}$'s own (generally non-orthogonal) eigenvectors from $S$'s orthonormal
+ones, reducing to the plain unweighted uniform-grid case when $\Delta z_k$ is constant.
+This combination requires `p_col = 1` (decompose only in $x$, via `p_row`), since the
+coupled solve needs $z$ fully local to every rank — see [[Input Parameters §
+DOMAIN|Input-Parameters#domain]]. **GPU build**: supported, via a batched cuSPARSE
+eigenmode transform + tridiagonal solve (the device analogue of the host `Zgtsv`
+machinery above), but only combined with `x_bc_type = 0` (periodic streamwise) and
+`nprocs = 1`; the spanwise-wall-alone case (`y_bc_type = 0`) above is not yet ported to
+GPU and still needs the CPU build.
 
 ### 4.2 Solver validation — triply-periodic Taylor-Green vortex
 
@@ -284,6 +329,14 @@ agree closely with the reference DNS:
 Both flat-wall and IBM-surface wall models use an **equilibrium wall model (EQWM)**
 based on the classical log-law, applied when `flat_wall_model_flag = 1` or `2` (flat
 walls) or `ibm_wall_model_flag = 1` (IBM surfaces).
+
+`flat_wall_model_flag` governs the $y$ walls always, and the $z$ walls too when
+`z_bc_type = 1` — mode 1 (smooth Reichardt EQWM) only; mode 2 (rough `z0`) is not yet
+extended to $z$ walls. At a $z$ wall the roles swap: $U$ and $V$ are the tangential
+components (each Robin-BC'd via the log-law, combined with a bilinearly-interpolated
+cross-term for the *other* tangential velocity, e.g. $V$ interpolated onto $U$'s grid
+point) and $W$ is wall-normal, staying exactly no-penetration — the direct $y$-wall
+analogue of §7.1 below, with $y \leftrightarrow z$ and $V \leftrightarrow W$.
 
 ### 7.1 Robin ghost-cell BC
 

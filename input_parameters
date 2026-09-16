@@ -20,23 +20,35 @@
 ! alpha_grid controls the stretching intensity (larger = stronger clustering).
 ! Ignored for grid_type=1. For grid_types 5-7, ks and nks must be set in &IBM.
 !
+! alpha_grid_z: spanwise (z) grid stretching -- 0.0 (default) = uniform z.
+! >0 = symmetric tanh clustering at both z walls (same formula/intensity
+! convention as grid_type=2's alpha_grid, just applied to z instead of y).
+! Only meaningful with z_bc_type=1 (see &BOUNDARY_CONDITIONS below); a Stop
+! fires at start-up if alpha_grid_z>0 with z_bc_type=0 (periodic z is
+! FFT-based and needs uniform spacing).
+!
 ! p_row/p_col: 2D pencil process grid for the x/z domain decomposition (y is
 ! always fully local per rank). p_row splits x, p_col splits z; p_row*p_col
 ! must equal the MPI rank count. 0,0 (default) auto-picks: pure z-split
 ! (p_row=1, cheapest, no x-transpose communication) if that alone gives
 ! every rank >=2 interior z-cells, otherwise the nprocs factor pair closest
-! to the grid's x:z aspect ratio. Set both explicitly to override.
+! to the grid's x:z aspect ratio -- EXCEPT when y_bc_type=1 AND z_bc_type=1
+! together (4-wall duct), where auto always forces p_row=nprocs, p_col=1
+! (the coupled 2D y-z pressure solve needs the full z-extent local to every
+! rank). Set both explicitly to override; an explicit p_col>1 with both
+! walls active is rejected at start-up with a Stop.
 &DOMAIN
-  nx         = 514,
-  ny         = 129,
-  nz         = 258,
-  Lx         = 0.6292,
-  Ly         = 0.1,
-  Lz         = 0.31460,
-  alpha_grid = 2.08,
-  grid_type  = 1,
-  p_row      = 0,
-  p_col      = 0,
+  nx           = 514,
+  ny           = 129,
+  nz           = 258,
+  Lx           = 0.6292,
+  Ly           = 0.1,
+  Lz           = 0.31460,
+  alpha_grid   = 2.08,
+  alpha_grid_z = 0.0,
+  grid_type    = 1,
+  p_row        = 0,
+  p_col        = 0,
 /
 
 ! Physical parameters
@@ -60,14 +72,24 @@
 !       Gibbs-like ringing near sharp immersed-boundary gradients.
 !   1 = pure divergence-form central differencing (original scheme).
 !
-! flat_wall_model_flag: equilibrium wall model for the flat (non-IBM) y walls.
+! flat_wall_model_flag: equilibrium wall model for the flat (non-IBM) walls --
+! applies to the y walls always, and additionally to the z walls when
+! z_bc_type=1 (see &BOUNDARY_CONDITIONS below).
 !   0 = DNS no-slip (default)
-!   1 = smooth log-law EQWM
+!   1 = smooth log-law EQWM (y and z walls)
 !   2 = rough z0 EQWM: momentum roughness length z0_ylo/z0_yhi [m] must be
 !       set (>0) for whichever wall is no-slip (bc_face_ylo/yhi=1); a Stop
 !       fires at start-up otherwise. z0h_ylo/z0h_yhi (thermal roughness) are
 !       only needed if &BOUSSINESQ T_bc_bot/T_bc_top=2 (rough EQWM flux BC)
-!       is also used on that wall.
+!       is also used on that wall. z walls only: NOT yet supported -- a Stop
+!       fires at start-up if z_bc_type=1 with flat_wall_model_flag=2; use 0
+!       or 1 with a spanwise wall.
+!
+! rotation_active/Omega_x: rigid-body rotation about the streamwise (x) axis
+! (e.g. a rotating duct). 0=off (default). When active, adds Coriolis
+! (+/-2*Omega_x*w or v) and centrifugal (Omega_x^2*(y-y0_rot) / (z-z0_rot))
+! forcing to the v/w-momentum equations; the rotation axis is fixed at the
+! domain centreline (Ly/2, Lz/2), not user-configurable.
 &PHYSICS
   nu                   = 1.0e-6,
   dPdx                 = 1.225e-4,
@@ -80,7 +102,7 @@
   phi_wave_z           = 0.0,     ! phase offset [rad] for z-wave forcing
   sgs_model            = 0,       ! 0=DNS, 1=Vreman
   Cs_vreman            = 0.17,    ! Sub-grid model constant (Eq. 5)
-  flat_wall_model_flag = 0,       ! 0=no-slip, 1=smooth log-law EQWM, 2=rough z0 EQWM
+  flat_wall_model_flag = 0,       ! 0=no-slip, 1=smooth log-law EQWM, 2=rough z0 EQWM (y walls only)
   z0_ylo               = 0.0,     ! momentum roughness length [m], bottom wall (flat_wall_model_flag=2 only)
   z0_yhi               = 0.0,     ! momentum roughness length [m], top wall (flat_wall_model_flag=2 only)
   z0h_ylo              = 0.0,     ! thermal roughness length [m], bottom wall (needs &BOUSSINESQ T_bc_bot=2)
@@ -88,6 +110,8 @@
   flow_forcing_mode    = 0,       ! 0=prescribed dPdx (default), 1=constant mass flux
   Ub_target            = 0.068,   ! target bulk velocity, used only if flow_forcing_mode=1
   advection_scheme     = 0,       ! 0=skew-symmetric (default), 1=pure divergence-form central
+  rotation_active      = 0,       ! 0=off, 1=streamwise rigid-body rotation (Coriolis + centrifugal)
+  Omega_x              = 0.0,     ! rotation rate [rad/s] about the x axis (rotation_active=1 only)
 /
 
 ! Time-stepping and output
@@ -126,16 +150,35 @@
 !       requires x_bc_type=0.
 !   1 = wall (default): bc_face_ylo/bc_face_yhi as above.
 !
+! z_bc_type: spanwise boundary condition
+!   0 = periodic (default): spectral FFT pressure solve, same as x_bc_type=0.
+!   1 = wall: DNS no-slip (flat_wall_model_flag=0) or smooth log-law EQWM
+!       (flat_wall_model_flag=1, see &PHYSICS above) on both z walls -- there
+!       is no bc_face_zlo/zhi (free-slip) option, and rough EQWM
+!       (flat_wall_model_flag=2) is not yet supported for z walls. May be
+!       combined with y_bc_type=0 (spanwise-only wall, y periodic) or
+!       y_bc_type=1 (a true 4-wall duct, solved via a coupled 2D y-z pressure
+!       Poisson solve) -- the latter needs p_col=1, see &DOMAIN's p_row/p_col
+!       note above. z can optionally be grid-stretched via &DOMAIN's
+!       alpha_grid_z. GPU build (ENABLE_GPU=ON): only the 4-wall duct
+!       (y_bc_type=1) combined with x_bc_type=0 is supported (batched cuSPARSE
+!       eigenmode+tridiagonal solve); a spanwise-wall-alone case (y_bc_type=0)
+!       or a duct with x_bc_type=1 still Stops at start-up -- use the CPU
+!       build for those.
+!
 ! GPU build (ENABLE_GPU=ON, see README.md "Building (single-GPU...)"): the GPU Poisson
 ! solve supports x_bc_type=0 or 1 here, AND a single MPI rank (nprocs=1, i.e. run with
 ! `mpirun -np 1`) -- a runtime Stop fires on startup otherwise. y_bc_type=0 (periodic y)
-! on the GPU build additionally requires x_bc_type=0. Everything else in this
-! file (IBM, wall models, SGS, sediment, RSB, etc.) is unaffected by ENABLE_GPU.
+! on the GPU build additionally requires x_bc_type=0. z_bc_type=1 on the GPU build
+! requires y_bc_type=1 AND x_bc_type=0 (4-wall duct, periodic streamwise only) -- see the
+! z_bc_type note above. Everything else in this file (IBM, wall models, SGS, sediment,
+! RSB, etc.) is unaffected by ENABLE_GPU.
 &BOUNDARY_CONDITIONS
   bc_face_ylo = 1,
   bc_face_yhi = 1,
   x_bc_type   = 0,
   y_bc_type   = 1,
+  z_bc_type   = 0,
 /
 
 ! Streamwise inflow condition (only used when x_bc_type=1 above; omit or

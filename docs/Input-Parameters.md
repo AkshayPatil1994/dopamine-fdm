@@ -13,7 +13,8 @@ See also the runnable examples in `examples/` ([[Examples|Examples]]).
 | `Lx, Ly, Lz` | — | Domain lengths |
 | `grid_type` | `1` | Vertical grid: 1=uniform, 2=symmetric tanh, 3=tanh bottom, 4=tanh top, 5–7=sublayer+tanh variants |
 | `alpha_grid` | `1.0` | Grid-stretching intensity (larger → stronger clustering) |
-| `p_row, p_col` | `0, 0` | 2decomp&fft MPI pencil grid: `p_row` splits $x$, `p_col` splits $z$ ($y$ always local); `p_row * p_col` must equal the rank count. `0, 0` = auto-pick (prefer a pure z-slab split, `p_row=1`; fall back to a 2-D split matching the grid's aspect ratio). Set both explicitly to override |
+| `alpha_grid_z` | `0.0` | Spanwise ($z$) grid stretching; `0`=uniform (default), `>0`=symmetric tanh clustering at both $z$ walls (same convention as `alpha_grid`/`grid_type=2`, applied to $z$). Only meaningful with `z_bc_type=1`; `Stop`s at startup if set `>0` with `z_bc_type=0` (periodic $z$ needs uniform spacing for its FFT) |
+| `p_row, p_col` | `0, 0` | 2decomp&fft MPI pencil grid: `p_row` splits $x$, `p_col` splits $z$ ($y$ always local); `p_row * p_col` must equal the rank count. `0, 0` = auto-pick (prefer a pure z-slab split, `p_row=1`; fall back to a 2-D split matching the grid's aspect ratio) — except when `y_bc_type=1` and `z_bc_type=1` together (4-wall duct), where auto always forces `p_row=nprocs, p_col=1` (the coupled 2D $y$-$z$ pressure solve needs $z$ fully local per rank). Set both explicitly to override; an explicit `p_col>1` with both walls active `Stop`s at startup |
 
 See [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]].
 
@@ -34,9 +35,11 @@ See [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]].
 | `phi_wave_z` | `0.0` | Phase offset $\varphi_z$ [rad] for spanwise oscillation; difference $\varphi_z - \varphi_x$ sets the cross-wave phase lag |
 | `sgs_model` | `0` | 0=DNS (ν_t=0), 1=Vreman SGS |
 | `Cs_vreman` | `0.17` | Smagorinsky-equivalent constant for Vreman model ($c_V = 2.5\\,C_s^2$) |
-| `flat_wall_model_flag` | `0` | 0=no-slip, 1=smooth log-law EQWM, 2=rough `z0` EQWM on flat walls |
+| `flat_wall_model_flag` | `0` | 0=no-slip, 1=smooth log-law EQWM, 2=rough `z0` EQWM on flat walls. Applies to the $y$ walls always, and additionally to the $z$ walls when `z_bc_type=1`; mode 2 (rough) is not yet supported for $z$ walls — `Stop`s at startup if `z_bc_type=1` with `flat_wall_model_flag=2` |
 | `z0_ylo`, `z0_yhi` | `0.0` | Momentum roughness length [m] per wall (`flat_wall_model_flag=2` only); `Stop` at startup if `<= 0` on an active no-slip wall |
 | `z0h_ylo`, `z0h_yhi` | `0.0` | Thermal roughness length [m] per wall, independent of `z0_ylo/yhi` (used with `T_bc_bot/top=2`, see `&BOUSSINESQ`) |
+| `rotation_active` | `0` | 0=off, 1=rigid-body rotation about the streamwise ($x$) axis (Coriolis + centrifugal forcing added to the $v$/$w$-momentum equations) |
+| `Omega_x` | `0.0` | Rotation rate [rad/s] about the $x$ axis (`rotation_active=1` only). The rotation axis is fixed at the domain centreline ($L_y/2$, $L_z/2$), not user-configurable |
 
 See [[Numerics § Forcing|Numerics#1-governing-equations]],
 [[§ SGS model|Numerics#5-sub-grid-scale-model]], and
@@ -65,6 +68,8 @@ See [[Numerics § Time integration|Numerics#3-time-integration]].
 | `bc_face_ylo` | `1` | Bottom wall: 1=no-slip (Dirichlet), 2=free-slip (Neumann) |
 | `bc_face_yhi` | `1` | Top wall: 1=no-slip (Dirichlet), 2=free-slip (Neumann) |
 | `x_bc_type` | `0` | Streamwise BC: 0=periodic (spectral FFT pressure solve); 1=inflow/outflow (Dirichlet velocity at inflow, see `&INFLOW`; convective outflow; DCT-IV pressure solve). GPU build supports both, `nprocs=1` only |
+| `y_bc_type` | `1` | Wall-normal BC: 0=periodic (requires `grid_type=1`, uniform $y$; `bc_face_ylo/yhi` ignored); 1=wall (default, uses `bc_face_ylo/yhi`) |
+| `z_bc_type` | `0` | Spanwise BC: 0=periodic (default, spectral FFT pressure solve, same as `x_bc_type=0`); 1=wall — DNS no-slip or smooth log-law EQWM on both $z$ walls (`flat_wall_model_flag`, see `&PHYSICS`; no free-slip option, no rough EQWM yet). May combine with `y_bc_type=0` (spanwise-only wall) or `y_bc_type=1` (4-wall duct, coupled 2D $y$-$z$ pressure solve — needs `p_col=1`, see `&DOMAIN`). $z$ may optionally be grid-stretched via `alpha_grid_z`. **GPU build**: the 4-wall duct (`y_bc_type=1`) combined with `x_bc_type=0` (periodic streamwise) is supported, via a batched cuSPARSE eigenmode+tridiagonal solve; a spanwise wall alone (`y_bc_type=0`) or a duct with `x_bc_type=1` still `Stop`s at startup — use the CPU build for those |
 
 ## `&INFLOW` *(optional — used only when `x_bc_type = 1`)*
 | Parameter | Default | Description |

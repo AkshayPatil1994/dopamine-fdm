@@ -123,9 +123,14 @@ this is a separate, opt-in build.
 
 **Scope — read before using**: the GPU Poisson solve currently only supports **`nprocs=1`**
 (single GPU, no MPI domain decomposition), with either **`x_bc_type=0`** (periodic, spectral FFT)
-or **`x_bc_type=1`** (inflow/outflow, DCT-IV) streamwise BC. A runtime guard `Stop`s immediately on
-startup if `nprocs/=1` or `x_bc_type` is anything other than 0/1 — Every other solver feature (IBM, wall models,
-SGS, sediment transport, RSB statistics, etc.) works normally in the GPU build.
+or **`x_bc_type=1`** (inflow/outflow, DCT-IV) streamwise BC, and **`z_bc_type=0`** (periodic
+spanwise) — with one exception: a **4-wall duct** (`y_bc_type=1` and `z_bc_type=1` together) is
+also supported, via a batched cuSPARSE eigenmode+tridiagonal solve, but only combined with
+`x_bc_type=0` (periodic streamwise); a spanwise wall alone (`z_bc_type=1`, `y_bc_type=0`), or a
+4-wall duct with `x_bc_type=1`, is still CPU-only. A runtime guard `Stop`s immediately on startup
+if `nprocs/=1`, `x_bc_type` is anything other than 0/1, or `z_bc_type=1` outside the supported
+duct combination above — every other solver feature (IBM, wall models, SGS, sediment transport,
+RSB statistics, rotation forcing, etc.) works normally in the GPU build.
 
 Put the NVHPC SDK's `nvfortran` and bundled MPI on your `PATH`/`LD_LIBRARY_PATH` first, e.g.:
 
@@ -181,7 +186,8 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `Lx, Ly, Lz` | — | Domain lengths |
 | `grid_type` | `1` | Vertical grid: 1=uniform, 2=symmetric tanh, 3=tanh bottom, 4=tanh top, 5–7=sublayer+tanh variants |
 | `alpha_grid` | `1.0` | Grid-stretching intensity (larger → stronger clustering) |
-| `p_row, p_col` | `0, 0` | 2decomp&fft MPI pencil grid: `p_row` splits x, `p_col` splits z (y always local); `p_row * p_col` must equal the rank count. `0, 0` = auto-pick (prefer a pure z-slab split; fall back to a 2-D split matching the grid's aspect ratio) |
+| `alpha_grid_z` | `0.0` | Spanwise ($z$) stretching (`z_bc_type=1` only); `0`=uniform, `>0`=symmetric tanh at both $z$ walls |
+| `p_row, p_col` | `0, 0` | 2decomp&fft MPI pencil grid: `p_row` splits x, `p_col` splits z (y always local); `p_row * p_col` must equal the rank count. `0, 0` = auto-pick (prefer a pure z-slab split; fall back to a 2-D split matching the grid's aspect ratio) — except `y_bc_type=1` and `z_bc_type=1` together (4-wall duct), which forces `p_col=1` |
 
 ### `&PHYSICS`
 | Parameter | Default | Description |
@@ -200,9 +206,11 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `phi_wave_z` | `0.0` | Phase offset $\varphi_z$ [rad] for spanwise oscillation; difference $\varphi_z - \varphi_x$ sets the cross-wave phase lag |
 | `sgs_model` | `0` | 0=DNS (ν_t=0), 1=Vreman SGS |
 | `Cs_vreman` | `0.17` | Smagorinsky-equivalent constant for Vreman model ($c_V = 2.5\,C_s^2$) |
-| `flat_wall_model_flag` | `0` | 0=no-slip, 1=smooth log-law EQWM, 2=rough `z0` EQWM on flat walls |
+| `flat_wall_model_flag` | `0` | 0=no-slip, 1=smooth log-law EQWM, 2=rough `z0` EQWM on flat walls. Governs the $z$ walls too when `z_bc_type=1` (mode 1 only — mode 2 not yet supported for $z$) |
 | `z0_ylo`, `z0_yhi` | `0.0` | Momentum roughness length [m] per wall (`flat_wall_model_flag=2` only) |
 | `z0h_ylo`, `z0h_yhi` | `0.0` | Thermal roughness length [m] per wall, independent of `z0_ylo/yhi` (used with `T_bc_bot/top=2`, see `&BOUSSINESQ`) |
+| `rotation_active` | `0` | 0=off, 1=rigid-body rotation about the streamwise ($x$) axis (Coriolis + centrifugal forcing on $v$/$w$) |
+| `Omega_x` | `0.0` | Rotation rate [rad/s] about $x$ (`rotation_active=1` only); axis fixed at the domain centreline |
 
 ### `&NUMERICS`
 | Parameter | Default | Description |
@@ -225,6 +233,8 @@ Parameters are grouped into Fortran namelists in `input_parameters`.  Any nameli
 | `bc_face_ylo` | `1` | Bottom wall: 1=no-slip (Dirichlet), 2=free-slip (Neumann) |
 | `bc_face_yhi` | `1` | Top wall: 1=no-slip (Dirichlet), 2=free-slip (Neumann) |
 | `x_bc_type` | `0` | Streamwise BC: 0=periodic (spectral FFT pressure solve); 1=inflow/outflow (Dirichlet velocity at inflow, see `&INFLOW`; convective outflow; DCT-IV pressure solve). GPU build supports both, `nprocs=1` only |
+| `y_bc_type` | `1` | Wall-normal BC: 0=periodic (requires `grid_type=1`), 1=wall (default) |
+| `z_bc_type` | `0` | Spanwise BC: 0=periodic (default); 1=wall (DNS no-slip or smooth EQWM, see `flat_wall_model_flag`; no free-slip option). Combine with `y_bc_type=0` (spanwise-only wall) or `y_bc_type=1` (4-wall duct, needs `p_col=1`). **GPU build**: only the 4-wall duct (`y_bc_type=1`) with `x_bc_type=0` is supported; spanwise-wall-alone or duct+`x_bc_type=1` still need the CPU build |
 
 ### `&INFLOW` *(optional — used only when `x_bc_type = 1`)*
 | Parameter | Default | Description |
