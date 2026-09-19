@@ -218,8 +218,13 @@ contains
             end do
             min_index(1) = floor((min_query(1) - xin(1) + 0.5_dp*dx) * deltax_inverse) + 1 - buffer_point_size
             max_index(1) = floor((max_query(1) - xin(1) + 0.5_dp*dx) * deltax_inverse) + 1 + buffer_point_size
-            min_index(2) = floor((min_query(2) - yin(1) + 0.5_dp*dy) * deltay_inverse) + 1 - buffer_point_size
-            max_index(2) = floor((max_query(2) - yin(1) + 0.5_dp*dy) * deltay_inverse) + 1 + buffer_point_size
+            if (y_stretched) then
+                min_index(2) = max(bsearch_le(yin, min_query(2), ystart, yend) - buffer_point_size, ystart)
+                max_index(2) = min(bsearch_le(yin, max_query(2), ystart, yend) + buffer_point_size, yend)
+            else
+                min_index(2) = floor((min_query(2) - yin(1) + 0.5_dp*dy) * deltay_inverse) + 1 - buffer_point_size
+                max_index(2) = floor((max_query(2) - yin(1) + 0.5_dp*dy) * deltay_inverse) + 1 + buffer_point_size
+            end if
             min_index(3) = max(bsearch_le(zin, min_query(3), zstart, zend) - buffer_point_size, zstart)
             max_index(3) = min(bsearch_le(zin, max_query(3), zstart, zend) + buffer_point_size, zend)
             ii_lo = min_index(1); ii_hi = max_index(1)

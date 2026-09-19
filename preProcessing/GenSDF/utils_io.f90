@@ -19,6 +19,9 @@ module utils_io
     real(dp), allocatable, dimension(:) :: xp, yp, zp, xf, yf, zf
     real(dp) :: lx, ly, lz, dx, dy, dx_inverse, dy_inverse
     real(dp), allocatable, dimension(:) :: dz, dz_inverse
+    ! per-cell width along GenSDF's internal y (= solver z when vertical_axis==2); uniform unless data/grid_z.out is present
+    real(dp), allocatable, dimension(:) :: dyv
+    logical :: y_stretched = .false.
 
     !  SDF / algorithm control 
     real(dp), protected :: scalarvalue
@@ -41,6 +44,7 @@ module utils_io
     ! dz is referenced inside godunov_update_cell (!$acc routine seq), which requires
     ! module allocatables it touches to be declared, not just enter-data'd.
     !$acc declare create(dz)
+    !$acc declare create(dyv)
 
 contains
 
@@ -163,6 +167,8 @@ contains
         allocate(xin_p(npoints(1)), yin_p(npoints(2)), zin_p(npoints(3)))
         allocate(xin_f(npoints(1)), yin_f(npoints(2)), zin_f(npoints(3)))
         allocate(dzin(npoints(3)))
+        allocate(dyv(npoints(2)))
+        dyv = dl(2)
 
         do iter = 1, npoints(1)
             xin_p(iter) = origin(1) + (iter - 0.5_dp) * dl(1)
@@ -201,6 +207,30 @@ contains
                 close(unit)
                 zin_p = origin(3) + grid_z8(:,2)
                 zin_f = origin(3) + grid_z8(:,3)
+            end if
+        end if
+
+        ! Optional stretched spanwise grid (solver z, GenSDF's internal y when vertical_axis==2): same 5-column
+        ! format as grid.out, written by the solver's genGridandIC when alpha_grid_z>0; absent => uniform y.
+        if (vertical_axis == 2) then
+            grdfile = trim(loc) // "grid_z.out"
+            inquire(file=trim(grdfile), exist=fexists)
+            if (fexists) then
+                if (allocated(grid_z8)) deallocate(grid_z8)
+                allocate(grid_z8(npoints(2),5))
+                open(newunit=unit, file=grdfile, status='old', action='read', iostat=filerr)
+                if (filerr /= 0) error stop "Error opening grid_z.out"
+                do ii = 1, npoints(2)
+                    read(unit,*,iostat=filerr) (grid_z8(ii,jj), jj=1,5)
+                    if (filerr /= 0) error stop "Error reading grid_z.out"
+                end do
+                close(unit)
+                yin_p = origin(2) + grid_z8(:,2)
+                yin_f = origin(2) + grid_z8(:,3)
+                dyv   = 2.0_dp * (yin_f - yin_p)     ! cell width (centres are face midpoints)
+                y_stretched = .true.
+                deallocate(grid_z8)
+                if (procid == 0) print *, "*** Read stretched spanwise grid from grid_z.out ***"
             end if
         end if
 
@@ -581,7 +611,7 @@ contains
         real(dp), allocatable :: smin(:,:), smax(:,:)
         logical,  allocatable :: seen(:)
         integer  :: fi, sid, vi, vidx, d, kk
-        real(dp) :: extent(3), local_dz, min_cells
+        real(dp) :: extent(3), local_dz, local_dy, min_cells
         real(dp), parameter :: MIN_CELLS_OK = 2.0_dp
 
         if (procid /= 0) return
@@ -619,7 +649,13 @@ contains
                     local_dz = max(local_dz, dz(kk))
             end do
 
-            min_cells = min(extent(1)/dx, extent(2)/dy, extent(3)/local_dz)
+            local_dy = dyv(1)
+            do kk = 1, size(yp)
+                if (yp(kk) >= smin(2,sid) - dyv(kk) .and. yp(kk) <= smax(2,sid) + dyv(kk)) &
+                    local_dy = max(local_dy, dyv(kk))
+            end do
+
+            min_cells = min(extent(1)/dx, extent(2)/local_dy, extent(3)/local_dz)
             if (min_cells < MIN_CELLS_OK) then
                 print '(A,I0,A,F6.2,A)', 'WARNING: solid ', sid, &
                     ' spans only ', min_cells, &

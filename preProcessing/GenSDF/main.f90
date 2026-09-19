@@ -80,10 +80,16 @@ program generatesdf
     call read_cans_grid(myid, 'data/', dp, ng, r0, non_uniform_grid, xp, yp, zp, xf, yf, zf, dz, lx, ly, lz)
     allocate(dz_inverse(ng(3)))
     call setup_grid_spacing(myid, xf, yf, zf, ng(3), dx, dy, dz, dx_inverse, dy_inverse, dz_inverse)
+    ! dy above is the uniform-grid spacing; with a stretched spanwise grid keep the smallest cell width as the scalar dy
+    if (y_stretched) then
+        dy = minval(dyv)
+        dy_inverse = 1.0_dp / dy
+    end if
 #ifdef GPU_SDF
     ! dz is allocated via dummy-argument aliasing in read_cans_grid, so declare create's automatic on-allocate hook never fires for it.
     !$acc enter data create(dz)
-    !$acc update device(dx, dy, dz)
+    !$acc enter data create(dyv)
+    !$acc update device(dx, dy, dz, dyv)
 #endif
 
     ! Load geometry: a single .stl/.obj file (one solid, ID 1) or a .list manifest

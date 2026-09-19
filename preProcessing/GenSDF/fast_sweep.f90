@@ -106,7 +106,7 @@ contains
         if (abs(sdf(ii,jj,kk)) < scalarvalue * 0.5_dp) return
 
         hx = dx           ! uniform in x (xf array assumed uniform in this tool)
-        hy = dy
+        hy = dyv(jj)      ! per-cell (spanwise stretching); equals dy on a uniform grid
         hz = dz(kk)       ! may be non-uniform
 
         ! Upwind neighbours in x: use ghost planes at slab boundaries
