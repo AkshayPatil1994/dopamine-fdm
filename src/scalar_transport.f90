@@ -75,7 +75,7 @@ Contains
     Real   (Int64) :: gf, gb, slp                   ! face gradients & limited slope
     Real   (Int64) :: dx_f, dy_f, dz_f
 
-    !$acc parallel loop collapse(3) present(C_,U_,V_,W_,Fc_,nu_t,phi,x,xg,y,yg,z,zg)
+    !$acc parallel loop collapse(3) present(C_,U_,V_,W_,Fc_,nu_t,phi,x,xg,y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
@@ -214,21 +214,21 @@ Contains
              adv_z = ( W_(i,j,k)*C_hi - W_(i,j,k-1)*C_lo ) / dz_f
 
              !-------- x-diffusion -----------------------------------------
-             ! kappa at high x-face: average of nu_t at (i,j,k) and (i+1,j,k)
+             ! kappa at high x-face (x uniform: plain average; y, z use the interpolation weights): average of nu_t at (i,j,k) and (i+1,j,k)
              kappa_hi = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i+1,j,k))*kappa_t_inv
              kappa_lo = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i-1,j,k))*kappa_t_inv
              diff_x = ( kappa_hi*(C_(i+1,j,k) - C_(i,j,k))/(xg(i+1)-xg(i)) &
                       - kappa_lo*(C_(i,j,k) - C_(i-1,j,k))/(xg(i)-xg(i-1)) ) / dx_f
 
              !-------- y-diffusion -----------------------------------------
-             kappa_hi = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i,j+1,k))*kappa_t_inv
-             kappa_lo = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i,j-1,k))*kappa_t_inv
+             kappa_hi = kappa_mol + ( weight_y_0(j  )*nu_t(i,j,k) + weight_y_1(j  )*nu_t(i,j+1,k) )*kappa_t_inv
+             kappa_lo = kappa_mol + ( weight_y_0(j-1)*nu_t(i,j-1,k) + weight_y_1(j-1)*nu_t(i,j,k) )*kappa_t_inv
              diff_y = ( kappa_hi*(C_(i,j+1,k) - C_(i,j,k))/(yg(j+1)-yg(j)) &
                       - kappa_lo*(C_(i,j,k) - C_(i,j-1,k))/(yg(j)-yg(j-1)) ) / dy_f
 
              !-------- z-diffusion -----------------------------------------
-             kappa_hi = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i,j,k+1))*kappa_t_inv
-             kappa_lo = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i,j,k-1))*kappa_t_inv
+             kappa_hi = kappa_mol + ( weight_z_0(k  )*nu_t(i,j,k) + weight_z_1(k  )*nu_t(i,j,k+1) )*kappa_t_inv
+             kappa_lo = kappa_mol + ( weight_z_0(k-1)*nu_t(i,j,k-1) + weight_z_1(k-1)*nu_t(i,j,k) )*kappa_t_inv
              diff_z = ( kappa_hi*(C_(i,j,k+1) - C_(i,j,k))/(zg(k+1)-zg(k)) &
                       - kappa_lo*(C_(i,j,k) - C_(i,j,k-1))/(zg(k)-zg(k-1)) ) / dz_f
 

@@ -5,6 +5,7 @@ Module ibm
   Use global
   Use mpi
   Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner
+  Use boundary_conditions, Only : exchange_velocity_halos
 
   Implicit None
 
@@ -20,6 +21,9 @@ Module ibm
   Real(Int64) :: ibm_Fx_acc = 0d0
   Real(Int64) :: ibm_Fy_acc = 0d0
   Real(Int64) :: ibm_Fz_acc = 0d0
+
+  ! Image-point values gathered from the pre-update field before any ghost cell is overwritten
+  Real(Int64), Allocatable :: ghost_img_val(:)
 
 Contains
 
@@ -52,6 +56,9 @@ Contains
     If ( myid==0 ) Then
        Write(*,*) 'IBM: ghost cells (GLOBAL) — U:', n_ghost_u_global, ' V:', n_ghost_v_global, ' W:', n_ghost_w_global
     End If
+
+    Allocate ( ghost_img_val(Max(n_ghost_u, n_ghost_v, n_ghost_w, 1)) )
+    !$acc enter data create(ghost_img_val)
 
     ! Device-resident IBM data: phi (read once above) and the ghost-cell lists (built once above), never modified afterward
     !$acc enter data copyin(phi)
@@ -445,15 +452,15 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, ny-1
           Do i = 2, nxg-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i,j+1,k)) < 0d0 ) Then
-                If ( 0.5d0*(phi(i-1,j,k)+phi(i-1,j+1,k)) >= 0d0 .Or. &
-                     0.5d0*(phi(i+1,j,k)+phi(i+1,j+1,k)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j-1,k)+phi(i,j,  k))   >= 0d0 .Or. &
-                     0.5d0*(phi(i,j+1,k)+phi(i,j+2,k))   >= 0d0 .Or. &
-                     0.5d0*(phi(i,j,k-1)+phi(i,j+1,k-1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j,k+1)+phi(i,j+1,k+1)) >= 0d0 ) Then
+             If ( phi_v(i,j,k) < 0d0 ) Then
+                If ( phi_v(i-1,j,k) >= 0d0 .Or. &
+                     phi_v(i+1,j,k) >= 0d0 .Or. &
+                     phi_v(i,j-1,k)   >= 0d0 .Or. &
+                     phi_v(i,j+1,k)   >= 0d0 .Or. &
+                     phi_v(i,j,k-1) >= 0d0 .Or. &
+                     phi_v(i,j,k+1) >= 0d0 ) Then
                    Call compute_normal_at_face_v(i,j,k, nx_,ny_,nz_)
-                   dGB = Abs( 0.5d0*(phi(i,j,k)+phi(i,j+1,k)) )
+                   dGB = Abs( phi_v(i,j,k) )
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
                    xI = xg(i) + dGI*nx_
                    yI = y(j)  + dGI*ny_
@@ -498,13 +505,13 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, ny-1
           Do i = 2, nxg-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i,j+1,k)) < 0d0 ) Then
-                If ( 0.5d0*(phi(i-1,j,k)+phi(i-1,j+1,k)) >= 0d0 .Or. &
-                     0.5d0*(phi(i+1,j,k)+phi(i+1,j+1,k)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j-1,k)+phi(i,j,  k))   >= 0d0 .Or. &
-                     0.5d0*(phi(i,j+1,k)+phi(i,j+2,k))   >= 0d0 .Or. &
-                     0.5d0*(phi(i,j,k-1)+phi(i,j+1,k-1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j,k+1)+phi(i,j+1,k+1)) >= 0d0 ) Then
+             If ( phi_v(i,j,k) < 0d0 ) Then
+                If ( phi_v(i-1,j,k) >= 0d0 .Or. &
+                     phi_v(i+1,j,k) >= 0d0 .Or. &
+                     phi_v(i,j-1,k)   >= 0d0 .Or. &
+                     phi_v(i,j+1,k)   >= 0d0 .Or. &
+                     phi_v(i,j,k-1) >= 0d0 .Or. &
+                     phi_v(i,j,k+1) >= 0d0 ) Then
 
                    xGc = xg(i)
                    yGc = y(j)
@@ -512,7 +519,7 @@ Contains
 
                    Call compute_normal_at_face_v(i,j,k, nx_,ny_,nz_)
 
-                   dGB = Abs( 0.5d0*(phi(i,j,k)+phi(i,j+1,k)) )
+                   dGB = Abs( phi_v(i,j,k) )
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
                    xB = xGc + dGB*nx_;  yB = yGc + dGB*ny_;  zB = zGc + dGB*nz_
                    xI = xGc + dGI*nx_;  yI = yGc + dGI*ny_;  zI = zGc + dGI*nz_
@@ -547,7 +554,7 @@ Contains
     Do ng = 1, n_ghost_v
        i = ghost_v_idx(1,ng);  j = ghost_v_idx(2,ng);  k = ghost_v_idx(3,ng)
        ghost_v_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
-       ghost_v_dGB(ng)   = Abs( 0.5d0*(phi(i,j,k)+phi(i,j+1,k)) )
+       ghost_v_dGB(ng)   = Abs( phi_v(i,j,k) )
        ghost_v_xB(1,ng)  = xg(i)  + ghost_v_dGB(ng)*ghost_v_nrm(1,ng)
        ghost_v_xB(2,ng)  = y (j)  + ghost_v_dGB(ng)*ghost_v_nrm(2,ng)
        ghost_v_xB(3,ng)  = zg(k)  + ghost_v_dGB(ng)*ghost_v_nrm(3,ng)
@@ -577,15 +584,15 @@ Contains
     Do k = 2, nz-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i,j,k+1)) < 0d0 ) Then
+             If ( phi_w(i,j,k) < 0d0 ) Then
                 If ( 0.5d0*(phi(i-1,j,k)+phi(i-1,j,k+1)) >= 0d0 .Or. &
                      0.5d0*(phi(i+1,j,k)+phi(i+1,j,k+1)) >= 0d0 .Or. &
                      0.5d0*(phi(i,j-1,k)+phi(i,j-1,k+1)) >= 0d0 .Or. &
                      0.5d0*(phi(i,j+1,k)+phi(i,j+1,k+1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j,k-1)+phi(i,j,k))               >= 0d0 .Or. &
-                     0.5d0*(phi(i,j,k+1)+phi(i,j,min(k+2,nzg)))   >= 0d0 ) Then
+                     phi_w(i,j,k-1) >= 0d0 .Or. &
+                     phi_w(i,j,k+1) >= 0d0 ) Then
                    Call compute_normal_at_face_w(i,j,k, nx_,ny_,nz_)
-                   dGB = Abs( 0.5d0*(phi(i,j,k)+phi(i,j,k+1)) )
+                   dGB = Abs( phi_w(i,j,k) )
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
                    xI = xg(i) + dGI*nx_
                    yI = yg(j) + dGI*ny_
@@ -630,13 +637,13 @@ Contains
     Do k = 2, nz-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i,j,k+1)) < 0d0 ) Then
+             If ( phi_w(i,j,k) < 0d0 ) Then
                 If ( 0.5d0*(phi(i-1,j,k)+phi(i-1,j,k+1)) >= 0d0 .Or. &
                      0.5d0*(phi(i+1,j,k)+phi(i+1,j,k+1)) >= 0d0 .Or. &
                      0.5d0*(phi(i,j-1,k)+phi(i,j-1,k+1)) >= 0d0 .Or. &
                      0.5d0*(phi(i,j+1,k)+phi(i,j+1,k+1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j,k-1)+phi(i,j,k))               >= 0d0 .Or. &
-                     0.5d0*(phi(i,j,k+1)+phi(i,j,min(k+2,nzg)))   >= 0d0 ) Then
+                     phi_w(i,j,k-1) >= 0d0 .Or. &
+                     phi_w(i,j,k+1) >= 0d0 ) Then
 
                    xGc = xg(i)
                    yGc = yg(j)
@@ -644,7 +651,7 @@ Contains
 
                    Call compute_normal_at_face_w(i,j,k, nx_,ny_,nz_)
 
-                   dGB = Abs( 0.5d0*(phi(i,j,k)+phi(i,j,k+1)) )
+                   dGB = Abs( phi_w(i,j,k) )
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
                    xB = xGc+dGB*nx_;  yB = yGc+dGB*ny_;  zB = zGc+dGB*nz_
                    xI = xGc+dGI*nx_;  yI = yGc+dGI*ny_;  zI = zGc+dGI*nz_
@@ -679,7 +686,7 @@ Contains
     Do ng = 1, n_ghost_w
        i = ghost_w_idx(1,ng);  j = ghost_w_idx(2,ng);  k = ghost_w_idx(3,ng)
        ghost_w_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
-       ghost_w_dGB(ng)   = Abs( 0.5d0*(phi(i,j,k)+phi(i,j,k+1)) )
+       ghost_w_dGB(ng)   = Abs( phi_w(i,j,k) )
        ghost_w_xB(1,ng)  = xg(i)  + ghost_w_dGB(ng)*ghost_w_nrm(1,ng)
        ghost_w_xB(2,ng)  = yg(j)  + ghost_w_dGB(ng)*ghost_w_nrm(2,ng)
        ghost_w_xB(3,ng)  = z (k)  + ghost_w_dGB(ng)*ghost_w_nrm(3,ng)
@@ -704,7 +711,10 @@ Contains
     Real(Int64), Dimension(nxg,nyg, nz), Intent(InOut) :: W_
 
     Integer(Int32) :: n, i, j, k
-    Real   (Int64) :: U_I, r
+    Real   (Int64) :: r
+
+    ! Image-point stencils can reach into the seam halo planes, which are stale after the RK update / projection that precedes this call
+    If ( nprocs > 1 ) Call exchange_velocity_halos
 
     ! Zero fully-solid faces using phi-based averages (face-centred; Umask_cc is cell-centred).
     ! Ghost cells are also zeroed here and corrected below from fluid image points.
@@ -717,20 +727,20 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
-    !$acc parallel loop collapse(3) present(phi,V_)
+    !$acc parallel loop collapse(3) present(phi,V_,y,yg)
     Do k = 2, nzg-1
        Do j = 2, ny-1
           Do i = 2, nxg-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i,j+1,k)) < 0d0 ) V_(i,j,k) = 0d0
+             If ( ( ( yg(j+1) - y(j) )*phi(i,j,k) + ( y(j) - yg(j) )*phi(i,j+1,k) ) / ( yg(j+1) - yg(j) ) < 0d0 ) V_(i,j,k) = 0d0
           End Do
        End Do
     End Do
     !$acc end parallel loop
-    !$acc parallel loop collapse(3) present(phi,W_)
+    !$acc parallel loop collapse(3) present(phi,W_,z,zg)
     Do k = 2, nz-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i,j,k+1)) < 0d0 ) W_(i,j,k) = 0d0
+             If ( ( ( zg(k+1) - z(k) )*phi(i,j,k) + ( z(k) - zg(k) )*phi(i,j,k+1) ) / ( zg(k+1) - zg(k) ) < 0d0 ) W_(i,j,k) = 0d0
           End Do
        End Do
     End Do
@@ -738,34 +748,49 @@ Contains
 
     !--- U ghost cells: general two-point mirror U_G = (U_wall - r*U_I)/(1-r), r = dGB/dGI
     !    (reduces to the textbook 2*U_wall - U_I when the image sits at the unclamped 2*dGB, r=0.5) ---
-    !$acc parallel loop present(U_,ghost_u_idx,ghost_u_wgt,ghost_u_img,ghost_u_dGB,ghost_u_dGI) private(U_I,r)
+    !$acc parallel loop present(U_,ghost_u_wgt,ghost_u_img,ghost_img_val)
+    Do n = 1, n_ghost_u
+       ghost_img_val(n) = trilinear_interp_u(U_, ghost_u_wgt(1:8,n), ghost_u_img(:,n))
+    End Do
+    !$acc end parallel loop
+    !$acc parallel loop present(U_,ghost_u_idx,ghost_u_dGB,ghost_u_dGI,ghost_img_val) private(r)
     Do n = 1, n_ghost_u
        i = ghost_u_idx(1,n);  j = ghost_u_idx(2,n);  k = ghost_u_idx(3,n)
-       U_I = trilinear_interp_u(U_, ghost_u_wgt(1:8,n), ghost_u_img(:,n))
        r = ghost_u_dGB(n) / ghost_u_dGI(n)
-       U_(i,j,k) = ( U_wall - r*U_I ) / ( 1d0 - r )
+       U_(i,j,k) = ( U_wall - r*ghost_img_val(n) ) / ( 1d0 - r )
     End Do
     !$acc end parallel loop
 
     !--- V ghost cells ---
-    !$acc parallel loop present(V_,ghost_v_idx,ghost_v_wgt,ghost_v_img,ghost_v_dGB,ghost_v_dGI) private(U_I,r)
+    !$acc parallel loop present(V_,ghost_v_wgt,ghost_v_img,ghost_img_val)
+    Do n = 1, n_ghost_v
+       ghost_img_val(n) = trilinear_interp_v(V_, ghost_v_wgt(1:8,n), ghost_v_img(:,n))
+    End Do
+    !$acc end parallel loop
+    !$acc parallel loop present(V_,ghost_v_idx,ghost_v_dGB,ghost_v_dGI,ghost_img_val) private(r)
     Do n = 1, n_ghost_v
        i = ghost_v_idx(1,n);  j = ghost_v_idx(2,n);  k = ghost_v_idx(3,n)
-       U_I = trilinear_interp_v(V_, ghost_v_wgt(1:8,n), ghost_v_img(:,n))
        r = ghost_v_dGB(n) / ghost_v_dGI(n)
-       V_(i,j,k) = ( V_wall - r*U_I ) / ( 1d0 - r )
+       V_(i,j,k) = ( V_wall - r*ghost_img_val(n) ) / ( 1d0 - r )
     End Do
     !$acc end parallel loop
 
     !--- W ghost cells ---
-    !$acc parallel loop present(W_,ghost_w_idx,ghost_w_wgt,ghost_w_img,ghost_w_dGB,ghost_w_dGI) private(U_I,r)
+    !$acc parallel loop present(W_,ghost_w_wgt,ghost_w_img,ghost_img_val)
     Do n = 1, n_ghost_w
-       i = ghost_w_idx(1,n);  j = ghost_w_idx(2,n);  k = ghost_w_idx(3,n)
-       U_I = trilinear_interp_w(W_, ghost_w_wgt(1:8,n), ghost_w_img(:,n))
-       r = ghost_w_dGB(n) / ghost_w_dGI(n)
-       W_(i,j,k) = ( W_wall - r*U_I ) / ( 1d0 - r )
+       ghost_img_val(n) = trilinear_interp_w(W_, ghost_w_wgt(1:8,n), ghost_w_img(:,n))
     End Do
     !$acc end parallel loop
+    !$acc parallel loop present(W_,ghost_w_idx,ghost_w_dGB,ghost_w_dGI,ghost_img_val) private(r)
+    Do n = 1, n_ghost_w
+       i = ghost_w_idx(1,n);  j = ghost_w_idx(2,n);  k = ghost_w_idx(3,n)
+       r = ghost_w_dGB(n) / ghost_w_dGI(n)
+       W_(i,j,k) = ( W_wall - r*ghost_img_val(n) ) / ( 1d0 - r )
+    End Do
+    !$acc end parallel loop
+
+    ! The neighbour's halo copies of the cells just modified are stale until refreshed; the next SGS/RHS reads them
+    If ( nprocs > 1 ) Call exchange_velocity_halos
 
   End Subroutine apply_ghost_cell_ibm
 
@@ -959,6 +984,26 @@ Contains
 
   !  Wall-normal at a cell centre (i,j,k): central-difference
   !  gradient of phi on the cell-centre grid, normalised.
+  !> SDF at the W (z-face) location (i,j,k), interpolated from the two adjacent cell centres with the local
+  !  z weights (centres are face midpoints, so this is a plain average only on a uniform z grid); built from
+  !  z/zg directly since setup_ibm runs before the interpolation weight arrays are allocated (host-only:
+  !  the device W-zeroing loop below inlines the same expression, module arrays can't be used in an acc routine)
+  Pure Function phi_w(i,j,k) Result(v)
+    Integer(Int32), Intent(In) :: i, j, k
+    Real   (Int64) :: v, w0
+    w0 = ( zg(k+1) - z(k) ) / ( zg(k+1) - zg(k) )
+    v  = w0*phi(i,j,k) + ( 1d0 - w0 )*phi(i,j,k+1)
+  End Function phi_w
+
+  !> SDF at the V (y-face) location (i,j,k), interpolated from the two adjacent cell centres with the local
+  !  y weights (plain average only on a uniform y grid); host-only, the device V-zeroing loop inlines the same expression
+  Pure Function phi_v(i,j,k) Result(v)
+    Integer(Int32), Intent(In) :: i, j, k
+    Real   (Int64) :: v, w0
+    w0 = ( yg(j+1) - y(j) ) / ( yg(j+1) - yg(j) )
+    v  = w0*phi(i,j,k) + ( 1d0 - w0 )*phi(i,j+1,k)
+  End Function phi_v
+
   Subroutine compute_normal_at_cc(i,j,k, nx_,ny_,nz_)
     Integer(Int32), Intent(In)  :: i, j, k
     Real   (Int64), Intent(Out) :: nx_, ny_, nz_
@@ -968,7 +1013,10 @@ Contains
     h_up = yg(j+1) - yg(j);  h_dn = yg(j) - yg(j-1)
     ny_  = ( h_dn**2*phi(i,j+1,k) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j-1,k) ) &
            / ( h_up * h_dn * (h_up + h_dn) )
-    nz_  = (phi(i,j,k+1) - phi(i,j,k-1)) / (zg(k+1) - zg(k-1))
+    ! Non-uniform central difference in z (2nd-order on stretched meshes)
+    h_up = zg(k+1) - zg(k);  h_dn = zg(k) - zg(k-1)
+    nz_  = ( h_dn**2*phi(i,j,k+1) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j,k-1) ) &
+           / ( h_up * h_dn * (h_up + h_dn) )
     nmag = Sqrt(nx_**2 + ny_**2 + nz_**2)
     If (nmag > 1d-14) Then
        nx_ = nx_/nmag;  ny_ = ny_/nmag;  nz_ = nz_/nmag
@@ -989,7 +1037,10 @@ Contains
     h_up = yg(j+1) - yg(j);  h_dn = yg(j) - yg(j-1)
     ny_  = ( h_dn**2*phi(i,j+1,k) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j-1,k) ) &
            / ( h_up * h_dn * (h_up + h_dn) )
-    nz_  = ( phi(i,j,k+1) - phi(i,j,k-1) ) / ( zg(k+1) - zg(k-1) )
+    ! Non-uniform central difference in z (2nd-order on stretched meshes)
+    h_up = zg(k+1) - zg(k);  h_dn = zg(k) - zg(k-1)
+    nz_  = ( h_dn**2*phi(i,j,k+1) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j,k-1) ) &
+           / ( h_up * h_dn * (h_up + h_dn) )
     nmag = Sqrt(nx_**2 + ny_**2 + nz_**2)
     If (nmag > 1d-14) Then
        nx_ = nx_/nmag;  ny_ = ny_/nmag;  nz_ = nz_/nmag
@@ -1001,10 +1052,13 @@ Contains
   Subroutine compute_normal_at_face_v(i,j,k, nx_,ny_,nz_)
     Integer(Int32), Intent(In)  :: i, j, k
     Real   (Int64), Intent(Out) :: nx_, ny_, nz_
-    Real   (Int64)              :: nmag
+    Real   (Int64)              :: nmag, h_up, h_dn
     nx_ = ( phi(i+1,j,k) - phi(i-1,j,k) ) / ( xg(i+1) - xg(i-1) )
     ny_ = ( phi(i,j+1,k) - phi(i,j,k) )   / ( yg(j+1) - yg(j) )
-    nz_ = ( phi(i,j,k+1) - phi(i,j,k-1) ) / ( zg(k+1) - zg(k-1) )
+    ! Non-uniform central difference in z (2nd-order on stretched meshes)
+    h_up = zg(k+1) - zg(k);  h_dn = zg(k) - zg(k-1)
+    nz_ = ( h_dn**2*phi(i,j,k+1) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j,k-1) ) &
+           / ( h_up * h_dn * (h_up + h_dn) )
     nmag = Sqrt(nx_**2+ny_**2+nz_**2)
     If (nmag>1d-14) Then; nx_=nx_/nmag; ny_=ny_/nmag; nz_=nz_/nmag
     Else; nx_=0d0; ny_=1d0; nz_=0d0; End If

@@ -43,7 +43,7 @@ Module uav_actuator
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global
-  Use mpi, Only : myid
+  Use mpi, Only : myid, k1_global, kg1_global
 
   Implicit None
 
@@ -484,11 +484,11 @@ Contains
 
     Real(Int64), Dimension(2:nx-1,2:nyg-1,2:nzg-1), Intent(InOut) :: rhs_u
 
-    Integer(Int32) :: n, i, j, k, i0, j0, k0
+    Integer(Int32) :: n, i, j, k, i0, j0, k0, kk0, kk
     Integer(Int32) :: ilo, ihi, jlo, jhi, klo, khi, ifull_lo, ifull_hi, kfull_lo, kfull_hi
     Real(Int64) :: xc, yc, zc, Qtot, nvec(3), e1(3), e2(3)
     Real(Int64) :: xp, yp, zp, Qn, e_theta(3), Fx
-    Real(Int64) :: sigx, sigz, sigy, dxp, dyp, dzp, wgt, norm, dVj, best
+    Real(Int64) :: sigx, sigz, sigy, dxp, dyp, dzp, dzk, wgt, norm, dVj, best
 
     Call uav_disk_state(t, xc, yc, zc, Qtot, nvec, e1, e2)
 
@@ -504,7 +504,8 @@ Contains
 
        ! nearest local x-face index (uniform spacing, face offset by half a cell from the xg centre grid)
        i0 = Nint( (xp - xg(2))/dx + 1.5d0 )
-       k0 = Nint( (zp - zg(2))/dz )        + 2
+       kk0 = nearest_zg_index(zp)          ! global cell-centre index (z may be stretched, and is MPI-decomposed)
+       k0  = kk0 - kg1_global(myid) + 1
 
        ! nearest yg cell-centre index (non-uniform grid: linear search, yg not MPI-decomposed)
        j0 = 2
@@ -526,14 +527,16 @@ Contains
        kfull_lo = k0 - uav_kernel_ncell;  kfull_hi = k0 + uav_kernel_ncell
 
        sigx = Max(uav_kernel_ncell,1) * dx                * 0.5d0
-       sigz = Max(uav_kernel_ncell,1) * dz                * 0.5d0
+       sigz = Max(uav_kernel_ncell,1) * ( z_face_at(kk0) - z_face_at(kk0-1) ) * 0.5d0
        sigy = Max(uav_kernel_ncell,1) * (y(j0)-y(j0-1))   * 0.5d0
 
        norm = 0d0
        Do k = kfull_lo, kfull_hi
-          dzp = zg(2) + Real(k-2,Int64)*dz - zp
+          kk  = kk0 + (k - k0)
+          dzp = zg_at(kk) - zp
+          dzk = z_face_at(kk) - z_face_at(kk-1)
           Do j = jlo, jhi
-             dVj = dx * dz * ( y(j) - y(j-1) )
+             dVj = dx * dzk * ( y(j) - y(j-1) )
              dyp = yg(j) - yp
              Do i = ifull_lo, ifull_hi
                 dxp = xg(2) + ( Real(i,Int64) - 1.5d0 )*dx - xp
@@ -568,12 +571,12 @@ Contains
 
     Real(Int64), Dimension(2:nxg-1,2:ny-1,2:nzg-1), Intent(InOut) :: rhs_v
 
-    Integer(Int32) :: n, i, j, k, i0, j0, k0
+    Integer(Int32) :: n, i, j, k, i0, j0, k0, kk0, kk
     Integer(Int32) :: ilo, ihi, jlo, jhi, klo, khi
     Integer(Int32) :: ifull_lo, ifull_hi, kfull_lo, kfull_hi
     Real(Int64) :: xc, yc, zc, Qtot, nvec(3), e1(3), e2(3)
     Real(Int64) :: xp, yp, zp, Qn, e_theta(3), Fy
-    Real(Int64) :: sigx, sigz, sigy, dxp, dyp, dzp, wgt, norm, dVj
+    Real(Int64) :: sigx, sigz, sigy, dxp, dyp, dzp, dzk, wgt, norm, dVj
     Real(Int64) :: best
 
     Call uav_disk_state(t, xc, yc, zc, Qtot, nvec, e1, e2)
@@ -588,9 +591,10 @@ Contains
        e_theta = -Sin(uav_mk_theta(n))*e1 + Cos(uav_mk_theta(n))*e2
        Fy = -Qn*nvec(2) + uav_swirl_frac*Qn*e_theta(2)
 
-       ! locate the nearest local cell-centre index in x/z (uniform spacing)
+       ! locate the nearest local cell-centre index in x (uniform spacing); z is located globally below (may be stretched)
        i0 = Nint( (xp - xg(2))/dx ) + 2
-       k0 = Nint( (zp - zg(2))/dz ) + 2
+       kk0 = nearest_zg_index(zp)
+       k0  = kk0 - kg1_global(myid) + 1
 
        ! locate the nearest local y-face index (non-uniform grid: linear search over this rank's small local y array)
        j0 = 2
@@ -613,22 +617,24 @@ Contains
        kfull_lo = k0 - uav_kernel_ncell;  kfull_hi = k0 + uav_kernel_ncell
 
        sigx = Max(uav_kernel_ncell,1) * dx                    * 0.5d0
-       sigz = Max(uav_kernel_ncell,1) * dz                    * 0.5d0
+       sigz = Max(uav_kernel_ncell,1) * ( z_face_at(kk0) - z_face_at(kk0-1) ) * 0.5d0
        sigy = Max(uav_kernel_ncell,1) * (yg(j0+1)-yg(j0))     * 0.5d0
 
        ! Pass 1: normalization so that sum(wgt*dV) over the support equals the marker's thrust share exactly.
        ! Summed over the marker's FULL kernel box (ifull_lo:ifull_hi, kfull_lo:kfull_hi), not just the
-       ! ilo:ihi/klo:khi cells this rank owns: x/z are uniform and dx/dz are the same on every rank, so
-       ! xg(i)-xp for any integer i is exactly xg(2)+(i-2)*dx-xp regardless of whether i is a valid local
-       ! index here -- computed arithmetically below without touching xg/zg out of bounds. Using only the
+       ! ilo:ihi/klo:khi cells this rank owns: x is uniform, so xg(i)-xp for any integer i is exactly
+       ! xg(2)+(i-2)*dx-xp regardless of whether i is a valid local index here; z positions/widths come from
+       ! the global z arrays (zg_at/z_face_at), which extrapolate past the domain ends, since z may be stretched. Using only the
        ! locally-owned range here would make each rank normalize its own partial sum back up to the full
        ! thrust share, double-counting (or worse) whenever a marker's support straddles two ranks in x/z.
        ! y is not MPI-decomposed, so jlo:jhi (already clipped at the physical wall, not a rank seam) is fine.
        norm = 0d0
        Do k = kfull_lo, kfull_hi
-          dzp = zg(2) + Real(k-2,Int64)*dz - zp
+          kk  = kk0 + (k - k0)
+          dzp = zg_at(kk) - zp
+          dzk = z_face_at(kk) - z_face_at(kk-1)
           Do j = jlo, jhi
-             dVj = dx * dz * ( yg(j+1) - yg(j) )
+             dVj = dx * dzk * ( yg(j+1) - yg(j) )
              dyp = y(j) - yp
              Do i = ifull_lo, ifull_hi
                 dxp = xg(2) + Real(i-2,Int64)*dx - xp
@@ -665,11 +671,11 @@ Contains
 
     Real(Int64), Dimension(2:nxg-1,2:nyg-1,2:nz-1), Intent(InOut) :: rhs_w
 
-    Integer(Int32) :: n, i, j, k, i0, j0, k0
+    Integer(Int32) :: n, i, j, k, i0, j0, k0, kk0, kk
     Integer(Int32) :: ilo, ihi, jlo, jhi, klo, khi, ifull_lo, ifull_hi, kfull_lo, kfull_hi
     Real(Int64) :: xc, yc, zc, Qtot, nvec(3), e1(3), e2(3)
     Real(Int64) :: xp, yp, zp, Qn, e_theta(3), Fz
-    Real(Int64) :: sigx, sigz, sigy, dxp, dyp, dzp, wgt, norm, dVj, best
+    Real(Int64) :: sigx, sigz, sigy, dxp, dyp, dzp, dzk, wgt, norm, dVj, best
 
     Call uav_disk_state(t, xc, yc, zc, Qtot, nvec, e1, e2)
 
@@ -684,7 +690,8 @@ Contains
        Fz = -Qn*nvec(3) + uav_swirl_frac*Qn*e_theta(3)
 
        i0 = Nint( (xp - xg(2))/dx )        + 2
-       k0 = Nint( (zp - zg(2))/dz + 1.5d0 )
+       kk0 = nearest_z_face_index(zp)      ! global z-face index
+       k0  = kk0 - k1_global(myid) + 1
 
        j0 = 2
        best = Abs( yg(2) - yp )
@@ -705,14 +712,16 @@ Contains
        kfull_lo = k0 - uav_kernel_ncell;  kfull_hi = k0 + uav_kernel_ncell
 
        sigx = Max(uav_kernel_ncell,1) * dx                * 0.5d0
-       sigz = Max(uav_kernel_ncell,1) * dz                * 0.5d0
+       sigz = Max(uav_kernel_ncell,1) * ( zg_at(kk0+1) - zg_at(kk0) ) * 0.5d0
        sigy = Max(uav_kernel_ncell,1) * (y(j0)-y(j0-1))   * 0.5d0
 
        norm = 0d0
        Do k = kfull_lo, kfull_hi
-          dzp = zg(2) + ( Real(k,Int64) - 1.5d0 )*dz - zp
+          kk  = kk0 + (k - k0)
+          dzp = z_face_at(kk) - zp
+          dzk = zg_at(kk+1) - zg_at(kk)      ! W control-volume height (face-centred)
           Do j = jlo, jhi
-             dVj = dx * dz * ( y(j) - y(j-1) )
+             dVj = dx * dzk * ( y(j) - y(j-1) )
              dyp = yg(j) - yp
              Do i = ifull_lo, ifull_hi
                 dxp = xg(2) + Real(i-2,Int64)*dx - xp
@@ -739,5 +748,51 @@ Contains
     End Do
 
   End Subroutine apply_uav_forcing_w
+
+  !> Global cell-centre z position for any (possibly out-of-range) global index, linearly extrapolated past the ends (kernel boxes can extend past this rank's or the domain's z range)
+  Pure Function zg_at(kk) Result(zv)
+    Integer(Int32), Intent(In) :: kk
+    Real(Int64) :: zv
+    If ( kk < 1 ) Then
+       zv = zg_global(1) + Real(kk-1,Int64)*( zg_global(2) - zg_global(1) )
+    Else If ( kk > nzg_global ) Then
+       zv = zg_global(nzg_global) + Real(kk-nzg_global,Int64)*( zg_global(nzg_global) - zg_global(nzg_global-1) )
+    Else
+       zv = zg_global(kk)
+    End If
+  End Function zg_at
+
+  !> Global z-face position for any (possibly out-of-range) global index, linearly extrapolated past the ends
+  Pure Function z_face_at(kk) Result(zv)
+    Integer(Int32), Intent(In) :: kk
+    Real(Int64) :: zv
+    If ( kk < 1 ) Then
+       zv = z_global(1) + Real(kk-1,Int64)*( z_global(2) - z_global(1) )
+    Else If ( kk > nz_global ) Then
+       zv = z_global(nz_global) + Real(kk-nz_global,Int64)*( z_global(nz_global) - z_global(nz_global-1) )
+    Else
+       zv = z_global(kk)
+    End If
+  End Function z_face_at
+
+  !> Global index of the interior cell centre nearest zp (z stretched and MPI-decomposed, so searched over the global array)
+  Function nearest_zg_index(zp) Result(kbest)
+    Real(Int64), Intent(In) :: zp
+    Integer(Int32) :: kbest, kk
+    kbest = 2
+    Do kk = 3, nzg_global-1
+       If ( Abs(zg_global(kk)-zp) < Abs(zg_global(kbest)-zp) ) kbest = kk
+    End Do
+  End Function nearest_zg_index
+
+  !> Global index of the interior z-face nearest zp
+  Function nearest_z_face_index(zp) Result(kbest)
+    Real(Int64), Intent(In) :: zp
+    Integer(Int32) :: kbest, kk
+    kbest = 2
+    Do kk = 3, nz_global-1
+       If ( Abs(z_global(kk)-zp) < Abs(z_global(kbest)-zp) ) kbest = kk
+    End Do
+  End Function nearest_z_face_index
 
 End Module uav_actuator

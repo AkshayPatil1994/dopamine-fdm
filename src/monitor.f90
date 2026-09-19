@@ -263,18 +263,18 @@ Contains
     local_conv = 0d0
     local_visc = 0d0
 
-    ! x and z grids are uniform: hoist their inverses outside all loops.
+    ! x grid is uniform: hoist its inverse outside all loops (z may be stretched, so inv_dz is per k).
     inv_dx  = 1d0 / dx
-    inv_dz  = 1d0 / dz
     inv_dx2 = inv_dx * inv_dx
-    inv_dz2 = inv_dz * inv_dz
 
     If ( ibm_input_mode >= 1 ) Then
        ! Kept as a separate branch (not merged behind a runtime .And. guard) since Fortran doesn't guarantee short-circuit evaluation and phi mustn't be touched when not IBM-active
-       !$acc parallel loop collapse(2) present(U,V,W,nu_t,y,phi) reduction(max:local_conv,local_visc)
+       !$acc parallel loop collapse(2) present(U,V,W,nu_t,y,z,phi) reduction(max:local_conv,local_visc)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
-             ! y-grid is non-uniform: recompute inv_dy only once per j.
+             ! y-grid is non-uniform: recompute inv_dy only once per j (inv_dz once per (k,j), z may be stretched).
+             inv_dz  = 1d0 / Max(z(k)-z(k-1), 1d-14)
+             inv_dz2 = inv_dz * inv_dz
              inv_dy  = 1d0 / Max(y(j)-y(j-1), 1d-14)
              inv_dy2 = inv_dy * inv_dy
              Do i = 2, nxg-1
@@ -295,11 +295,13 @@ Contains
        End Do
        !$acc end parallel loop
     Else
-       !$acc parallel loop collapse(2) present(U,V,W,nu_t,y) reduction(max:local_conv,local_visc)
+       !$acc parallel loop collapse(2) present(U,V,W,nu_t,y,z) reduction(max:local_conv,local_visc)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
              inv_dy  = 1d0 / Max(y(j)-y(j-1), 1d-14)
              inv_dy2 = inv_dy * inv_dy
+             inv_dz  = 1d0 / Max(z(k)-z(k-1), 1d-14)
+             inv_dz2 = inv_dz * inv_dz
              Do i = 2, nxg-1
                 conv_ijk = Abs(0.5d0*(U(i,j,k)+U(i-1,j,k)))*inv_dx + &
                            Abs(0.5d0*(V(i,j,k)+V(i,j-1,k)))*inv_dy + &
@@ -326,7 +328,7 @@ Contains
 
   End Subroutine compute_cfl
 
-  !> Volume-weighted (non-uniform y, IBM-solid-excluded) domain bulk streamwise velocity, for constant-mass-flux forcing
+  !> Volume-weighted (non-uniform y and z, IBM-solid-excluded) domain bulk streamwise velocity, for constant-mass-flux forcing
   Subroutine compute_bulk_velocity(Ub_out)
 
     Real(Int64), Intent(Out) :: Ub_out
@@ -339,10 +341,10 @@ Contains
     local_wgt = 0d0
 
     If ( ibm_input_mode >= 1 ) Then
-       !$acc parallel loop collapse(2) present(U,y,phi) reduction(+:local_sum,local_wgt)
+       !$acc parallel loop collapse(2) present(U,y,z,phi) reduction(+:local_sum,local_wgt)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
-             dy_j = y(j) - y(j-1)
+             dy_j = ( y(j) - y(j-1) ) * ( z(k) - z(k-1) )   ! y-z cell area (x uniform); z may be stretched
              Do i = 2, nxg-1
                 If ( phi(i,j,k) < 0d0 ) Cycle
                 local_sum = local_sum + 0.5d0*(U(i,j,k)+U(i-1,j,k)) * dy_j
@@ -352,10 +354,10 @@ Contains
        End Do
        !$acc end parallel loop
     Else
-       !$acc parallel loop collapse(2) present(U,y) reduction(+:local_sum,local_wgt)
+       !$acc parallel loop collapse(2) present(U,y,z) reduction(+:local_sum,local_wgt)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
-             dy_j = y(j) - y(j-1)
+             dy_j = ( y(j) - y(j-1) ) * ( z(k) - z(k-1) )   ! y-z cell area (x uniform); z may be stretched
              Do i = 2, nxg-1
                 local_sum = local_sum + 0.5d0*(U(i,j,k)+U(i-1,j,k)) * dy_j
                 local_wgt = local_wgt + dy_j

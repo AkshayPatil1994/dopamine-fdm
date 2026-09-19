@@ -701,27 +701,45 @@ Contains
 
        ! mesh
        Read(1) nx_global_f
-       If ( nx_global_f/=nx_global ) Stop 'nx_f/=nx'
+       If ( nx_global_f/=nx_global ) Then
+          Write(*,'(A,I0,A,I0)') ' ERROR: restart file nx = ', nx_global_f, ' but input_parameters gives ', nx_global
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
        Read(1) x_global
 
        Read(1) ny_global_f
-       If ( ny_global_f/=ny_global ) Stop 'ny_f/=ny'
+       If ( ny_global_f/=ny_global ) Then
+          Write(*,'(A,I0,A,I0)') ' ERROR: restart file ny = ', ny_global_f, ' but input_parameters gives ', ny_global
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
        Read(1) y_global
 
        Read(1) nz_global_f
-       If ( nz_global_f/=nz_global ) Stop 'nz_f/=nz'
+       If ( nz_global_f/=nz_global ) Then
+          Write(*,'(A,I0,A,I0)') ' ERROR: restart file nz = ', nz_global_f, ' but input_parameters gives ', nz_global
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
        Read(1) z_global
 
        Read(1) nxm_global_f
-       If ( nxm_global_f/=nxm_global ) Stop 'nxm_f/=nxm'
+       If ( nxm_global_f/=nxm_global ) Then
+          Write(*,'(A,I0,A,I0)') ' ERROR: restart file nxm = ', nxm_global_f, ' but input_parameters gives ', nxm_global
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
        Read(1) xm_global
 
        Read(1) nym_global_f
-       If ( nym_global_f/=nym_global ) Stop 'nym_f/=nym'
+       If ( nym_global_f/=nym_global ) Then
+          Write(*,'(A,I0,A,I0)') ' ERROR: restart file nym = ', nym_global_f, ' but input_parameters gives ', nym_global
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
        Read(1) ym_global
 
        Read(1) nzm_global_f
-       If ( nzm_global_f/=nzm_global ) Stop 'nzm_f/=nzm'
+       If ( nzm_global_f/=nzm_global ) Then
+          Write(*,'(A,I0,A,I0)') ' ERROR: restart file nzm = ', nzm_global_f, ' but input_parameters gives ', nzm_global
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
        Read(1) zm_global
 
     End If

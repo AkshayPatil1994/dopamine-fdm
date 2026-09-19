@@ -6,7 +6,7 @@ Module equations
   Use global,          Only : x, xm, xg, y, ym, yg, z, zm, zg, term_1, &
                               term_2, term, nx, nxg, ny, nyg, nz, nzg, &
                               nu, dPdx, dPdz, yg_m, nu_t, in1, in2,    &
-                              weight_y_0, weight_y_1, dx, dz,         &
+                              weight_y_0, weight_y_1, weight_z_0, weight_z_1, dx, dz,         &
                               boussinesq_flag, beta_T, grav, T_ref, Tscal, &
                               advection_scheme, uav_active,           &
                               rotation_active, Omega_x, y0_rot, z0_rot
@@ -131,7 +131,7 @@ Contains
     End Do
     !$acc end kernels
 
-    !$acc parallel loop collapse(2) present(term_1,term_2,rhs_u,nu_t,weight_y_0,weight_y_1,U_,V_,W_,y,z)
+    !$acc parallel loop collapse(2) present(term_1,term_2,rhs_u,nu_t,weight_y_0,weight_y_1,weight_z_0,weight_z_1,U_,V_,W_,y,z)
     Do k=2,nzg-1
 
        Do j=2,nyg-1
@@ -168,8 +168,10 @@ Contains
              End If
 
              ! total viscosity at z locations
-             nu_z1 = nu + 0.25d0*(nu_t(i,j,k)+nu_t(i,j,k-1)+nu_t(i+1,j,k)+nu_t(i+1,j,k-1))
-             nu_z2 = nu + 0.25d0*(nu_t(i,j,k)+nu_t(i,j,k+1)+nu_t(i+1,j,k)+nu_t(i+1,j,k+1))
+             nu_z1 = nu + 0.5d0*( weight_z_0(k-1)*( nu_t(i,j,k-1) + nu_t(i+1,j,k-1) ) + &
+                              weight_z_1(k-1)*( nu_t(i,j,k) + nu_t(i+1,j,k) ) )
+             nu_z2 = nu + 0.5d0*( weight_z_0(k  )*( nu_t(i,j,k  ) + nu_t(i+1,j,k  ) ) + &
+                              weight_z_1(k  )*( nu_t(i,j,k+1) + nu_t(i+1,j,k+1) ) )
 
              ! viscous term, fused directly into rhs_u (was written to scratch `term` then accumulated separately)
              rhs_u(i,j,k) = rhs_u(i,j,k) +                                                                  &
@@ -297,7 +299,7 @@ Contains
     ! interpolate eddy viscosity to faces
 
     ! second order remain, no need to interpolate
-    !$acc parallel loop collapse(2) present(rhs_v,V_,U_,W_,nu_t,weight_y_0,weight_y_1,y,yg,z,zg)
+    !$acc parallel loop collapse(2) present(rhs_v,V_,U_,W_,nu_t,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg)
     Do k=2,nzg-1
 
        Do j=2,ny-1
@@ -332,10 +334,10 @@ Contains
              nu_y2 = nu + nu_t(i,j+1,k) 
 
              ! eddy viscosity at z locations
-             nu_z1 = nu + 0.5d0*( weight_y_0(j)*nu_t(i,j,k-1) + weight_y_1(j)*nu_t(i,j+1,k-1) + &
-                                  weight_y_0(j)*nu_t(i,j,k  ) + weight_y_1(j)*nu_t(i,j+1,k  ) )
-             nu_z2 = nu + 0.5d0*( weight_y_0(j)*nu_t(i,j,  k) + weight_y_1(j)*nu_t(i,j+1,  k) + &
-                                  weight_y_0(j)*nu_t(i,j,k+1) + weight_y_1(j)*nu_t(i,j+1,k+1) )
+             nu_z1 = nu + weight_z_0(k-1)*( weight_y_0(j)*nu_t(i,j,k-1) + weight_y_1(j)*nu_t(i,j+1,k-1) ) + &
+                          weight_z_1(k-1)*( weight_y_0(j)*nu_t(i,j,k  ) + weight_y_1(j)*nu_t(i,j+1,k  ) )
+             nu_z2 = nu + weight_z_0(k  )*( weight_y_0(j)*nu_t(i,j,  k) + weight_y_1(j)*nu_t(i,j+1,  k) ) + &
+                          weight_z_1(k  )*( weight_y_0(j)*nu_t(i,j,k+1) + weight_y_1(j)*nu_t(i,j+1,k+1) )
 
              ! viscous term, fused directly into rhs_v (was written to scratch term_2 then accumulated separately)
              rhs_v(i,j,k) = rhs_v(i,j,k) +                                                                                     &
@@ -499,7 +501,7 @@ Contains
     ! nu_t at the required face locations is read directly from the global array
     ! in the loop below; a separate interpolate_y pass is not needed.
 
-    !$acc parallel loop collapse(2) present(term_1,rhs_w,nu_t,weight_y_0,weight_y_1,U_,V_,W_,y,z,zg)
+    !$acc parallel loop collapse(2) present(term_1,rhs_w,nu_t,weight_y_0,weight_y_1,weight_z_0,weight_z_1,U_,V_,W_,y,z,zg)
     Do k=2,nz-1
 
        Do j=2,nyg-1
@@ -523,21 +525,23 @@ Contains
           Do i=2,nxg-1
 
              ! eddy viscosity at x locations
-             nu_x1 = nu + 0.25d0*(nu_t(i,j,k)+nu_t(i,j,k+1)+nu_t(i-1,j,k)+nu_t(i-1,j,k+1))
-             nu_x2 = nu + 0.25d0*(nu_t(i,j,k)+nu_t(i,j,k+1)+nu_t(i+1,j,k)+nu_t(i+1,j,k+1))
+             nu_x1 = nu + 0.5d0*( weight_z_0(k)*( nu_t(i,j,k  ) + nu_t(i-1,j,k  ) ) + &
+                              weight_z_1(k)*( nu_t(i,j,k+1) + nu_t(i-1,j,k+1) ) )
+             nu_x2 = nu + 0.5d0*( weight_z_0(k)*( nu_t(i,j,k  ) + nu_t(i+1,j,k  ) ) + &
+                              weight_z_1(k)*( nu_t(i,j,k+1) + nu_t(i+1,j,k+1) ) )
 
              ! Wall-face viscosity forced to nu only
              If ( j-1 == 1 ) Then
                 nu_y1 = nu
              Else
-                nu_y1 = nu + 0.5d0*( weight_y_0(j-1)*nu_t(i,j-1,  k) + weight_y_1(j-1)*nu_t(i,j  ,  k) + &
-                                     weight_y_0(j-1)*nu_t(i,j-1,k+1) + weight_y_1(j-1)*nu_t(i,j  ,k+1) )
+                nu_y1 = nu + weight_z_0(k)*( weight_y_0(j-1)*nu_t(i,j-1,  k) + weight_y_1(j-1)*nu_t(i,j  ,  k) ) + &
+                             weight_z_1(k)*( weight_y_0(j-1)*nu_t(i,j-1,k+1) + weight_y_1(j-1)*nu_t(i,j  ,k+1) )
              End If
              If ( j+1 == nyg ) Then
                 nu_y2 = nu
              Else
-                nu_y2 = nu + 0.5d0*( weight_y_0(j  )*nu_t(i,j  ,  k) + weight_y_1(j  )*nu_t(i,j+1,  k) + &
-                                     weight_y_0(j  )*nu_t(i,j  ,k+1) + weight_y_1(j  )*nu_t(i,j+1,k+1) )
+                nu_y2 = nu + weight_z_0(k)*( weight_y_0(j  )*nu_t(i,j  ,  k) + weight_y_1(j  )*nu_t(i,j+1,  k) ) + &
+                             weight_z_1(k)*( weight_y_0(j  )*nu_t(i,j  ,k+1) + weight_y_1(j  )*nu_t(i,j+1,k+1) )
              End If
 
              ! eddy viscosity at z locations
@@ -559,15 +563,15 @@ Contains
     !$acc end parallel loop
 
     ! Rigid-body rotation about the streamwise (x) axis: Coriolis (-2*Omega_x*v) + centrifugal (Omega_x^2*(z-z0_rot)).
-    ! v is interpolated onto w's (y-centre,z-face) point via plain neighbour averaging in y and
-    ! z, matching the face-to-centre averaging used for the convective/viscous cross terms above.
+    ! v is interpolated onto w's (y-centre,z-face) point: plain averaging in y (faces to centres) and
+    ! weight_z_0/1 in z (centres to faces, z may be stretched).
     If ( rotation_active >= 1 ) Then
-       !$acc parallel loop collapse(3) present(rhs_w,V_,z)
+       !$acc parallel loop collapse(3) present(rhs_w,V_,z,weight_z_0,weight_z_1)
        Do k=2,nz-1
           Do j=2,nyg-1
              Do i=2,nxg-1
                 rhs_w(i,j,k) = rhs_w(i,j,k) - &
-                     0.5d0*Omega_x*( V_(i,j-1,k) + V_(i,j,k) + V_(i,j-1,k+1) + V_(i,j,k+1) ) + &
+                     0.5d0*Omega_x*( weight_z_0(k)*( V_(i,j-1,k) + V_(i,j,k) ) + weight_z_1(k)*( V_(i,j-1,k+1) + V_(i,j,k+1) ) ) + &
                      Omega_x*Omega_x*( z(k) - z0_rot )
              End Do
           End Do

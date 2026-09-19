@@ -13,15 +13,8 @@ Module boundary_conditions
 
 Contains
 
-  ! Apply boundary conditions to velocities in the 3 directions; after_projection semantics
-  Subroutine apply_boundary_conditions(after_projection)
-
-    Logical, Intent(In), Optional :: after_projection
-    Logical :: skip_outflow_u
-    Real   (Int64) :: Uc
-
-    skip_outflow_u = .False.
-    If ( Present(after_projection) ) skip_outflow_u = after_projection
+  !> Refresh the interior-rank seam halos of U,V,W (z first, then x so the x planes carry fresh z ghosts)
+  Subroutine exchange_velocity_halos
 
     ! interior region (z-direction)
     Call update_ghost_interior_planes(U,1)
@@ -33,6 +26,20 @@ Contains
     Call update_ghost_interior_planes_x(U,1)
     Call update_ghost_interior_planes_x(V,2)
     Call update_ghost_interior_planes_x(W,2)
+
+  End Subroutine exchange_velocity_halos
+
+  ! Apply boundary conditions to velocities in the 3 directions; after_projection semantics
+  Subroutine apply_boundary_conditions(after_projection)
+
+    Logical, Intent(In), Optional :: after_projection
+    Logical :: skip_outflow_u
+    Real   (Int64) :: Uc
+
+    skip_outflow_u = .False.
+    If ( Present(after_projection) ) skip_outflow_u = after_projection
+
+    Call exchange_velocity_halos
 
     ! x direction: periodic, or Dirichlet-SEM inflow / convective outflow
     If ( x_bc_type == 0 ) Then

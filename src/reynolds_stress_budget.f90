@@ -151,7 +151,9 @@ Contains
     Real(Int64)    :: dwdx, dwdy, dwdz
     Real(Int64)    :: sij_11, sij_22, sij_33
     Real(Int64)    :: sij_12, sij_13, sij_23
-    Real(Int64)    :: inv_dx, inv_dz             ! uniform-grid reciprocals
+    Real(Int64)    :: inv_dx                     ! uniform-grid reciprocal
+    Real(Int64)    :: inv_zg_km, inv_zg_kp       ! per-k z-grid reciprocals (cell-centre spacing)
+    Real(Int64)    :: inv_dz_k                   ! per-k face-to-face spacing: 1/(z(k)-z(k-1))
     Real(Int64)    :: inv_yg_jm, inv_yg_jp       ! per-j y-grid reciprocals (cell-centre spacing)
     Real(Int64)    :: inv_dy_j                    ! per-j face-to-face spacing: 1/(y(j)-y(j-1))
 
@@ -159,10 +161,13 @@ Contains
     If ( istep < rsb_nstart ) Return
 
     inv_dx = 1d0 / dx
-    inv_dz = 1d0 / dz
 
     ! loop over interior cell centres i,j,k in [2..nxg-1]x[2..nyg-1]x[2..nzg-1]; cell-centre (i,j,k) maps to accumulator index (i-1,j-1,k-1)
     Do k = 2, nzg-1
+       ! per-k z-grid reciprocals (z may be stretched when z_bc_type==1)
+       inv_zg_km = 1d0 / ( zg(k)   - zg(k-1) )
+       inv_zg_kp = 1d0 / ( zg(k+1) - zg(k  ) )
+       inv_dz_k  = 1d0 / ( z (k)   - z (k-1) )
        Do j = 2, nyg-1
           ! per-j y-grid reciprocals
           inv_yg_jm = 1d0 / ( yg(j)   - yg(j-1) )
@@ -233,20 +238,20 @@ Contains
              dudx = ( U(i,j,k) - U(i-1,j,k) ) * inv_dx
              dudy = 0.5d0*( (U(i,j,k)-U(i,j-1,k))*inv_yg_jm + &
                             (U(i,j+1,k)-U(i,j,k))*inv_yg_jp )
-             dudz = 0.5d0*( (U(i,j,k)-U(i,j,k-1)) + &
-                            (U(i,j,k+1)-U(i,j,k)) ) * inv_dz
+             dudz = 0.5d0*( (U(i,j,k)-U(i,j,k-1))*inv_zg_km + &
+                            (U(i,j,k+1)-U(i,j,k))*inv_zg_kp )
 
              dvdx = 0.5d0*( (V(i,j,k)-V(i-1,j,k)) + &
                             (V(i+1,j,k)-V(i,j,k)) ) * inv_dx
              dvdy = ( V(i,j,k) - V(i,j-1,k) ) * inv_dy_j  ! V on y-faces: use face spacing
-             dvdz = 0.5d0*( (V(i,j,k)-V(i,j,k-1)) + &
-                            (V(i,j,k+1)-V(i,j,k)) ) * inv_dz
+             dvdz = 0.5d0*( (V(i,j,k)-V(i,j,k-1))*inv_zg_km + &
+                            (V(i,j,k+1)-V(i,j,k))*inv_zg_kp )
 
              dwdx = 0.5d0*( (W(i,j,k)-W(i-1,j,k)) + &
                             (W(i+1,j,k)-W(i,j,k)) ) * inv_dx
              dwdy = 0.5d0*( (W(i,j,k)-W(i,j-1,k))*inv_yg_jm + &
                             (W(i,j+1,k)-W(i,j,k))*inv_yg_jp )
-             dwdz = ( W(i,j,k) - W(i,j,k-1) ) * inv_dz
+             dwdz = ( W(i,j,k) - W(i,j,k-1) ) * inv_dz_k
 
              ! ── strain-rate tensor (symmetric part of grad u) ──────────
              sij_11 = dudx
@@ -586,80 +591,51 @@ Contains
   End Subroutine ensure_rsb_dir
 
 
-  !  Gather a local z-slab array into the full global array on rank 0
-  !  using MPI_Gatherv along the z decomposition.
+  !  Gather a local (x,z)-block scalar array into the full global array on rank 0
+  !  (thin wrapper over reduce_to_rank0_4d with nc=1).
   Subroutine reduce_to_rank0(local_arr, global_arr, local_sz)
 
     Integer(Int32), Intent(In)  :: local_sz
     Real(Int64),    Intent(In)  :: local_arr(local_sz)
     Real(Int64),    Intent(Out) :: global_arr(*)
 
-    Integer(Int32) :: sendcount
-    Integer(Int32), Allocatable :: recvcounts(:), displs(:)
-    Integer(Int32) :: iproc, off
-
-    sendcount = local_sz
-
-    ! rank 0 builds recvcounts and displacements for Gatherv
-    If ( myid == 0 ) Then
-       Allocate(recvcounts(nprocs), displs(nprocs))
-       off = 0
-       Do iproc = 0, nprocs-1
-          ! each rank owns (kg2_global(iproc)-kg1_global(iproc)+1-2) z-centre cells
-          ! (subtract 2 ghost planes; accumulator arrays have size nzm, not nzg)
-          recvcounts(iproc+1) = nxm_global * nym_global * &
-               (kg2_global(iproc) - kg1_global(iproc) + 1 - 2)
-          displs(iproc+1) = off
-          off = off + recvcounts(iproc+1)
-       End Do
-       Call MPI_Gatherv(local_arr, sendcount, MPI_REAL8, &
-                        global_arr(1), recvcounts, displs, MPI_REAL8, &
-                        0, MPI_COMM_WORLD, ierr)
-       Deallocate(recvcounts, displs)
-    Else
-       Call MPI_Gatherv(local_arr, sendcount, MPI_REAL8, &
-                        global_arr(1), sendcount, 0, MPI_REAL8, &
-                        0, MPI_COMM_WORLD, ierr)
-    End If
+    Call reduce_to_rank0_4d(local_arr, global_arr, 1, nxm, nym_global, nzm)
 
   End Subroutine reduce_to_rank0
 
 
-  !  reduce_to_rank0_4d — gathers a 4D (nc,nx,ny,nz) array along the z decomposition
-  !  in a single MPI_Gatherv (nc is the fastest-varying dimension, so the whole
-  !  array is already one contiguous per-rank z-slab block; this was previously
-  !  nc separate reduce_to_rank0 calls, one per component, each paying its own
-  !  collective-call latency for no reason since nc components move together).
+  !  reduce_to_rank0_4d — gathers a 4D (nc,nx,ny,nz) array to rank 0 for any (p_row,p_col)
+  !  decomposition: each rank owns an x-range (ig1_global) and z-range (kg1_global) block of
+  !  the interior cells, all of y, so rank 0 receives each block and places it by its global
+  !  offsets. The interior index of local cell i is ig1_global + i - 1 (likewise in z).
   Subroutine reduce_to_rank0_4d(local_arr, global_arr, nc, lnx, lny, lnz)
 
     Integer(Int32), Intent(In)  :: nc, lnx, lny, lnz
     Real(Int64),    Intent(In)  :: local_arr (nc, lnx, lny, lnz)
     Real(Int64),    Intent(Out) :: global_arr(nc, nxm_global, nym_global, nzm_global)
 
-    Integer(Int32) :: sendcount
-    Integer(Int32), Allocatable :: recvcounts(:), displs(:)
-    Integer(Int32) :: iproc, off
+    Real(Int64), Allocatable :: buf(:,:,:,:)
+    Integer(Int32) :: iproc, rnx, rnz, i0, k0
 
-    sendcount = nc*lnx*lny*lnz
-
-    If ( myid == 0 ) Then
-       Allocate(recvcounts(nprocs), displs(nprocs))
-       off = 0
-       Do iproc = 0, nprocs-1
-          recvcounts(iproc+1) = nc * nxm_global * nym_global * &
-               (kg2_global(iproc) - kg1_global(iproc) + 1 - 2)
-          displs(iproc+1) = off
-          off = off + recvcounts(iproc+1)
-       End Do
-       Call MPI_Gatherv(local_arr, sendcount, MPI_REAL8, &
-                        global_arr, recvcounts, displs, MPI_REAL8, &
-                        0, MPI_COMM_WORLD, ierr)
-       Deallocate(recvcounts, displs)
-    Else
-       Call MPI_Gatherv(local_arr, sendcount, MPI_REAL8, &
-                        global_arr, sendcount, 0, MPI_REAL8, &
-                        0, MPI_COMM_WORLD, ierr)
+    If ( myid /= 0 ) Then
+       Call MPI_Send(local_arr, nc*lnx*lny*lnz, MPI_REAL8, 0, myid, MPI_COMM_WORLD, ierr)
+       Return
     End If
+
+    Do iproc = 0, nprocs-1
+       rnx = ig2_global(iproc) - ig1_global(iproc) - 1
+       rnz = kg2_global(iproc) - kg1_global(iproc) - 1
+       i0  = ig1_global(iproc)
+       k0  = kg1_global(iproc)
+       If ( iproc == 0 ) Then
+          global_arr(:, i0:i0+rnx-1, :, k0:k0+rnz-1) = local_arr
+       Else
+          Allocate ( buf(nc, rnx, lny, rnz) )
+          Call MPI_Recv(buf, nc*rnx*lny*rnz, MPI_REAL8, iproc, iproc, MPI_COMM_WORLD, istat, ierr)
+          global_arr(:, i0:i0+rnx-1, :, k0:k0+rnz-1) = buf
+          Deallocate ( buf )
+       End If
+    End Do
 
   End Subroutine reduce_to_rank0_4d
 

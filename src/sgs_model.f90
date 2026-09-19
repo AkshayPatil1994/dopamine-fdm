@@ -4,8 +4,8 @@ Module sgs_models
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors, z_periodic_partner
-  Use boundary_conditions, Only : apply_periodic_bc_z
+  Use decomp, Only : z_halo_neighbors, z_periodic_partner, x_periodic_partner
+  Use boundary_conditions, Only : apply_periodic_bc_z, update_ghost_interior_planes_x
 
   Implicit None
 
@@ -49,9 +49,12 @@ Contains
     Integer(Int32) :: i, j, k
     Logical        :: is_first, is_last
     Integer(Int32) :: partner
+    Real   (Int64) :: xbuf(nyg,nzg), xbuf2(nyg,nzg)
     Real   (Int64) :: dx_c, dy_c, dz_c          ! local filter widths (IBM pass only)
-    Real   (Int64) :: dx2, dz2                  ! uniform-grid squares
-    Real   (Int64) :: inv_dx, inv_dz            ! 1/dx, 1/dz
+    Real   (Int64) :: dx2, dz2                  ! dx^2 (uniform) and dz_c^2 (per k, z may be stretched)
+    Real   (Int64) :: inv_dx                    ! 1/dx
+    Real   (Int64) :: inv_zg_km, inv_zg_kp      ! per-k z-grid reciprocals
+    Real   (Int64) :: inv_dz_k                  ! 1/(z(k)-z(k-1)) — per k
     Real   (Int64) :: inv_yg_jm, inv_yg_jp      ! per-j y-grid reciprocals
     Real   (Int64) :: inv_dy_j                  ! 1/(y(j)-y(j-1)) — per j
     Real   (Int64) :: dy2_c                     ! dy_c^2 — per j (standard path)
@@ -66,16 +69,19 @@ Contains
     ibm_active = ibm_input_mode >= 1 .And. Allocated(Umask_cc)
 
     inv_dx = 1d0 / dx
-    inv_dz = 1d0 / dz
     dx2    = dx * dx
-    dz2    = dz * dz
 
     ! Pass 1: standard (non-IBM) stencil, unconditional so it stays GPU-offloadable without phi residency; ibm_active discards it via Pass 2/solid-cell zeroing below
-    !$acc parallel loop collapse(2) present(U_,V_,W_,nu_t_,y,yg)
+    !$acc parallel loop collapse(2) present(U_,V_,W_,nu_t_,y,yg,z,zg)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
 
-          ! Per-j constants: y-grid spacings (non-uniform y; x,z uniform)
+          ! Per-(k,j) constants: y- and z-grid spacings (non-uniform y, and z when z_bc_type==1 with alpha_grid_z>0; x uniform)
+          dz_c      = z(k) - z(k-1)
+          dz2       = dz_c * dz_c
+          inv_dz_k  = 1d0 / dz_c
+          inv_zg_km = 1d0 / ( zg(k)   - zg(k-1) )
+          inv_zg_kp = 1d0 / ( zg(k+1) - zg(k  ) )
           dy_c      = y(j) - y(j-1)
           dy2_c     = dy_c * dy_c
           inv_yg_jm = 1d0 / ( yg(j)   - yg(j-1) )
@@ -89,23 +95,23 @@ Contains
              ! Non-uniform y: use per-j precomputed inverses
              a21 = 0.5d0*( ( U_(i,j,k)   - U_(i,j-1,k)  ) * inv_yg_jm + &
                            ( U_(i,j+1,k) - U_(i,j,  k)  ) * inv_yg_jp )
-             a31 = 0.5d0*( ( U_(i,j,k)   - U_(i,j,k-1)  ) + &
-                           ( U_(i,j,k+1) - U_(i,j,k  )  ) ) * inv_dz
+             a31 = 0.5d0*( ( U_(i,j,k)   - U_(i,j,k-1)  ) * inv_zg_km + &
+                           ( U_(i,j,k+1) - U_(i,j,k  )  ) * inv_zg_kp )
              a12 = 0.5d0*( ( V_(i,j,k)   - V_(i-1,j,k)  ) + &
                            ( V_(i+1,j,k) - V_(i,  j,k)  ) ) * inv_dx
              ! Non-uniform y: V on y-faces
              a22 = ( V_(i,j,k)   - V_(i,j-1,k)   ) * inv_dy_j
-             a32 = 0.5d0*( ( V_(i,j,k)   - V_(i,j,k-1)  ) + &
-                           ( V_(i,j,k+1) - V_(i,j,k  )  ) ) * inv_dz
+             a32 = 0.5d0*( ( V_(i,j,k)   - V_(i,j,k-1)  ) * inv_zg_km + &
+                           ( V_(i,j,k+1) - V_(i,j,k  )  ) * inv_zg_kp )
              a13 = 0.5d0*( ( W_(i,j,k)   - W_(i-1,j,k)  ) + &
                            ( W_(i+1,j,k) - W_(i,  j,k)  ) ) * inv_dx
              ! Non-uniform y
              a23 = 0.5d0*( ( W_(i,j,k)   - W_(i,j-1,k)  ) * inv_yg_jm + &
                            ( W_(i,j+1,k) - W_(i,j,  k)  ) * inv_yg_jp )
-             ! Uniform z: W on z-faces
-             a33 = ( W_(i,j,k)   - W_(i,j,k-1)   ) * inv_dz
+             ! W on z-faces
+             a33 = ( W_(i,j,k)   - W_(i,j,k-1)   ) * inv_dz_k
 
-             ! ------ beta_mn (standard: dx_c=dx, dz_c=dz, dy_c=y(j)-y(j-1)) --
+             ! ------ beta_mn (standard: dx_c=dx, dz_c=z(k)-z(k-1), dy_c=y(j)-y(j-1)) --
              b11 = dx2*(a11*a11) + dy2_c*(a21*a21) + dz2*(a31*a31)
              b22 = dx2*(a12*a12) + dy2_c*(a22*a22) + dz2*(a32*a32)
              b33 = dx2*(a13*a13) + dy2_c*(a23*a23) + dz2*(a33*a33)
@@ -144,6 +150,10 @@ Contains
     If ( ibm_active ) Then
        Do k = 2, nzg-1
           Do j = 2, nyg-1
+             dz_c      = z(k) - z(k-1)
+             inv_dz_k  = 1d0 / dz_c
+             inv_zg_km = 1d0 / ( zg(k)   - zg(k-1) )
+             inv_zg_kp = 1d0 / ( zg(k+1) - zg(k  ) )
              dy_c      = y(j) - y(j-1)
              inv_yg_jm = 1d0 / ( yg(j)   - yg(j-1) )
              inv_yg_jp = 1d0 / ( yg(j+1) - yg(j  ) )
@@ -155,13 +165,13 @@ Contains
                 ! Re-evaluate gradients; then apply one-sided corrections where needed
                 a11 = ( U_(i,j,k)   - U_(i-1,j,k)   ) * inv_dx
                 a21 = 0.5d0*( (U_(i,j,k)-U_(i,j-1,k))*inv_yg_jm + (U_(i,j+1,k)-U_(i,j,k))*inv_yg_jp )
-                a31 = 0.5d0*( (U_(i,j,k)-U_(i,j,k-1)) + (U_(i,j,k+1)-U_(i,j,k)) ) * inv_dz
+                a31 = 0.5d0*( (U_(i,j,k)-U_(i,j,k-1))*inv_zg_km + (U_(i,j,k+1)-U_(i,j,k))*inv_zg_kp )
                 a12 = 0.5d0*( (V_(i,j,k)-V_(i-1,j,k)) + (V_(i+1,j,k)-V_(i,j,k)) ) * inv_dx
                 a22 = ( V_(i,j,k)   - V_(i,j-1,k)   ) * inv_dy_j
-                a32 = 0.5d0*( (V_(i,j,k)-V_(i,j,k-1)) + (V_(i,j,k+1)-V_(i,j,k)) ) * inv_dz
+                a32 = 0.5d0*( (V_(i,j,k)-V_(i,j,k-1))*inv_zg_km + (V_(i,j,k+1)-V_(i,j,k))*inv_zg_kp )
                 a13 = 0.5d0*( (W_(i,j,k)-W_(i-1,j,k)) + (W_(i+1,j,k)-W_(i,j,k)) ) * inv_dx
                 a23 = 0.5d0*( (W_(i,j,k)-W_(i,j-1,k))*inv_yg_jm + (W_(i,j+1,k)-W_(i,j,k))*inv_yg_jp )
-                a33 = ( W_(i,j,k)   - W_(i,j,k-1)   ) * inv_dz
+                a33 = ( W_(i,j,k)   - W_(i,j,k-1)   ) * inv_dz_k
 
                 ! One-sided stencil corrections near IBM solid faces
                 If ( Umask_cc(i,j-1,k) < 0.5d0 .And. Umask_cc(i,j+1,k) < 0.5d0 ) Then
@@ -177,11 +187,11 @@ Contains
                 If ( Umask_cc(i,j,k-1) < 0.5d0 .And. Umask_cc(i,j,k+1) < 0.5d0 ) Then
                    a31 = 0d0;  a32 = 0d0
                 Else If ( Umask_cc(i,j,k-1) < 0.5d0 ) Then
-                   a31 = ( U_(i,j,k+1) - U_(i,j,k) ) * inv_dz
-                   a32 = ( V_(i,j,k+1) - V_(i,j,k) ) * inv_dz
+                   a31 = ( U_(i,j,k+1) - U_(i,j,k) ) * inv_zg_kp
+                   a32 = ( V_(i,j,k+1) - V_(i,j,k) ) * inv_zg_kp
                 Else If ( Umask_cc(i,j,k+1) < 0.5d0 ) Then
-                   a31 = ( U_(i,j,k)   - U_(i,j,k-1) ) * inv_dz
-                   a32 = ( V_(i,j,k)   - V_(i,j,k-1) ) * inv_dz
+                   a31 = ( U_(i,j,k)   - U_(i,j,k-1) ) * inv_zg_km
+                   a32 = ( V_(i,j,k)   - V_(i,j,k-1) ) * inv_zg_km
                 End If
 
                 If ( Umask_cc(i-1,j,k) < 0.5d0 .And. Umask_cc(i+1,j,k) < 0.5d0 ) Then
@@ -197,7 +207,7 @@ Contains
                 ! IBM filter-width clamping: collapse filter to zero at the surface
                 dx_c = Min(dx, 2d0*phi(i,j,k))
                 dy_c = Min(y(j)-y(j-1), 2d0*phi(i,j,k))
-                dz_c = Min(dz, 2d0*phi(i,j,k))
+                dz_c = Min(z(k)-z(k-1), 2d0*phi(i,j,k))
 
                 b11 = dx_c*dx_c*(a11*a11) + dy_c*dy_c*(a21*a21) + dz_c*dz_c*(a31*a31)
                 b22 = dx_c*dx_c*(a12*a12) + dy_c*dy_c*(a22*a22) + dz_c*dz_c*(a32*a32)
@@ -245,8 +255,23 @@ Contains
     End If
 
     ! x-periodicity: fill ghost planes i=1,nxg (never written above, but read by compute_rhs_v/w at the x boundaries)
-    nu_t_(1,  :,:) = nu_t_(nxg-1,:,:)
-    nu_t_(nxg,:,:) = nu_t_(2,    :,:)
+    ! (x-split: seam planes come from the x-neighbour, the wrap from the partner rank at the opposite domain edge)
+    Call update_ghost_interior_planes_x(nu_t_, 2)
+    Call x_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       nu_t_(1,  :,:) = nu_t_(nxg-1,:,:)
+       nu_t_(nxg,:,:) = nu_t_(2,    :,:)
+    Else If ( is_first ) Then
+       xbuf = nu_t_(2,:,:)
+       Call Mpi_sendrecv(xbuf, nyg*nzg, Mpi_real8, partner, 13, xbuf2, nyg*nzg, Mpi_real8, partner, 14, &
+                         MPI_COMM_WORLD, istat, ierr)
+       nu_t_(1,:,:) = xbuf2
+    Else If ( is_last ) Then
+       xbuf = nu_t_(nxg-1,:,:)
+       Call Mpi_sendrecv(xbuf, nyg*nzg, Mpi_real8, partner, 14, xbuf2, nyg*nzg, Mpi_real8, partner, 13, &
+                         MPI_COMM_WORLD, istat, ierr)
+       nu_t_(nxg,:,:) = xbuf2
+    End If
 
     ! Ring exchange for intermediate ranks (host-only); rank-0/rank-(nprocs-1) wrap handled below.
     Call update_ghost_interior_planes_nut(nu_t_)

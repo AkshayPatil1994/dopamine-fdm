@@ -16,7 +16,7 @@ Contains
 	Subroutine generateGrid
 
 		! Local variables
-		Integer(Int32) :: i, j, n_smooth, io_unit, N_sp, iter_geom
+		Integer(Int32) :: i, j, n_smooth, io_unit, N_sp, iter_geom, ios_gz
 		Real   (Int64) :: eta, dy_k, Ly_smooth, y_start, yp_c, dy_c, &
 		                  r_geom, r_lo, r_hi, r_mid, f_lo, f_mid
 
@@ -248,6 +248,20 @@ Contains
 				Write(io_unit, '(I6,4(1X,ES24.16))') i, yp_c, y_global(i+1), dy_c, 1.0d0/dy_c
 			End Do
 			Close(io_unit)
+			! Stretched spanwise (z) grid for GenSDF (same 5-column format as grid.out); a stale file from an earlier
+			! stretched run is removed so GenSDF never reads it for a uniform-z grid.
+			If ( z_bc_type == 1 .And. alpha_grid_z > 0d0 ) Then
+				Open(newunit=io_unit, file='fields/grid_z.out', status='replace')
+				Do i = 1, nzm_global
+					yp_c = 0.5d0 * (z_global(i) + z_global(i+1))
+					dy_c = z_global(i+1) - z_global(i)
+					Write(io_unit, '(I6,4(1X,ES24.16))') i, yp_c, z_global(i+1), dy_c, 1.0d0/dy_c
+				End Do
+				Close(io_unit)
+			Else
+				Open(newunit=io_unit, file='fields/grid_z.out', status='old', iostat=ios_gz)
+				If ( ios_gz == 0 ) Close(io_unit, status='delete')
+			End If
 			Write(*,'(A)') '   Wrote fields/geometry.out and fields/grid.out for GenSDF'
 		End If
 

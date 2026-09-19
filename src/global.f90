@@ -283,7 +283,7 @@ Module global
 
   ! interpolation weights 
   Integer(Int32) :: in1, in2
-  Real(Int64), Dimension(:), Allocatable :: weight_y_0, weight_y_1
+  Real(Int64), Dimension(:), Allocatable :: weight_y_0, weight_y_1, weight_z_0, weight_z_1
 
   ! actual pressure boundary conditions
   Real   (Int64) :: coef_bc_1, coef_bc_2

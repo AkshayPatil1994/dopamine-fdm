@@ -3,7 +3,7 @@ Module interpolation
 
   ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
-  Use global,          Only : weight_y_0, weight_y_1
+  Use global,          Only : weight_y_0, weight_y_1, weight_z_0, weight_z_1
 
   ! prevent implicit typing
   Implicit None
@@ -59,20 +59,28 @@ Contains
    
   End Subroutine interpolate_y
 
-  !> Linear interpolation of u in z (uniform mesh); di: 1=faces to center, 2=centers to faces
+  !> Linear interpolation of u in z; di: 1=faces to center (centres are face midpoints, plain average), 2=centers to faces (weighted, z may be stretched)
   Pure Subroutine interpolate_z(u,ui,di)
 
     Real    (Int64), Intent(In)  :: u(:,:,:)
     Real    (Int64), Intent(Out) :: ui(:,:,:)
     Integer (Int32), Intent(In)  :: di
 
-    Integer (Int32) :: n3
+    Integer (Int32) :: n3, i3
 
-    ! Uniform z-grid: simple 0.5 average along third dimension. n3 computed on host, see interpolate_x
     n3 = Size(u,3)
-    !$acc kernels present(u,ui)
-    ui(:, :, 1:n3-1) = 0.5d0*( u(:,:,1:n3-1) + u(:,:,2:n3) )
-    !$acc end kernels
+    If ( di==2 ) Then
+       !$acc kernels present(u,ui,weight_z_0,weight_z_1)
+       Do i3 = 1, n3-1
+          ui(:, :, i3) = weight_z_0(i3)*u(:,:,i3) + weight_z_1(i3)*u(:,:,i3+1)
+       End Do
+       !$acc end kernels
+    Else
+       ! n3 computed on host, see interpolate_x
+       !$acc kernels present(u,ui)
+       ui(:, :, 1:n3-1) = 0.5d0*( u(:,:,1:n3-1) + u(:,:,2:n3) )
+       !$acc end kernels
+    End If
 
   End Subroutine interpolate_z
 

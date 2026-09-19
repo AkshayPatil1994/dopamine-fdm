@@ -621,6 +621,9 @@ Contains
     Allocate ( weight_y_0(ny), weight_y_1(ny) )
     weight_y_0 = ( yg(2:nyg) - y(1:ny) ) / ( yg(2:nyg) - yg(1:nyg-1)  )
     weight_y_1 = 1d0 - weight_y_0
+    Allocate ( weight_z_0(nz), weight_z_1(nz) )
+    weight_z_0 = ( zg(2:nzg) - z(1:nz) ) / ( zg(2:nzg) - zg(1:nzg-1)  )
+    weight_z_1 = 1d0 - weight_z_0
 
     ! Runge-Kutta 3
     If ( myid==0 ) Write(*,*) 'initializing time integration...'
@@ -753,7 +756,7 @@ Contains
     !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall,ibm_z0)
     !$acc update device(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
     ! OpenACC: static grid arrays copied once, scratch arrays created once, never re-transferred
-    !$acc enter data copyin(y,yg,z,zg,weight_y_0,weight_y_1)
+    !$acc enter data copyin(y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
     ! x,xg needed on device by compute_rhs_scalar_core (non-uniform-grid-style stencil, even though x itself is uniform)
     !$acc enter data copyin(x,xg)
     !$acc enter data create(term,term_1,term_2)
