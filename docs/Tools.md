@@ -27,6 +27,15 @@ brute-force, narrow-band width, the solver's wall-normal axis (2=y-vertical,
 one. See `examples/dns_ibm_wavyWall/geo/parameters.in` for a worked configuration
 matching that example ([[Examples § dns_ibm_wavyWall|Examples#dns_ibm_wavywall]]).
 
+**Stretched grids.** GenSDF reads the solver's `fields/geometry.out` and `fields/grid.out`
+(copy them into `data/`) and treats the wall-normal axis as non-uniform when the
+"non-uniform" flag is `.true.`. When the solver's spanwise grid is stretched
+(`z_bc_type = 1` with `alpha_grid_z > 0`) it additionally writes `fields/grid_z.out` (same
+five-column format as `grid.out`); copy that into `data/` as well and GenSDF picks it up
+automatically (with `vertical_axis = 2`), using the per-cell spanwise spacing in the
+narrow-band search and in the fast-sweep update. Without a `grid_z.out` the spanwise axis is
+assumed uniform, as before. The solver removes a stale `grid_z.out` when z is uniform.
+
 Run:
 
 ```bash

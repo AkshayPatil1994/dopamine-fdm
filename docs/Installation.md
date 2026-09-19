@@ -64,10 +64,14 @@ the default; this is a separate, opt-in build.
 
 **Scope — read before using**: the GPU Poisson solve currently only supports
 **`nprocs=1`** (single GPU, no MPI domain decomposition), with either **`x_bc_type=0`**
-(periodic, spectral FFT) or **`x_bc_type=1`** (inflow/outflow, DCT-IV) streamwise BC. A
-runtime guard `Stop`s immediately on startup if `nprocs/=1` or `x_bc_type` is anything
-other than 0/1 — every other solver feature (IBM, wall models, SGS, sediment transport,
-RSB statistics, etc.) works normally in the GPU build.
+(periodic, spectral FFT) or **`x_bc_type=1`** (inflow/outflow, DCT-IV) streamwise BC, and
+**`z_bc_type=0`** (periodic spanwise) — with one exception: a **4-wall duct**
+(`y_bc_type=1` and `z_bc_type=1` together) is also supported, via a batched cuSPARSE
+eigenmode + tridiagonal solve, but only with `x_bc_type=0`. A spanwise wall alone
+(`z_bc_type=1`, `y_bc_type=0`), or a 4-wall duct with `x_bc_type=1`, is still CPU-only. A
+runtime guard `Stop`s immediately on startup outside these combinations — every other
+solver feature (IBM, wall models, SGS, sediment transport, RSB statistics, rotation
+forcing, etc.) works normally in the GPU build.
 
 Put the NVHPC SDK's `nvfortran` and bundled MPI on your `PATH`/`LD_LIBRARY_PATH` first,
 e.g.:
@@ -135,6 +139,7 @@ Each field block is preceded by a 3-integer size header. The layout is:
 | P | `nxg × nyg × nzg` | always |
 | C | `nxg × nyg × nzg` | only when `sediment_flag >= 1` |
 | ν_t | `nxg × nyg × nzg` | only when `sgs_model /= 0` |
+| T | `nxg × nyg × nzg` | only when `boussinesq_flag >= 1` (written last) |
 
 ```python
 import numpy as np

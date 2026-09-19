@@ -82,7 +82,16 @@ pressure solve adapts, and [[Input Parameters § BOUNDARY_CONDITIONS|Input-Param
 All spatial derivatives are discretised with **second-order central differences**.
 Cross-derivative terms (e.g. $\partial u/\partial y$ on a $y$-face) require
 interpolation between the two staggered positions; this is performed by arithmetic
-averaging (linear interpolation in uniform-grid directions, weight-averaged in $y$).
+averaging (linear interpolation in the uniform $x$ direction, weight-averaged in $y$ and,
+when it is stretched, in $z$ — cell centres are face midpoints, so face-to-centre
+interpolation is a plain average while centre-to-face interpolation uses the local
+grid-spacing weights). The stretched-$z$ treatment covers the convective and viscous
+terms, the Vreman velocity-gradient/filter-width stencils, the eddy-viscosity and scalar
+diffusivity face averages (in $y$ as well as $z$), the CFL estimate, the volume-weighted bulk
+velocity used by constant-mass-flux forcing, the Reynolds-stress-budget gradients, the UAV
+actuator-disk kernel (located and normalised from the global $z$ arrays), and the IBM (W-face
+SDF interpolation and second-order non-uniform surface-normal stencils in $z$; the SDF itself
+comes from GenSDF, which reads the stretched spanwise grid from `grid_z.out`).
 
 ## 3. Time integration
 
