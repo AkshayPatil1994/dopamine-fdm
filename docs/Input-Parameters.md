@@ -39,7 +39,7 @@ See [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]].
 | `z0_ylo`, `z0_yhi` | `0.0` | Momentum roughness length [m] per wall (`flat_wall_model_flag=2` only); `Stop` at startup if `<= 0` on an active no-slip wall |
 | `z0h_ylo`, `z0h_yhi` | `0.0` | Thermal roughness length [m] per wall, independent of `z0_ylo/yhi` (used with `T_bc_bot/top=2`, see `&BOUSSINESQ`) |
 | `rotation_active` | `0` | 0=off, 1=rigid-body rotation about the streamwise ($x$) axis (Coriolis + centrifugal forcing added to the $v$/$w$-momentum equations) |
-| `Omega_x` | `0.0` | Rotation rate [rad/s] about the $x$ axis (`rotation_active=1` only). The rotation axis is fixed at the domain centreline ($L_y/2$, $L_z/2$), not user-configurable |
+| `Omega_x` | `0.0` | Rotation rate [rad/s] about the $x$ axis (`rotation_active=1` only). Positive $\Omega_x$ is a right-handed rotation about $+x$ (the $y$ axis turning towards $z$), giving Coriolis forcing $-2\boldsymbol{\Omega}\times\mathbf{u}$. The rotation axis is fixed at the domain centreline ($L_y/2$, $L_z/2$), not user-configurable |
 
 See [[Numerics § Forcing|Numerics#1-governing-equations]],
 [[§ SGS model|Numerics#5-sub-grid-scale-model]], and
@@ -120,7 +120,7 @@ and the [[precursor/successor example|Examples#precursor_successor]].
 ## `&INITIAL_CONDITIONS`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `ic_type` | `1` | 1=log-law + noise; 2=linear/tent + noise; 3=zero mean + noise; 4=Reichardt turbulent channel profile + structured perturbation; 5=inverse-linear/anti-tent + noise |
+| `ic_type` | `1` | 1=log-law + noise; 2=linear/tent + noise; 3=zero mean + noise; 4=Reichardt turbulent channel profile + structured perturbation; 5=inverse-linear/anti-tent + noise; 7=deterministic two-mode perturbation on uniform `Utarget` (ε₁=`noise_percent`/100, ε₂=0.04·ε₁; 25 % gives ε₁=0.25, ε₂=0.01) |
 | `noise_percent` | `5.0` | White-noise amplitude as % of `Utarget` (applied to U, V, W for types 1–3) |
 | `Utarget` | — | Target bulk or centreline velocity |
 | `nstep_init` | — | Starting step number (non-zero for hot-start logging) |
