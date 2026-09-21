@@ -293,6 +293,10 @@ Contains
 		Real   (Int64) :: alpha_ls, beta_ls, alpha_ss, beta_ss
 		Real   (Int64) :: x_c, z_c, z_f, ran_ch
 
+		! Two-mode perturbation IC (ic_type==7)
+		Real   (Int64) :: eps1_tm, eps2_tm
+		Real   (Int64), Parameter :: alpha1_tm = 3.0d0, beta1_tm = 2.0d0, alpha2_tm = 17.0d0, beta2_tm = 6.5d0
+
 		! Taylor-Green Vortex IC (ic_type==6)
 		Real   (Int64) :: kx_tgv, ky_tgv, kz_tgv, x_f
 
@@ -352,6 +356,84 @@ Contains
 			End If
 
 			Return  ! skip log-law/Reichardt setup, Select Case, and noise loops entirely
+
+		End If
+
+		! ---- Two-mode deterministic perturbation IC (ic_type==7): laminar-to-turbulent
+		! seeding; paper's (x1,x2,x3) = (vertical, spanwise, streamwise) = (y, z, x) here.
+		! noise_percent scales both amplitudes: eps1 = noise_frac, eps2 = 0.04*noise_frac,
+		! so noise_percent=25 gives eps1=0.25, eps2=0.01. Utarget is the bulk velocity Ub.
+		If ( ic_type == 7 ) Then
+
+			eps1_tm = noise_frac
+			eps2_tm = 0.04d0*noise_frac
+
+			If ( myid == 0 ) Write(*,'(A)') '   IC = two-mode perturbation (ic_type=7), Utarget used as bulk velocity Ub'
+
+			! -- U (paper u3): x-face, y-center, z-center --
+			U = 0d0
+			Do kk = 1, nzg
+				Do jj = 2, nyg_global-1
+					y_c = 0.5d0 * ( y_global(jj-1) + y_global(jj) )
+					Do ii = 1, nx
+						ii_glob = i1_global(myid) + ii - 1
+						x_c = x_global(ii_glob)
+						U(ii,jj,kk) = Utarget &
+							+ eps1_tm*beta1_tm * sin(alpha1_tm*y_c)*cos(beta1_tm*x_c) &
+							+ eps2_tm*beta2_tm * sin(alpha2_tm*y_c)*cos(beta2_tm*x_c)
+					End Do
+				End Do
+			End Do
+
+			If ( y_bc_type == 1 ) Then
+				U(:, 1, :) = -U(:, 2, :)
+				If ( bc_face_yhi == 1 ) Then
+					U(:, nyg_global, :) = -U(:, nyg_global-1, :)
+				Else
+					U(:, nyg_global, :) =  U(:, nyg_global-1, :)
+				End If
+			End If
+
+			! -- V (paper u1): x-center, y-face, z-center --
+			V = 0d0
+			Do kk = 1, nzg
+				Do jj = 2, ny_global-1
+					y_c = y_global(jj)
+					Do ii = 2, nxg-1
+						ii_glob = ig1_global(myid) + ii - 2
+						x_c = 0.5d0 * ( x_global(ii_glob-1) + x_global(ii_glob) )
+						V(ii,jj,kk) = &
+							- eps1_tm*alpha1_tm * cos(alpha1_tm*y_c)*sin(beta1_tm*x_c) &
+							- eps2_tm*alpha2_tm * cos(alpha2_tm*y_c)*sin(beta2_tm*x_c)
+					End Do
+				End Do
+			End Do
+
+			! -- W (paper u2): x-center, y-center, z-face; uniform in z --
+			W = 0d0
+			Do kk = 1, nz
+				Do jj = 2, nyg_global-1
+					y_c = 0.5d0 * ( y_global(jj-1) + y_global(jj) )
+					Do ii = 2, nxg-1
+						ii_glob = ig1_global(myid) + ii - 2
+						x_c = 0.5d0 * ( x_global(ii_glob-1) + x_global(ii_glob) )
+						W(ii,jj,kk) = &
+							  eps1_tm * sin(alpha1_tm*y_c)*sin(beta1_tm*x_c) &
+							+ eps2_tm * sin(alpha2_tm*y_c)*sin(beta2_tm*x_c)
+					End Do
+				End Do
+			End Do
+
+			Call Mpi_allreduce( MaxVal(Abs(U)), max_u_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+			Call Mpi_allreduce( MaxVal(Abs(V)), max_v_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+			Call Mpi_allreduce( MaxVal(Abs(W)), max_w_g, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr )
+			If ( myid==0 ) Then
+				Write(*,'(A,E12.4)') '   IC Max |U| = ', max_u_g
+				Write(*,'(A,E12.4)') '   IC Max |V| = ', max_v_g
+				Write(*,'(A,E12.4)') '   IC Max |W| = ', max_w_g
+			End If
+
+			Return
 
 		End If
 

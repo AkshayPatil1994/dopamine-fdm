@@ -9,7 +9,8 @@ Module equations
                               weight_y_0, weight_y_1, weight_z_0, weight_z_1, dx, dz,         &
                               boussinesq_flag, beta_T, grav, T_ref, Tscal, &
                               advection_scheme, uav_active,           &
-                              rotation_active, Omega_x, y0_rot, z0_rot
+                              rotation_active, Omega_x, y0_rot, z0_rot, &
+                              y_bc_type, bc_face_ylo, bc_face_yhi
   Use interpolation
   Use uav_actuator, Only : apply_uav_forcing_u, apply_uav_forcing_v, apply_uav_forcing_w
   
@@ -37,6 +38,10 @@ Contains
     Real   (Int64) :: inv_dy3    ! 1/dy_3
     Real   (Int64) :: inv_dz3    ! 1/dz_3
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
+    Logical        :: wall_lo, wall_hi   ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
+
+    wall_lo = ( y_bc_type == 1 .And. bc_face_ylo == 1 )
+    wall_hi = ( y_bc_type == 1 .And. bc_face_yhi == 1 )
 
     inv_dx  = 1d0 / dx
     inv_dx2 = inv_dx * inv_dx   ! used for second derivative in x: 1/dx^2
@@ -154,13 +159,13 @@ Contains
              nu_x2  = nu + nu_t(i+1,j,k)
               
              ! Wall-face viscosity forced to nu only
-             If ( j-1 == 1 ) Then
+             If ( wall_lo .And. j-1 == 1 ) Then
                 nu_y1 = nu
              Else
                 nu_y1 = nu + 0.5d0*( weight_y_0(j-1)*nu_t(i,  j-1,k) + weight_y_1(j-1)*nu_t(i,  j  ,k) + &
                                      weight_y_0(j-1)*nu_t(i+1,j-1,k) + weight_y_1(j-1)*nu_t(i+1,j  ,k) )
              End If
-             If ( j+1 == nyg ) Then
+             If ( wall_hi .And. j+1 == nyg ) Then
                 nu_y2 = nu
              Else
                 nu_y2 = nu + 0.5d0*( weight_y_0(j  )*nu_t(i,  j,  k) + weight_y_1(j  )*nu_t(i,  j+1,k) + &
@@ -415,6 +420,10 @@ Contains
     Real   (Int64) :: inv_dy3    ! 1/dy_3
     Real   (Int64) :: inv_dz1, inv_dz2, inv_dz3, two_inv_dz3  ! z-spacing inverses
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
+    Logical        :: wall_lo, wall_hi   ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
+
+    wall_lo = ( y_bc_type == 1 .And. bc_face_ylo == 1 )
+    wall_hi = ( y_bc_type == 1 .And. bc_face_yhi == 1 )
 
     inv_dx  = 1d0 / dx
 
@@ -531,13 +540,13 @@ Contains
                               weight_z_1(k)*( nu_t(i,j,k+1) + nu_t(i+1,j,k+1) ) )
 
              ! Wall-face viscosity forced to nu only
-             If ( j-1 == 1 ) Then
+             If ( wall_lo .And. j-1 == 1 ) Then
                 nu_y1 = nu
              Else
                 nu_y1 = nu + weight_z_0(k)*( weight_y_0(j-1)*nu_t(i,j-1,  k) + weight_y_1(j-1)*nu_t(i,j  ,  k) ) + &
                              weight_z_1(k)*( weight_y_0(j-1)*nu_t(i,j-1,k+1) + weight_y_1(j-1)*nu_t(i,j  ,k+1) )
              End If
-             If ( j+1 == nyg ) Then
+             If ( wall_hi .And. j+1 == nyg ) Then
                 nu_y2 = nu
              Else
                 nu_y2 = nu + weight_z_0(k)*( weight_y_0(j  )*nu_t(i,j  ,  k) + weight_y_1(j  )*nu_t(i,j+1,  k) ) + &
@@ -571,7 +580,7 @@ Contains
           Do j=2,nyg-1
              Do i=2,nxg-1
                 rhs_w(i,j,k) = rhs_w(i,j,k) - &
-                     0.5d0*Omega_x*( weight_z_0(k)*( V_(i,j-1,k) + V_(i,j,k) ) + weight_z_1(k)*( V_(i,j-1,k+1) + V_(i,j,k+1) ) ) + &
+                     Omega_x*( weight_z_0(k)*( V_(i,j-1,k) + V_(i,j,k) ) + weight_z_1(k)*( V_(i,j-1,k+1) + V_(i,j,k+1) ) ) + &
                      Omega_x*Omega_x*( z(k) - z0_rot )
              End Do
           End Do

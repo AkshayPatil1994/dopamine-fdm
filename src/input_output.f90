@@ -95,6 +95,7 @@ Contains
     ic_type       = 1
     noise_percent = 5.0d0
     advection_scheme = 0
+    nsteps = 0; nsave = 0; nmonitor = 0   ! no valid default: must be set in &NUMERICS (checked after the read)
 
     fname = 'input_parameters'
     If ( Present(input_file) ) fname = input_file
@@ -104,24 +105,24 @@ Contains
 
        Open(newunit=unit_in, file=fname, status='old',    &
             action='read', iostat=ios)
-       If ( ios /= 0 ) Stop 'ERROR: cannot open input parameters file: '//fname
+       If ( ios /= 0 ) Call abort_input( 'ERROR: cannot open input parameters file: '//fname )
 
        Rewind(unit_in)
        Read(unit_in, nml=DOMAIN,              iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &DOMAIN missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &DOMAIN missing or failed to parse (check for unrecognized variable names)' )
 
        Rewind(unit_in)
        Read(unit_in, nml=PHYSICS,             iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &PHYSICS missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &PHYSICS missing or failed to parse (check for unrecognized variable names)' )
 
        Rewind(unit_in)
        Read(unit_in, nml=NUMERICS,            iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &NUMERICS missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &NUMERICS missing or failed to parse (check for unrecognized variable names)' )
 
        If ( namelist_group_present(unit_in, 'BOUNDARY_CONDITIONS') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=BOUNDARY_CONDITIONS, iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &BOUNDARY_CONDITIONS present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &BOUNDARY_CONDITIONS present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &BOUNDARY_CONDITIONS found, using defaults'
        End If
@@ -129,7 +130,7 @@ Contains
        If ( namelist_group_present(unit_in, 'INFLOW') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=INFLOW,              iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &INFLOW present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &INFLOW present but failed to parse (check variable names)' )
        Else If ( x_bc_type == 1 ) Then
           Write(*,'(A)') ' INFO: no &INFLOW found, using defaults (inflow_type=0, constant uniform flow)'
        End If
@@ -137,7 +138,7 @@ Contains
        If ( namelist_group_present(unit_in, 'IBM') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=IBM,                 iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &IBM present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &IBM present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &IBM found, using defaults (no IBM body)'
           ibm_input_mode      = 0
@@ -152,16 +153,17 @@ Contains
 
        Rewind(unit_in)
        Read(unit_in, nml=INITIAL_CONDITIONS,  iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &INITIAL_CONDITIONS missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &INITIAL_CONDITIONS missing or failed to parse ' // &
+            '(check for unrecognized variable names)' )
 
        Rewind(unit_in)
        Read(unit_in, nml=IO,                  iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &IO missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &IO missing or failed to parse (check for unrecognized variable names)' )
 
        If ( namelist_group_present(unit_in, 'SEDIMENT') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=SEDIMENT,            iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &SEDIMENT present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &SEDIMENT present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &SEDIMENT found, scalar transport disabled'
        End If
@@ -170,7 +172,7 @@ Contains
        If ( namelist_group_present(unit_in, 'BOUSSINESQ') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=BOUSSINESQ,          iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &BOUSSINESQ present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &BOUSSINESQ present but failed to parse (check variable names)' )
           If ( sediment_flag >= 1 .And. grav /= grav_sediment ) Then
              Write(*,'(A)') ' WARNING: &SEDIMENT and &BOUSSINESQ specify different grav, using &BOUSSINESQ value'
           End If
@@ -181,7 +183,7 @@ Contains
        If ( namelist_group_present(unit_in, 'STATISTICS') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=STATISTICS,          iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &STATISTICS present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &STATISTICS present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &STATISTICS found, Reynolds stress budget disabled'
        End If
@@ -189,7 +191,7 @@ Contains
        If ( namelist_group_present(unit_in, 'UAV') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=UAV,                 iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &UAV present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &UAV present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &UAV found, UAV actuator disk disabled'
        End If
@@ -197,10 +199,14 @@ Contains
        If ( namelist_group_present(unit_in, 'INFLOW_OPT') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=INFLOW_OPT,          iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &INFLOW_OPT present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &INFLOW_OPT present but failed to parse (check variable names)' )
        End If
 
        Close(unit_in)
+
+       If ( nsteps == 0 ) Call abort_input( 'ERROR: &NUMERICS nsteps must be set (>0 fixed step count, <0 run until sim_end_time)' )
+       If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
+       If ( nmonitor <= 0 ) Call abort_input( 'ERROR: &NUMERICS nmonitor must be set to a positive step interval' )
 
        ! Map short namelist names to the global variable names
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
@@ -232,10 +238,10 @@ Contains
        z0_rot = 0.5d0 * Lz_i
 
        If ( flow_forcing_mode == 1 .And. T_wave_x > 0d0 ) Then
-          Stop 'ERROR: flow_forcing_mode=1 (constant mass flux) is incompatible with oscillatory forcing (T_wave_x)'
+          Call abort_input( 'ERROR: flow_forcing_mode=1 (constant mass flux) is incompatible with oscillatory forcing (T_wave_x)' )
        End If
        If ( flow_forcing_mode == 1 .And. x_bc_type /= 0 ) Then
-          Stop 'ERROR: flow_forcing_mode=1 (constant mass flux) requires periodic streamwise BC (x_bc_type=0)'
+          Call abort_input( 'ERROR: flow_forcing_mode=1 (constant mass flux) requires periodic streamwise BC (x_bc_type=0)' )
        End If
        ! 4-wall duct: the coupled 2D (y,z) pressure solve (solve_poisson_equation) needs the full
        ! z-extent locally available within the y-pencil for every rank, which only holds when z is
@@ -243,17 +249,17 @@ Contains
        ! handles this itself (decomp_auto_factorize forces p_col=1 for this BC combination); an
        ! explicit p_col/=1 request is rejected here rather than silently doing the wrong thing.
        If ( alpha_grid_z > 0d0 .And. z_bc_type == 0 ) Then
-          Stop 'ERROR: alpha_grid_z>0 (spanwise grid stretching) requires z_bc_type=1 -- periodic z ' // &
-               '(z_bc_type=0) is FFT-based and needs uniform spacing'
+          Call abort_input( 'ERROR: alpha_grid_z>0 (spanwise grid stretching) requires z_bc_type=1 -- periodic z ' // &
+               '(z_bc_type=0) is FFT-based and needs uniform spacing' )
        End If
        If ( z_bc_type == 1 .And. flat_wall_model_flag == 2 ) Then
-          Stop 'ERROR: flat_wall_model_flag=2 (rough EQWM) is not yet supported for z walls (z_bc_type=1) ' // &
-               '-- use flat_wall_model_flag=0 (DNS no-slip) or 1 (smooth Reichardt EQWM) with a spanwise wall'
+          Call abort_input( 'ERROR: flat_wall_model_flag=2 (rough EQWM) is not yet supported for z walls (z_bc_type=1) ' // &
+               '-- use flat_wall_model_flag=0 (DNS no-slip) or 1 (smooth Reichardt EQWM) with a spanwise wall' )
        End If
        If ( y_bc_type == 1 .And. z_bc_type == 1 .And. p_col > 1 ) Then
-          Stop 'ERROR: y_bc_type=1 and z_bc_type=1 (4-wall duct) requires p_col=1 (decompose only in ' // &
+          Call abort_input( 'ERROR: y_bc_type=1 and z_bc_type=1 (4-wall duct) requires p_col=1 (decompose only in ' // &
                'x, via p_row) -- the 2D (y,z) pressure solve needs the full z-extent local to every ' // &
-               'rank; leave p_row/p_col=0 for auto, or set p_col=1 explicitly'
+               'rank; leave p_row/p_col=0 for auto, or set p_col=1 explicitly' )
        End If
 
        Write(*,'(A)') ' Input parameters read from namelist file.'
@@ -596,6 +602,16 @@ Contains
     Call Mpi_bcast ( inflow_opt_tol,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
+
+  !> Report an input-file error and abort every rank (a bare Stop on rank 0 alone leaves the others blocked in the bcast below)
+  Subroutine abort_input(msg)
+
+    Character(*), Intent(In) :: msg
+
+    Write(*,'(A)') Trim(msg)
+    Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+
+  End Subroutine abort_input
 
   ! Scan the input file for an uncommented "&<group_name>" header, without consuming it; iostat-ambiguity rationale
   Function namelist_group_present(unit_in, group_name) result(found)

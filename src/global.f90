@@ -32,6 +32,7 @@ Module global
   Integer(Int32) :: nsteps
   Integer(Int32) :: nstep_init = 0
   Real   (Int64) :: dt, t
+  Real   (Int64) :: dt_step = 0d0   ! size of the step just completed (dt itself is restored to its pre-snap value at the end of each step)
   ! explicit restart start time (overrides nstep_init*dt when >=0d0 -- needed
   ! for restarts under adaptive dt, where step count no longer maps to a fixed
   ! dt*nstep_init); default -1d0 means "not given, fall back to nstep_init*dt"

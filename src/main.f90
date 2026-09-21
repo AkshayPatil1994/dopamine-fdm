@@ -7,6 +7,7 @@ Program dopamine
   Use input_output
   Use initialization
   Use time_integration
+  Use boundary_conditions, Only : apply_boundary_conditions
   Use monitor
   Use finalization
   Use reynolds_stress_budget
@@ -36,6 +37,10 @@ Program dopamine
   ! small summary of input parameters
   Call summary
      
+  ! fill ghost/halo cells of the initial (or restarted) fields: the first RK stage's RHS and scalar RHS read them before any stage-end BC call
+  Call apply_boundary_conditions(after_projection=.True.)
+  If ( sediment_flag >= 1 .And. ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
+
   ! temporal loop: nsteps>0 runs a fixed step count, nsteps<0 runs until t >= sim_end_time
   istep = 0
   Do

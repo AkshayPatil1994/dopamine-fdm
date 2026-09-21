@@ -7,6 +7,7 @@ Module monitor
   Use mpi
   Use projection, Only : check_divergence
   Use ibm
+  Use decomp, Only : x_periodic_partner, z_periodic_partner
 
   ! prevent implicit typing
   Implicit None
@@ -335,17 +336,34 @@ Contains
 
     Real(Int64)    :: local_sum, local_wgt, dy_j
     Real(Int64)    :: local_buf(2), global_buf(2)
-    Integer(Int32) :: i, j, k
+    Integer(Int32) :: i, j, k, ihi, jhi, khi
+    Logical        :: is_first, is_last
+    Integer(Int32) :: partner
+
+    ! Periodic directions carry a redundant duplicate of the first cell as the last interior cell
+    ! (nxp_global=nxm_global-1, etc.); leave it out so it isn't counted twice
+    ihi = nxg-1
+    jhi = nyg-1
+    khi = nzg-1
+    If ( x_bc_type == 0 ) Then
+       Call x_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) ihi = nxg-2
+    End If
+    If ( z_bc_type == 0 ) Then
+       Call z_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) khi = nzg-2
+    End If
+    If ( y_bc_type == 0 ) jhi = nyg-2
 
     local_sum = 0d0
     local_wgt = 0d0
 
     If ( ibm_input_mode >= 1 ) Then
        !$acc parallel loop collapse(2) present(U,y,z,phi) reduction(+:local_sum,local_wgt)
-       Do k = 2, nzg-1
-          Do j = 2, nyg-1
+       Do k = 2, khi
+          Do j = 2, jhi
              dy_j = ( y(j) - y(j-1) ) * ( z(k) - z(k-1) )   ! y-z cell area (x uniform); z may be stretched
-             Do i = 2, nxg-1
+             Do i = 2, ihi
                 If ( phi(i,j,k) < 0d0 ) Cycle
                 local_sum = local_sum + 0.5d0*(U(i,j,k)+U(i-1,j,k)) * dy_j
                 local_wgt = local_wgt + dy_j
@@ -355,10 +373,10 @@ Contains
        !$acc end parallel loop
     Else
        !$acc parallel loop collapse(2) present(U,y,z) reduction(+:local_sum,local_wgt)
-       Do k = 2, nzg-1
-          Do j = 2, nyg-1
+       Do k = 2, khi
+          Do j = 2, jhi
              dy_j = ( y(j) - y(j-1) ) * ( z(k) - z(k-1) )   ! y-z cell area (x uniform); z may be stretched
-             Do i = 2, nxg-1
+             Do i = 2, ihi
                 local_sum = local_sum + 0.5d0*(U(i,j,k)+U(i-1,j,k)) * dy_j
                 local_wgt = local_wgt + dy_j
              End Do

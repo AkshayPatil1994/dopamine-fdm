@@ -819,6 +819,22 @@ Contains
 
   End Subroutine apply_ghost_cell_ibm_scalar
 
+  !> No-flux (zero-gradient) ghost-cell condition for a cell-centred scalar at the immersed boundary: each ghost cell takes its image-point value (used for sediment; solid cells are otherwise held at C=0, which would make the body an absorbing surface)
+  Subroutine apply_ghost_cell_ibm_scalar_noflux(C_)
+
+    Real(Int64), Dimension(nxg,nyg,nzg), Intent(InOut) :: C_
+
+    Integer(Int32) :: n, i, j, k
+
+    !$acc parallel loop present(C_,ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc)
+    Do n = 1, n_ghost_cc
+       i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)
+       C_(i,j,k) = trilinear_interp_p(C_, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n))
+    End Do
+    !$acc end parallel loop
+
+  End Subroutine apply_ghost_cell_ibm_scalar_noflux
+
   !                     Helper routines
 
   !  Zero the per-step IBM force accumulators.

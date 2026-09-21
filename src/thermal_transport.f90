@@ -4,9 +4,10 @@ Module thermal_transport
   Use iso_fortran_env,  Only : Int32, Int64
   Use global
   Use mpi
-  Use boundary_conditions, Only : apply_periodic_bc_z, apply_inflow_bc_scalar_x, outflow_convection_velocity, &
+  Use decomp, Only : x_periodic_partner
+  Use boundary_conditions, Only : update_ghost_interior_planes_x, apply_inflow_bc_scalar_x, outflow_convection_velocity, &
                                   apply_Robin_bc_y_scalar_lo, apply_Robin_bc_y_scalar_hi
-  Use scalar_transport,    Only : compute_rhs_scalar_core, update_ghost_scalar
+  Use scalar_transport,    Only : compute_rhs_scalar_core, finish_scalar_halos
 
   Implicit None
 
@@ -32,25 +33,20 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: T_
 
     Real(Int64) :: Uc, courant
+    Logical :: is_first_x, is_last_x
+    Integer(Int32) :: partner_x
 
-    ! x direction: periodic, or Dirichlet-SEM inflow / convective outflow
-    If ( x_bc_type == 0 ) Then
-       T_(1,   :,:) = T_(nxg-2,:,:)
-       T_(nxg-1,:,:) = T_(2,   :,:)
-       T_(nxg,  :,:) = T_(3,   :,:)
-    Else
+    ! x direction: interior-rank seam planes, then Dirichlet-SEM inflow / convective outflow (periodic wrap comes in finish_scalar_halos)
+    Call update_ghost_interior_planes_x(T_, 4)
+    If ( x_bc_type == 1 ) Then
+       Call x_periodic_partner(is_first_x, is_last_x, partner_x)
        Call apply_inflow_bc_scalar_x(T_)
        Uc = outflow_convection_velocity()   ! scalar-only, safe to call from host code (see boundary_conditions.f90)
        courant = Min(Max(Uc,0d0)*dt/dx, 1d0)
-       T_(nxg,:,:) = T_(nxg,:,:) - courant*( T_(nxg,:,:) - T_(nxg-1,:,:) )
+       If ( is_last_x ) T_(nxg,:,:) = T_(nxg,:,:) - courant*( T_(nxg,:,:) - T_(nxg-1,:,:) )
     End If
 
-    ! z-halo via MPI (ring exchange, non-periodic) + z-periodic wrap
-    Call update_ghost_scalar(T_)
-    ! Push host state to device first: apply_periodic_bc_z runs device-resident at nprocs==1, else its z-wrap fill is clobbered by the caller's later blanket update device
-    !$acc update device(T_)
-    Call apply_periodic_bc_z(T_, 4)
-    !$acc update host(T_)
+    Call finish_scalar_halos(T_)
 
     ! y-bottom ghost: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet mirror),
     ! 2=rough EQWM flux BC (Robin, alpha_T set by compute_flat_wall_thermal_eqwm)

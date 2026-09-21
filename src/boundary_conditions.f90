@@ -275,18 +275,36 @@ Contains
 
   End Subroutine apply_inflow_bc_scalar_x_C
 
-  ! Plane-averaged streamwise velocity at the outlet (x_bc_type==1, no MPI reduction: local-rank average, consistent with the other x_bc_type==1 routines' no-MPI scope), used as the convection speed for apply_outflow_bc_x
+  ! Plane-averaged streamwise velocity at the outlet (x_bc_type==1), reduced over every rank of the last x-row so all z-slabs share one convection speed (collective: every rank must call it), used as the convection speed for apply_outflow_bc_x
   Function outflow_convection_velocity() Result(Uc)
 
     Real(Int64) :: Uc
-    Integer(Int32) :: n2, n3
+    Integer(Int32) :: n2, n3, khi
+    Real(Int64) :: local_buf(2), global_buf(2), usum
+    Logical :: is_first_x, is_last_x, is_first_z, is_last_z
+    Integer(Int32) :: partner
 
     n2 = Size(U,2)
     n3 = Size(U,3)
 
-    !$acc kernels present(U)
-    Uc = Sum(U(nx-1,2:n2-1,2:n3-1)) / Real((n2-2)*(n3-2),Int64)
-    !$acc end kernels
+    Call x_periodic_partner(is_first_x, is_last_x, partner)
+    Call z_periodic_partner(is_first_z, is_last_z, partner)
+
+    ! z-periodic: the last column's final interior plane duplicates the first one, so leave it out
+    khi = n3-1
+    If ( z_bc_type == 0 .And. is_last_z ) khi = n3-2
+
+    local_buf = 0d0
+    If ( is_last_x ) Then
+       !$acc kernels present(U)
+       usum = Sum(U(nx-1,2:n2-1,2:khi))
+       !$acc end kernels
+       local_buf(1) = usum
+       local_buf(2) = Real((n2-2)*(khi-1),Int64)
+    End If
+
+    Call MPI_Allreduce(local_buf, global_buf, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Uc = global_buf(1) / Max(global_buf(2), 1d0)
 
   End Function outflow_convection_velocity
 

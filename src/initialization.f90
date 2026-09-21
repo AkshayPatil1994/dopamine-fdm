@@ -111,6 +111,8 @@ Contains
        If ( bc_face_yhi /= 2 .And. z0_yhi <= 0d0 ) &
           Stop 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_yhi > 0 for a no-slip top wall'
     End If
+    If ( ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) .And. z_bc_type /= 0 ) &
+       Stop 'ERROR: sediment/Boussinesq scalars require periodic z (z_bc_type=0); the scalar z BC and MUSCL halo assume it'
     If ( T_bc_bot == 2 .Or. T_bc_top == 2 ) Then
        If ( boussinesq_flag < 1 ) &
           Stop 'ERROR: T_bc_bot/top=2 (rough EQWM flux BC) requires boussinesq_flag >= 1'
@@ -874,15 +876,6 @@ Contains
     End Select
 
     Cscal_o = Cscal
-
-    ! Zero scalar concentration inside IBM solid cells so that the IC value
-    ! never persists inside solid and pollutes adjacent fluid via diffusion.
-    If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
-       Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) <= 0d0 )
-          Cscal(2:nxg-1, 2:nyg-1, 2:nzg-1) = 0d0
-       End Where
-       Cscal_o = Cscal
-    End If
 
     If (myid == 0) Write(*,'(A,I1,A,E12.4)') &
        '   C_ic_type = ', C_ic_type, '  Max Cscal = ', MaxVal(Cscal)

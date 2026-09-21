@@ -4,14 +4,19 @@ Module scalar_transport
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors
-  Use boundary_conditions, Only : apply_periodic_bc_z, apply_inflow_bc_scalar_x_C, outflow_convection_velocity
+  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner, z_periodic_partner
+  Use boundary_conditions, Only : apply_periodic_bc_z, apply_periodic_bc_x, update_ghost_interior_planes_x, &
+                                  apply_inflow_bc_scalar_x_C, outflow_convection_velocity
 
   Implicit None
 
   ! Module-level halo buffers for C z-exchange (avoids per-call heap allocation)
   Real(Int64), Allocatable, Dimension(:,:,:) :: sc_snd_lo, sc_snd_hi
   Real(Int64), Allocatable, Dimension(:,:,:) :: sc_rcv_lo, sc_rcv_hi
+
+  ! Scalar copy with a second x and z ghost layer (indices 0 and nxg+1 / nzg+1) for the MUSCL far-upwind cell, so the scheme
+  ! stays second order across MPI seams and periodic wraps instead of dropping to first order there
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Cpad
 
 Contains
 
@@ -75,7 +80,9 @@ Contains
     Real   (Int64) :: gf, gb, slp                   ! face gradients & limited slope
     Real   (Int64) :: dx_f, dy_f, dz_f
 
-    !$acc parallel loop collapse(3) present(C_,U_,V_,W_,Fc_,nu_t,phi,x,xg,y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
+    Call scalar_fill_pad(C_)
+
+    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,nu_t,phi,x,xg,y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
@@ -86,40 +93,32 @@ Contains
              uf = U_(i,j,k)
              If ( uf >= 0d0 ) Then
                 ! upwind cell = i
-                gf  = ( C_(i+1,j,k) - C_(i,j,k)   ) / ( xg(i+1) - xg(i)   )
-                gb  = ( C_(i,j,k)   - C_(i-1,j,k) ) / ( xg(i)   - xg(i-1) )
+                gf  = ( Cpad(i+1,j,k) - Cpad(i,j,k)   ) / ( xg(i+1) - xg(i)   )
+                gb  = ( Cpad(i,j,k)   - Cpad(i-1,j,k) ) / ( xg(i)   - xg(i-1) )
                 slp = vanleer_slope(gf, gb)
-                C_hi = C_(i,j,k) + slp * ( x(i) - xg(i) )
+                C_hi = Cpad(i,j,k) + slp * ( x(i) - xg(i) )
              Else
-                ! upwind cell = i+1; guard far-upwind C_(i+2) out of bounds at i=nxg-1
-                If ( i == nxg-1 ) Then
-                   C_hi = C_(i+1,j,k)
-                Else
-                   gf  = ( C_(i+2,j,k) - C_(i+1,j,k) ) / ( xg(i+2) - xg(i+1) )
-                   gb  = ( C_(i+1,j,k) - C_(i,j,k)   ) / ( xg(i+1) - xg(i)   )
-                   slp = vanleer_slope(gf, gb)
-                   C_hi = C_(i+1,j,k) + slp * ( x(i) - xg(i+1) )
-                End If
+                ! upwind cell = i+1; far-upwind C(i+2) comes from the padded halo (x is uniform, so dx stands in for xg(i+2)-xg(i+1))
+                gf  = ( Cpad(i+2,j,k) - Cpad(i+1,j,k) ) / dx
+                gb  = ( Cpad(i+1,j,k) - Cpad(i,j,k)   ) / ( xg(i+1) - xg(i)   )
+                slp = vanleer_slope(gf, gb)
+                C_hi = Cpad(i+1,j,k) + slp * ( x(i) - xg(i+1) )
              End If
 
              ! -- low face (i-1/2) at x(i-1): U_(i-1,j,k)
              uf = U_(i-1,j,k)
              If ( uf >= 0d0 ) Then
-                ! upwind cell = i-1; guard far-upwind C_(i-2) out of bounds at i=2
-                If ( i == 2 ) Then
-                   C_lo = C_(i-1,j,k)
-                Else
-                   gf  = ( C_(i,j,k)   - C_(i-1,j,k) ) / ( xg(i)   - xg(i-1) )
-                   gb  = ( C_(i-1,j,k) - C_(i-2,j,k) ) / ( xg(i-1) - xg(i-2) )
-                   slp = vanleer_slope(gf, gb)
-                   C_lo = C_(i-1,j,k) + slp * ( x(i-1) - xg(i-1) )
-                End If
+                ! upwind cell = i-1; far-upwind C(i-2) comes from the padded halo
+                gf  = ( Cpad(i,j,k)   - Cpad(i-1,j,k) ) / ( xg(i)   - xg(i-1) )
+                gb  = ( Cpad(i-1,j,k) - Cpad(i-2,j,k) ) / dx
+                slp = vanleer_slope(gf, gb)
+                C_lo = Cpad(i-1,j,k) + slp * ( x(i-1) - xg(i-1) )
              Else
                 ! upwind cell = i
-                gf  = ( C_(i+1,j,k) - C_(i,j,k)   ) / ( xg(i+1) - xg(i)   )
-                gb  = ( C_(i,j,k)   - C_(i-1,j,k) ) / ( xg(i)   - xg(i-1) )
+                gf  = ( Cpad(i+1,j,k) - Cpad(i,j,k)   ) / ( xg(i+1) - xg(i)   )
+                gb  = ( Cpad(i,j,k)   - Cpad(i-1,j,k) ) / ( xg(i)   - xg(i-1) )
                 slp = vanleer_slope(gf, gb)
-                C_lo = C_(i,j,k) + slp * ( x(i-1) - xg(i) )
+                C_lo = Cpad(i,j,k) + slp * ( x(i-1) - xg(i) )
              End If
 
              dx_f  = x(i) - x(i-1)
@@ -130,40 +129,40 @@ Contains
              vf = V_(i,j,k) - w_settle
              If ( vf >= 0d0 ) Then
                 ! upwind cell = j
-                gf  = ( C_(i,j+1,k) - C_(i,j,k)   ) / ( yg(j+1) - yg(j)   )
-                gb  = ( C_(i,j,k)   - C_(i,j-1,k) ) / ( yg(j)   - yg(j-1) )
+                gf  = ( Cpad(i,j+1,k) - Cpad(i,j,k)   ) / ( yg(j+1) - yg(j)   )
+                gb  = ( Cpad(i,j,k)   - Cpad(i,j-1,k) ) / ( yg(j)   - yg(j-1) )
                 slp = vanleer_slope(gf, gb)
-                C_hi = C_(i,j,k) + slp * ( y(j) - yg(j) )
+                C_hi = Cpad(i,j,k) + slp * ( y(j) - yg(j) )
              Else
-                ! upwind cell = j+1; guard C_(i,j+2) out of bounds at j=nyg-1
+                ! upwind cell = j+1; guard C(i,j+2) out of bounds at j=nyg-1
                 If ( j == nyg-1 ) Then
-                   C_hi = C_(i,j+1,k)
+                   C_hi = Cpad(i,j+1,k)
                 Else
-                   gf  = ( C_(i,j+2,k) - C_(i,j+1,k) ) / ( yg(j+2) - yg(j+1) )
-                   gb  = ( C_(i,j+1,k) - C_(i,j,k)   ) / ( yg(j+1) - yg(j)   )
+                   gf  = ( Cpad(i,j+2,k) - Cpad(i,j+1,k) ) / ( yg(j+2) - yg(j+1) )
+                   gb  = ( Cpad(i,j+1,k) - Cpad(i,j,k)   ) / ( yg(j+1) - yg(j)   )
                    slp = vanleer_slope(gf, gb)
-                   C_hi = C_(i,j+1,k) + slp * ( y(j) - yg(j+1) )
+                   C_hi = Cpad(i,j+1,k) + slp * ( y(j) - yg(j+1) )
                 End If
              End If
 
              ! -- low face (j-1/2) at y(j-1): V_(i,j-1,k); subtract ws
              vf = V_(i,j-1,k) - w_settle
              If ( vf >= 0d0 ) Then
-                ! upwind cell = j-1; guard C_(i,j-2) out of bounds at j=2
+                ! upwind cell = j-1; guard C(i,j-2) out of bounds at j=2
                 If ( j == 2 ) Then
-                   C_lo = C_(i,j-1,k)
+                   C_lo = Cpad(i,j-1,k)
                 Else
-                   gf  = ( C_(i,j,k)   - C_(i,j-1,k) ) / ( yg(j)   - yg(j-1) )
-                   gb  = ( C_(i,j-1,k) - C_(i,j-2,k) ) / ( yg(j-1) - yg(j-2) )
+                   gf  = ( Cpad(i,j,k)   - Cpad(i,j-1,k) ) / ( yg(j)   - yg(j-1) )
+                   gb  = ( Cpad(i,j-1,k) - Cpad(i,j-2,k) ) / ( yg(j-1) - yg(j-2) )
                    slp = vanleer_slope(gf, gb)
-                   C_lo = C_(i,j-1,k) + slp * ( y(j-1) - yg(j-1) )
+                   C_lo = Cpad(i,j-1,k) + slp * ( y(j-1) - yg(j-1) )
                 End If
              Else
                 ! upwind cell = j
-                gf  = ( C_(i,j+1,k) - C_(i,j,k)   ) / ( yg(j+1) - yg(j)   )
-                gb  = ( C_(i,j,k)   - C_(i,j-1,k) ) / ( yg(j)   - yg(j-1) )
+                gf  = ( Cpad(i,j+1,k) - Cpad(i,j,k)   ) / ( yg(j+1) - yg(j)   )
+                gb  = ( Cpad(i,j,k)   - Cpad(i,j-1,k) ) / ( yg(j)   - yg(j-1) )
                 slp = vanleer_slope(gf, gb)
-                C_lo = C_(i,j,k) + slp * ( y(j-1) - yg(j) )
+                C_lo = Cpad(i,j,k) + slp * ( y(j-1) - yg(j) )
              End If
 
              dy_f  = y(j) - y(j-1)
@@ -174,40 +173,32 @@ Contains
              wf = W_(i,j,k)
              If ( wf >= 0d0 ) Then
                 ! upwind cell = k
-                gf  = ( C_(i,j,k+1) - C_(i,j,k)   ) / ( zg(k+1) - zg(k)   )
-                gb  = ( C_(i,j,k)   - C_(i,j,k-1) ) / ( zg(k)   - zg(k-1) )
+                gf  = ( Cpad(i,j,k+1) - Cpad(i,j,k)   ) / ( zg(k+1) - zg(k)   )
+                gb  = ( Cpad(i,j,k)   - Cpad(i,j,k-1) ) / ( zg(k)   - zg(k-1) )
                 slp = vanleer_slope(gf, gb)
-                C_hi = C_(i,j,k) + slp * ( z(k) - zg(k) )
+                C_hi = Cpad(i,j,k) + slp * ( z(k) - zg(k) )
              Else
-                ! upwind cell = k+1; guard C_(i,j,k+2) out of bounds at k=nzg-1
-                If ( k == nzg-1 ) Then
-                   C_hi = C_(i,j,k+1)
-                Else
-                   gf  = ( C_(i,j,k+2) - C_(i,j,k+1) ) / ( zg(k+2) - zg(k+1) )
-                   gb  = ( C_(i,j,k+1) - C_(i,j,k)   ) / ( zg(k+1) - zg(k)   )
-                   slp = vanleer_slope(gf, gb)
-                   C_hi = C_(i,j,k+1) + slp * ( z(k) - zg(k+1) )
-                End If
+                ! upwind cell = k+1; far-upwind C(k+2) comes from the padded halo (scalars need uniform z, so dz stands in for zg(k+2)-zg(k+1))
+                gf  = ( Cpad(i,j,k+2) - Cpad(i,j,k+1) ) / dz
+                gb  = ( Cpad(i,j,k+1) - Cpad(i,j,k)   ) / ( zg(k+1) - zg(k)   )
+                slp = vanleer_slope(gf, gb)
+                C_hi = Cpad(i,j,k+1) + slp * ( z(k) - zg(k+1) )
              End If
 
              ! -- low face (k-1/2) at z(k-1): W_(i,j,k-1)
              wf = W_(i,j,k-1)
              If ( wf >= 0d0 ) Then
-                ! upwind cell = k-1; guard C_(i,j,k-2) out of bounds at k=2
-                If ( k == 2 ) Then
-                   C_lo = C_(i,j,k-1)
-                Else
-                   gf  = ( C_(i,j,k)   - C_(i,j,k-1) ) / ( zg(k)   - zg(k-1) )
-                   gb  = ( C_(i,j,k-1) - C_(i,j,k-2) ) / ( zg(k-1) - zg(k-2) )
-                   slp = vanleer_slope(gf, gb)
-                   C_lo = C_(i,j,k-1) + slp * ( z(k-1) - zg(k-1) )
-                End If
+                ! upwind cell = k-1; far-upwind C(k-2) comes from the padded halo
+                gf  = ( Cpad(i,j,k)   - Cpad(i,j,k-1) ) / ( zg(k)   - zg(k-1) )
+                gb  = ( Cpad(i,j,k-1) - Cpad(i,j,k-2) ) / dz
+                slp = vanleer_slope(gf, gb)
+                C_lo = Cpad(i,j,k-1) + slp * ( z(k-1) - zg(k-1) )
              Else
                 ! upwind cell = k
-                gf  = ( C_(i,j,k+1) - C_(i,j,k)   ) / ( zg(k+1) - zg(k)   )
-                gb  = ( C_(i,j,k)   - C_(i,j,k-1) ) / ( zg(k)   - zg(k-1) )
+                gf  = ( Cpad(i,j,k+1) - Cpad(i,j,k)   ) / ( zg(k+1) - zg(k)   )
+                gb  = ( Cpad(i,j,k)   - Cpad(i,j,k-1) ) / ( zg(k)   - zg(k-1) )
                 slp = vanleer_slope(gf, gb)
-                C_lo = C_(i,j,k) + slp * ( z(k-1) - zg(k) )
+                C_lo = Cpad(i,j,k) + slp * ( z(k-1) - zg(k) )
              End If
 
              dz_f  = z(k) - z(k-1)
@@ -217,20 +208,20 @@ Contains
              ! kappa at high x-face (x uniform: plain average; y, z use the interpolation weights): average of nu_t at (i,j,k) and (i+1,j,k)
              kappa_hi = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i+1,j,k))*kappa_t_inv
              kappa_lo = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i-1,j,k))*kappa_t_inv
-             diff_x = ( kappa_hi*(C_(i+1,j,k) - C_(i,j,k))/(xg(i+1)-xg(i)) &
-                      - kappa_lo*(C_(i,j,k) - C_(i-1,j,k))/(xg(i)-xg(i-1)) ) / dx_f
+             diff_x = ( kappa_hi*(Cpad(i+1,j,k) - Cpad(i,j,k))/(xg(i+1)-xg(i)) &
+                      - kappa_lo*(Cpad(i,j,k) - Cpad(i-1,j,k))/(xg(i)-xg(i-1)) ) / dx_f
 
              !-------- y-diffusion -----------------------------------------
              kappa_hi = kappa_mol + ( weight_y_0(j  )*nu_t(i,j,k) + weight_y_1(j  )*nu_t(i,j+1,k) )*kappa_t_inv
              kappa_lo = kappa_mol + ( weight_y_0(j-1)*nu_t(i,j-1,k) + weight_y_1(j-1)*nu_t(i,j,k) )*kappa_t_inv
-             diff_y = ( kappa_hi*(C_(i,j+1,k) - C_(i,j,k))/(yg(j+1)-yg(j)) &
-                      - kappa_lo*(C_(i,j,k) - C_(i,j-1,k))/(yg(j)-yg(j-1)) ) / dy_f
+             diff_y = ( kappa_hi*(Cpad(i,j+1,k) - Cpad(i,j,k))/(yg(j+1)-yg(j)) &
+                      - kappa_lo*(Cpad(i,j,k) - Cpad(i,j-1,k))/(yg(j)-yg(j-1)) ) / dy_f
 
              !-------- z-diffusion -----------------------------------------
              kappa_hi = kappa_mol + ( weight_z_0(k  )*nu_t(i,j,k) + weight_z_1(k  )*nu_t(i,j,k+1) )*kappa_t_inv
              kappa_lo = kappa_mol + ( weight_z_0(k-1)*nu_t(i,j,k-1) + weight_z_1(k-1)*nu_t(i,j,k) )*kappa_t_inv
-             diff_z = ( kappa_hi*(C_(i,j,k+1) - C_(i,j,k))/(zg(k+1)-zg(k)) &
-                      - kappa_lo*(C_(i,j,k) - C_(i,j,k-1))/(zg(k)-zg(k-1)) ) / dz_f
+             diff_z = ( kappa_hi*(Cpad(i,j,k+1) - Cpad(i,j,k))/(zg(k+1)-zg(k)) &
+                      - kappa_lo*(Cpad(i,j,k) - Cpad(i,j,k-1))/(zg(k)-zg(k-1)) ) / dz_f
 
              !-------- Assemble RHS ----------------------------------------
              Fc_(i,j,k) = -adv_x - adv_y - adv_z + diff_x + diff_y + diff_z
@@ -246,6 +237,107 @@ Contains
     !$acc end parallel loop
 
   End Subroutine compute_rhs_scalar_core
+
+
+  !> Load C_ into the padded work array Cpad and fill its outer x/z ghost layer: neighbour-rank cells across MPI seams, the periodic partner's cells across a periodic wrap, else a copy of the adjacent ghost cell (zero slope, i.e. first-order upwind at true domain edges)
+  Subroutine scalar_fill_pad(C_)
+
+    Real(Int64), Dimension(nxg, nyg, nzg), Intent(In) :: C_
+
+    Integer(Int32) :: i, j, k, up, down, xsend_up, xsend_dn, zsend_up, zsend_dn
+    Logical        :: is_first_x, is_last_x, is_first_z, is_last_z
+    Integer(Int32) :: partner_x, partner_z
+    Real(Int64)    :: xs(nyg,nzg), xr(nyg,nzg), zs(nxg+2,nyg), zr(nxg+2,nyg)
+
+    If ( .Not. Allocated(Cpad) ) Then
+       Allocate( Cpad(0:nxg+1, 1:nyg, 0:nzg+1) )
+       !$acc enter data create(Cpad)
+    End If
+
+    !$acc parallel loop collapse(3) present(C_,Cpad)
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             Cpad(i,j,k) = C_(i,j,k)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    Call x_periodic_partner(is_first_x, is_last_x, partner_x)
+    Call z_periodic_partner(is_first_z, is_last_z, partner_z)
+
+    If ( is_first_x .And. is_last_x .And. is_first_z .And. is_last_z ) Then
+       ! single rank: every outer plane is a local wrap or edge copy (device-resident on GPU builds, which are single-rank only)
+       !$acc kernels present(Cpad)
+       If ( x_bc_type == 0 ) Then
+          Cpad(0,   :,1:nzg) = Cpad(nxg-3,:,1:nzg)
+          Cpad(nxg+1,:,1:nzg) = Cpad(4,   :,1:nzg)
+       Else
+          Cpad(0,   :,1:nzg) = Cpad(1,  :,1:nzg)
+          Cpad(nxg+1,:,1:nzg) = Cpad(nxg,:,1:nzg)
+       End If
+       Cpad(:,:,0)     = Cpad(:,:,nzg-3)
+       Cpad(:,:,nzg+1) = Cpad(:,:,4)
+       !$acc end kernels
+       Return
+    End If
+
+    ! multi-rank (host-only): x planes first for k=1..nzg, then z planes over the x-extended extent so corners are consistent
+    Call x_halo_neighbors(up, down)
+    xsend_up = nxg-2
+    xsend_dn = 3
+    If ( x_bc_type == 0 ) Then
+       If ( is_last_x  ) Then
+          up = partner_x
+          xsend_up = nxg-3
+       End If
+       If ( is_first_x ) Then
+          down = partner_x
+          xsend_dn = 4
+       End If
+    End If
+
+    xs = Cpad(xsend_up,:,1:nzg)
+    Call Mpi_Sendrecv( xs, nyg*nzg, Mpi_real8, up,   20, &
+                       xr, nyg*nzg, Mpi_real8, down, 20, MPI_COMM_WORLD, istat, ierr )
+    If ( down /= MPI_PROC_NULL ) Then
+       Cpad(0,:,1:nzg) = xr
+    Else
+       Cpad(0,:,1:nzg) = Cpad(1,:,1:nzg)
+    End If
+    xs = Cpad(xsend_dn,:,1:nzg)
+    Call Mpi_Sendrecv( xs, nyg*nzg, Mpi_real8, down, 21, &
+                       xr, nyg*nzg, Mpi_real8, up,   21, MPI_COMM_WORLD, istat, ierr )
+    If ( up /= MPI_PROC_NULL ) Then
+       Cpad(nxg+1,:,1:nzg) = xr
+    Else
+       Cpad(nxg+1,:,1:nzg) = Cpad(nxg,:,1:nzg)
+    End If
+
+    ! z: scalars are z-periodic only, so first/last columns always wrap
+    Call z_halo_neighbors(up, down)
+    zsend_up = nzg-2
+    zsend_dn = 3
+    If ( is_last_z  ) Then
+       up = partner_z
+       zsend_up = nzg-3
+    End If
+    If ( is_first_z ) Then
+       down = partner_z
+       zsend_dn = 4
+    End If
+
+    zs = Cpad(:,:,zsend_up)
+    Call Mpi_Sendrecv( zs, (nxg+2)*nyg, Mpi_real8, up,   22, &
+                       zr, (nxg+2)*nyg, Mpi_real8, down, 22, MPI_COMM_WORLD, istat, ierr )
+    Cpad(:,:,0) = zr
+    zs = Cpad(:,:,zsend_dn)
+    Call Mpi_Sendrecv( zs, (nxg+2)*nyg, Mpi_real8, down, 23, &
+                       zr, (nxg+2)*nyg, Mpi_real8, up,   23, MPI_COMM_WORLD, istat, ierr )
+    Cpad(:,:,nzg+1) = zr
+
+  End Subroutine scalar_fill_pad
 
 
   !> MPI ring exchange for C ghost planes (intermediate ranks only)
@@ -280,33 +372,42 @@ Contains
   End Subroutine update_ghost_scalar
 
 
+  !> z-halo exchange plus the periodic x/z wraps for a cell-centred scalar, after the caller's x seam exchange and inflow/outflow update; host-side (runs the wraps on the device via a round trip)
+  Subroutine finish_scalar_halos(C_)
+
+    Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
+
+    ! z-halo via MPI (ring exchange, non-periodic)
+    Call update_ghost_scalar(C_)
+    ! Push host state to device first: the periodic wraps run device-resident at nprocs==1, else their fill is clobbered by the caller's later blanket update device
+    !$acc update device(C_)
+    If ( x_bc_type == 0 ) Call apply_periodic_bc_x(C_, 2)
+    Call apply_periodic_bc_z(C_, 4)
+    !$acc update host(C_)
+
+  End Subroutine finish_scalar_halos
+
+
   !> Apply boundary conditions to scalar C (x-periodic or Dirichlet inflow/convective outflow, z-MPI halo, y-wall fluxes)
   Subroutine apply_scalar_bc(C_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
 
     Real(Int64) :: Uc, courant
+    Logical :: is_first_x, is_last_x
+    Integer(Int32) :: partner_x
 
-    ! x direction: periodic, or Dirichlet inflow / convective outflow
-    If ( x_bc_type == 0 ) Then
-       C_(1,   :,:) = C_(nxg-2,:,:)
-       C_(nxg-1,:,:) = C_(2,   :,:)
-       C_(nxg,  :,:) = C_(3,   :,:)
-    Else
+    ! x direction: interior-rank seam planes, then Dirichlet inflow / convective outflow (periodic wrap comes in finish_scalar_halos)
+    Call update_ghost_interior_planes_x(C_, 4)
+    If ( x_bc_type == 1 ) Then
+       Call x_periodic_partner(is_first_x, is_last_x, partner_x)
        Call apply_inflow_bc_scalar_x_C(C_)
        Uc = outflow_convection_velocity()
        courant = Min(Max(Uc,0d0)*dt/dx, 1d0)
-       C_(nxg,:,:) = C_(nxg,:,:) - courant*( C_(nxg,:,:) - C_(nxg-1,:,:) )
+       If ( is_last_x ) C_(nxg,:,:) = C_(nxg,:,:) - courant*( C_(nxg,:,:) - C_(nxg-1,:,:) )
     End If
 
-    ! z-halo via MPI (ring exchange, non-periodic)
-    Call update_ghost_scalar(C_)
-    ! z-periodic wrap: rank 0 ↔ rank nprocs-1 (sets z=1 on rank 0 and
-    ! fills the periodic-copy cell nzg-1 and ghost nzg on rank nprocs-1)
-    ! Push host state to device first: apply_periodic_bc_z runs device-resident at nprocs==1, else its z-wrap fill is clobbered by the caller's later blanket update device
-    !$acc update device(C_)
-    Call apply_periodic_bc_z(C_, 4)
-    !$acc update host(C_)
+    Call finish_scalar_halos(C_)
 
     ! y-bottom ghost
     If ( sed_bc_bot == 0 ) Then
@@ -318,13 +419,7 @@ Contains
     ! y-top ghost
     C_(:,nyg,:) = C_(:,nyg-1,:)
 
-    ! Zero C inside IBM solid cells after every ghost/BC update to prevent
-    ! the RK3 update leaking a non-zero IC value into adjacent fluid.
-    If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
-       Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) <= 0d0 )
-          C_(2:nxg-1, 2:nyg-1, 2:nzg-1) = 0d0
-       End Where
-    End If
+    ! IBM solid cells are deliberately not zeroed: image-point interpolation and the MUSCL stencil read them, and zeros would drain nearby fluid; the no-flux ghost fill (apply_ghost_cell_ibm_scalar_noflux) supplies the boundary condition
 
   End Subroutine apply_scalar_bc
 
