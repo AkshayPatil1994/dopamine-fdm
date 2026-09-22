@@ -4,8 +4,8 @@ Module ibm
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner
-  Use boundary_conditions, Only : exchange_velocity_halos
+  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner, z_periodic_partner
+  Use boundary_conditions, Only : exchange_velocity_halos, apply_periodic_bc_x, apply_periodic_bc_z
 
   Implicit None
 
@@ -184,16 +184,28 @@ Contains
 
     Call read_distributed_scalar_field(ibm_sdf_file, phi)
 
-    ! Apply Neumann (zero-gradient) ghost BCs for phi at domain boundaries; x=1/nxg is an
-    ! inter-rank seam (already correctly populated straight from the global file slice) on
-    ! any rank that doesn't own the true global x edge, so skip it there
+    ! Ghost BCs for phi at domain boundaries: true periodic wrap when x_bc_type/z_bc_type
+    ! select periodic (matches solve_poisson_equation's treatment of P, projection.f90),
+    ! Neumann (zero-gradient) otherwise. x=1/nxg (resp. z=1/nzg) is an inter-rank seam
+    ! (already correctly populated straight from the global file slice) on any rank that
+    ! doesn't own the true global domain edge, so the Neumann branch skips it there.
+    ! is_first_x/is_last_x are needed below regardless of branch (passed to
+    ! smooth_ibm_corners), so resolve them unconditionally -- cheap, no communication.
     Call x_periodic_partner(is_first_x, is_last_x, partner_x)
-    If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
-    If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+    If ( x_bc_type == 0 ) Then
+       Call apply_periodic_bc_x(phi,4)
+    Else
+       If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
+       If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+    End If
     phi(:,1,:)   = phi(:,2,:)
     phi(:,nyg,:) = phi(:,nyg-1,:)
-    phi(:,:,1)   = phi(:,:,2)
-    phi(:,:,nzg) = phi(:,:,nzg-1)
+    If ( z_bc_type == 0 ) Then
+       Call apply_periodic_bc_z(phi,4)
+    Else
+       phi(:,:,1)   = phi(:,:,2)
+       phi(:,:,nzg) = phi(:,:,nzg-1)
+    End If
     ! Overwrite interior-rank z ghost planes with actual neighbour values
     Call exchange_phi_ghost_planes
 
@@ -267,14 +279,23 @@ Contains
        End Do
        phi(2:nxg-1,2:nyg-1,2:nzg-1) = phi_new(2:nxg-1,2:nyg-1,2:nzg-1)
 
-       ! Refresh ghosts before the next pass: Neumann at true domain boundaries, MPI
-       ! exchange at interior-rank seams (both x and z; y is never decomposed)
-       If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
-       If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+       ! Refresh ghosts before the next pass: true periodic wrap when x_bc_type/z_bc_type
+       ! select periodic, Neumann at true domain boundaries otherwise, MPI exchange at
+       ! interior-rank seams (both x and z; y is never decomposed)
+       If ( x_bc_type == 0 ) Then
+          Call apply_periodic_bc_x(phi,4)
+       Else
+          If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
+          If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+       End If
        phi(:,1,:)   = phi(:,2,:)
        phi(:,nyg,:) = phi(:,nyg-1,:)
-       phi(:,:,1)   = phi(:,:,2)
-       phi(:,:,nzg) = phi(:,:,nzg-1)
+       If ( z_bc_type == 0 ) Then
+          Call apply_periodic_bc_z(phi,4)
+       Else
+          phi(:,:,1)   = phi(:,:,2)
+          phi(:,:,nzg) = phi(:,:,nzg-1)
+       End If
        Call exchange_phi_x_ghost_planes
        Call exchange_phi_ghost_planes
     End Do

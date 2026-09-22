@@ -271,6 +271,15 @@ Contains
     ! inflow-optimization setup (no-op unless inflow_opt_active==1); must come after init_inflow (needs prof_R11/22/33 already read)
     Call init_inflow_opt
 
+    ! Boundary-condition z-plane buffers: only depend on grid-size integers (already
+    ! set), not on xg/yg/zg contents; allocated here (ahead of IBM setup below) because
+    ! read_phi_from_sdf_file/smooth_ibm_corners now call apply_periodic_bc_z(phi,4) for
+    ! periodic-z domains, which reads/writes these same shared buffers.
+    ! local velocity, initial z-planes
+    Allocate ( buffer_ui(nx,nyg,2:3), buffer_vi(nxg,ny,2:3), buffer_wi(nxg,nyg), buffer_ci(nxg,nyg,2:3) )
+    ! local velocity, ending  z-planes
+    Allocate ( buffer_ue(nx,nyg),     buffer_ve(nxg,ny),     buffer_we(nxg,nyg), buffer_ce(nxg,nyg) )
+
     ! IBM setup: must come after xg/yg/zg/dxmin/dymin/dzmin are set
     ! (compute_normal_at_face_* divides by grid spacings).
     If ( ibm_input_mode >= 1 ) Then
@@ -282,12 +291,8 @@ Contains
     If ( uav_active >= 1 ) Call setup_uav
 
     ! Boundary conditions
-    ! local velocity, initial z-planes
-    Allocate ( buffer_ui(nx,nyg,2:3), buffer_vi(nxg,ny,2:3), buffer_wi(nxg,nyg), buffer_ci(nxg,nyg,2:3) )
-    ! local velocity, ending  z-planes
-    Allocate ( buffer_ue(nx,nyg),     buffer_ve(nxg,ny),     buffer_we(nxg,nyg), buffer_ce(nxg,nyg) )
     ! local pressure z-plane
-    Allocate ( buffer_p(2:nxg-1,2:nyg-1) ) 
+    Allocate ( buffer_p(2:nxg-1,2:nyg-1) )
 
     ! Interior communications; 3rd dim: 1=+z exchange, 2=-z exchange, issued concurrently
     Allocate ( buffer_us(nx ,nyg,2), buffer_ur(nx ,nyg,2) )
