@@ -129,14 +129,25 @@ Contains
 
     Integer(Int32) :: iproc, nxge_r, nzge_r, n_interior
     Integer(Int32) :: sdf_unit
+    Integer(Int64) :: file_size, expected_size, expected_elements
     Real   (Int64), Allocatable :: global_field(:,:,:), tmp_read(:), send_buf(:,:,:)
 
     ! Rank iproc owns global x-columns ig1_global(iproc):ig2_global(iproc) (already ghosted in-file)
     ! and interior z-planes kg1_global(iproc):kg2_global(iproc)-2.
     If ( myid==0 ) Then
 
+       expected_elements = Int(nxg_global, Int64) * Int(nyg_global, Int64) * Int(nzm_global, Int64)
+       expected_size = expected_elements * Int(storage_size(1d0)/8, Int64)
+       Inquire(file=Trim(filename), size=file_size)
+       If ( file_size /= expected_size ) Then
+          Write(error_unit,*) 'IBM: file size mismatch reading ', Trim(filename)
+          Write(error_unit,*) '  expected ', expected_elements, ' elements (', expected_size, ' bytes),', &
+               ' found ', file_size, ' bytes'
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+
        Open(newunit=sdf_unit, file=Trim(filename), access='stream', form='unformatted', action='read', convert='big_endian')
-       Allocate( tmp_read(Int(nxg_global, Int64) * Int(nyg_global, Int64) * Int(nzm_global, Int64)) )
+       Allocate( tmp_read(expected_elements) )
        Read(sdf_unit) tmp_read
        Close(sdf_unit)
        Allocate( global_field(nxg_global, nyg_global, nzm_global) )
