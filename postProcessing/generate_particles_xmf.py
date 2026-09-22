@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate XDMF for fdm-dopamine particle snapshots (src/particles.f90) — NO DATA
-DUPLICATION, same philosophy as generateXMF.py for the flow fields: the
-generated .xmf points directly at the original Fortran binary snapshot files
-via byte-seek HyperSlabs; no particle data is ever copied.
+Generate XDMF for fdm-dopamine particle snapshots (src/particles.f90).
 
 Binary format written by particles.f90's write_particle_snapshot (also used,
 same layout, by the hot-restart file from write_particle_restart):
@@ -18,29 +15,41 @@ All integers/floats are big-endian (this build's global -fconvert=big-endian/
 -convert big_endian/-Mbyteswapio Fortran flag, same convention generateXMF.py
 already relies on for the field snapshots).
 
-Point count varies from one snapshot to the next (particles exit/deposit/
-reinject), so — unlike the fixed field-grid XDMF, which shares one Topology/
-Geometry across the whole time series — every timestep here declares its own
-Polyvertex Topology and XYZ Geometry, sized to that snapshot's own particle
-count.
+Particle count varies from one snapshot to the next (particles exit/deposit/
+reinject). By default this script PADS every snapshot up to the run's own
+maximum particle count and writes one small auxiliary binary file per
+timestep into ./paraview/ (id=-1, active=0 for padding rows) -- unlike
+generateXMF.py's fields, which are large enough that zero-copy byte-seeking
+into the original files matters, particle snapshots are tiny, and giving
+every timestep the SAME Topology/Geometry size is required for vtkXdmfReader
+to treat the series as one homogeneous time-varying dataset rather than
+promoting it to a vtkMultiBlockDataSet (a real ParaView reader limitation --
+without this, ParaView prints "Data type generated (vtkMultiBlockDataSet)
+does not match data type expected (vtkUnstructuredGrid)" and animation can
+misbehave). Pass --no-pad to fall back to the original zero-duplication,
+variable-size-per-timestep behaviour if you don't hit that warning.
 
 Usage:
-    python3 generate_particles_xmf.py
+    python3 generate_particles_xmf.py            # padded (default, fixes the ParaView warning)
+    python3 generate_particles_xmf.py --no-pad    # original byte-seek-only, no auxiliary files
 
 Output (in ./paraview/ subdirectory, alongside generateXMF.py's own output):
-    particles.xmf   – XDMF time series; open this in ParaView (or combine
-                       with channel_test.xmf's time toolbar to scrub fields
-                       and particles together -- Time Value is the step
-                       number, matching generateXMF.py's own DT=1 convention
-                       exactly, not physical time, so the two time axes agree)
+    particles.xmf                        – XDMF time series; open in ParaView
+    <prefix>_particles_padded.<step>.bin – padded per-timestep data (--pad only)
 
-Requires the id/age fields shown as point-cloud Attributes: colour by
-"id" to track individual particles, or by "age"/"Velocity" (magnitude or
-component) for dispersion/turbophoresis-style plots. A Glyph filter
+Open particles.xmf alongside channel_test.xmf (generateXMF.py's output) and use
+the shared time toolbar to animate fields and particles together -- Time Value
+is the step number, matching generateXMF.py's own DT=1 convention exactly, not
+physical time, so the two time axes agree.
+
+Point-cloud Attributes: "id" (track individual particles, -1 on padding rows
+with --pad), "age", "Velocity", and (--pad only) "active" (1=real particle,
+0=padding -- Threshold on active>0.5 to hide the padding rows). A Glyph filter
 (Sphere, small radius) on the point cloud is usually clearer than the raw
 Points representation in ParaView.
 """
 
+import argparse
 import os
 import re
 import struct
@@ -82,87 +91,135 @@ def detect_particle_prefix_and_steps():
     return detected_prefix, steps
 
 
-def probe_count(fpath):
-    """Read just the leading Int32 particle count from one snapshot file."""
+def read_snapshot(fpath):
+    """Read one full snapshot: (total, id[total] int32, dat[total,7] float64)."""
     with open(fpath, 'rb') as fh:
-        return struct.unpack('>i', fh.read(4))[0]
+        data = fh.read()
+    total = struct.unpack_from('>i', data, 0)[0]
+    if total == 0:
+        return 0, np.zeros(0, dtype='>i4'), np.zeros((0, 7), dtype='>f8')
+    ids = np.frombuffer(data, dtype='>i4', count=total, offset=4)
+    dat = np.frombuffer(data, dtype='>f8', count=total * 7, offset=4 + 4 * total).reshape(total, 7)
+    return total, ids, dat
 
 
 def rel(path):
     return os.path.relpath(path, OUT_DIR)
 
 
-def xdmf_grid_for_step(total, frel, t):
-    """One <Grid> (Polyvertex point cloud + attributes) for a single snapshot."""
-    id_bytes = 4          # Int32
-    dat_offset = 4 + 4 * total   # past the Int32 total header and the Int32 id[] array
+def write_padded(fpath, ids, dat, max_total):
+    """Write one padded auxiliary file: Int32[max_total] id, Int32[max_total] active,
+    Float64[max_total,7] dat -- padding rows get id=-1, active=0, dat=0."""
+    total = len(ids)
+    id_pad = np.full(max_total, -1, dtype='>i4')
+    id_pad[:total] = ids
+    active_pad = np.zeros(max_total, dtype='>i4')
+    active_pad[:total] = 1
+    dat_pad = np.zeros((max_total, 7), dtype='>f8')
+    dat_pad[:total, :] = dat
+
+    with open(fpath, 'wb') as fh:
+        fh.write(id_pad.tobytes())
+        fh.write(active_pad.tobytes())
+        fh.write(dat_pad.tobytes())
+
+
+def xdmf_grid_for_step(n, frel, t, padded):
+    """One <Grid> (Polyvertex point cloud + attributes) for a single (already-sized) timestep.
+    n is the Topology/Geometry element count: the padded ceiling if padded=True, else this
+    snapshot's own (possibly different from every other step's) real particle count."""
+    if padded:
+        id_off = 0
+        active_off = 4 * n
+        dat_off = 8 * n   # past id[n] (Int32) and active[n] (Int32)
+    else:
+        id_off = 4          # past the Int32 total header
+        dat_off = 4 + 4 * n   # past the Int32 total header and the Int32 id[] array
 
     lines = [
         '',
         f'      <Grid Name="t{t:.6g}" GridType="Uniform">',
         f'        <Time Value="{t:.6g}"/>',
-        f'        <Topology TopologyType="Polyvertex" NumberOfElements="{total}"/>',
+        f'        <Topology TopologyType="Polyvertex" NumberOfElements="{n}"/>',
         '        <Geometry GeometryType="XYZ">',
-        f'          <DataItem ItemType="HyperSlab" Dimensions="{total} 3" Type="HyperSlab">',
+        f'          <DataItem ItemType="HyperSlab" Dimensions="{n} 3" Type="HyperSlab">',
         '            <DataItem Dimensions="3 2" Format="XML">',
         '              0 0',
         '              1 1',
-        f'              {total} 3',
+        f'              {n} 3',
         '            </DataItem>',
-        f'            <DataItem Dimensions="{total} 7" Format="Binary"',
-        f'                     DataType="Float" Precision="8" Endian="Big" Seek="{dat_offset}">',
+        f'            <DataItem Dimensions="{n} 7" Format="Binary"',
+        f'                     DataType="Float" Precision="8" Endian="Big" Seek="{dat_off}">',
         f'              {frel}',
         '            </DataItem>',
         '          </DataItem>',
         '        </Geometry>',
         '',
         '        <Attribute Name="Velocity" Center="Node" AttributeType="Vector">',
-        f'          <DataItem ItemType="HyperSlab" Dimensions="{total} 3" Type="HyperSlab">',
+        f'          <DataItem ItemType="HyperSlab" Dimensions="{n} 3" Type="HyperSlab">',
         '            <DataItem Dimensions="3 2" Format="XML">',
         '              0 3',
         '              1 1',
-        f'              {total} 3',
+        f'              {n} 3',
         '            </DataItem>',
-        f'            <DataItem Dimensions="{total} 7" Format="Binary"',
-        f'                     DataType="Float" Precision="8" Endian="Big" Seek="{dat_offset}">',
+        f'            <DataItem Dimensions="{n} 7" Format="Binary"',
+        f'                     DataType="Float" Precision="8" Endian="Big" Seek="{dat_off}">',
         f'              {frel}',
         '            </DataItem>',
         '          </DataItem>',
         '        </Attribute>',
         '',
         '        <Attribute Name="age" Center="Node" AttributeType="Scalar">',
-        f'          <DataItem ItemType="HyperSlab" Dimensions="{total} 1" Type="HyperSlab">',
+        f'          <DataItem ItemType="HyperSlab" Dimensions="{n} 1" Type="HyperSlab">',
         '            <DataItem Dimensions="3 2" Format="XML">',
         '              0 6',
         '              1 1',
-        f'              {total} 1',
+        f'              {n} 1',
         '            </DataItem>',
-        f'            <DataItem Dimensions="{total} 7" Format="Binary"',
-        f'                     DataType="Float" Precision="8" Endian="Big" Seek="{dat_offset}">',
+        f'            <DataItem Dimensions="{n} 7" Format="Binary"',
+        f'                     DataType="Float" Precision="8" Endian="Big" Seek="{dat_off}">',
         f'              {frel}',
         '            </DataItem>',
         '          </DataItem>',
         '        </Attribute>',
         '',
         '        <Attribute Name="id" Center="Node" AttributeType="Scalar">',
-        f'          <DataItem Dimensions="{total}" Format="Binary"',
-        f'                   DataType="Int" Precision="4" Endian="Big" Seek="{id_bytes}">',
+        f'          <DataItem Dimensions="{n}" Format="Binary"',
+        f'                   DataType="Int" Precision="4" Endian="Big" Seek="{id_off}">',
         f'            {frel}',
         '          </DataItem>',
         '        </Attribute>',
-        '      </Grid>',
     ]
+    if padded:
+        lines += [
+            '',
+            '        <Attribute Name="active" Center="Node" AttributeType="Scalar">',
+            f'          <DataItem Dimensions="{n}" Format="Binary"',
+            f'                   DataType="Int" Precision="4" Endian="Big" Seek="{active_off}">',
+            f'            {frel}',
+            '          </DataItem>',
+            '        </Attribute>',
+        ]
+    lines.append('      </Grid>')
     return lines
 
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--no-pad', dest='pad', action='store_false',
+                     help='disable padding: original zero-duplication, variable-size-per-timestep '
+                          'behaviour (may trigger a vtkXdmfReader vtkMultiBlockDataSet warning in ParaView)')
+    args = ap.parse_args()
+
     prefix, steps = detect_particle_prefix_and_steps()
-    # Time Value = step (not physical time): matches generateXMF.py's own DT=1
-    # convention exactly, which is what lets ParaView's shared time toolbar line
-    # fields and particles up frame-for-frame when both .xmf files are open
-    # together. (generateXMF.py doesn't read dt from input_parameters either --
-    # see its own DT=1 comment -- so scaling by dt here would only make the two
-    # time axes disagree.)
+
+    max_total = 0
+    if args.pad:
+        for step in steps:
+            fpath = os.path.join(FIELDS_DIR, f'{prefix}_particles.{step}')
+            if os.path.exists(fpath):
+                max_total = max(max_total, struct.unpack('>i', open(fpath, 'rb').read(4))[0])
+        print(f'Padding every snapshot up to {max_total} particles (this run\'s maximum)')
 
     lines = [
         '<?xml version="1.0" ?>',
@@ -177,16 +234,25 @@ def main():
         fpath = os.path.join(FIELDS_DIR, f'{prefix}_particles.{step}')
         if not os.path.exists(fpath):
             continue
-        total = probe_count(fpath)
-        if total == 0:
-            # An empty Polyvertex grid confuses some ParaView versions; skip
-            # steps with no active particles rather than emitting one.
-            print(f'  step {step}: 0 particles, skipping')
-            continue
         t = float(step)
-        lines += xdmf_grid_for_step(total, rel(fpath), t)
+
+        if args.pad:
+            total, ids, dat = read_snapshot(fpath)
+            if max_total == 0:
+                print(f'  step {step}: 0 particles in every snapshot, skipping')
+                continue
+            padded_path = os.path.join(OUT_DIR, f'{prefix}_particles_padded.{step}.bin')
+            write_padded(padded_path, ids, dat, max_total)
+            lines += xdmf_grid_for_step(max_total, rel(padded_path), t, padded=True)
+            print(f'  registered step {step} ({total}/{max_total} active particles)')
+        else:
+            total = probe_count_only(fpath)
+            if total == 0:
+                print(f'  step {step}: 0 particles, skipping')
+                continue
+            lines += xdmf_grid_for_step(total, rel(fpath), t, padded=False)
+            print(f'  registered step {step} ({total} particles)')
         n_written += 1
-        print(f'  registered step {step} ({total} particles)')
 
     lines += [
         '    </Grid>',
@@ -205,6 +271,13 @@ def main():
     print('Open particles.xmf in ParaView (File -> Open), or open it alongside '
           "channel_test.xmf (generateXMF.py's output) and use the shared time "
           'toolbar to animate fields and particles together.')
+    if args.pad:
+        print('Padding rows have active=0 -- apply Threshold (active > 0.5) to hide them.')
+
+
+def probe_count_only(fpath):
+    with open(fpath, 'rb') as fh:
+        return struct.unpack('>i', fh.read(4))[0]
 
 
 if __name__ == '__main__':
