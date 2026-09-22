@@ -5,7 +5,7 @@ Module boundary_conditions
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, z_periodic_partner, x_periodic_partner
+  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, z_periodic_partner, x_periodic_partner, comm_outflow_x
   Use synthetic_eddy_method
 
   ! prevent implicit typing
@@ -294,16 +294,21 @@ Contains
     khi = n3-1
     If ( z_bc_type == 0 .And. is_last_z ) khi = n3-2
 
-    local_buf = 0d0
-    If ( is_last_x ) Then
-       !$acc kernels present(U)
-       usum = Sum(U(nx-1,2:n2-1,2:khi))
-       !$acc end kernels
-       local_buf(1) = usum
-       local_buf(2) = Real((n2-2)*(khi-1),Int64)
-    End If
+    ! Only the outflow row (is_last_x, one row of p_col ranks) has anything to
+    ! contribute -- apply_outflow_bc_x is itself a no-op on every other rank, so this
+    ! function's result is never read there either. Reduce over comm_outflow_x (built
+    ! once at init, decomp.f90) rather than MPI_COMM_WORLD: at high p_row this avoids
+    ! synchronising the whole p_row*p_col process grid just to share one scalar.
+    Uc = 0d0
+    If ( .Not. is_last_x ) Return
 
-    Call MPI_Allreduce(local_buf, global_buf, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    !$acc kernels present(U)
+    usum = Sum(U(nx-1,2:n2-1,2:khi))
+    !$acc end kernels
+    local_buf(1) = usum
+    local_buf(2) = Real((n2-2)*(khi-1),Int64)
+
+    Call MPI_Allreduce(local_buf, global_buf, 2, MPI_real8, MPI_SUM, comm_outflow_x, ierr)
     Uc = global_buf(1) / Max(global_buf(2), 1d0)
 
   End Function outflow_convection_velocity

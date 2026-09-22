@@ -6,7 +6,8 @@ Module initialization
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : decomp_init_pencil, decomp_build_xz_ranges, decomp_init_poisson_pencil, decomp_poisson, z_periodic_partner
+  Use decomp, Only : decomp_init_pencil, decomp_build_xz_ranges, decomp_init_poisson_pencil, &
+       decomp_poisson, z_periodic_partner, init_outflow_x_comm
   Use input_output
   Use ibmSetup
   Use scalar_transport, Only : compute_settling_velocity
@@ -128,6 +129,12 @@ Contains
     Call decomp_init_pencil
     If ( myid==0 ) Write(*,'(A,I0,A,I0)') '   p_row, p_col (resolved)     =  ', p_row, '  ', p_col
     Call decomp_build_xz_ranges
+
+    ! Sub-communicator for outflow_convection_velocity (boundary_conditions.f90): x_bc_type
+    ! is a broadcast namelist value (identical on every rank), so this If is not
+    ! rank-divergent -- every rank enters (or skips) the collective MPI_Comm_split together.
+    ! Unused (comm_outflow_x stays MPI_COMM_NULL) unless x_bc_type==1.
+    If ( x_bc_type == 1 ) Call init_outflow_x_comm
 
     ! restriction for MPI boundaries (ghost-cell stencils need >=2 interior cells per rank)
     If ( Any( (kg2_global-kg1_global-1) < 2 ) ) Stop 'Error: each rank needs at least 2 interior z-cells'
