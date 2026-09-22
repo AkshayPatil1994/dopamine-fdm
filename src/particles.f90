@@ -27,6 +27,10 @@ Module particles
   Real   (Int64), Allocatable :: p_x(:), p_y(:), p_z(:)
   Real   (Int64), Allocatable :: p_u(:), p_v(:), p_w(:)
   Real   (Int64), Allocatable :: p_age(:)
+  ! Phase 5 (sgs_particle_model==1 only): persistent SGS velocity fluctuation state, evolved
+  ! by the simplified Langevin model (advance_sgs_velocity) and added to the resolved fluid
+  ! velocity used for advection
+  Real   (Int64), Allocatable :: p_sgs_u(:), p_sgs_v(:), p_sgs_w(:)
 
   ! Resolved per-direction BC codes (0=periodic,1=exit,2=reflect,3=absorb) and this rank's
   ! position in the periodic topology, both set once in setup_particles
@@ -117,6 +121,11 @@ Contains
           p_v  (n_particles_local) = 0d0
           p_w  (n_particles_local) = 0d0
           p_age(n_particles_local) = 0d0
+          If ( sgs_particle_model == 1 ) Then
+             p_sgs_u(n_particles_local) = 0d0
+             p_sgs_v(n_particles_local) = 0d0
+             p_sgs_w(n_particles_local) = 0d0
+          End If
        End If
     End Do
 
@@ -237,6 +246,9 @@ Contains
     Real(Int64) :: ex, ey, ez, dv, dsig
 
     Call interpolate_velocity(p_x(i), p_y(i), p_z(i), uf, vf, wf)
+    If ( sgs_particle_model == 1 ) Then
+       uf = uf + p_sgs_u(i);  vf = vf + p_sgs_v(i);  wf = wf + p_sgs_w(i)
+    End If
 
     urel = Sqrt( (uf-p_u(i))**2 + (vf-p_v(i))**2 + (wf-p_w(i))**2 )
     Re_p = urel * particle_diam / nu
@@ -324,6 +336,51 @@ Contains
 
   End Subroutine gaussian_pair
 
+  !> Diagnose SGS turbulent kinetic energy and dissipation rate at (xp,yp,zp) from the eddy-
+  !  viscosity SGS model's nu_t (sgs_model.f90/global.f90), via a Deardorff-style mixing-length
+  !  closure nu_t=C_k*sqrt(k_sgs)*Delta => k_sgs=(nu_t/(C_k*Delta))^2, and eps_sgs=C_eps*
+  !  k_sgs^1.5/Delta. C_k=0.1, C_eps=1.0 are standard textbook LES values, not case-tuned.
+  Subroutine compute_sgs_stats(xp, yp, zp, k_sgs, eps_sgs)
+
+    Real(Int64), Intent(In)  :: xp, yp, zp
+    Real(Int64), Intent(Out) :: k_sgs, eps_sgs
+
+    Real(Int64) :: nut_local
+    Real(Int64), Parameter :: C_k = 0.1d0, C_eps = 1.0d0
+
+    nut_local = interp3(nu_t, xg, nxg, yg, nyg, zg, nzg, xp, yp, zp)
+    k_sgs   = ( Max(nut_local,0d0) / (C_k*Max(Delta,1d-14)) )**2
+    eps_sgs = C_eps * k_sgs**1.5d0 / Max(Delta,1d-14)
+
+  End Subroutine compute_sgs_stats
+
+  !> Explicit-Euler step of the simplified (isotropic) Langevin SGS model (simplified Thomson/
+  !  Weil-Sullivan-Moeng well-mixed model): du_sgs = -u_sgs/T_L*dt + sqrt(C0*eps_sgs)*dW, with
+  !  T_L=2*k_sgs/(C0*eps_sgs). Assumes dt<<T_L (typical for LES time steps); a documented
+  !  simplification rather than the exact-exponential treatment used for drag (exp_integrate).
+  Subroutine advance_sgs_velocity(i)
+
+    Integer(Int32), Intent(In) :: i
+
+    Real(Int64) :: k_sgs, eps_sgs, T_L, b, g1, g2, g3, g4
+
+    Call compute_sgs_stats(p_x(i), p_y(i), p_z(i), k_sgs, eps_sgs)
+    If ( k_sgs < 1d-20 .Or. eps_sgs < 1d-20 ) Then
+       p_sgs_u(i) = 0d0;  p_sgs_v(i) = 0d0;  p_sgs_w(i) = 0d0
+       Return
+    End If
+
+    T_L = 2d0*k_sgs / (particle_langevin_C0*eps_sgs)
+    b   = Sqrt(particle_langevin_C0*eps_sgs)
+
+    Call gaussian_pair(g1, g2)
+    Call gaussian_pair(g3, g4)
+    p_sgs_u(i) = p_sgs_u(i)*(1d0 - dt/T_L) + b*Sqrt(dt)*g1
+    p_sgs_v(i) = p_sgs_v(i)*(1d0 - dt/T_L) + b*Sqrt(dt)*g2
+    p_sgs_w(i) = p_sgs_w(i)*(1d0 - dt/T_L) + b*Sqrt(dt)*g3
+
+  End Subroutine advance_sgs_velocity
+
   !> Grow every per-particle array to at least n_needed (doubling), preserving existing data.
   Subroutine ensure_capacity(n_needed)
 
@@ -341,6 +398,11 @@ Contains
     Call grow_real(p_v,   new_cap)
     Call grow_real(p_w,   new_cap)
     Call grow_real(p_age, new_cap)
+    If ( sgs_particle_model == 1 ) Then
+       Call grow_real(p_sgs_u, new_cap)
+       Call grow_real(p_sgs_v, new_cap)
+       Call grow_real(p_sgs_w, new_cap)
+    End If
     particle_capacity = new_cap
 
   End Subroutine ensure_capacity
@@ -382,6 +444,11 @@ Contains
        p_v  (i) = p_v  (n)
        p_w  (i) = p_w  (n)
        p_age(i) = p_age(n)
+       If ( sgs_particle_model == 1 ) Then
+          p_sgs_u(i) = p_sgs_u(n)
+          p_sgs_v(i) = p_sgs_v(n)
+          p_sgs_w(i) = p_sgs_w(n)
+       End If
     End If
     n_particles_local = n - 1
 
@@ -560,6 +627,8 @@ Contains
     i = 1
     Do While ( i <= n_particles_local )
 
+       If ( sgs_particle_model == 1 ) Call advance_sgs_velocity(i)
+
        If ( particle_mode == 1 ) Then
           Call advance_particle_inertial(i)
        Else
@@ -568,6 +637,13 @@ Contains
           Call interpolate_velocity(x0, y0, z0, k1u, k1v, k1w)
           Call interpolate_velocity(x0 + 0.5d0*dt*k1u, y0 + 0.5d0*dt*k1v, z0 + 0.5d0*dt*k1w, k2u, k2v, k2w)
           Call interpolate_velocity(x0 - dt*k1u + 2d0*dt*k2u, y0 - dt*k1v + 2d0*dt*k2v, z0 - dt*k1w + 2d0*dt*k2w, k3u, k3v, k3w)
+
+          ! SGS fluctuation held frozen across the 3 RK evaluations (see advance_sgs_velocity)
+          If ( sgs_particle_model == 1 ) Then
+             k1u = k1u+p_sgs_u(i);  k1v = k1v+p_sgs_v(i);  k1w = k1w+p_sgs_w(i)
+             k2u = k2u+p_sgs_u(i);  k2v = k2v+p_sgs_v(i);  k2w = k2w+p_sgs_w(i)
+             k3u = k3u+p_sgs_u(i);  k3v = k3v+p_sgs_v(i);  k3w = k3w+p_sgs_w(i)
+          End If
 
           p_x(i) = x0 + dt/6d0*(k1u + 4d0*k2u + k3u)
           p_y(i) = y0 + dt/6d0*(k1v + 4d0*k2v + k3v)
@@ -760,6 +836,14 @@ Contains
     p_v  (n_particles_local) = dat_in(5)
     p_w  (n_particles_local) = dat_in(6)
     p_age(n_particles_local) = dat_in(7)
+    ! SGS fluctuation state is not carried across migration (documented simplification --
+    ! the well-mixed model's timescale T_L is normally short compared to a full-domain
+    ! transit, so restarting it at 0 on migration has limited practical impact)
+    If ( sgs_particle_model == 1 ) Then
+       p_sgs_u(n_particles_local) = 0d0
+       p_sgs_v(n_particles_local) = 0d0
+       p_sgs_w(n_particles_local) = 0d0
+    End If
   End Subroutine unpack_particle
 
   !> Replace particles that exited through the outflow face (n_exit_outflow_local, counted on
@@ -807,6 +891,11 @@ Contains
        p_v  (n_particles_local) = 0d0
        p_w  (n_particles_local) = 0d0
        p_age(n_particles_local) = 0d0
+       If ( sgs_particle_model == 1 ) Then
+          p_sgs_u(n_particles_local) = 0d0
+          p_sgs_v(n_particles_local) = 0d0
+          p_sgs_w(n_particles_local) = 0d0
+       End If
        n_reinjected_local = n_reinjected_local + 1
     End Do
 
@@ -964,6 +1053,11 @@ Contains
           p_v  (n_particles_local) = dat_all(7*(i-1)+5)
           p_w  (n_particles_local) = dat_all(7*(i-1)+6)
           p_age(n_particles_local) = dat_all(7*(i-1)+7)
+          If ( sgs_particle_model == 1 ) Then
+             p_sgs_u(n_particles_local) = 0d0
+             p_sgs_v(n_particles_local) = 0d0
+             p_sgs_w(n_particles_local) = 0d0
+          End If
        End If
     End Do
 

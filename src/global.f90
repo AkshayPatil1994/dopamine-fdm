@@ -696,6 +696,14 @@ Module global
   Character(200) :: particle_deposit_file = 'particle_deposit_x.csv'
   Integer(Int32) :: particle_deposit_freq = 10
 
+  ! Phase 5: LES sub-grid dispersion. 0=none (default, correct for DNS resolution); 1=langevin:
+  ! a simplified (isotropic) Thomson/Weil-Sullivan-Moeng well-mixed Langevin model, diagnosing
+  ! k_sgs/eps_sgs from the existing eddy-viscosity SGS model's nu_t via a Deardorff-style
+  ! mixing-length closure (nu_t=C_k*sqrt(k_sgs)*Delta) rather than a transported k_sgs
+  ! equation -- a documented simplification, see particles.f90's compute_sgs_stats.
+  Integer(Int32) :: sgs_particle_model  = 0
+  Real   (Int64) :: particle_langevin_C0 = 2.1d0   ! Kolmogorov constant
+
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
   Integer(Int32) :: line_freq = 100
