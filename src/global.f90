@@ -672,6 +672,17 @@ Module global
   Integer(Int32) :: particle_brownian    = 0       ! 0=off (default), 1=on: isotropic Stokes-Einstein Brownian kick
   Real   (Int64) :: particle_temp_abs    = 293d0   ! [K], particle_brownian==1 only
 
+  ! Phase 3: IBM/SDF collision (ibm_input_mode>=1 only). Per-object BC by solid ID (same
+  ! 0..max_ibm_objects convention as ibm_T_bc_type/ibm_z0): 1=absorb (deposit, removed),
+  ! 2=reflect (default), 3=deposit_resuspend (reflect if the local relative speed exceeds
+  ! particle_resuspend_ucrit, else absorb -- a simplified proxy for a full Shields/van Rijn
+  ! pickup function). Reflection uses a simple Stokes-number-dependent restitution heuristic
+  ! e=Min(1,tau_p/particle_ibm_tau_crit) (documented simplification, not a validated closed
+  ! form) -- see particles.f90's apply_ibm_collision.
+  Integer(Int32) :: particle_ibm_bc(0:max_ibm_objects) = 2
+  Real   (Int64) :: particle_ibm_tau_crit    = 1d-3
+  Real   (Int64) :: particle_resuspend_ucrit = 1d30   ! effectively "always deposits" until set
+
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
   Integer(Int32) :: line_freq = 100

@@ -87,7 +87,8 @@ Contains
                          bc_particle_x, bc_particle_y, bc_particle_z, &
                          particle_reinit_on_exit, particle_max_age, particle_restart_file, &
                          particle_mode, particle_diam, particle_rho, particle_rho_f, &
-                         particle_added_mass, particle_brownian, particle_temp_abs
+                         particle_added_mass, particle_brownian, particle_temp_abs, &
+                         particle_ibm_bc, particle_ibm_tau_crit, particle_resuspend_ucrit
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -667,6 +668,9 @@ Contains
     Call Mpi_bcast ( particle_added_mass,   1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_brownian,     1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_temp_abs,     1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_ibm_bc, Size(particle_ibm_bc), MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_ibm_tau_crit,    1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_resuspend_ucrit, 1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 

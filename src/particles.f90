@@ -454,6 +454,71 @@ Contains
 
   End Function apply_particle_bc
 
+  !> IBM/SDF collision handling (Phase 3, ibm_input_mode>=1 only): phi/Umask_cc/ibm_obj_id
+  !  (global.f90, populated by ibm.f90's setup_ibm) are read directly -- no `Use ibm` needed,
+  !  which keeps particles.f90 usable by dopamine-ESEM (which never compiles ibm.f90).
+  !  phi<=0 means the particle has penetrated a solid; the surface normal is the (finite-
+  !  difference) gradient of the interpolated phi field, and the particle is pushed back out
+  !  along it by approximately its own penetration depth (phi is a signed distance field).
+  !  Per-object BC (particle_ibm_bc, global.f90) selects absorb/reflect/deposit_resuspend;
+  !  reflect uses a simple Stokes-number-dependent restitution heuristic (see global.f90's
+  !  comment on particle_ibm_tau_crit -- a documented simplification, not a validated
+  !  closed-form model). Returns .True. if the particle should be removed (absorbed/deposited).
+  Logical Function apply_ibm_collision(i) Result(do_remove)
+
+    Integer(Int32), Intent(In) :: i
+
+    Real(Int64) :: phi_c, eps, gx, gy, gz, gmag, vn, e_rest, urel, obj_r
+    Integer(Int32) :: obj_id, bc_code
+
+    do_remove = .False.
+
+    phi_c = interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i))
+    If ( phi_c > 0d0 ) Return   ! still on the fluid side, nothing to do
+
+    eps = 0.5d0*dxmin
+    gx = interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i)+eps, p_y(i), p_z(i)) - &
+         interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i)-eps, p_y(i), p_z(i))
+    gy = interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i)+eps, p_z(i)) - &
+         interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i)-eps, p_z(i))
+    gz = interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i)+eps) - &
+         interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i)-eps)
+    gmag = Sqrt(gx*gx + gy*gy + gz*gz)
+    If ( gmag < 1d-14 ) Return   ! degenerate gradient (shouldn't happen inside a real solid); leave the particle as-is rather than divide by ~0
+    gx = gx/gmag;  gy = gy/gmag;  gz = gz/gmag   ! unit normal, points from solid toward fluid
+
+    obj_r = interp3(ibm_obj_id, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i))
+    obj_id = Max(0, Min(max_ibm_objects, Nint(obj_r)))
+    bc_code = particle_ibm_bc(obj_id)
+
+    If ( bc_code == 3 ) Then
+       ! deposit_resuspend: resuspend (treat as reflect) only if the local relative speed
+       ! exceeds particle_resuspend_ucrit, otherwise deposit -- simplified Shields/van Rijn proxy
+       urel = Sqrt( p_u(i)**2 + p_v(i)**2 + p_w(i)**2 )
+       bc_code = Merge(2, 1, urel > particle_resuspend_ucrit)
+    End If
+
+    If ( bc_code == 1 ) Then
+       do_remove = .True.
+       n_deposited_local = n_deposited_local + 1
+       Return
+    End If
+
+    ! reflect (bc_code==2, the default): push back out along the normal by the penetration
+    ! depth (+ a small margin so it doesn't land exactly on phi=0), and mirror the velocity's
+    ! normal component with the Stokes-dependent restitution coefficient
+    p_x(i) = p_x(i) + (-phi_c + eps)*gx
+    p_y(i) = p_y(i) + (-phi_c + eps)*gy
+    p_z(i) = p_z(i) + (-phi_c + eps)*gz
+
+    e_rest = Min(1d0, tau_p_stokes/particle_ibm_tau_crit)
+    vn = p_u(i)*gx + p_v(i)*gy + p_w(i)*gz
+    p_u(i) = p_u(i) - (1d0+e_rest)*vn*gx
+    p_v(i) = p_v(i) - (1d0+e_rest)*vn*gy
+    p_w(i) = p_w(i) - (1d0+e_rest)*vn*gz
+
+  End Function apply_ibm_collision
+
   !> Advance every local particle one full step against the already-consistent post-
   !  projection U/V/W (frozen for the step), apply boundary handling, migrate, and (at
   !  the monitor cadence) report counters. Called once per step from time_integration.f90's
@@ -465,6 +530,7 @@ Contains
     Integer(Int32) :: i
     Real(Int64) :: x0, y0, z0
     Real(Int64) :: k1u, k1v, k1w, k2u, k2v, k2w, k3u, k3v, k3w
+    Logical :: do_remove
 
     If ( particles_active < 1 ) Return
 
@@ -489,7 +555,13 @@ Contains
        End If
        p_age(i) = p_age(i) + dt
 
-       If ( apply_particle_bc(i) ) Then
+       ! IBM collision first (Phase 3): may reflect/push the position back to the fluid side
+       ! before the domain-boundary check below sees it
+       do_remove = .False.
+       If ( ibm_input_mode >= 1 ) do_remove = apply_ibm_collision(i)
+       If ( .Not. do_remove .And. apply_particle_bc(i) ) do_remove = .True.
+
+       If ( do_remove ) Then
           Call remove_particle(i)   ! swaps the last particle into slot i; re-check the same slot
        Else
           i = i + 1
