@@ -39,6 +39,9 @@ Module particles
   Integer(Int32) :: n_exit_outflow_local = 0   ! outflow (is_last_x, x exit) exits this step, feeds reinject_at_inflow
   Integer(Int32) :: n_reinject_counter  = 0    ! per-rank running counter for reinjected-particle IDs
 
+  ! Phase 2 (particle_mode==1 only): Stokes response time, computed once in setup_particles
+  Real(Int64) :: tau_p_stokes
+
 Contains
 
   !> Seed (or restart-load) particles; no-op unless particles_active>=1. Called once from
@@ -55,6 +58,10 @@ Contains
     bcx_resolved = bc_particle_x
     bcy_resolved = bc_particle_y
     bcz_resolved = bc_particle_z
+
+    ! Stokes response time tau_p = rho_p*d_p^2/(18*mu_f), mu_f = rho_f*nu (particle_mode==1 only,
+    ! but harmless to precompute unconditionally)
+    tau_p_stokes = particle_rho * particle_diam**2 / (18d0 * particle_rho_f * nu)
 
     n_particles_local = 0
     particle_capacity = 0
@@ -198,6 +205,105 @@ Contains
     wp = interp3(W, xg, nxg, yg, nyg, z,  nz,  xp, yp, zp)
 
   End Subroutine interpolate_velocity
+
+  !> Advance local particle i one step under the inertial (Maxey-Riley-reduced) model:
+  !  dv/dt = (u_f-v)/tau_eff + a_other, with u_f, tau_eff (nonlinear Schiller-Naumann drag
+  !  correction) and a_other (gravity + optional added-mass) all frozen at their start-of-
+  !  step values -- this makes the ODE linear over the step, so it has an EXACT exponential
+  !  solution with no sub-cycling needed even for tau_eff << dt (small-Stokes-number
+  !  particles). Optional Brownian motion (particle_brownian==1) is added as an independent
+  !  random walk on top of this deterministic update. Saffman-Mei lift is deferred to
+  !  Phase 3 (needs the IBM wall-distance field to gate it near-wall).
+  Subroutine advance_particle_inertial(i)
+
+    Integer(Int32), Intent(In) :: i
+
+    Real(Int64) :: uf, vf, wf, uf_o, vf_o, wf_o
+    Real(Int64) :: urel, Re_p, f_drag, tau_eff
+    Real(Int64) :: ax, ay, az
+    Real(Int64) :: ex, ey, ez, dv, dsig
+
+    Call interpolate_velocity(p_x(i), p_y(i), p_z(i), uf, vf, wf)
+
+    urel = Sqrt( (uf-p_u(i))**2 + (vf-p_v(i))**2 + (wf-p_w(i))**2 )
+    Re_p = urel * particle_diam / nu
+    f_drag = 1d0 + 0.15d0 * Re_p**0.687d0            ! Schiller-Naumann, valid Re_p ~< 1000
+    tau_eff = tau_p_stokes / f_drag
+
+    ax = 0d0;  ay = -grav*(1d0 - particle_rho_f/particle_rho);  az = 0d0   ! gravity acts along -y (Boussinesq convention)
+
+    If ( particle_added_mass == 1 ) Then
+       ! Simplified added-mass: local Eulerian dU/dt at the particle's own position (Uo/Vo/Wo
+       ! are the previous RK-step's start-of-step field, global.f90) -- omits the convective
+       ! (u.grad)u term of the true material derivative, a deliberate simplification to avoid
+       ! an expensive on-the-fly velocity-gradient evaluation at an arbitrary particle position.
+       Call interpolate_velocity_old(p_x(i), p_y(i), p_z(i), uf_o, vf_o, wf_o)
+       ax = ax + 0.5d0*(particle_rho_f/particle_rho) * (uf-uf_o)/Max(dt,1d-14)
+       ay = ay + 0.5d0*(particle_rho_f/particle_rho) * (vf-vf_o)/Max(dt,1d-14)
+       az = az + 0.5d0*(particle_rho_f/particle_rho) * (wf-wf_o)/Max(dt,1d-14)
+    End If
+
+    Call exp_integrate(p_x(i), p_u(i), uf, ax, tau_eff, dt)
+    Call exp_integrate(p_y(i), p_v(i), vf, ay, tau_eff, dt)
+    Call exp_integrate(p_z(i), p_w(i), wf, az, tau_eff, dt)
+
+    If ( particle_brownian == 1 ) Then
+       ! Isotropic Stokes-Einstein Brownian kick: D = kB*T/(3*pi*mu_f*d_p), displacement
+       ! std dev = sqrt(2*D*dt) per axis (independent Box-Muller draws)
+       dsig = Sqrt( 2d0 * (1.380649d-23*particle_temp_abs) / &
+            (3d0*pi*particle_rho_f*nu*particle_diam) * dt )
+       Call gaussian_pair(ex, ey);  Call gaussian_pair(ez, dv)
+       p_x(i) = p_x(i) + dsig*ex
+       p_y(i) = p_y(i) + dsig*ey
+       p_z(i) = p_z(i) + dsig*ez
+    End If
+
+  End Subroutine advance_particle_inertial
+
+  !> Exact solution of dv/dt=(u-v)/tau+a (u,a frozen) over [0,dt], advancing both x and v in place.
+  Subroutine exp_integrate(x, v, u, a, tau, dt_in)
+
+    Real(Int64), Intent(InOut) :: x, v
+    Real(Int64), Intent(In)    :: u, a, tau, dt_in
+
+    Real(Int64) :: vterm, dv0, edt
+
+    vterm = u + a*tau
+    dv0   = v - vterm
+    edt   = Exp(-dt_in/Max(tau,1d-14))
+
+    x = x + vterm*dt_in + tau*dv0*(1d0 - edt)
+    v = vterm + dv0*edt
+
+  End Subroutine exp_integrate
+
+  !> Fluid velocity at (xp,yp,zp) from the PREVIOUS step's start-of-step field (Uo,Vo,Wo,
+  !  global.f90) -- same staggering/interpolation as interpolate_velocity, used only by
+  !  the simplified added-mass term above.
+  Subroutine interpolate_velocity_old(xp, yp, zp, up, vp, wp)
+
+    Real(Int64), Intent(In)  :: xp, yp, zp
+    Real(Int64), Intent(Out) :: up, vp, wp
+
+    up = interp3(Uo, x,  nx,  yg, nyg, zg, nzg, xp, yp, zp)
+    vp = interp3(Vo, xg, nxg, y,  ny,  zg, nzg, xp, yp, zp)
+    wp = interp3(Wo, xg, nxg, yg, nyg, z,  nz,  xp, yp, zp)
+
+  End Subroutine interpolate_velocity_old
+
+  !> Two independent standard-normal draws via Box-Muller (Fortran's Random_Number is uniform only)
+  Subroutine gaussian_pair(g1, g2)
+
+    Real(Int64), Intent(Out) :: g1, g2
+    Real(Int64) :: u1, u2, r
+
+    Call random_number(u1);  Call random_number(u2)
+    u1 = Max(u1, 1d-300)   ! avoid Log(0)
+    r  = Sqrt(-2d0*Log(u1))
+    g1 = r*Cos(2d0*pi*u2)
+    g2 = r*Sin(2d0*pi*u2)
+
+  End Subroutine gaussian_pair
 
   !> Grow every per-particle array to at least n_needed (doubling), preserving existing data.
   Subroutine ensure_capacity(n_needed)
@@ -348,10 +454,12 @@ Contains
 
   End Function apply_particle_bc
 
-  !> Advance every local particle one full step (frozen-field 3-stage RK against the
-  !  already-consistent post-projection U/V/W), apply boundary handling, migrate, and
-  !  (at the monitor cadence) report counters. Called once per step from
-  !  time_integration.f90's compute_time_step_RK3, after the final host U/V/W sync.
+  !> Advance every local particle one full step against the already-consistent post-
+  !  projection U/V/W (frozen for the step), apply boundary handling, migrate, and (at
+  !  the monitor cadence) report counters. Called once per step from time_integration.f90's
+  !  compute_time_step_RK3, after the final host U/V/W sync. particle_mode==0 (tracer):
+  !  classical 3-stage RK on dx/dt=u_fluid(x), Phase 1 behaviour. particle_mode==1
+  !  (inertial): see advance_particle_inertial.
   Subroutine advance_particles
 
     Integer(Int32) :: i
@@ -364,16 +472,21 @@ Contains
 
     i = 1
     Do While ( i <= n_particles_local )
-       x0 = p_x(i);  y0 = p_y(i);  z0 = p_z(i)
 
-       Call interpolate_velocity(x0, y0, z0, k1u, k1v, k1w)
-       Call interpolate_velocity(x0 + 0.5d0*dt*k1u, y0 + 0.5d0*dt*k1v, z0 + 0.5d0*dt*k1w, k2u, k2v, k2w)
-       Call interpolate_velocity(x0 - dt*k1u + 2d0*dt*k2u, y0 - dt*k1v + 2d0*dt*k2v, z0 - dt*k1w + 2d0*dt*k2w, k3u, k3v, k3w)
+       If ( particle_mode == 1 ) Then
+          Call advance_particle_inertial(i)
+       Else
+          x0 = p_x(i);  y0 = p_y(i);  z0 = p_z(i)
 
-       p_x(i) = x0 + dt/6d0*(k1u + 4d0*k2u + k3u)
-       p_y(i) = y0 + dt/6d0*(k1v + 4d0*k2v + k3v)
-       p_z(i) = z0 + dt/6d0*(k1w + 4d0*k2w + k3w)
-       p_u(i) = k1u;  p_v(i) = k1v;  p_w(i) = k1w
+          Call interpolate_velocity(x0, y0, z0, k1u, k1v, k1w)
+          Call interpolate_velocity(x0 + 0.5d0*dt*k1u, y0 + 0.5d0*dt*k1v, z0 + 0.5d0*dt*k1w, k2u, k2v, k2w)
+          Call interpolate_velocity(x0 - dt*k1u + 2d0*dt*k2u, y0 - dt*k1v + 2d0*dt*k2v, z0 - dt*k1w + 2d0*dt*k2w, k3u, k3v, k3w)
+
+          p_x(i) = x0 + dt/6d0*(k1u + 4d0*k2u + k3u)
+          p_y(i) = y0 + dt/6d0*(k1v + 4d0*k2v + k3v)
+          p_z(i) = z0 + dt/6d0*(k1w + 4d0*k2w + k3w)
+          p_u(i) = k1u;  p_v(i) = k1v;  p_w(i) = k1w
+       End If
        p_age(i) = p_age(i) + dt
 
        If ( apply_particle_bc(i) ) Then

@@ -101,6 +101,11 @@ Contains
     Vo = V
     Wo = W
     !$acc end kernels
+    ! particles.f90's simplified added-mass term reads Uo/Vo/Wo host-side; on a GPU build these
+    ! otherwise stay device-only until something else happens to sync them
+    If ( particles_active >= 1 .And. particle_mode == 1 .And. particle_added_mass == 1 ) Then
+       !$acc update host(Uo,Vo,Wo)
+    End If
     Call profiler_stop(PROF_RK_UPDATE)
     If ( sediment_flag >= 1 ) Then
        !$acc kernels present(Cscal,Cscal_o)

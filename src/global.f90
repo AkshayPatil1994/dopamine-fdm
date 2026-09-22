@@ -657,6 +657,21 @@ Module global
   Real   (Int64) :: particle_max_age       = 1d30
   Character(200) :: particle_restart_file  = 'particles_restart'
 
+  ! Phase 2: inertial force model. particle_mode: 0=tracer (dx/dt=u_fluid, Phase 1
+  ! behaviour, default), 1=inertial (independent particle velocity, Maxey-Riley-reduced
+  ! ODE: nonlinear (Schiller-Naumann) drag + gravity, both always on in this mode; a
+  ! small-Stokes-number inertial particle already reproduces settling/tracer-like
+  ! behaviour on its own, so there is no separate "settling_tracer" mode). Saffman-Mei
+  ! lift is deferred to Phase 3 (its usual near-wall gating needs the IBM SDF wall
+  ! distance that Phase 3 introduces).
+  Integer(Int32) :: particle_mode        = 0
+  Real   (Int64) :: particle_diam        = 1d-4    ! d_p [m]
+  Real   (Int64) :: particle_rho         = 2650d0  ! rho_p [kg/m^3]
+  Real   (Int64) :: particle_rho_f       = 1000d0  ! rho_f [kg/m^3] for the particle force balance -- independent of sediment/Boussinesq rho_f by default
+  Integer(Int32) :: particle_added_mass  = 0       ! 0=off (default), 1=on: local Eulerian dU/dt added-mass approximation (see advance_particles)
+  Integer(Int32) :: particle_brownian    = 0       ! 0=off (default), 1=on: isotropic Stokes-Einstein Brownian kick
+  Real   (Int64) :: particle_temp_abs    = 293d0   ! [K], particle_brownian==1 only
+
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
   Integer(Int32) :: line_freq = 100

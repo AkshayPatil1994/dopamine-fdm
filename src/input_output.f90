@@ -85,7 +85,9 @@ Contains
                          particle_seed_xmin, particle_seed_xmax, particle_seed_ymin, particle_seed_ymax, &
                          particle_seed_zmin, particle_seed_zmax, particle_seed_seed, &
                          bc_particle_x, bc_particle_y, bc_particle_z, &
-                         particle_reinit_on_exit, particle_max_age, particle_restart_file
+                         particle_reinit_on_exit, particle_max_age, particle_restart_file, &
+                         particle_mode, particle_diam, particle_rho, particle_rho_f, &
+                         particle_added_mass, particle_brownian, particle_temp_abs
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -447,6 +449,14 @@ Contains
           Write(*,'(A,3I3)')   '   bc_particle (x,y,z) (0=periodic,1=exit,2=reflect,3=absorb) = ', &
                bc_particle_x, bc_particle_y, bc_particle_z
           Write(*,'(A,I2)')    '   particle_reinit_on_exit (0=none,1=inflow) = ', particle_reinit_on_exit
+          Write(*,'(A,I2)')    '   particle_mode (0=tracer,1=inertial)       = ', particle_mode
+          If ( particle_mode >= 1 ) Then
+             Write(*,'(A,E12.4)') '   particle_diam                = ', particle_diam
+             Write(*,'(A,E12.4)') '   particle_rho                 = ', particle_rho
+             Write(*,'(A,E12.4)') '   particle_rho_f               = ', particle_rho_f
+             Write(*,'(A,I2)')    '   particle_added_mass          = ', particle_added_mass
+             Write(*,'(A,I2)')    '   particle_brownian            = ', particle_brownian
+          End If
        End If
     End If
 
@@ -650,6 +660,13 @@ Contains
     Call Mpi_bcast ( particle_reinit_on_exit, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_max_age,      1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_restart_file, Len(particle_restart_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_mode,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_diam,         1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_rho,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_rho_f,        1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_added_mass,   1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_brownian,     1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_temp_abs,     1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 
