@@ -86,6 +86,24 @@ python3 postProcessing/generateXMF.py
 > The `--case`/`--nx`/`--ny`/`--nz` flags shown in the top-level README are stale — the
 > current script takes no CLI arguments and auto-detects everything from `fields/`.
 
+### `generate_particles_xmf.py`
+
+Writes XDMF metadata (`paraview/particles.xmf`) for the point-particle snapshots written
+by `src/particles.f90` (`fields/<fileout>_particles.<step>`, active whenever
+`particles_active=1` in `&PARTICLES`) — same no-duplication, byte-seek-HyperSlab
+philosophy as `generateXMF.py`, and its `<Time Value=...>` uses the step number rather
+than physical time for the same reason `generateXMF.py`'s does (`DT=1`): opened
+alongside `channel_test.xmf`, ParaView's shared time toolbar then scrubs the point cloud
+and the flow fields together, frame for frame. Each snapshot's particle count varies
+(particles exit/deposit/reinject), so every timestep gets its own Polyvertex
+Topology/Geometry rather than sharing one across the series, unlike the fixed field
+grid. Exposes `id`, `age`, and `Velocity` as point-cloud Attributes for colouring. Run
+it the same way as `generateXMF.py`, from the case directory:
+
+```bash
+python3 postProcessing/generate_particles_xmf.py
+```
+
 ### `generate_slice_xmf.py`
 
 XDMF time-series generator for 2-D slice-probe output (`<base>.bin` +

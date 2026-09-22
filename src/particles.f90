@@ -947,18 +947,20 @@ Contains
 
   End Subroutine write_deposit_profile
 
-  !> Write a flat particle-restart file (rank-0 gather, per the repo's own rank-0-centric
-  !  restart I/O convention, input_output.f90): a global count header, then that many
-  !  (id, x,y,z,u,v,w,age) records. Called from output_data (input_output.f90) at the
-  !  same cadence as the main field snapshot.
-  Subroutine write_particle_restart
+  !> Rank-0 gather of every particle's (id) and (x,y,z,u,v,w,age) into flat arrays,
+  !  shared by write_particle_restart and write_particle_snapshot. On return, id_all/
+  !  dat_all are allocated and populated on EVERY rank the same way write_particle_restart
+  !  always did (harmless on non-root ranks: Mpi_gatherv only reads counts/displs at the
+  !  root) -- total is 0 (and the arrays size-1 placeholders) on non-root ranks.
+  Subroutine gather_all_particles(id_all, dat_all, total)
+
+    Integer(Int32), Allocatable, Intent(Out) :: id_all(:)
+    Real   (Int64), Allocatable, Intent(Out) :: dat_all(:)
+    Integer(Int32), Intent(Out) :: total
 
     Integer(Int32) :: counts(0:nprocs-1), displs(0:nprocs-1), rcounts(0:nprocs-1), rdispls(0:nprocs-1)
-    Integer(Int32) :: total, r, funit, i
-    Integer(Int32), Allocatable :: id_all(:)
-    Real   (Int64), Allocatable :: dat_local(:), dat_all(:)
-
-    If ( particles_active < 1 ) Return
+    Integer(Int32) :: r, i
+    Real(Int64), Allocatable :: dat_local(:)
 
     Call Mpi_gather(n_particles_local, 1, MPI_INTEGER, counts, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
 
@@ -984,6 +986,25 @@ Contains
     Call Mpi_gatherv(p_id,      n_particles_local,   MPI_INTEGER, id_all,  counts,  displs,  MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
     Call Mpi_gatherv(dat_local, 7*n_particles_local, Mpi_real8,   dat_all, rcounts, rdispls, Mpi_real8,   0, MPI_COMM_WORLD, ierr)
 
+    Deallocate ( dat_local )
+
+  End Subroutine gather_all_particles
+
+  !> Write a flat particle-restart file (rank-0 gather, per the repo's own rank-0-centric
+  !  restart I/O convention, input_output.f90): a global count header, then that many
+  !  (id, x,y,z,u,v,w,age) records. Overwrites particle_restart_file every call (a single
+  !  latest-state snapshot for hot-restart, NOT a time series -- see write_particle_snapshot
+  !  for the visualization time series). Called from output_data at the field-snapshot cadence.
+  Subroutine write_particle_restart
+
+    Integer(Int32) :: total, funit
+    Integer(Int32), Allocatable :: id_all(:)
+    Real   (Int64), Allocatable :: dat_all(:)
+
+    If ( particles_active < 1 ) Return
+
+    Call gather_all_particles(id_all, dat_all, total)
+
     If ( myid == 0 ) Then
        Open(newunit=funit, file=Trim(particle_restart_file), access='stream', form='unformatted', status='replace')
        Write(funit) total
@@ -994,9 +1015,40 @@ Contains
        Close(funit)
     End If
 
-    Deallocate ( id_all, dat_all, dat_local )
+    Deallocate ( id_all, dat_all )
 
   End Subroutine write_particle_restart
+
+  !> Write a timestamped particle snapshot for visualization (same (id,x,y,z,u,v,w,age)
+  !  binary layout as write_particle_restart, but to fname -- normally 'fields/<fileout>
+  !  _particles.<istep>', one file per saved step, called from output_data alongside the
+  !  main field snapshot so postProcessing/generate_particles_xmf.py can build a ParaView
+  !  time series that scrubs together with the field snapshots' own XDMF timeline).
+  Subroutine write_particle_snapshot(fname)
+
+    Character(*), Intent(In) :: fname
+
+    Integer(Int32) :: total, funit
+    Integer(Int32), Allocatable :: id_all(:)
+    Real   (Int64), Allocatable :: dat_all(:)
+
+    If ( particles_active < 1 ) Return
+
+    Call gather_all_particles(id_all, dat_all, total)
+
+    If ( myid == 0 ) Then
+       Open(newunit=funit, file=Trim(fname), access='stream', form='unformatted', status='replace')
+       Write(funit) total
+       If ( total > 0 ) Then
+          Write(funit) id_all(1:total)
+          Write(funit) dat_all(1:7*total)
+       End If
+       Close(funit)
+    End If
+
+    Deallocate ( id_all, dat_all )
+
+  End Subroutine write_particle_snapshot
 
   !> Read the particle-restart file (if present) and redistribute every record to whichever
   !  rank owns it now (owns_particle), independent of p_row/p_col matching the writing run.

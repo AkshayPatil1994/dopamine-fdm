@@ -6,7 +6,7 @@ Module input_output
   Use global
   Use mpi
   Use genGridAndIC
-  Use particles, Only : write_particle_restart
+  Use particles, Only : write_particle_restart, write_particle_snapshot
 
   ! prevent implicit typing
   Implicit None
@@ -1030,8 +1030,8 @@ Contains
   ! Output: fileout
   Subroutine output_data
 
-    Character(200)   :: fname
-    Character(8)     :: ext
+    Character(200)   :: fname, pfname
+    Character(8)     :: ext, pext
     Integer  (Int64) :: fsize
     Logical          :: dirExists
     Logical          :: save_now
@@ -1092,8 +1092,18 @@ Contains
           Call write_distributed_field_block(1, Tscal, nxg_global, nyg_global, nzg_global, .False., .False.)
        End If
 
-       ! Particle positions/state (src/particles.f90): separate file, gather/scatter I/O
-       If ( particles_active >= 1 ) Call write_particle_restart
+       ! Particle positions/state (src/particles.f90): separate restart file (latest state
+       ! only, gather/scatter I/O), plus a timestamped snapshot for ParaView visualization
+       ! (postProcessing/generate_particles_xmf.py) alongside the field snapshot above.
+       ! ext (above) is only ever assigned inside the myid==0 block, so pext/pfname are
+       ! recomputed here identically on every rank -- write_particle_snapshot is a
+       ! collective call and every rank must agree on the filename.
+       If ( particles_active >= 1 ) Then
+          Call write_particle_restart
+          Write(pext,'(I8)') istep + nstep_init
+          pfname = 'fields/'//Trim(Adjustl(fileout))//'_particles.'//Trim(Adjustl(pext))
+          Call write_particle_snapshot(pfname)
+       End If
 
        ! close file and report size
        If (myid==0) Then
