@@ -656,6 +656,11 @@ Module global
   Integer(Int32) :: particle_reinit_on_exit = 0
   Real   (Int64) :: particle_max_age       = 1d30
   Character(200) :: particle_restart_file  = 'particles_restart'
+  ! particle_restart_load: 1=read particles from particle_restart_file when restart==1
+  ! (default, mirrors the main fluid restart); 0=always seed fresh particles even when
+  ! restart==1 (e.g. hot-starting the flow field but starting a new particle release) --
+  ! same idea as scalar_restart for C.
+  Integer(Int32) :: particle_restart_load  = 1
 
   ! Phase 2: inertial force model. particle_mode: 0=tracer (dx/dt=u_fluid, Phase 1
   ! behaviour, default), 1=inertial (independent particle velocity, Maxey-Riley-reduced

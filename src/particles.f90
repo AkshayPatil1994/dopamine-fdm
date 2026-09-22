@@ -85,7 +85,7 @@ Contains
     End If
 
     loaded = .False.
-    If ( restart == 1 ) Call read_particle_restart(loaded)
+    If ( restart == 1 .And. particle_restart_load == 1 ) Call read_particle_restart(loaded)
     If ( .Not. loaded ) Call seed_particles_fresh
 
     If ( myid == 0 ) Write(*,'(A,I8,A)') ' particles: ', n_particles_init, ' seed particles configured (tracer, one-way)'
