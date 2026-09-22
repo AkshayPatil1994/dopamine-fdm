@@ -181,9 +181,10 @@ Module global
   Integer(Int32) :: y_bc_type  = 1
 
   ! spanwise (z) pressure/velocity BC selector: 0=periodic (default), 1=wall (DNS no-slip only --
-  ! no wall model yet). y_bc_type==1 .And. z_bc_type==1 simultaneously is not supported: that needs
-  ! a coupled 2D (y-z) elliptic pressure solve, not the independent 1D tridiagonal solves this
-  ! selector adds (validated at input read time, see read_input_parameters).
+  ! no wall model yet). y_bc_type==1 .And. z_bc_type==1 (4-wall duct) is supported via a coupled
+  ! per-eigenmode 2D (y-z) solve (decomp.f90, initialization.f90, projection.f90), but requires
+  ! p_col==1 so the full z-extent is local to every rank (enforced at input read time, see
+  ! read_input_parameters).
   Integer(Int32) :: z_bc_type  = 0
 
   ! &INFLOW streamwise inflow condition (x_bc_type==1 only): inflow_type 0=constant, 1=SEM, 2=recycled precursor slice
