@@ -683,6 +683,19 @@ Module global
   Real   (Int64) :: particle_ibm_tau_crit    = 1d-3
   Real   (Int64) :: particle_resuspend_ucrit = 1d30   ! effectively "always deposits" until set
 
+  ! Phase 4: Boussinesq coupling (boussinesq_flag>=1 only). 0=off (default): particle_rho_f
+  ! stays the fixed value the user set. 1=on: the buoyancy term's fluid density is instead
+  ! the local Boussinesq value rho_f*(1-beta_T*(T-T_ref)) interpolated at the particle -- only
+  ! the buoyancy term uses this local value (drag/Re_p keep the constant particle_rho_f, a
+  ! scoped simplification). Ships one-way (particles never feed back into Tscal/momentum).
+  Integer(Int32) :: particle_boussinesq_coupling = 0
+  ! Deposition diagnostic (any ibm_input_mode>=1 collision that removes a particle, both
+  ! Phase 3's absorb and deposit_resuspend outcomes): streamwise deposition-rate accumulator,
+  ! written to particle_deposit_file every particle_deposit_freq monitor reports. Structured
+  ! so a later two-way concentration/deposition feedback into the flow is a small increment.
+  Character(200) :: particle_deposit_file = 'particle_deposit_x.csv'
+  Integer(Int32) :: particle_deposit_freq = 10
+
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
   Integer(Int32) :: line_freq = 100

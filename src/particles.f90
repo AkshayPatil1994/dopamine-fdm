@@ -42,6 +42,14 @@ Module particles
   ! Phase 2 (particle_mode==1 only): Stokes response time, computed once in setup_particles
   Real(Int64) :: tau_p_stokes
 
+  ! Phase 4: per-rank streamwise deposition-rate accumulator, sized nxg_global (indexed by
+  ! GLOBAL cell-centre index via bracket_index against xg_global -- see apply_ibm_collision).
+  ! Every rank's array only ever gets incremented at indices inside its own owned x-range, so
+  ! summing all ranks' copies (report_deposit_profile) gives the correct combined profile with
+  ! no double-counting. Reset to 0 after each write, so the written value is a RATE per
+  ! particle_deposit_freq*nmonitor steps, not a running total.
+  Real(Int64), Allocatable :: particle_deposit_x(:)
+
 Contains
 
   !> Seed (or restart-load) particles; no-op unless particles_active>=1. Called once from
@@ -66,6 +74,11 @@ Contains
     n_particles_local = 0
     particle_capacity = 0
     n_reinject_counter = 0
+
+    If ( ibm_input_mode >= 1 ) Then
+       Allocate ( particle_deposit_x(nxg_global) )
+       particle_deposit_x = 0d0
+    End If
 
     loaded = .False.
     If ( restart == 1 ) Call read_particle_restart(loaded)
@@ -220,7 +233,7 @@ Contains
 
     Real(Int64) :: uf, vf, wf, uf_o, vf_o, wf_o
     Real(Int64) :: urel, Re_p, f_drag, tau_eff
-    Real(Int64) :: ax, ay, az
+    Real(Int64) :: ax, ay, az, rho_f_local
     Real(Int64) :: ex, ey, ez, dv, dsig
 
     Call interpolate_velocity(p_x(i), p_y(i), p_z(i), uf, vf, wf)
@@ -230,7 +243,13 @@ Contains
     f_drag = 1d0 + 0.15d0 * Re_p**0.687d0            ! Schiller-Naumann, valid Re_p ~< 1000
     tau_eff = tau_p_stokes / f_drag
 
-    ax = 0d0;  ay = -grav*(1d0 - particle_rho_f/particle_rho);  az = 0d0   ! gravity acts along -y (Boussinesq convention)
+    rho_f_local = particle_rho_f
+    If ( particle_boussinesq_coupling == 1 .And. boussinesq_flag >= 1 ) Then
+       ! local Boussinesq fluid density at the particle, buoyancy term only (see global.f90)
+       rho_f_local = particle_rho_f * ( 1d0 - beta_T * &
+            (interp3(Tscal, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i)) - T_ref) )
+    End If
+    ax = 0d0;  ay = -grav*(1d0 - rho_f_local/particle_rho);  az = 0d0   ! gravity acts along -y (Boussinesq convention)
 
     If ( particle_added_mass == 1 ) Then
        ! Simplified added-mass: local Eulerian dU/dt at the particle's own position (Uo/Vo/Wo
@@ -501,6 +520,8 @@ Contains
     If ( bc_code == 1 ) Then
        do_remove = .True.
        n_deposited_local = n_deposited_local + 1
+       particle_deposit_x(bracket_index(xg_global, nxg_global, p_x(i))) = &
+            particle_deposit_x(bracket_index(xg_global, nxg_global, p_x(i))) + 1d0
        Return
     End If
 
@@ -573,6 +594,9 @@ Contains
     If ( particle_reinit_on_exit == 1 .And. bcx_resolved == 1 ) Call reinject_at_inflow
 
     If ( Mod(istep, Max(nmonitor,1)) == 0 ) Call report_particle_counts
+
+    If ( ibm_input_mode >= 1 .And. Mod(istep, Max(nmonitor*particle_deposit_freq,1)) == 0 ) &
+         Call write_deposit_profile
 
   End Subroutine advance_particles
 
@@ -805,6 +829,34 @@ Contains
     n_exited_local = 0;  n_deposited_local = 0;  n_reinjected_local = 0
 
   End Subroutine report_particle_counts
+
+  !> Sum every rank's particle_deposit_x (each rank only ever populated indices in its own
+  !  owned x-range, so the sum has no double-counting) and append one row to
+  !  particle_deposit_file: istep, t, then nxg_global deposit counts since the last write.
+  Subroutine write_deposit_profile
+
+    Real(Int64), Allocatable :: global_x(:)
+    Integer(Int32) :: funit, k
+    Logical :: file_exists
+
+    Allocate ( global_x(nxg_global) )
+    Call MPI_Reduce(particle_deposit_x, global_x, nxg_global, Mpi_real8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+
+    If ( myid == 0 ) Then
+       Inquire(file=Trim(particle_deposit_file), exist=file_exists)
+       Open(newunit=funit, file=Trim(particle_deposit_file), status='unknown', &
+            position='append', action='write')
+       If ( .Not. file_exists ) Then
+          Write(funit,'(A)') 'istep,t,deposit_count_per_x_cell...'
+       End If
+       Write(funit,'(I10,A,ES14.6,999999(A,ES14.6))') istep, ',', t, (',', global_x(k), k=1,nxg_global)
+       Close(funit)
+    End If
+
+    particle_deposit_x = 0d0
+    Deallocate ( global_x )
+
+  End Subroutine write_deposit_profile
 
   !> Write a flat particle-restart file (rank-0 gather, per the repo's own rank-0-centric
   !  restart I/O convention, input_output.f90): a global count header, then that many
