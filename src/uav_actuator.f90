@@ -775,24 +775,57 @@ Contains
     End If
   End Function z_face_at
 
-  !> Global index of the interior cell centre nearest zp (z stretched and MPI-decomposed, so searched over the global array)
+  !> Global index of the interior cell centre nearest zp (z stretched and MPI-decomposed, so
+  !  searched over the global array). zg_global is monotonic, so bracket by binary search
+  !  (was an O(n) linear scan -- hot in apply_uav_forcing_u/v/w, called per marker per RK
+  !  substage), same structure as sem.f90's invert_cdf.
   Function nearest_zg_index(zp) Result(kbest)
     Real(Int64), Intent(In) :: zp
-    Integer(Int32) :: kbest, kk
-    kbest = 2
-    Do kk = 3, nzg_global-1
-       If ( Abs(zg_global(kk)-zp) < Abs(zg_global(kbest)-zp) ) kbest = kk
+    Integer(Int32) :: kbest, kk, lo, hi
+    If ( zp <= zg_global(2) ) Then
+       kbest = 2
+       Return
+    Else If ( zp >= zg_global(nzg_global-1) ) Then
+       kbest = nzg_global-1
+       Return
+    End If
+    lo = 2
+    hi = nzg_global-2
+    Do While ( lo < hi )
+       kk = (lo+hi)/2
+       If ( zg_global(kk+1) < zp ) Then
+          lo = kk+1
+       Else
+          hi = kk
+       End If
     End Do
+    kbest = lo
+    If ( Abs(zg_global(lo+1)-zp) < Abs(zg_global(lo)-zp) ) kbest = lo+1
   End Function nearest_zg_index
 
-  !> Global index of the interior z-face nearest zp
+  !> Global index of the interior z-face nearest zp (same binary-search structure as nearest_zg_index)
   Function nearest_z_face_index(zp) Result(kbest)
     Real(Int64), Intent(In) :: zp
-    Integer(Int32) :: kbest, kk
-    kbest = 2
-    Do kk = 3, nz_global-1
-       If ( Abs(z_global(kk)-zp) < Abs(z_global(kbest)-zp) ) kbest = kk
+    Integer(Int32) :: kbest, kk, lo, hi
+    If ( zp <= z_global(2) ) Then
+       kbest = 2
+       Return
+    Else If ( zp >= z_global(nz_global-1) ) Then
+       kbest = nz_global-1
+       Return
+    End If
+    lo = 2
+    hi = nz_global-2
+    Do While ( lo < hi )
+       kk = (lo+hi)/2
+       If ( z_global(kk+1) < zp ) Then
+          lo = kk+1
+       Else
+          hi = kk
+       End If
     End Do
+    kbest = lo
+    If ( Abs(z_global(lo+1)-zp) < Abs(z_global(lo)-zp) ) kbest = lo+1
   End Function nearest_z_face_index
 
 End Module uav_actuator
