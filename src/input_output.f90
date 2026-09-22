@@ -5,7 +5,8 @@ Module input_output
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
-  Use genGridAndIC    
+  Use genGridAndIC
+  Use particles, Only : write_particle_restart
 
   ! prevent implicit typing
   Implicit None
@@ -79,6 +80,12 @@ Contains
     Namelist /INFLOW_OPT/ inflow_opt_active, inflow_opt_x, inflow_opt_nstart, inflow_opt_window, &
                           n_bezier, inflow_opt_wall_exclude, inflow_opt_trust, inflow_opt_max_iter, &
                           inflow_opt_relax, inflow_opt_tol
+
+    Namelist /PARTICLES/ particles_active, n_particles_init, &
+                         particle_seed_xmin, particle_seed_xmax, particle_seed_ymin, particle_seed_ymax, &
+                         particle_seed_zmin, particle_seed_zmax, particle_seed_seed, &
+                         bc_particle_x, bc_particle_y, bc_particle_z, &
+                         particle_reinit_on_exit, particle_max_age, particle_restart_file
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -200,6 +207,26 @@ Contains
           Rewind(unit_in)
           Read(unit_in, nml=INFLOW_OPT,          iostat=ios)
           If (ios /= 0) Call abort_input( 'ERROR: &INFLOW_OPT present but failed to parse (check variable names)' )
+       End If
+
+       ! particle_seed_*max defaults to the full domain; resolved here (using the DOMAIN
+       ! group's local Lx/Ly/Lz aliases, already read above) rather than in the declaration
+       ! block, since the domain size isn't known until DOMAIN is read.
+       If ( namelist_group_present(unit_in, 'PARTICLES') ) Then
+          Rewind(unit_in)
+          Read(unit_in, nml=PARTICLES,           iostat=ios)
+          If (ios /= 0) Call abort_input( 'ERROR: &PARTICLES present but failed to parse (check variable names)' )
+          If ( particle_seed_xmax < 0d0 ) particle_seed_xmax = Lx
+          If ( particle_seed_ymax < 0d0 ) particle_seed_ymax = Ly
+          If ( particle_seed_zmax < 0d0 ) particle_seed_zmax = Lz
+          If ( bc_particle_x < 0 ) bc_particle_x = Merge(0, 1, x_bc_type == 0)
+          If ( bc_particle_y < 0 ) bc_particle_y = Merge(0, 2, y_bc_type == 0)
+          If ( bc_particle_z < 0 ) bc_particle_z = Merge(0, 2, z_bc_type == 0)
+          If ( particle_reinit_on_exit < 0 .Or. particle_reinit_on_exit > 1 ) Then
+             Call abort_input( 'ERROR: &PARTICLES particle_reinit_on_exit must be 0 (none) or 1 (inflow)' )
+          End If
+       Else
+          Write(*,'(A)') ' INFO: no &PARTICLES found, point-particle tracking disabled'
        End If
 
        Close(unit_in)
@@ -414,6 +441,13 @@ Contains
           Write(*,'(A,I4)')  '   n_lines                     = ', n_lines
           Write(*,'(A,I8)')  '   line_freq                   = ', line_freq
        End If
+       If ( particles_active >= 1 ) Then
+          Write(*,'(A,I2)')    '   particles_active            = ', particles_active
+          Write(*,'(A,I8)')    '   n_particles_init            = ', n_particles_init
+          Write(*,'(A,3I3)')   '   bc_particle (x,y,z) (0=periodic,1=exit,2=reflect,3=absorb) = ', &
+               bc_particle_x, bc_particle_y, bc_particle_z
+          Write(*,'(A,I2)')    '   particle_reinit_on_exit (0=none,1=inflow) = ', particle_reinit_on_exit
+       End If
     End If
 
     ! ---- Broadcast everything to all ranks ---------------------------
@@ -600,6 +634,22 @@ Contains
     Call Mpi_bcast ( inflow_opt_relax,    1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( inflow_opt_max_iter, 1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( inflow_opt_tol,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+
+    Call Mpi_bcast ( particles_active,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( n_particles_init,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_xmin,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_xmax,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_ymin,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_ymax,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_zmin,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_zmax,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_seed,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( bc_particle_x,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( bc_particle_y,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( bc_particle_z,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_reinit_on_exit, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_max_age,      1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_restart_file, Len(particle_restart_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 
@@ -1013,6 +1063,9 @@ Contains
        If ( boussinesq_flag >= 1 ) Then
           Call write_distributed_field_block(1, Tscal, nxg_global, nyg_global, nzg_global, .False., .False.)
        End If
+
+       ! Particle positions/state (src/particles.f90): separate file, gather/scatter I/O
+       If ( particles_active >= 1 ) Call write_particle_restart
 
        ! close file and report size
        If (myid==0) Then

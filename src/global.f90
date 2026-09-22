@@ -640,6 +640,23 @@ Module global
   Character(8)   :: slice_comps  (MAX_PROBES) = 'UVW'
   Character(200) :: slice_fileout(MAX_PROBES) = 'slice'
 
+  ! Lagrangian point-particle tracking (src/particles.f90): particles_active 0=off,1=on.
+  ! Per-direction particle BC codes (bc_particle_x/y/z): -1=auto (periodic if the matching
+  ! fluid x_bc_type/y_bc_type/z_bc_type==0, else exit(x)/reflect(y,z)); explicit override
+  ! 0=periodic,1=exit(inflow/outflow),2=reflect(wall),3=absorb(wall, no bounce).
+  ! particle_reinit_on_exit: 0=none (population decays as particles exit), 1=inflow
+  ! (replace an outflow exit with a new particle at the inflow plane).
+  Integer(Int32) :: particles_active       = 0
+  Integer(Int32) :: n_particles_init       = 0
+  Real   (Int64) :: particle_seed_xmin = 0d0, particle_seed_xmax = -1d0   ! <0 (xmax): resolved to the full domain once Lx is known
+  Real   (Int64) :: particle_seed_ymin = 0d0, particle_seed_ymax = -1d0
+  Real   (Int64) :: particle_seed_zmin = 0d0, particle_seed_zmax = -1d0
+  Integer(Int32) :: particle_seed_seed     = 987654
+  Integer(Int32) :: bc_particle_x = -1, bc_particle_y = -1, bc_particle_z = -1
+  Integer(Int32) :: particle_reinit_on_exit = 0
+  Real   (Int64) :: particle_max_age       = 1d30
+  Character(200) :: particle_restart_file  = 'particles_restart'
+
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
   Integer(Int32) :: line_freq = 100

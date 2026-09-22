@@ -13,6 +13,7 @@ Module initialization
   Use scalar_transport, Only : compute_settling_velocity
   Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
   Use uav_actuator, Only : setup_uav
+  Use particles, Only : setup_particles
 
   ! prevent implicit typing
   Implicit None
@@ -296,6 +297,10 @@ Contains
     ! UAV actuator disk marker setup (no-op unless uav_active>=1); no grid
     ! dependency but grouped here alongside IBM setup for readability
     If ( uav_active >= 1 ) Call setup_uav
+
+    ! Point-particle seeding/restart (no-op unless particles_active>=1); needs the grid
+    ! (xg/yg/zg) and x/z periodic-partner topology, both already set up above
+    Call setup_particles
 
     ! Boundary conditions
     ! local pressure z-plane

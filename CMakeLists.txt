@@ -112,6 +112,7 @@ set(SRCS
     src/uav_actuator.f90
     src/interpolation.f90
     src/sem.f90
+    src/particles.f90
     src/boundary_conditions.f90
     src/sgs_model.f90
     src/equations.f90
@@ -281,6 +282,7 @@ add_executable(dopamine-ESEM
     src/global.f90
     src/decomp.f90
     src/sem.f90
+    src/particles.f90
     src/genGridandIC.f90
     src/input_output.f90
     src/dopamine_esem_main.f90

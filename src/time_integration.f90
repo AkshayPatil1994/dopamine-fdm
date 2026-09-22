@@ -14,6 +14,7 @@ Module time_integration
   Use scalar_transport,  Only : compute_rhs_scalar, apply_scalar_bc
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
   Use monitor,          Only : compute_cfl, write_force_csv, compute_bulk_velocity
+  Use particles,        Only : advance_particles
   Use profiler
 
   ! prevent implicit typing
@@ -425,6 +426,7 @@ Contains
 
     ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (IBM re-enforce below, RSB/inflow-optimization accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
     needs_final_sync = ( ibm_input_mode >= 1 ) .Or. &
+         ( particles_active >= 1 ) .Or. &
          ( rsb_active == 1 .And. istep >= rsb_nstart ) .Or. &
          ( inflow_opt_active == 1 .And. istep >= inflow_opt_nstart ) .Or. &
          ( Mod(istep, nmonitor) == 0 ) .Or. &
@@ -455,6 +457,11 @@ Contains
        !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)
     End If
+
+    ! Advance particles once per full step against this step's final, consistent (divergence-free,
+    ! BC/IBM-applied) host-resident U,V,W -- needs_final_sync above guarantees the host mirror is
+    ! current whenever particles_active>=1, even on steps that wouldn't otherwise need it.
+    If ( particles_active >= 1 ) Call advance_particles
 
     ! Scalar step 3
     If ( sediment_flag >= 1 ) Then
