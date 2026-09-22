@@ -1,0 +1,98 @@
+! ================================================================
+! Turbophoresis smoke test for src/particles.f90 (Phase 6 validation).
+!
+! Seeds inertial point-particles (St+ ~ 25 in this preset, computed as
+! tau_p*u_tau^2/nu with u_tau=1, nu=1/Re_tau below) uniformly across the
+! channel half-height and confirms the classic turbophoresis result
+! (Marchioli & Soldati 2002; Marchioli et al. 2008 multi-code benchmark,
+! St+ = 1, 5, 25): inertial particles in wall turbulence preferentially
+! migrate toward and accumulate at the wall, while passive tracers stay
+! well-mixed at their initial (near-uniform) concentration.
+!
+! This is a QUALITATIVE correctness check, not a quantitative reproduction
+! of the Marchioli et al. benchmark: it runs far fewer steps, at a
+! different Re_tau (395 here vs. 150 in the paper), and does not average
+! long enough for a converged near-wall concentration PROFILE (only a
+! coarse near-wall/away-from-wall population fraction). A real benchmark
+! run needs a matching Re_tau=150 domain, one-way St+=1/5/25 ensembles
+! run to statistical convergence, and comparison against the paper's
+! published concentration profiles -- a dedicated long-running campaign,
+! not something to launch from a quick example.
+!
+! Observed with this exact config (2000 steps, single rank): near-wall
+! fraction (particles within 0.1 of either wall, channel half-height 1.0)
+! climbs from the ~5% well-mixed baseline to full saturation (~100%) by
+! step ~1800, while a tracer (particle_mode=0) control run holds flat at
+! the ~5% baseline over the same number of steps.
+!
+! particle_diam presets below (rho_p/rho_f=1000, this case's nu) for the
+! paper's three St+ values -- change bc_particle_y / particle_diam to
+! rerun at a different Stokes number:
+!   St+=1:  particle_diam = 3.397e-4
+!   St+=5:  particle_diam = 7.594e-4
+!   St+=25: particle_diam = 1.6983e-3   (default below)
+! ================================================================
+
+&DOMAIN
+  nx         = 66,
+  ny         = 65,
+  nz         = 66,
+  Lx         = 6.0,
+  Ly         = 2.0,
+  Lz         = 2.0,
+  alpha_grid = 2.5,
+  grid_type  = 2,
+/
+
+&PHYSICS
+  nu                   = 0.002531645569620253,      ! Re_tau = 395, H = 1.0, u_tau = 1.0, nu = 1/Re_tau
+  dPdx                 = 1.0,
+  dPdz                 = 0.0,
+  sgs_model            = 1,       ! 0=DNS, 1=Vreman
+  Cs_vreman            = 0.17,
+  flat_wall_model_flag = 1,       ! 0=no-slip, 1=log-law EQWM
+/
+
+&NUMERICS
+  dt           = 1.0,
+  nsteps       = 2000,
+  nsave        = 1000,
+  nmonitor     = 100,
+  cfl_adaptive = 1,
+  cfl_target   = 0.5,
+  cfl_safety   = 1.0,
+  dt_min       = 1.0e-8,
+  dt_max       = 1.0e10,
+/
+
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 1,
+  bc_face_yhi = 1,
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 15.0,
+  ic_type      = 5,
+  noise_percent  = 5.0,
+/
+
+&IO
+  filein  = 'restart/particle_channel_turbophoresis.1',
+  fileout = 'particle_channel_turbophoresis',
+/
+
+&PARTICLES
+  particles_active     = 1,
+  n_particles_init      = 3000,
+  particle_seed_xmin = 0.0, particle_seed_xmax = 6.0,
+  particle_seed_ymin = 0.05, particle_seed_ymax = 1.95,
+  particle_seed_zmin = 0.0, particle_seed_zmax = 2.0,
+  bc_particle_x = 0,    ! periodic (streamwise)
+  bc_particle_y = 2,    ! reflect (wall)
+  bc_particle_z = 0,    ! periodic (spanwise)
+  particle_mode  = 1,   ! 1=inertial; set to 0 for the tracer control run
+  particle_diam  = 1.6983e-3,   ! St+ ~ 25, see header
+  particle_rho   = 1000.0,
+  particle_rho_f = 1.0,
+  particle_seed_seed = 11,
+/
