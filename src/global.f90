@@ -459,8 +459,9 @@ Module global
   Real   (Int64) :: dt_min        = 1d-10
   Real   (Int64) :: dt_max        = 1d10
   Real   (Int64) :: cfl_current   = 0d0
-  Real   (Int64) :: cfl_conv_last = 0d0   ! convective CFL from last step
-  Real   (Int64) :: cfl_visc_last = 0d0   ! viscous CFL from last step
+  Real   (Int64) :: cfl_conv_last  = 0d0   ! convective CFL from last step
+  Real   (Int64) :: cfl_visc_last  = 0d0   ! viscous CFL from last step
+  Real   (Int64) :: cfl_accel_last = 0d0   ! source-term (buoyancy/rotation/UAV) accel-CFL from last step
 
   ! Suspended sediment transport: sediment_flag 0=off,1=on; sed_bc_bot 0=flux,1=equilibrium; C_ic_type 0=uniform,1=Rouse,2=ramp,3=slab
   Integer(Int32) :: sediment_flag = 0

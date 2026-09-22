@@ -8,6 +8,7 @@ Module monitor
   Use projection, Only : check_divergence
   Use ibm
   Use decomp, Only : x_periodic_partner, z_periodic_partner
+  Use uav_actuator, Only : uav_current_thrust
 
   ! prevent implicit typing
   Implicit None
@@ -59,11 +60,11 @@ Contains
        time2 = MPI_WTIME()
 
        If ( myid == 0 ) Then
-          Write(*,'(I8,3X,ES12.5,3X,ES11.4,3X,ES11.4,3X,ES10.3,3X,ES9.2,3X,ES9.2,3X,ES12.5,3X,F7.2)') &
+          Write(*,'(I8,3X,ES12.5,3X,ES11.4,3X,ES11.4,3X,ES10.3,3X,ES9.2,3X,ES9.2,3X,ES9.2,3X,ES12.5,3X,F7.2)') &
                istep, t,                                                     &
                meanU,                                                        &
                maxU, max_divergence,                                         &
-               cfl_conv_last, cfl_visc_last, dt, time2 - time1
+               cfl_conv_last, cfl_visc_last, cfl_accel_last, dt, time2 - time1
        End If
 
        time1 = MPI_WTIME()
@@ -243,26 +244,27 @@ Contains
             '  t_start=', t, '  t_end=', t_end_s
        Write(*,'(A)') ' '
        Write(*,'(A)') '    step             t           <U>        |U|max        |div|       CFL_c       CFL_v' // &
-                      '             dt   wall(s)'
+                      '       CFL_a             dt   wall(s)'
        Write(*,'(A)') '--------   ------------   -----------   -----------   ----------   ---------   ---------' // &
-                      '   ------------   -------'
+                      '   ---------   ------------   -------'
 
     End If
 
   End Subroutine summary
 
-  !> Compute convective/viscous CFL (global max over MPI ranks)
-  Subroutine compute_cfl(cfl_conv_out, cfl_visc_out)
+  !> Compute convective/viscous/source-term CFL (global max over MPI ranks)
+  Subroutine compute_cfl(cfl_conv_out, cfl_visc_out, cfl_accel_out)
 
-    Real(Int64), Intent(Out) :: cfl_conv_out, cfl_visc_out
+    Real(Int64), Intent(Out) :: cfl_conv_out, cfl_visc_out, cfl_accel_out
 
-    Real(Int64)    :: local_conv, local_visc, conv_ijk, visc_ijk
+    Real(Int64)    :: local_conv, local_visc, local_accel, conv_ijk, visc_ijk
     Real(Int64)    :: inv_dx, inv_dy, inv_dz, inv_dx2, inv_dy2, inv_dz2
-    Real(Int64)    :: local_buf(2), global_buf(2)
+    Real(Int64)    :: local_buf(3), global_buf(3)
     Integer(Int32) :: i, j, k
 
     local_conv = 0d0
     local_visc = 0d0
+    local_accel = 0d0
 
     ! x grid is uniform: hoist its inverse outside all loops (z may be stretched, so inv_dz is per k).
     inv_dx  = 1d0 / dx
@@ -317,15 +319,61 @@ Contains
        !$acc end parallel loop
     End If
 
-    local_conv = local_conv * dt
-    local_visc = local_visc * dt
+    ! Acceleration-CFL: source terms (Boussinesq buoyancy, rigid-body rotation, UAV
+    ! actuator thrust) feed rhs_v/rhs_w but were previously invisible to the adaptive-dt
+    ! estimate above, which only sees advection/diffusion -- a run that starts with weak
+    ! flow but strong stratification/thrust can be unstable while cfl_conv/cfl_visc still
+    ! report "safe". Gravity-wave-type limiter dt*sqrt(2*|a|/dy), analogous in form to the
+    ! convective/viscous terms above; kept as separate acc regions (not merged into the
+    ! loops above) so Tscal/W are only touched -- and only need to be device-present --
+    ! when their owning pathway is actually active, matching the Boussinesq/rotation
+    ! source terms' own separate acc regions in equations.f90.
+    If ( boussinesq_flag >= 1 ) Then
+       !$acc parallel loop collapse(3) present(Tscal,y) reduction(max:local_accel)
+       Do k = 2, nzg-1
+          Do j = 2, nyg-1
+             Do i = 2, nxg-1
+                local_accel = Max( local_accel, &
+                     Sqrt( 2d0*Abs(beta_T*grav*(Tscal(i,j,k)-T_ref)) / Max(y(j)-y(j-1),1d-14) ) )
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
 
-    ! Single Allreduce for both quantities to halve MPI collective latency.
+    If ( rotation_active >= 1 ) Then
+       !$acc parallel loop collapse(3) present(W,y) reduction(max:local_accel)
+       Do k = 2, nzg-1
+          Do j = 2, nyg-1
+             Do i = 2, nxg-1
+                local_accel = Max( local_accel, Sqrt( 2d0*( Abs(Omega_x)*Abs(0.5d0*(W(i,j,k)+W(i,j,k-1))) &
+                     + Omega_x*Omega_x*Abs(y(j)-y0_rot) ) / Max(y(j)-y(j-1),1d-14) ) )
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+
+    ! UAV: no per-cell forcing array is exposed here, so use a conservative worst-case bound
+    ! (total thrust spread over the disk area and one grid cell's wall-normal thickness)
+    ! rather than duplicating the marker-projection kernel from uav_actuator.f90.
+    If ( uav_active >= 1 ) Then
+       local_accel = Max( local_accel, Sqrt( 2d0*Abs(uav_current_thrust(t)) / &
+            ( pi*uav_disk_radius*uav_disk_radius*Max(dymin,1d-14) ) / Max(dymin,1d-14) ) )
+    End If
+
+    local_conv  = local_conv  * dt
+    local_visc  = local_visc  * dt
+    local_accel = local_accel * dt
+
+    ! Single Allreduce for all three quantities to halve MPI collective latency.
     local_buf(1) = local_conv
     local_buf(2) = local_visc
-    Call MPI_Allreduce(local_buf, global_buf, 2, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
+    local_buf(3) = local_accel
+    Call MPI_Allreduce(local_buf, global_buf, 3, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     cfl_conv_out = global_buf(1)
     cfl_visc_out = global_buf(2)
+    cfl_accel_out = global_buf(3)
 
   End Subroutine compute_cfl
 

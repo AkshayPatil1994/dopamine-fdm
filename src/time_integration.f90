@@ -49,7 +49,7 @@ Contains
     Real(Int64) :: Fx_ibm,  Fy_ibm,  Fz_ibm
     Real(Int64) :: Fx_pres, Fy_pres, Fz_pres
     Real(Int64) :: Fx_visc, Fy_visc, Fz_visc
-    Real(Int64) :: cfl_conv, cfl_visc, dt_new, dt_presnap
+    Real(Int64) :: cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap
     Real(Int64) :: Ub_now, dU_cmfr
     Logical     :: needs_final_sync
 
@@ -70,11 +70,12 @@ Contains
 
     ! CFL check and adaptive dt, evaluated from the start-of-step velocity so dt is enforced on the current step, not lagged by one
     Call profiler_start(PROF_CFL)
-    Call compute_cfl(cfl_conv, cfl_visc)
+    Call compute_cfl(cfl_conv, cfl_visc, cfl_accel)
     Call profiler_stop(PROF_CFL)
-    cfl_conv_last = cfl_conv
-    cfl_visc_last = cfl_visc
-    cfl_current   = Max(cfl_conv, cfl_visc)
+    cfl_conv_last  = cfl_conv
+    cfl_visc_last  = cfl_visc
+    cfl_accel_last = cfl_accel
+    cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
     If ( cfl_adaptive == 1 .And. cfl_current > 0d0 ) Then
        dt_new = dt * cfl_target / cfl_current * cfl_safety
        dt = Max(dt_min, Min(dt_max, dt_new))
