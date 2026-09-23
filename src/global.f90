@@ -471,7 +471,7 @@ Module global
   Real   (Int64) :: d_s           = 1d-4    ! particle diameter [m]
   Real   (Int64) :: rho_s         = 2650d0  ! particle density [kg/m^3]
   Real   (Int64) :: rho_f         = 1000d0  ! fluid density [kg/m^3]
-  Real   (Int64) :: grav          = 9.81d0  ! gravitational acceleration [m/s^2]
+  Real   (Int64) :: grav          = 0d0     ! gravitational acceleration [m/s^2]; off unless set via &SEDIMENT or &BOUSSINESQ
   Real   (Int64) :: Sc            = 1d0     ! molecular Schmidt number
   Real   (Int64) :: Sc_t          = 0.7d0   ! turbulent Schmidt number
   Real   (Int64) :: ws            = 0d0     ! settling velocity (computed at init)

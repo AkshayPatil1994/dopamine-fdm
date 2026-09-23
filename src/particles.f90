@@ -901,18 +901,31 @@ Contains
 
   End Subroutine reinject_at_inflow
 
-  !> Reduce and print per-rank event counters (global sums), then reset the running totals.
+  !> Reduce per-rank event counters (global sums) and append one row to fields/particle_count.dat
+  !  (istep,t,exited,deposited,reinjected,active), then reset the running totals. Was a stdout
+  !  Write every nmonitor steps -- moved to a file so it doesn't spam the run log.
   Subroutine report_particle_counts
 
     Integer(Int64) :: local_buf(4), global_buf(4)
-    Integer(Int32) :: n_active_global
+    Integer(Int32) :: funit
+    Logical :: dir_exists, file_exists
 
     local_buf = (/ n_exited_local, n_deposited_local, n_reinjected_local, Int(n_particles_local, Int64) /)
     Call MPI_Reduce(local_buf, global_buf, 4, MPI_INTEGER8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
 
     If ( myid == 0 ) Then
-       Write(*,'(A,I10,A,I10,A,I10,A,I12)') ' particles: exited=', global_buf(1), &
-            ' deposited=', global_buf(2), ' reinjected=', global_buf(3), ' active=', global_buf(4)
+       Inquire(file='fields/.', exist=dir_exists)
+       If ( .Not. dir_exists ) Call system('mkdir -p fields/')
+
+       Inquire(file='fields/particle_count.dat', exist=file_exists)
+       Open(newunit=funit, file='fields/particle_count.dat', status='unknown', &
+            position='append', action='write')
+       If ( .Not. file_exists ) Then
+          Write(funit,'(A)') 'istep,t,exited,deposited,reinjected,active'
+       End If
+       Write(funit,'(I10,A,ES14.6,A,I10,A,I10,A,I10,A,I12)') istep, ',', t, ',', &
+            global_buf(1), ',', global_buf(2), ',', global_buf(3), ',', global_buf(4)
+       Close(funit)
     End If
 
     n_exited_local = 0;  n_deposited_local = 0;  n_reinjected_local = 0
