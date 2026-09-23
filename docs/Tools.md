@@ -90,19 +90,31 @@ python3 postProcessing/generateXMF.py
 
 Writes XDMF metadata (`paraview/particles.xmf`) for the point-particle snapshots written
 by `src/particles.f90` (`fields/<fileout>_particles.<step>`, active whenever
-`particles_active=1` in `&PARTICLES`) — same no-duplication, byte-seek-HyperSlab
-philosophy as `generateXMF.py`, and its `<Time Value=...>` uses the step number rather
-than physical time for the same reason `generateXMF.py`'s does (`DT=1`): opened
+`particles_active=1` in `&PARTICLES`), and its `<Time Value=...>` uses the step number
+rather than physical time for the same reason `generateXMF.py`'s does (`DT=1`): opened
 alongside `channel_test.xmf`, ParaView's shared time toolbar then scrubs the point cloud
 and the flow fields together, frame for frame. Each snapshot's particle count varies
-(particles exit/deposit/reinject), so every timestep gets its own Polyvertex
-Topology/Geometry rather than sharing one across the series, unlike the fixed field
-grid. Exposes `id`, `age`, and `Velocity` as point-cloud Attributes for colouring. Run
-it the same way as `generateXMF.py`, from the case directory:
+(particles exit/deposit/reinject); by default the script pads every timestep up to the
+run's own maximum particle count (writing one small auxiliary `..._particles_padded.
+<step>.bin` file per timestep into `paraview/`, with `id=-1`/`active=0` on padding
+rows) so every `<Grid>` shares one fixed-size Topology/Geometry — vtkXdmfReader
+otherwise treats a variable-size series as a `vtkMultiBlockDataSet` rather than a
+homogeneous time-varying dataset, which ParaView warns about and can animate
+incorrectly. Pass `--no-pad` for the original zero-duplication, byte-seek-only,
+variable-size-per-timestep behaviour if you don't hit that warning. Exposes `id`,
+`age`, `Velocity`, and (padded mode only) `active` as point-cloud Attributes for
+colouring — Threshold on `active > 0.5` to hide padding rows. Run it the same way as
+`generateXMF.py`, from the case directory:
 
 ```bash
-python3 postProcessing/generate_particles_xmf.py
+python3 postProcessing/generate_particles_xmf.py            # padded (default)
+python3 postProcessing/generate_particles_xmf.py --no-pad    # original byte-seek-only
 ```
+
+Per-monitor-interval particle event counts (exited/deposited/reinjected/active,
+`src/particles.f90`'s `report_particle_counts`) are no longer printed to stdout — they're
+appended as CSV rows to `fields/particle_count.dat` (`istep,t,exited,deposited,
+reinjected,active`, one row every `nmonitor` steps) instead.
 
 ### `generate_slice_xmf.py`
 

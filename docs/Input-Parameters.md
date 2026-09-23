@@ -156,7 +156,7 @@ See [[Numerics § Initial conditions|Numerics#12-initial-conditions]].
 | `d_s` | `1e-4` | Particle diameter [m] |
 | `rho_s` | `2650.0` | Particle density [kg m⁻³] |
 | `rho_f` | `1000.0` | Fluid density [kg m⁻³] |
-| `grav` | `9.81` | Gravitational acceleration [m s⁻²] |
+| `grav` | `0.0` | Gravitational acceleration [m s⁻²]; off unless set here or in `&BOUSSINESQ` |
 | `Sc` | `1.0` | Molecular Schmidt number |
 | `Sc_t` | `0.7` | Turbulent Schmidt number |
 | `C_ref` | `0.0` | Reference near-bed concentration |
@@ -166,13 +166,18 @@ See [[Numerics § Initial conditions|Numerics#12-initial-conditions]].
 
 See [[Numerics § Scalar transport|Numerics#8-scalar-transport-suspended-sediment]].
 
+`grav` is also applied unconditionally to inertial point-particles (`&PARTICLES`,
+`particle_mode = 1`) regardless of `sediment_flag`/`boussinesq_flag` — set it here (or in
+`&BOUSSINESQ`) if an inertial-particle case needs gravity, e.g. for sedimentation rather
+than a zero-gravity turbophoresis-style run.
+
 ## `&BOUSSINESQ` *(optional — omit to disable)*
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `boussinesq_flag` | `0` | 0=off, 1=transport temperature $T$ and couple it into the $v$-momentum equation via Boussinesq buoyancy |
 | `beta_T` | `0.0` | Thermal expansion coefficient $\beta_T$ [1/K] |
 | `T_ref` | `0.0` | Reference temperature $T_\text{ref}$ [K] used in the buoyancy source term |
-| `grav` | — | Gravitational acceleration [m s⁻²] (shared with `&SEDIMENT`; a warning is printed if the two disagree) |
+| `grav` | `0.0` | Gravitational acceleration [m s⁻²] (shared with `&SEDIMENT`; a warning is printed if the two disagree) |
 | `Pr` | `0.7` | Molecular Prandtl number |
 | `Pr_t` | `0.85` | Turbulent Prandtl number |
 | `T_bc_bot`, `T_bc_top` | `0`, `0` | Wall BC type: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet), 2=rough EQWM flux BC (isothermal target `T_wall_*`, flux set via `z0h_ylo/yhi` and, under stratification, the iterated Businger-Dyer Obukhov length; requires `flat_wall_model_flag=2` and `boussinesq_flag>=1`) |
