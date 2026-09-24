@@ -56,6 +56,11 @@ def main():
         for d in ('fields', 'restart', 'stats'):
             os.makedirs(os.path.join(tmp, d))
         write = lambda s: open(os.path.join(tmp, 'input_parameters'), 'w').write(s)
+        # auxiliary input files referenced by the case (UAV paths, profiles, ...)
+        for f in os.listdir(args.case_dir):
+            fp = os.path.join(args.case_dir, f)
+            if os.path.isfile(fp) and f != 'input_parameters':
+                shutil.copy(fp, tmp)
 
         write(make_input(2 * n, False))
         run(args.mpirun, args.exe, args.np, tmp, env)
