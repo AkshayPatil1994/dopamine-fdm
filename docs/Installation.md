@@ -45,33 +45,39 @@ The executable `dopamine` is placed in `build/`.
 > `OPEN` to produce little-endian float64 (consistent with the coordinate `.bin` files
 > used by `generateXMF.py`).
 
-## Building (single-GPU, OpenACC + cuFFT + cuSPARSE)
-
-> Not tested extensively — watch for bugs.
+## Building (GPU: OpenACC + cuFFT + cuSPARSE, single- or multi-GPU)
 
 An optional `ENABLE_GPU` CMake target offloads the RHS/SGS/boundary-condition/projection
-kernels and the pressure Poisson solve (cuFFT transform + cuSPARSE batched tridiagonal
-solve) to a single NVIDIA GPU via OpenACC. The CPU build above is untouched and remains
-the default; this is a separate, opt-in build.
+kernels and the pressure Poisson solve (cuFFT transforms + cuSPARSE batched tridiagonal
+solve) to NVIDIA GPUs via OpenACC, one MPI rank per GPU. The CPU build above is untouched
+and remains the default; this is a separate, opt-in build.
 
 **Requirements**:
 - [NVIDIA HPC SDK](https://developer.nvidia.com/hpc-sdk) 23.3 or later (provides
-  `nvfortran`, its bundled OpenMPI, and the `cufft`/`cusparse` device libraries) — e.g.
-  installed under `/opt/nvidia/hpc_sdk`.
-- A CUDA-capable NVIDIA GPU. `CMakeLists.txt` targets compute capability `cc86` (Ampere,
-  e.g. RTX 30-series); edit the `-gpu=cc86` flag in `CMakeLists.txt` to match a different
-  GPU before building for another architecture.
+  `nvfortran`, its bundled **CUDA-aware** OpenMPI, and the `cufft`/`cusparse` device
+  libraries) — e.g. installed under `/opt/nvidia/hpc_sdk`. Use its bundled `mpirun`/`mpif90`.
+- NVIDIA GPUs whose driver supports the toolkit: the user-space `libcuda` must match the
+  kernel driver (a stale `libcuda` crashes at start-up in `cuModuleLoad`). If the driver
+  is older than the toolkit NVHPC defaults to, pass `-DGPU_CUDA_VERSION=<X.Y>` (nvfortran
+  `-gpu=cudaX.Y`) with a matching toolkit installed.
+- Compute capability defaults to `86` (Ampere, e.g. RTX A6000 / RTX 30-series); override
+  with `-DCMAKE_CUDA_ARCHITECTURES=<cc>` (no dot) for other GPUs.
 
-**Scope — read before using**: the GPU Poisson solve currently only supports
-**`nprocs=1`** (single GPU, no MPI domain decomposition), with either **`x_bc_type=0`**
-(periodic, spectral FFT) or **`x_bc_type=1`** (inflow/outflow, DCT-IV) streamwise BC, and
-**`z_bc_type=0`** (periodic spanwise) — with one exception: a **4-wall duct**
-(`y_bc_type=1` and `z_bc_type=1` together) is also supported, via a batched cuSPARSE
-eigenmode + tridiagonal solve, but only with `x_bc_type=0`. A spanwise wall alone
-(`z_bc_type=1`, `y_bc_type=0`), or a 4-wall duct with `x_bc_type=1`, is still CPU-only. A
-runtime guard `Stop`s immediately on startup outside these combinations — every other
-solver feature (IBM, wall models, SGS, sediment transport, RSB statistics, rotation
-forcing, etc.) works normally in the GPU build.
+**How multi-GPU works**: the vendored 2decomp&fft is built in its GPU mode
+(`-DDECOMP2D_GPU=ON`, default with `ENABLE_GPU`), so the pencil transposes of the
+Poisson solve, and the velocity/scalar halo exchanges, pass *device* buffers straight to
+MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
+(`src/gpu_device.f90`). Launch with one rank per GPU.
+
+**Scope — read before using**:
+- **Multi-GPU (`nprocs>1`)**: supported when **`x_bc_type=0` and `z_bc_type=0`** (periodic
+  streamwise and spanwise) with either periodic or wall `y` — i.e. periodic boxes and
+  channels, pencil-decomposed like the CPU build (`p_row`/`p_col`). Wall models, SGS,
+  scalars etc. work as on one GPU; IBM host-side halo code is unchanged.
+- **Single GPU only (`nprocs=1`)**: inflow/outflow x (`x_bc_type=1`, DCT-IV) and the
+  4-wall duct (`y_bc_type=1` with `z_bc_type=1`, `x_bc_type=0`). A spanwise wall alone
+  (`z_bc_type=1`, `y_bc_type=0`), or a duct with `x_bc_type=1`, is CPU-only. A runtime
+  guard `Stop`s immediately on unsupported combinations.
 
 Put the NVHPC SDK's `nvfortran` and bundled MPI on your `PATH`/`LD_LIBRARY_PATH` first,
 e.g.:
@@ -85,7 +91,8 @@ Then configure and build with `nvfortran` and `-DENABLE_GPU=ON`:
 
 ```bash
 cmake -S . -B build_gpu -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_Fortran_COMPILER=nvfortran -DENABLE_GPU=ON
+      -DCMAKE_Fortran_COMPILER=nvfortran -DENABLE_GPU=ON \
+      -DMPI_Fortran_COMPILER=$NVHPC/comm_libs/openmpi4/bin/mpif90
 cmake --build build_gpu -j$(nproc)
 ```
 
@@ -97,8 +104,8 @@ touched is still being generated for the GPU.
 
 1. Edit `input_parameters` to set domain size, grid type, physics, and IC options — see
    the [[Input Parameters Reference|Input-Parameters]] for every field. For the GPU
-   build, also make sure `nprocs=1` (i.e. launch with `-np 1`) and `x_bc_type` is 0 or 1
-   in `&BOUNDARY_CONDITIONS` (see "Building (single-GPU...)" above).
+   build, check the scope rules in "Building (GPU ...)" above (multi-GPU needs periodic
+   x and z).
 2. Create the required output directories (adjust paths to match your `fileout` and
    `rsb_fileout` settings):
    ```bash
@@ -108,9 +115,9 @@ touched is still being generated for the GPU.
    ```bash
    mpirun -np <N> ./build/dopamine
    ```
-   or, for the GPU build (single rank only):
+   or, for the GPU build (one rank per GPU; use the NVHPC `mpirun`):
    ```bash
-   mpirun -np 1 ./build_gpu/dopamine
+   mpirun -np 2 ./build_gpu/dopamine     # 2 GPUs
    ```
    The solver reads `input_parameters` from the working directory in both cases.
 
@@ -118,6 +125,19 @@ Every run prints a per-stage profiler summary (`src/profiler.f90`) at shutdown �
 time and percent-of-tracked-time for SGS, wall model, RHS, boundary conditions, Poisson
 FFT, Poisson tridiagonal solve, projection, and CFL check — useful for spotting where
 time is going on either build.
+
+## Testing
+
+`ctest` (in the build directory) runs the unit drivers plus deterministic parity
+regressions (`tests/regression/{tgv_small,chan_small,chan_les_small}`): each is run on 1
+and 2 ranks and the per-step monitor diagnostics (`meanU`, `maxU`, divergence, CFL, `dt`)
+must agree within tolerance. In a GPU build, pass a CPU build to also compare CPU vs GPU:
+
+```bash
+cmake -S . -B build_gpu ... -DCPU_REFERENCE_EXE=$PWD/build/dopamine \
+      -DCPU_REFERENCE_MPIRUN=$(which mpirun)   # optional; TEST_LD_LIBRARY_PATH adds a libcuda dir
+ctest --test-dir build_gpu
+```
 
 ## Output files
 
