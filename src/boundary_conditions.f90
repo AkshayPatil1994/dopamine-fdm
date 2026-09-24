@@ -437,13 +437,27 @@ Contains
 
     Real(Int64) :: Uc
     Integer(Int32) :: n2, n3
+    Logical :: is_first, is_last
+    Integer(Int32) :: partner
+    Real(Int64) :: loc(2), glob(2), s
 
     n2 = Size(U,2)
     n3 = Size(U,3)
 
+    ! Mean of U over the WHOLE outlet plane: every rank owning a slab of the plane (the last x-row; with a z-split all
+    ! ranks) contributes its sum and cell count, reduced over all ranks. A per-rank mean made the convective outflow
+    ! BC, and hence the whole solution, depend on the rank count.
     !$acc kernels present(U)
-    Uc = Sum(U(nx-1,2:n2-1,2:n3-1)) / Real((n2-2)*(n3-2),Int64)
+    s = Sum(U(nx-1,2:n2-1,2:n3-1))
     !$acc end kernels
+    Call x_periodic_partner(is_first, is_last, partner)
+    If ( is_last ) Then
+       loc = [ s, Real((n2-2)*(n3-2),Int64) ]
+    Else
+       loc = 0d0
+    End If
+    Call MPI_Allreduce(loc, glob, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Uc = glob(1) / glob(2)
 
   End Function outflow_convection_velocity
 
