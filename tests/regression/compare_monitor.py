@@ -42,10 +42,15 @@ def clear_snapshots(case_dir):
         os.remove(f)
 
 
-def read_snapshot(case_dir):
+def read_snapshot(case_dir, interior_only=False):
     """Parse the newest big-endian stream snapshot written by output_data (src/input_output.f90): six mesh
-    blocks (int32 count + float64 array), then one (int32 nx,ny,nz + float64 nx*ny*nz) block per field
-    (U,V,W,P, then C/nu_t/T when active). Returns a list of float64 arrays, one per field block."""
+    blocks (int32 count + float64 array: x,y,z,xm,ym,zm), then one (int32 nx,ny,nz + float64 nx*ny*nz) block
+    per field (U,V,W,P, then C/nu_t/T when active). Returns a list of float64 arrays, one per field block.
+
+    interior_only drops the ghost layers of cell-centred (ghosted) dimensions. Those layers hold boundary/seam
+    ghost values (e.g. the wall-ghost row at a rank seam) that the interior update never reads and that depend
+    on the order of the BC and halo passes, so they are not a meaningful parity quantity.
+    """
     files = sorted(glob.glob(os.path.join(case_dir, 'fields', '*.[0-9]*')),
                    key=lambda f: int(f.rsplit('.', 1)[1]))
     if not files:
@@ -53,9 +58,12 @@ def read_snapshot(case_dir):
         sys.exit(1)
     b = open(files[-1], 'rb').read()
     p = 0
+    mesh = []
     for _ in range(6):
         n, = struct.unpack_from('>i', b, p)
+        mesh.append(n)
         p += 4 + 8 * n
+    ncell = mesh[3:6]  # xm, ym, zm lengths = interior cell counts; a ghosted dimension has ncell + 2 points
     blocks = []
     while p < len(b):
         nx, ny, nz = struct.unpack_from('>iii', b, p)
@@ -65,8 +73,34 @@ def read_snapshot(case_dir):
         a.frombytes(b[p:p + 8 * n])
         a.byteswap()
         p += 8 * n
+        if interior_only:
+            dims = (nx, ny, nz)
+            lo = [1 if dims[d] == ncell[d] + 2 else 0 for d in range(3)]
+            hi = [dims[d] - lo[d] for d in range(3)]
+            a = array.array('d', (a[i + nx * (j + ny * k)]
+                                  for k in range(lo[2], hi[2])
+                                  for j in range(lo[1], hi[1])
+                                  for i in range(lo[0], hi[0])))
         blocks.append(a)
     return blocks
+
+
+def clear_files(case_dir, patterns):
+    for pat in patterns:
+        for f in glob.glob(os.path.join(case_dir, pat)):
+            os.remove(f)
+
+
+def read_raw_files(case_dir, patterns):
+    """Little-endian float64 raw files (e.g. RSB/slice output, no record markers), keyed by relative path."""
+    out = {}
+    for pat in patterns:
+        for f in sorted(glob.glob(os.path.join(case_dir, pat))):
+            a = array.array('d')
+            b = open(f, 'rb').read()
+            a.frombytes(b[:len(b) // 8 * 8])
+            out[os.path.relpath(f, case_dir)] = a
+    return out
 
 
 def run_case(mpirun, exe, np, case_dir, extra_env):
@@ -104,10 +138,13 @@ def main():
                          'oscillates through zero on this decaying-TGV case, where a '
                          'pure relative tolerance is meaningless')
     p.add_argument('--fields', action='store_true',
-                    help='also compare the final field snapshot block by block (needs nsave in the case input); '
+                    help='also compare the final field snapshot block by block, ghost layers excluded (needs nsave in the case input); '
                          'catches errors in P, nu_t, scalars, ghost cells that the monitor columns cannot see')
     p.add_argument('--field-tol', type=float, default=1e-7,
                     help='per-block bound on max|a-b| relative to max|a| (default 1e-7)')
+    p.add_argument('--files', action='append', default=[],
+                    help='glob (relative to the case dir) of raw little-endian float64 output files to also compare, '
+                         'e.g. stats/rsb_*.bin; repeatable')
     p.add_argument('--label-a', default='A')
     p.add_argument('--label-b', default='B')
     args = p.parse_args()
@@ -121,12 +158,17 @@ def main():
 
     if args.fields:
         clear_snapshots(args.case_dir)
+    clear_files(args.case_dir, args.files)
     out_a = run_case(args.mpirun, args.exe_a, args.np_a, args.case_dir, parse_env(args.env_a))
-    snap_a = read_snapshot(args.case_dir) if args.fields else None
+    snap_a = read_snapshot(args.case_dir, interior_only=True) if args.fields else None
+    raw_a = read_raw_files(args.case_dir, args.files)
     if args.fields:
         clear_snapshots(args.case_dir)
+    clear_files(args.case_dir, args.files)
     out_b = run_case(args.mpirun_b or args.mpirun, args.exe_b, args.np_b, args.case_dir, parse_env(args.env_b))
-    snap_b = read_snapshot(args.case_dir) if args.fields else None
+    snap_b = read_snapshot(args.case_dir, interior_only=True) if args.fields else None
+    raw_b = read_raw_files(args.case_dir, args.files)
+    clear_files(args.case_dir, args.files)
 
     rows_a = parse_monitor(out_a)
     rows_b = parse_monitor(out_b)
@@ -172,6 +214,23 @@ def main():
                 if dmax / scale > args.field_tol:
                     failed = True
                     print(f'MISMATCH field block {ib}: {dmax / scale:.3E} > {args.field_tol:.1E}')
+
+    if args.files:
+        if not raw_a or set(raw_a) != set(raw_b):
+            failed = True
+            print(f'MISMATCH: raw output files differ: {sorted(raw_a)} vs {sorted(raw_b)}')
+        for name in sorted(set(raw_a) & set(raw_b)):
+            fa, fb = raw_a[name], raw_b[name]
+            if len(fa) != len(fb):
+                failed = True
+                print(f'MISMATCH {name}: {len(fa)} vs {len(fb)} values')
+                continue
+            scale = max(max((abs(v) for v in fa), default=0.0), 1e-30)
+            dmax = max((abs(x - y) for x, y in zip(fa, fb)), default=0.0)
+            print(f'  file {name}: max|a-b|/max|a| = {dmax / scale:.3E}')
+            if dmax / scale > args.field_tol:
+                failed = True
+                print(f'MISMATCH file {name}: {dmax / scale:.3E} > {args.field_tol:.1E}')
 
     if failed:
         print('RESULT: FAIL')

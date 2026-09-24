@@ -9,7 +9,7 @@
   Lx         = 3.0,
   Ly         = 2.0,
   Lz         = 1.5,
-  grid_type  = 2,
+  grid_type  = 1,
   alpha_grid = 2.0,
   p_row      = 0,
   p_col      = 0,
@@ -49,19 +49,12 @@
 /
 
 &IO
-  filein  = 'restart/bouss_small.1',
-  fileout = 'bouss_small',
+  filein  = 'restart/ibm_small.1',
+  fileout = 'ibm_small',
 /
 
-&BOUSSINESQ
-  boussinesq_flag = 1,
-  beta_T = 3.0e-3,
-  T_ref = 0.0,
-  grav = 9.81,
-  Pr = 0.7,
-  Pr_t = 0.85,
-  T_bc_bot = 1, T_bc_top = 1,
-  T_wall_bot = 1.0, T_wall_top = 0.0,
-  T_ic_type = 1,
-  T_ic_grad = -0.5,
+&IBM
+  ibm_input_mode = 1,
+  ibm_wall_model_flag = 0,
+  ibm_sdf_file = 'SDF_in',
 /

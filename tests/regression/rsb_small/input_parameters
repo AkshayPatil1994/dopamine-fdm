@@ -49,19 +49,11 @@
 /
 
 &IO
-  filein  = 'restart/bouss_small.1',
-  fileout = 'bouss_small',
+  filein  = 'restart/rsb_small.1',
+  fileout = 'rsb_small',
 /
 
-&BOUSSINESQ
-  boussinesq_flag = 1,
-  beta_T = 3.0e-3,
-  T_ref = 0.0,
-  grav = 9.81,
-  Pr = 0.7,
-  Pr_t = 0.85,
-  T_bc_bot = 1, T_bc_top = 1,
-  T_wall_bot = 1.0, T_wall_top = 0.0,
-  T_ic_type = 1,
-  T_ic_grad = -0.5,
+&STATISTICS
+  rsb_active = 1, rsb_freq = 5, rsb_nstart = 0, rsb_hom_dir = 'x,z',
+  rsb_fileout = 'stats/rsb',
 /

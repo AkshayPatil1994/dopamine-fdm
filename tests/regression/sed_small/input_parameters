@@ -43,7 +43,7 @@
 &INITIAL_CONDITIONS
   Utarget      = 5.0,
   ic_type      = 4,
-  noise_percent  = 0.0,
+  noise_percent  = 5.0,
   nstep_init     = 0,
   restart        = 0,
 /

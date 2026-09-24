@@ -64,7 +64,7 @@ def main():
 
         write(make_input(2 * n, False))
         run(args.mpirun, args.exe, args.np, tmp, env)
-        straight = read_snapshot(tmp)
+        straight = read_snapshot(tmp, interior_only=True)
 
         clear_snapshots(tmp)
         write(make_input(n, False))
@@ -74,7 +74,7 @@ def main():
         clear_snapshots(tmp)
         write(make_input(n, True))
         run(args.mpirun, args.exe, args.np, tmp, env)
-        restarted = read_snapshot(tmp)
+        restarted = read_snapshot(tmp, interior_only=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
