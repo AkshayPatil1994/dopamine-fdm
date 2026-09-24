@@ -11,11 +11,9 @@ Module poisson_gpu
 
   Implicit None
 
-  Integer :: plan_fwd, plan_bwd
   Logical :: plans_created = .False.
   Integer :: nslabs   ! number of interior y-planes batched per transform (nyg-2)
 
-  Complex(Int64), Allocatable :: slab(:,:,:)
 
   ! Genuine 3D periodic cuFFT transform (y_bc_type==0 AND x_bc_type==0 only)
   ! (pencil-decomposed: batched 1-D cuFFT plans, one per pencil orientation, wired between
@@ -87,13 +85,14 @@ Contains
        !$acc enter data create(Qz_gpu,sqrt_w_z_gpu,lambda_z_gpu)
        !$acc update device(Qz_gpu,sqrt_w_z_gpu,lambda_z_gpu)
 
-    Else If ( y_bc_type == 0 ) Then
+    Else If ( x_bc_type == 0 ) Then
 
-       If ( x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
-
-       ! kyy only exists (is Allocated) in this periodic-y branch
-       !$acc enter data create(kyy)
-       !$acc update device(kyy)
+       ! x,z periodic (y periodic or walls): pencil-decomposed, multi-GPU capable
+       ! kyy only exists (is Allocated) in the periodic-y case
+       If ( y_bc_type == 0 ) Then
+          !$acc enter data create(kyy)
+          !$acc update device(kyy)
+       End If
 
        ! Periodic y transforms only the first nyp=ysz(2)-1 y-slots ("last interior cell is a
        ! redundant duplicate of the first", as for periodic x/z); the excluded last cell
@@ -108,22 +107,12 @@ Contains
        ierr = ierr + cufftPlanMany( plan_p3_z, 1, [nz1], [nz1], decomp_poisson%zsz(1)*decomp_poisson%zsz(2), 1, &
                                     [nz1], decomp_poisson%zsz(1)*decomp_poisson%zsz(2), 1, CUFFT_Z2Z, &
                                     decomp_poisson%zsz(1)*decomp_poisson%zsz(2) )
-       ! y-pencil: length-nyp transforms at stride ysz1, batch over i (one plan execution per k-slice)
-       ierr = ierr + cufftPlanMany( plan_p3_y, 1, [nyp_l], [nyp_l], decomp_poisson%ysz(1), 1, &
-                                    [nyp_l], decomp_poisson%ysz(1), 1, CUFFT_Z2Z, decomp_poisson%ysz(1) )
+       ! y-pencil (periodic y only): length-nyp transforms at stride ysz1, batch over i (one plan execution per k-slice)
+       If ( y_bc_type == 0 ) Then
+          ierr = ierr + cufftPlanMany( plan_p3_y, 1, [nyp_l], [nyp_l], decomp_poisson%ysz(1), 1, &
+                                       [nyp_l], decomp_poisson%ysz(1), 1, CUFFT_Z2Z, decomp_poisson%ysz(1) )
+       End If
        If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil periodic plan creation failed'
-
-    Else If ( x_bc_type == 0 ) Then
-
-       Allocate( slab( nx1, nz1, nslabs ) )
-       !$acc enter data create(slab)
-
-       ! cufftPlanMany dims use the reversed-relative-to-Fortran convention of cufftPlan2D
-       ierr = cufftPlanMany( plan_fwd, 2, [nz1, nx1], [nz1, nx1], 1, nx1*nz1, &
-                                          [nz1, nx1], 1, nx1*nz1, CUFFT_Z2Z, nslabs )
-       ierr = ierr + cufftPlanMany( plan_bwd, 2, [nz1, nx1], [nz1, nx1], 1, nx1*nz1, &
-                                                [nz1, nx1], 1, nx1*nz1, CUFFT_Z2Z, nslabs )
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT batched plan creation failed'
 
     Else
 
@@ -143,80 +132,6 @@ Contains
     plans_created = .True.
 
   End Subroutine gpu_poisson_init
-
-  !> Forward-transform every y-slab of rhs_p into rhs_p_hat in one batched cuFFT call; direct kx=i, kz=k indexing (no MPI transpose, unlike the FFTW-MPI path). Fully device-resident: rhs_p/rhs_p_hat/slab never touch host here.
-  Subroutine gpu_forward_transform_all_slabs
-
-    Integer :: j, ix, iz, ierr, nx1, nz1
-
-    If ( .Not. plans_created ) Call gpu_poisson_init
-
-    nx1 = Int(nxp_global)
-    nz1 = Int(nzp_global)
-
-    !$acc parallel loop collapse(3) present(rhs_p,slab)
-    Do j = 2, nyg-1
-       Do iz = 1, nz1
-          Do ix = 1, nx1
-             slab(ix,iz,j-1) = dcmplx( rhs_p(ix+1,j,iz+1) )
-          End Do
-       End Do
-    End Do
-    !$acc end parallel loop
-
-    !$acc host_data use_device(slab)
-    ierr = cufftExecZ2Z( plan_fwd, slab, slab, CUFFT_FORWARD )
-    !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cuFFT batched forward exec failed'
-
-    !$acc parallel loop collapse(3) present(slab,rhs_p_hat)
-    Do j = 2, nyg-1
-       Do iz = 1, nz1
-          Do ix = 1, nx1
-             rhs_p_hat(j,ix-1,iz-1) = slab(ix,iz,j-1)
-          End Do
-       End Do
-    End Do
-    !$acc end parallel loop
-
-  End Subroutine gpu_forward_transform_all_slabs
-
-  !> Inverse-transform every y-slab of rhs_p_hat back into rhs_p in one batched cuFFT call, normalised by nxp_global*nzp_global. Fully device-resident.
-  Subroutine gpu_inverse_transform_all_slabs
-
-    Integer :: j, ix, iz, ierr, nx1, nz1
-    Real(Int64) :: norm
-
-    nx1  = Int(nxp_global)
-    nz1  = Int(nzp_global)
-    norm = Real(nxp_global,Int64) * Real(nzp_global,Int64)
-
-    !$acc parallel loop collapse(3) present(rhs_p_hat,slab)
-    Do j = 2, nyg-1
-       Do iz = 1, nz1
-          Do ix = 1, nx1
-             slab(ix,iz,j-1) = rhs_p_hat(j,ix-1,iz-1)
-          End Do
-       End Do
-    End Do
-    !$acc end parallel loop
-
-    !$acc host_data use_device(slab)
-    ierr = cufftExecZ2Z( plan_bwd, slab, slab, CUFFT_INVERSE )
-    !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cuFFT batched inverse exec failed'
-
-    !$acc parallel loop collapse(3) present(slab,rhs_p)
-    Do j = 2, nyg-1
-       Do iz = 1, nz1
-          Do ix = 1, nx1
-             rhs_p(ix+1,j,iz+1) = Real(slab(ix,iz,j-1),Int64) / norm
-          End Do
-       End Do
-    End Do
-    !$acc end parallel loop
-
-  End Subroutine gpu_inverse_transform_all_slabs
 
   !> Pencil-decomposed forward transform, fully periodic case: y(real) -> x (cuFFT) -> y -> z (cuFFT) -> y, leaving poisson_y_c in (kx,y,kz) space; mirrors projection.f90's CPU chain with device-resident arrays and CUDA-aware transposes
   Subroutine gpu_forward_transform_3d
@@ -494,7 +409,12 @@ Contains
     Integer(Int64) :: bufsize
 
     gtsv_m     = nyg - 2
-    gtsv_batch = ( Int(mx,Int32) + 1 ) * ( Int(mz,Int32) + 1 )
+    If ( x_bc_type == 0 .And. z_bc_type == 0 ) Then
+       ! pencil path: one system per (kx,kz) mode this rank owns in its y-pencil
+       gtsv_batch = decomp_poisson%ysz(1) * decomp_poisson%ysz(3)
+    Else
+       gtsv_batch = ( Int(mx,Int32) + 1 ) * ( Int(mz,Int32) + 1 )
+    End If
 
     Allocate( gtsv_dl(gtsv_m*gtsv_batch), gtsv_d(gtsv_m*gtsv_batch), &
               gtsv_du(gtsv_m*gtsv_batch), gtsv_x(gtsv_m*gtsv_batch) )
@@ -595,6 +515,70 @@ Contains
     !$acc end data
 
   End Subroutine gpu_solve_tridiagonal_batched
+
+  !> Wall-normal (y) solve for the pencil path with x,z periodic and y walls: batched cuSPARSE tridiagonal solve, one system per (kx,kz) mode this rank owns, operating in place on the y-pencil poisson_y_c; global mode indices come from decomp_poisson%yst
+  Subroutine gpu_solve_tridiagonal_pencil
+
+    Integer :: i, k, ii, j, idx, b, ierr, n1, n3, yst1, yst3, i_global, k_global
+
+    If ( .Not. gtsv_created ) Call gpu_gtsv_init
+
+    n1   = decomp_poisson%ysz(1)
+    n3   = decomp_poisson%ysz(3)
+    yst1 = decomp_poisson%yst(1)
+    yst3 = decomp_poisson%yst(3)
+
+    !$acc data present(Dyy,kxx,kzz,poisson_y_c,gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
+
+    !$acc parallel loop collapse(2) present(Dyy,kxx,kzz,poisson_y_c,gtsv_dl,gtsv_d,gtsv_du,gtsv_x) private(i_global,k_global,b,ii,j,idx)
+    Do k = 1, n3
+       Do i = 1, n1
+          i_global = yst1 + i - 2
+          k_global = yst3 + k - 2
+          b = (k-1)*n1 + (i-1)
+          Do ii = 0, gtsv_m-1
+             j   = ii + 2
+             idx = ii*gtsv_batch + b + 1
+             gtsv_d(idx) = Dyy(j,j) + kxx(i_global) + kzz(k_global)
+             ! remove the periodic null-space singularity of the (0,0) mode, whichever rank owns it
+             If ( ii == 0 .And. i_global == 0 .And. k_global == 0 ) gtsv_d(idx) = 3d0/2d0*gtsv_d(idx)
+             If ( ii > 0 ) Then
+                gtsv_dl(idx) = Dyy(j,j-1)
+             Else
+                gtsv_dl(idx) = (0d0,0d0)
+             End If
+             If ( ii < gtsv_m-1 ) Then
+                gtsv_du(idx) = Dyy(j,j+1)
+             Else
+                gtsv_du(idx) = (0d0,0d0)
+             End If
+             gtsv_x(idx) = poisson_y_c(i,ii+1,k)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !$acc host_data use_device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
+    ierr = cusparseZgtsvInterleavedBatch( cusparse_h, CUSPARSE_ALG1, gtsv_m, &
+                 gtsv_dl, gtsv_d, gtsv_du, gtsv_x, gtsv_batch, gtsv_buf )
+    !$acc end host_data
+    If ( ierr /= 0 ) Stop 'ERROR: cusparseZgtsvInterleavedBatch (pencil) failed'
+
+    !$acc parallel loop collapse(2) present(poisson_y_c,gtsv_x) private(b,ii,idx)
+    Do k = 1, n3
+       Do i = 1, n1
+          b = (k-1)*n1 + (i-1)
+          Do ii = 0, gtsv_m-1
+             idx = ii*gtsv_batch + b + 1
+             poisson_y_c(i,ii+1,k) = gtsv_x(idx)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !$acc end data
+
+  End Subroutine gpu_solve_tridiagonal_pencil
 
   !> Forward x-FFT (x_bc_type==0 only) then z-eigenmode transform of every interior point of rhs_p into rhs_p_hat, batched; z_bc_type==1 .And. y_bc_type==1 (4-wall duct) only. Fully device-resident.
   Subroutine gpu_forward_transform_duct

@@ -382,23 +382,56 @@ add_test(NAME verify_ti_profile
 add_test(NAME verify_inflow_opt
     COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 $<TARGET_FILE:verify_inflow_opt>)
 
-# tgv_small MPI-rank-count parity regression: np=1 vs np=TEST_PARITY_NPROCS CPU
-# runs of the same deterministic Taylor-Green-Vortex case must agree within
-# tolerance in output_monitor's per-step diagnostics (src/monitor.f90:61) --
-# see tests/regression/compare_monitor.py. Reused unmodified for CPU-vs-GPU
-# and 1-GPU-vs-N-GPU parity once ENABLE_GPU supports nprocs>1.
+# Parity regressions (tests/regression/<case>): deterministic small cases whose output_monitor
+# diagnostics (src/monitor.f90:61) must agree within tolerance across rank counts and, in
+# ENABLE_GPU builds, between CPU and GPU. See tests/regression/compare_monitor.py.
+#   tgv_small      fully periodic Taylor-Green vortex (analytic IC)
+#   chan_small     periodic-x/z channel, no-slip y walls, DNS (wall-normal tridiagonal Poisson path)
+#   chan_les_small same with Vreman LES + equilibrium wall model on a stretched y grid
+# Every build: np=1 vs np=TEST_PARITY_NPROCS of this same executable. GPU build additionally
+# compares against a CPU build if CPU_REFERENCE_EXE (+ CPU_REFERENCE_MPIRUN) point at one.
 set(TEST_PARITY_NPROCS "2" CACHE STRING
-    "Second rank count for the tgv_small MPI parity regression (compared against np=1)")
+    "Second rank count for the MPI parity regressions (compared against np=1)")
+set(CPU_REFERENCE_EXE "" CACHE FILEPATH "CPU-build dopamine executable to compare GPU runs against (optional)")
+set(CPU_REFERENCE_MPIRUN "" CACHE FILEPATH "mpirun matching CPU_REFERENCE_EXE (default: this build's mpiexec)")
+set(TEST_LD_LIBRARY_PATH "" CACHE STRING "LD_LIBRARY_PATH prepended for parity tests (e.g. a matching user-space libcuda)")
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
-    add_test(NAME tgv_small_mpi_parity
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
-                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/tgv_small
-                --mpirun ${MPIEXEC_EXECUTABLE}
-                --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine>
-                --np-a 1 --np-b ${TEST_PARITY_NPROCS}
-                --label-a cpu-np1 --label-b cpu-np${TEST_PARITY_NPROCS})
+    foreach(case tgv_small chan_small chan_les_small)
+        set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
+        set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
+                 --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE})
+        set(_kind cpu)
+        if(ENABLE_GPU)
+            set(_kind gpu)
+        endif()
+        add_test(NAME ${case}_${_kind}_np1_vs_np${TEST_PARITY_NPROCS}
+            COMMAND ${_cmp} --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine>
+                    --np-a 1 --np-b ${TEST_PARITY_NPROCS}
+                    --label-a ${_kind}-np1 --label-b ${_kind}-np${TEST_PARITY_NPROCS})
+        if(TEST_LD_LIBRARY_PATH)
+            set_tests_properties(${case}_${_kind}_np1_vs_np${TEST_PARITY_NPROCS} PROPERTIES
+                ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
+        endif()
+        if(ENABLE_GPU AND CPU_REFERENCE_EXE)
+            set(_ref_mpirun ${MPIEXEC_EXECUTABLE})
+            if(CPU_REFERENCE_MPIRUN)
+                set(_ref_mpirun ${CPU_REFERENCE_MPIRUN})
+            endif()
+            foreach(_np 1 ${TEST_PARITY_NPROCS})
+                add_test(NAME ${case}_cpu_vs_gpu_np${_np}
+                    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
+                            --case-dir ${_case_dir}
+                            --mpirun ${_ref_mpirun} --exe-a ${CPU_REFERENCE_EXE} --np-a ${_np}
+                            --mpirun-b ${MPIEXEC_EXECUTABLE} --exe-b $<TARGET_FILE:dopamine> --np-b ${_np}
+                            --label-a cpu-np${_np} --label-b gpu-np${_np})
+                if(TEST_LD_LIBRARY_PATH)
+                    set_tests_properties(${case}_cpu_vs_gpu_np${_np} PROPERTIES
+                        ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
+                endif()
+            endforeach()
+        endif()
+    endforeach()
 endif()
 
 #------------------------------------------------------------------------------

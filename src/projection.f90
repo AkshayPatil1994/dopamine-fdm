@@ -78,10 +78,9 @@ Contains
     ! combinations are rejected for GPU_POISSON builds at init time, initialization.f90)
     If ( z_bc_type == 1 ) Then
        Call gpu_forward_transform_duct
-    Else If ( y_bc_type == 0 ) Then
-       Call gpu_forward_transform_3d
     Else If ( x_bc_type == 0 ) Then
-       Call gpu_forward_transform_all_slabs
+       ! x,z periodic (y periodic or walls): pencil-decomposed transform chain, multi-GPU capable
+       Call gpu_forward_transform_3d
     Else
        Call gpu_forward_transform_dct_slabs
     End If
@@ -127,9 +126,12 @@ Contains
     If ( z_bc_type == 1 ) Then
        ! 4-wall duct: batched cuSPARSE solve of one y-tridiagonal system per (x-mode, z-eigenmode) pair
        Call gpu_solve_duct_tridiagonal_batched
-    Else If ( y_bc_type == 0 ) Then
+    Else If ( x_bc_type == 0 .And. y_bc_type == 0 ) Then
        ! Fully periodic: elementwise divide by kxx+kyy+kzz in Fourier space (no tridiagonal solve needed)
        Call gpu_solve_periodic_3d
+    Else If ( x_bc_type == 0 ) Then
+       ! x,z periodic, y walls: per-rank batched cuSPARSE tridiagonal solve over the local (kx,kz) modes
+       Call gpu_solve_tridiagonal_pencil
     Else
        ! Batched cuSPARSE solve of all (mx+1)*(mz+1) y-tridiagonal systems in one call
        Call gpu_solve_tridiagonal_batched
@@ -275,10 +277,8 @@ Contains
 #ifdef GPU_POISSON
     If ( z_bc_type == 1 ) Then
        Call gpu_inverse_transform_duct
-    Else If ( y_bc_type == 0 ) Then
-       Call gpu_inverse_transform_3d
     Else If ( x_bc_type == 0 ) Then
-       Call gpu_inverse_transform_all_slabs
+       Call gpu_inverse_transform_3d
     Else
        Call gpu_inverse_transform_dct_slabs
     End If
