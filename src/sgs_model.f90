@@ -272,7 +272,15 @@ Contains
 
     ! x-periodicity: fill ghost planes i=1,nxg (never written above, but read by compute_rhs_v/w at the x boundaries)
     ! (x-split: seam planes come from the x-neighbour, the wrap from the partner rank at the opposite domain edge)
+#ifdef GPU_POISSON
+    ! this (IBM, host-only Pass 2) path works on the host copy, but the x seam exchange now runs on device memory:
+    ! push the just-corrected host nu_t to the device, exchange there, and bring the filled ghost planes back
+    !$acc update device(nu_t_)
+#endif
     Call update_ghost_interior_planes_x(nu_t_, 2)
+#ifdef GPU_POISSON
+    !$acc update host(nu_t_)
+#endif
     Call x_periodic_partner(is_first, is_last, partner)
     If ( is_first .And. is_last ) Then
        nu_t_(1,  :,:) = nu_t_(nxg-1,:,:)
