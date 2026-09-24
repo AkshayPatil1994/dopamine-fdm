@@ -11,7 +11,152 @@ Module boundary_conditions
   ! prevent implicit typing
   Implicit None
 
+#ifdef GPU_POISSON
+  Real(Int64), Allocatable :: dev_bs(:), dev_br(:)   ! device-resident MPI staging buffers (GPU-aware MPI)
+#endif
+
 Contains
+
+#ifdef GPU_POISSON
+  !> Lazily allocate the device-resident MPI staging buffers (GPU-aware MPI: MPI reads/writes these device arrays directly)
+  Subroutine gpu_halo_buffers_init
+
+    Integer :: nmax
+
+    If ( Allocated(dev_bs) ) Return
+    nmax = 2 * Max( nxg*nyg, nyg*nzg ) + 16
+    Allocate( dev_bs(nmax), dev_br(nmax) )
+    !$acc enter data create(dev_bs,dev_br)
+
+  End Subroutine gpu_halo_buffers_init
+
+  !> Copy plane p of F (F(p,:,:) if dirx else F(:,:,p)) into dev_bs(off+1:off+n), on the device
+  Subroutine gpu_plane_pack(F, dirx, p, off)
+
+    Real   (Int64), Intent(In) :: F(:,:,:)
+    Logical,        Intent(In) :: dirx
+    Integer(Int32), Intent(In) :: p, off
+    Integer(Int32) :: i, j, k, n1, n2, n3
+
+    n1 = Size(F,1); n2 = Size(F,2); n3 = Size(F,3)
+    If ( dirx ) Then
+       !$acc parallel loop collapse(2) present(F,dev_bs)
+       Do k = 1, n3
+          Do j = 1, n2
+             dev_bs(off+(k-1)*n2+j) = F(p,j,k)
+          End Do
+       End Do
+       !$acc end parallel loop
+    Else
+       !$acc parallel loop collapse(2) present(F,dev_bs)
+       Do j = 1, n2
+          Do i = 1, n1
+             dev_bs(off+(j-1)*n1+i) = F(i,j,p)
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+
+  End Subroutine gpu_plane_pack
+
+  !> Copy dev_br(off+1:off+n) into plane p of F, on the device
+  Subroutine gpu_plane_unpack(F, dirx, p, off)
+
+    Real   (Int64), Intent(InOut) :: F(:,:,:)
+    Logical,        Intent(In)    :: dirx
+    Integer(Int32), Intent(In)    :: p, off
+    Integer(Int32) :: i, j, k, n1, n2, n3
+
+    n1 = Size(F,1); n2 = Size(F,2); n3 = Size(F,3)
+    If ( dirx ) Then
+       !$acc parallel loop collapse(2) present(F,dev_br)
+       Do k = 1, n3
+          Do j = 1, n2
+             F(p,j,k) = dev_br(off+(k-1)*n2+j)
+          End Do
+       End Do
+       !$acc end parallel loop
+    Else
+       !$acc parallel loop collapse(2) present(F,dev_br)
+       Do j = 1, n2
+          Do i = 1, n1
+             F(i,j,p) = dev_br(off+(j-1)*n1+i)
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+
+  End Subroutine gpu_plane_unpack
+
+  !> Interior-rank seam halo swap (both directions, non-blocking) of one plane each way, directly between device buffers (GPU-aware MPI). k_send_hi: highest interior plane, sent to +; plane 2 is sent to -. k_ghost_hi: ghost plane filled from +; plane 1 is filled from -.
+  Subroutine gpu_halo_exchange(F, dirx, k_send_hi, k_ghost_hi, up, down)
+
+    Real   (Int64), Intent(InOut) :: F(:,:,:)
+    Logical,        Intent(In)    :: dirx
+    Integer(Int32), Intent(In)    :: k_send_hi, k_ghost_hi, up, down
+    Integer(Int32) :: n, reqs(4)
+
+    Call gpu_halo_buffers_init
+    If ( dirx ) Then
+       n = Size(F,2)*Size(F,3)
+    Else
+       n = Size(F,1)*Size(F,2)
+    End If
+
+    Call gpu_plane_pack(F, dirx, k_send_hi, 0)
+    Call gpu_plane_pack(F, dirx, 2, n)
+
+    !$acc host_data use_device(dev_bs,dev_br)
+    Call Mpi_irecv(dev_br(1:n),     n, Mpi_real8, down, 0, MPI_COMM_WORLD, reqs(1), ierr)
+    Call Mpi_irecv(dev_br(n+1:2*n), n, Mpi_real8, up,   0, MPI_COMM_WORLD, reqs(2), ierr)
+    Call Mpi_isend(dev_bs(1:n),     n, Mpi_real8, up,   0, MPI_COMM_WORLD, reqs(3), ierr)
+    Call Mpi_isend(dev_bs(n+1:2*n), n, Mpi_real8, down, 0, MPI_COMM_WORLD, reqs(4), ierr)
+    !$acc end host_data
+    Call Mpi_waitall(4, reqs, MPI_STATUSES_IGNORE, ierr)
+
+    If ( down /= MPI_PROC_NULL ) Call gpu_plane_unpack(F, dirx, 1, 0)
+    If ( up   /= MPI_PROC_NULL ) Call gpu_plane_unpack(F, dirx, k_ghost_hi, n)
+
+  End Subroutine gpu_halo_exchange
+
+  !> Periodic wrap between the first and last rank along one decomposed direction, device buffers straight into MPI. nP = number of wrapped planes (1 for face-located F, 2 for cell-centred F); N = plane count of F along the direction. First rank sends planes 2..1+nP and fills plane 1 from the last rank's plane N-nP; last rank sends plane N-nP and fills planes N-nP+1..N. Self-pairs (single rank in that direction) are handled by the caller's device kernels.
+  Subroutine gpu_periodic_wrap(F, dirx, nwrap, nplanes, is_first, is_last, partner, tag)
+
+    Real   (Int64), Intent(InOut) :: F(:,:,:)
+    Logical,        Intent(In)    :: dirx, is_first, is_last
+    Integer(Int32), Intent(In)    :: nwrap, nplanes, partner, tag
+    Integer(Int32) :: npl, m
+
+    If ( .Not. ( is_first .Or. is_last ) ) Return
+    Call gpu_halo_buffers_init
+    If ( dirx ) Then
+       npl = Size(F,2)*Size(F,3)
+    Else
+       npl = Size(F,1)*Size(F,2)
+    End If
+
+    If ( is_first ) Then
+       Do m = 1, nwrap
+          Call gpu_plane_pack(F, dirx, 1+m, (m-1)*npl)
+       End Do
+       !$acc host_data use_device(dev_bs,dev_br)
+       Call Mpi_sendrecv(dev_bs(1:nwrap*npl), nwrap*npl, Mpi_real8, partner, tag, &
+                         dev_br(1:npl),    npl,    Mpi_real8, partner, tag, MPI_COMM_WORLD, istat, ierr)
+       !$acc end host_data
+       Call gpu_plane_unpack(F, dirx, 1, 0)
+    Else
+       Call gpu_plane_pack(F, dirx, nplanes-nwrap, 0)
+       !$acc host_data use_device(dev_bs,dev_br)
+       Call Mpi_sendrecv(dev_bs(1:npl),    npl,    Mpi_real8, partner, tag, &
+                         dev_br(1:nwrap*npl), nwrap*npl, Mpi_real8, partner, tag, MPI_COMM_WORLD, istat, ierr)
+       !$acc end host_data
+       Do m = 1, nwrap
+          Call gpu_plane_unpack(F, dirx, nplanes-nwrap+m, (m-1)*npl)
+       End Do
+    End If
+
+  End Subroutine gpu_periodic_wrap
+#endif
 
   !> Refresh the interior-rank seam halos of U,V,W (z first, then x so the x planes carry fresh z ghosts)
   Subroutine exchange_velocity_halos
@@ -122,9 +267,14 @@ Contains
     End If
 
 #ifdef GPU_POISSON
-    ! U/V/W/scalars are device-resident in GPU builds but this MPI exchange works on host slices: stage through host (multi-rank only; nprocs==1 wraps on device above)
     If ( nprocs > 1 ) Then
-       !$acc update host(F)
+       ! id==1: F at x faces (nx planes, 1 plane wrap); else x centres (nxg planes, 2 plane wrap)
+       If ( id == 1 ) Then
+          Call gpu_periodic_wrap(F, .True., 1, nx, is_first, is_last, partner, 10+id)
+       Else
+          Call gpu_periodic_wrap(F, .True., 2, nxg, is_first, is_last, partner, 10+id)
+       End If
+       Return
     End If
 #endif
 
@@ -167,12 +317,6 @@ Contains
     End If
 
     ! Note: handles non-periodic ICs; redundant after the first time step.
-#ifdef GPU_POISSON
-    If ( nprocs > 1 ) Then
-       !$acc update device(F)
-    End If
-#endif
-
   End Subroutine apply_periodic_bc_x
 
   ! Dirichlet inflow (x_bc_type==1): F face/ghost = mean profile + SEM fluctuation (sem.f90); comp: 1=U,2=V,3=W; F in/out; no-op except on the rank owning the x=1 boundary
@@ -353,9 +497,14 @@ Contains
     End If
 
 #ifdef GPU_POISSON
-    ! U/V/W/scalars are device-resident in GPU builds but this MPI exchange works on host slices: stage through host (multi-rank only; nprocs==1 wraps on device above)
     If ( nprocs > 1 ) Then
-       !$acc update host(F)
+       ! id==3: F at z faces (nz planes, 1 plane wrap); else z centres (nzg planes, 2 plane wrap)
+       If ( id == 3 ) Then
+          Call gpu_periodic_wrap(F, .False., 1, nz, is_first, is_last, partner, 20+id)
+       Else
+          Call gpu_periodic_wrap(F, .False., 2, nzg, is_first, is_last, partner, 20+id)
+       End If
+       Return
     End If
 #endif
 
@@ -474,12 +623,6 @@ Contains
       End If    
     End If   
     
-#ifdef GPU_POISSON
-    If ( nprocs > 1 ) Then
-       !$acc update device(F)
-    End If
-#endif
-
   End Subroutine apply_periodic_bc_z
 
   ! Dirichlet (no-slip) BC in z; z is domain-decomposed (unlike y) so only the
@@ -684,9 +827,13 @@ Contains
     Call z_halo_neighbors(up, down)
 
 #ifdef GPU_POISSON
-    ! U/V/W/scalars are device-resident in GPU builds but this MPI exchange works on host slices: stage through host (multi-rank only; nprocs==1 wraps on device above)
     If ( nprocs > 1 ) Then
-       !$acc update host(F)
+       If ( id == 3 ) Then
+          Call gpu_halo_exchange(F, .False., nz-1, nz, up, down)
+       Else
+          Call gpu_halo_exchange(F, .False., nzg-1, nzg, up, down)
+       End If
+       Return
     End If
 #endif
 
@@ -739,12 +886,6 @@ Contains
       If ( up   /= MPI_PROC_NULL ) F(:,:,nzg) = buffer_wr(:,:,2) ! received from +z neighbour
     End if
 
-#ifdef GPU_POISSON
-    If ( nprocs > 1 ) Then
-       !$acc update device(F)
-    End If
-#endif
-
   End Subroutine update_ghost_interior_planes
 
   !          Update ghost interior planes (x-direction, same column/adjacent row)
@@ -761,9 +902,13 @@ Contains
     Call x_halo_neighbors(up, down)
 
 #ifdef GPU_POISSON
-    ! U/V/W/scalars are device-resident in GPU builds but this MPI exchange works on host slices: stage through host (multi-rank only; nprocs==1 wraps on device above)
     If ( nprocs > 1 ) Then
-       !$acc update host(F)
+       If ( id == 1 ) Then
+          Call gpu_halo_exchange(F, .True., nx-1, nx, up, down)
+       Else
+          Call gpu_halo_exchange(F, .True., nxg-1, nxg, up, down)
+       End If
+       Return
     End If
 #endif
 
@@ -799,12 +944,6 @@ Contains
        If ( down /= MPI_PROC_NULL ) F(1,:,:)   = buffer_bcxr1(1:n2,1:n3) ! received from -x neighbour
        If ( up   /= MPI_PROC_NULL ) F(nxg,:,:) = buffer_bcxr2(1:n2,1:n3) ! received from +x neighbour
     End If
-
-#ifdef GPU_POISSON
-    If ( nprocs > 1 ) Then
-       !$acc update device(F)
-    End If
-#endif
 
   End Subroutine update_ghost_interior_planes_x
 
