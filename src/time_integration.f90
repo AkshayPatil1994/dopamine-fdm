@@ -438,7 +438,11 @@ Contains
          ( n_lines  > 0 .And. line_freq  > 0 .And. Mod(istep, line_freq)  == 0 )
     If ( needs_final_sync ) Then
        Call profiler_start(PROF_RK_UPDATE)
-       !$acc update host(U,V,W)
+       !$acc update host(U,V,W,P)
+       ! P (and nu_t, in LES) are device-resident too: refresh the host copies for the same host-only consumers (IBM forces, RSB, probes); snapshots also sync them in input_output.f90
+       If ( sgs_model /= 0 ) Then
+          !$acc update host(nu_t)
+       End If
        Call profiler_stop(PROF_RK_UPDATE)
     End If
     ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.

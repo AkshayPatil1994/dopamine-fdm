@@ -809,6 +809,7 @@ Contains
     ! shared !$acc kernels code doesn't fail, and round-trip it via a targeted
     ! update device/host pair around just that fill (see projection.f90)
     !$acc enter data create(P)
+    !$acc update device(P)
 #endif
 
     ! Done

@@ -981,6 +981,9 @@ Contains
        Call write_distributed_field_block(1, U, nx_global,  nyg_global, nzg_global, .True.,  .False.)
        Call write_distributed_field_block(1, V, nxg_global, ny_global,  nzg_global, .False., .False.)
        Call write_distributed_field_block(1, W, nxg_global, nyg_global, nz_global,  .False., .True.)
+#ifdef GPU_POISSON
+       !$acc update host(P)
+#endif
        Call write_distributed_field_block(1, P, nxg_global, nyg_global, nzg_global, .False., .False.)
 
        ! C (scalar concentration, cell-centred)
@@ -990,6 +993,9 @@ Contains
 
        ! nu_t (SGS turbulent viscosity, cell-centred) — only written when LES is active
        If ( sgs_model /= 0 ) Then
+#ifdef GPU_POISSON
+          !$acc update host(nu_t)
+#endif
           Call write_distributed_field_block(1, nu_t, nxg_global, nyg_global, nzg_global, .False., .False.)
        End If
 

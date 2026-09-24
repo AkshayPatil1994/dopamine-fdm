@@ -67,7 +67,7 @@ Contains
   Subroutine solve_poisson_equation
 
     Integer(Int32) :: i, j, k, k_global, i_global, j_global, info, nyp
-    Real   (Int64) :: dum, dumref, maxerr, wavenum_sum
+    Real   (Int64) :: dum, dumref, maxerr, wavenum_sum, inv_pdt
     Logical        :: is_first_p, is_last_p
     Integer(Int32) :: partner_p
 
@@ -326,53 +326,59 @@ Contains
     ! Save physical pressure at the end of the full time step
     If ( rk_step == 3 ) Then
 #ifdef GPU_POISSON
-       ! rhs_p is device-resident throughout; P is host-only, so pull rhs_p back
-       ! just for this end-of-step save -- only 1 in 3 RK substages pays this transfer
-       !$acc update host(rhs_p)
-#endif
+       ! P is device-resident like rhs_p: computed and ghost-filled entirely on the device (no host round
+       ! trips); the host copy is refreshed only when a host consumer needs it (see time_integration.f90)
+       inv_pdt = 1d0/(dt*rk_coef(3,3))
+       !$acc parallel loop collapse(3) present(P,rhs_p)
+       Do k = 2, nzg-1
+          Do j = 2, nyg-1
+             Do i = 2, nxg-1
+                P(i,j,k) = rhs_p(i,j,k)*inv_pdt
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+       !$acc kernels present(P)
+       P(:,  1,:) = P(:,    2,:)
+       P(:,nyg,:) = P(:,nyg-1,:)
+       !$acc end kernels
+#else
        P( 2:nxg-1, 2:nyg-1, 2:nzg-1 ) = rhs_p( 2:nxg-1, 2:nyg-1, 2:nzg-1 )/(dt*rk_coef(3,3))
        P(:,  1,:) = P(:,    2,:)
        P(:,nyg,:) = P(:,nyg-1,:)
+#endif
        ! x/z ghosts: cross-rank halo + domain-periodic wrap (id=4, generic scalar-shaped convention), not
        ! a same-rank self-copy -- a self-copy here duplicated the neighbour rank's own edge plane in the
        ! output snapshot at every interior MPI boundary (visible as spurious repeated planes along z/x)
-#ifdef GPU_POISSON
-       ! these halo exchanges stage F through host in GPU builds and treat the device copy as authoritative
-       !$acc update device(P)
-#endif
        Call update_ghost_interior_planes_x(P,4)
        Call update_ghost_interior_planes(P,4)
-#ifdef GPU_POISSON
-       !$acc update host(P)
-#endif
        If ( x_bc_type == 0 ) Then
-#ifdef GPU_POISSON
-          ! apply_periodic_bc_x assumes its argument is already device-resident (shared
-          ! with the device-resident U/V/W); P is otherwise host-only, so round-trip it
-          ! through the device just for this call (see initialization.f90's enter data)
-          !$acc update device(P)
           Call apply_periodic_bc_x(P,4)
-          !$acc update host(P)
-#else
-          Call apply_periodic_bc_x(P,4)
-#endif
        Else
           Call x_periodic_partner(is_first_p, is_last_p, partner_p)
+#ifdef GPU_POISSON
+          !$acc kernels present(P)
           If ( is_first_p ) P(1,:,:) = P(2,:,:)
           If ( is_last_p  ) P(nxg,:,:) = P(nxg-1,:,:)
+          !$acc end kernels
+#else
+          If ( is_first_p ) P(1,:,:) = P(2,:,:)
+          If ( is_last_p  ) P(nxg,:,:) = P(nxg-1,:,:)
+#endif
        End If
        If ( z_bc_type == 0 ) Then
-#ifdef GPU_POISSON
-          !$acc update device(P)
           Call apply_periodic_bc_z(P,4)
-          !$acc update host(P)
-#else
-          Call apply_periodic_bc_z(P,4)
-#endif
        Else
           Call z_periodic_partner(is_first_p, is_last_p, partner_p)
+#ifdef GPU_POISSON
+          !$acc kernels present(P)
           If ( is_first_p ) P(:,:,1)   = P(:,:,2)
           If ( is_last_p  ) P(:,:,nzg) = P(:,:,nzg-1)
+          !$acc end kernels
+#else
+          If ( is_first_p ) P(:,:,1)   = P(:,:,2)
+          If ( is_last_p  ) P(:,:,nzg) = P(:,:,nzg-1)
+#endif
        End If
     End If
 

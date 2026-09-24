@@ -5,7 +5,10 @@ Module sgs_models
   Use global
   Use mpi
   Use decomp, Only : z_halo_neighbors, z_periodic_partner, x_periodic_partner
-  Use boundary_conditions, Only : apply_periodic_bc_z, update_ghost_interior_planes_x
+  Use boundary_conditions, Only : apply_periodic_bc_z, update_ghost_interior_planes_x, update_ghost_interior_planes
+#ifdef GPU_POISSON
+  Use boundary_conditions, Only : gpu_periodic_wrap
+#endif
 
   Implicit None
 
@@ -142,6 +145,19 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+#ifdef GPU_POISSON
+    ! Without IBM there is no host-only Pass 2, so wall zeroing, ghost fills and MPI halos all stay on the device
+    ! (previously nu_t made three full-array host<->device round trips per RK substage)
+    If ( .Not. ibm_active ) Then
+       Call vreman_ghosts_device(nu_t_)
+       ! host copy only needed by host consumers (snapshot write syncs it itself, see input_output.f90)
+       If ( rsb_active == 1 ) Then
+          !$acc update host(nu_t_)
+       End If
+       Return
+    End If
+#endif
 
     ! Pass 2, wall zeroing, x-periodicity, and MPI halo exchange below all run on host; sync Pass 1's GPU result back first
     !$acc update host(nu_t_)
@@ -297,6 +313,60 @@ Contains
 
   End Subroutine compute_vreman
 
+
+#ifdef GPU_POISSON
+  !> Device-resident equivalent of compute_vreman's post-Pass-1 host block (non-IBM only): y wall/periodic ghosts, x seam + periodic wrap, z seam + z BC, all on nu_t_ in device memory, MPI on device buffers
+  Subroutine vreman_ghosts_device(nu_t_)
+
+    Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: nu_t_
+    Logical        :: is_first, is_last
+    Integer(Int32) :: partner
+
+    ! No-slip flat walls only (j=1, nyg): zero nu_t; leave it alone at a free-slip boundary
+    If ( y_bc_type == 1 .And. bc_face_ylo == 1 ) Then
+       !$acc kernels present(nu_t_)
+       nu_t_(:,  1,:) = 0d0
+       !$acc end kernels
+    End If
+    If ( y_bc_type == 1 .And. bc_face_yhi == 1 ) Then
+       !$acc kernels present(nu_t_)
+       nu_t_(:,nyg,:) = 0d0
+       !$acc end kernels
+    End If
+    If ( y_bc_type == 0 ) Then
+       !$acc kernels present(nu_t_)
+       nu_t_(:,    1,:) = nu_t_(:,nyg-2,:)
+       nu_t_(:,nyg-1,:) = nu_t_(:,    2,:)
+       nu_t_(:,nyg  ,:) = nu_t_(:,    3,:)
+       !$acc end kernels
+    End If
+
+    ! x seam planes from the x-neighbour, then the periodic wrap (single-plane, cell-centred)
+    Call update_ghost_interior_planes_x(nu_t_, 2)
+    Call x_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       !$acc kernels present(nu_t_)
+       nu_t_(1,  :,:) = nu_t_(nxg-1,:,:)
+       nu_t_(nxg,:,:) = nu_t_(2,    :,:)
+       !$acc end kernels
+    Else
+       Call gpu_periodic_wrap(nu_t_, .True., 1, nxg, is_first, is_last, partner, 13)
+    End If
+
+    ! z seam planes, then z periodic wrap or wall zeroing
+    Call update_ghost_interior_planes(nu_t_, 2)
+    If ( z_bc_type == 0 ) Then
+       Call apply_periodic_bc_z(nu_t_, 4)
+    Else
+       Call z_periodic_partner(is_first, is_last, partner)
+       !$acc kernels present(nu_t_)
+       If ( is_first ) nu_t_(:,:,1)   = 0d0
+       If ( is_last  ) nu_t_(:,:,nzg) = 0d0
+       !$acc end kernels
+    End If
+
+  End Subroutine vreman_ghosts_device
+#endif
 
   !> MPI ring exchange for nu_t z-halo (cell-centred, 1 ghost/side)
   Subroutine update_ghost_interior_planes_nut(F_)
