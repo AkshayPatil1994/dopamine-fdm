@@ -6,6 +6,7 @@ Module initialization
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
+  Use boundary_conditions, Only : exchange_velocity_halos, apply_periodic_bc_x, apply_periodic_bc_z
   Use decomp, Only : decomp_init_pencil, decomp_build_xz_ranges, decomp_init_poisson_pencil, decomp_poisson, z_periodic_partner
 #ifdef GPU_POISSON
   Use decomp, Only : decomp_spec
@@ -832,6 +833,26 @@ Contains
     !$acc enter data create(P)
     !$acc update device(P)
 #endif
+
+    ! Fill the rank-seam halos and periodic wraps of the initial U,V,W once: the IC (and a restart file's
+    ! unwritten ghost layers) leave the z/x ghost planes unset, so step 1 saw zeros there -- at the rank seam
+    ! for np>1 but at the periodic edge for np=1, which made the first step, and hence everything after it,
+    ! depend on the rank count. (Wall/inflow BCs are left to the per-step application: they depend on
+    ! wall-model coefficients that do not exist yet, and outflow relaxation is not idempotent.)
+    ! Fresh starts only: a restart file already holds the previous step's fully filled state.
+    If ( restart == 0 ) Then
+       Call exchange_velocity_halos
+       If ( x_bc_type == 0 ) Then
+          Call apply_periodic_bc_x(U,1)
+          Call apply_periodic_bc_x(V,2)
+          Call apply_periodic_bc_x(W,2)
+       End If
+       If ( z_bc_type == 0 ) Then
+          Call apply_periodic_bc_z(U,1)
+          Call apply_periodic_bc_z(V,2)
+          Call apply_periodic_bc_z(W,3)
+       End If
+    End If
 
     ! Done
     Call Mpi_barrier(MPI_COMM_WORLD,ierr)
