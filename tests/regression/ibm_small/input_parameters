@@ -3,12 +3,12 @@
 ! rank-count / CPU-vs-GPU parity case exercising the wall-normal tridiagonal Poisson path.
 
 &DOMAIN
-  nx         = 18,
+  nx         = 34,
   ny         = 17,
-  nz         = 18,
-  Lx         = 3.0,
+  nz         = 34,
+  Lx         = 6.0,
   Ly         = 2.0,
-  Lz         = 1.5,
+  Lz         = 3.0,
   grid_type  = 1,
   alpha_grid = 2.0,
   p_row      = 0,

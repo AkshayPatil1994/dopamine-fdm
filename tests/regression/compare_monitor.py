@@ -15,9 +15,11 @@ import array
 import glob
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 
 # src/monitor.f90:61 -- istep, t, meanU, maxU, max_divergence, cfl_conv, cfl_visc, dt, wall_dt_s
 MONITOR_LINE = re.compile(
@@ -145,6 +147,12 @@ def main():
     p.add_argument('--files', action='append', default=[],
                     help='glob (relative to the case dir) of raw little-endian float64 output files to also compare, '
                          'e.g. stats/rsb_*.bin; repeatable')
+    p.add_argument('--p-grid', default=None, metavar='ROW,COL',
+                    help='force the 2decomp p_row,p_col pencil grid (e.g. 2,2) in a temporary copy of the case, for '
+                         'BOTH runs (a 2D rank layout needs np-a/np-b == ROW*COL wherever it is used; the reference '
+                         'run keeps the case default when its np-a differs -- see --p-grid-b-only)')
+    p.add_argument('--p-grid-b-only', action='store_true',
+                    help='apply --p-grid to run B only; run A keeps the case default (auto) decomposition')
     p.add_argument('--label-a', default='A')
     p.add_argument('--label-b', default='B')
     args = p.parse_args()
@@ -156,19 +164,39 @@ def main():
             out[k] = v
         return out
 
+    case_a = case_b = args.case_dir
+    tmp_dirs = []
+    if args.p_grid:
+        row, col = args.p_grid.split(',')
+
+        def with_grid(src):
+            d = tempfile.mkdtemp(prefix='pgrid_')
+            tmp_dirs.append(d)
+            shutil.copytree(src, os.path.join(d, 'case'))
+            f = os.path.join(d, 'case', 'input_parameters')
+            txt = open(f).read()
+            txt = re.sub(r'p_row\s*=\s*\d+', f'p_row = {row}', txt)
+            txt = re.sub(r'p_col\s*=\s*\d+', f'p_col = {col}', txt)
+            open(f, 'w').write(txt)
+            return os.path.join(d, 'case')
+
+        case_b = with_grid(args.case_dir)
+        case_a = args.case_dir if args.p_grid_b_only else with_grid(args.case_dir)
     if args.fields:
-        clear_snapshots(args.case_dir)
-    clear_files(args.case_dir, args.files)
-    out_a = run_case(args.mpirun, args.exe_a, args.np_a, args.case_dir, parse_env(args.env_a))
-    snap_a = read_snapshot(args.case_dir, interior_only=True) if args.fields else None
-    raw_a = read_raw_files(args.case_dir, args.files)
+        clear_snapshots(case_a)
+    clear_files(case_a, args.files)
+    out_a = run_case(args.mpirun, args.exe_a, args.np_a, case_a, parse_env(args.env_a))
+    snap_a = read_snapshot(case_a, interior_only=True) if args.fields else None
+    raw_a = read_raw_files(case_a, args.files)
     if args.fields:
-        clear_snapshots(args.case_dir)
-    clear_files(args.case_dir, args.files)
-    out_b = run_case(args.mpirun_b or args.mpirun, args.exe_b, args.np_b, args.case_dir, parse_env(args.env_b))
-    snap_b = read_snapshot(args.case_dir, interior_only=True) if args.fields else None
-    raw_b = read_raw_files(args.case_dir, args.files)
-    clear_files(args.case_dir, args.files)
+        clear_snapshots(case_b)
+    clear_files(case_b, args.files)
+    out_b = run_case(args.mpirun_b or args.mpirun, args.exe_b, args.np_b, case_b, parse_env(args.env_b))
+    snap_b = read_snapshot(case_b, interior_only=True) if args.fields else None
+    raw_b = read_raw_files(case_b, args.files)
+    clear_files(case_b, args.files)
+    for d in tmp_dirs:
+        shutil.rmtree(d, ignore_errors=True)
 
     rows_a = parse_monitor(out_a)
     rows_b = parse_monitor(out_b)
