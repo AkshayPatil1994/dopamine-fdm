@@ -426,6 +426,16 @@ if(Python3_Interpreter_FOUND)
             set_tests_properties(${case}_${_kind}_np1_vs_np${TEST_PARITY_NPROCS} PROPERTIES
                 ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
         endif()
+        # hot-start restart reproduces an uninterrupted run (all field blocks incl. scalars), at np=1 and np=N
+        foreach(_np 1 ${TEST_PARITY_NPROCS})
+            add_test(NAME ${case}_${_kind}_restart_np${_np}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
+                        --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE} --exe $<TARGET_FILE:dopamine> --np ${_np})
+            if(TEST_LD_LIBRARY_PATH)
+                set_tests_properties(${case}_${_kind}_restart_np${_np} PROPERTIES
+                    ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
+            endif()
+        endforeach()
         if(ENABLE_GPU AND CPU_REFERENCE_EXE)
             set(_ref_mpirun ${MPIEXEC_EXECUTABLE})
             if(CPU_REFERENCE_MPIRUN)
