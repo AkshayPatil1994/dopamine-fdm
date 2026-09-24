@@ -127,16 +127,28 @@ time is going on either build.
 
 ## Testing
 
-`ctest` (in the build directory) runs the unit drivers plus deterministic parity
-regressions (`tests/regression/{tgv_small,chan_small,chan_les_small}`): each is run on 1
-and 2 ranks and the per-step monitor diagnostics (`meanU`, `maxU`, divergence, CFL, `dt`)
-must agree within tolerance. In a GPU build, pass a CPU build to also compare CPU vs GPU:
+`ctest` (in the build directory) runs the unit drivers plus deterministic regression
+cases in `tests/regression/` (TGV, LES/DNS channel, 4-wall duct, inflow/outflow, passive
+scalar, Boussinesq temperature, UAV actuator disk, IBM sphere, Reynolds-stress budget).
+Each case is run on 1 rank and on `TEST_PARITY_NPROCS` ranks (default 2), plus explicit
+4-rank `2x2` and `4x1` pencil layouts, and must agree within tolerance on the per-step
+monitor diagnostics **and** field-by-field on the final snapshot (ghost layers excluded;
+RSB output files are compared too). A hot-start restart must reproduce an uninterrupted
+run. In a GPU build, pass a CPU build to also compare CPU vs GPU at the same rank
+count and layout (agreement is to roundoff, ~1e-13):
 
 ```bash
 cmake -S . -B build_gpu ... -DCPU_REFERENCE_EXE=$PWD/build/dopamine \
       -DCPU_REFERENCE_MPIRUN=$(which mpirun)   # optional; TEST_LD_LIBRARY_PATH adds a libcuda dir
 ctest --test-dir build_gpu
 ```
+
+**Known decomposition dependence (present in the CPU build too; bounds are loosened in
+`CMakeLists.txt` and marked `KNOWN ISSUE`)**: the Boussinesq temperature differs by
+~1e-6 per step across rank counts near rank seams; restart at more than one rank is not
+bit-exact (~3e-4 after one step); ghost-cell IBM results depend on the rank count from
+3 ranks up (image-point stencils are limited to the one-cell halo); recycled precursor
+inflow (`inflow_type=2`) is decomposition-dependent and was not brought under test.
 
 ## Output files
 
