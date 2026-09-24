@@ -29,7 +29,7 @@
 &NUMERICS
   dt           = 0.01,
   nsteps       = 20,
-  nsave        = 1000,    ! > nsteps: never fires, so the case never touches disk for I/O
+  nsave        = 20,    ! == nsteps: one snapshot at the end, compared field-by-field
   nmonitor     = 1,
   cfl_adaptive = 0,
 /

@@ -27,7 +27,7 @@
 &NUMERICS
   dt           = 0.002,
   nsteps       = 20,
-  nsave        = 1000,
+  nsave        = 20,
   nmonitor     = 1,
   cfl_adaptive = 0,
 /
@@ -43,7 +43,7 @@
 &INITIAL_CONDITIONS
   Utarget      = 5.0,
   ic_type      = 4,
-  noise_percent  = 5.0,
+  noise_percent  = 0.0,
   nstep_init     = 0,
   restart        = 0,
 /

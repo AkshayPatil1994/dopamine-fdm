@@ -1,4 +1,4 @@
-! Tiny periodic-x/z channel (no-slip walls in y), DNS, deterministic IC (ic_type=4:
+! Tiny periodic-x/z channel, LES (Vreman) + smooth equilibrium wall model, stretched y grid,
 ! laminar Reichardt profile + prescribed sinusoidal perturbation, no random noise) used as a
 ! rank-count / CPU-vs-GPU parity case exercising the wall-normal tridiagonal Poisson path.
 
@@ -9,17 +9,19 @@
   Lx         = 3.0,
   Ly         = 2.0,
   Lz         = 1.5,
-  grid_type  = 1,
+  grid_type  = 2,
+  alpha_grid = 2.0,
   p_row      = 0,
   p_col      = 0,
 /
 
 &PHYSICS
-  nu                   = 0.005,
+  nu                   = 0.002531645569620253,
   dPdx                 = 1.0,
   dPdz                 = 0.0,
-  sgs_model            = 0,
-  flat_wall_model_flag = 0,
+  sgs_model            = 1,
+  Cs_vreman            = 0.17,
+  flat_wall_model_flag = 1,
 /
 
 &NUMERICS
@@ -47,6 +49,19 @@
 /
 
 &IO
-  filein  = 'restart/chan_small.1',
-  fileout = 'chan_small',
+  filein  = 'restart/bouss_small.1',
+  fileout = 'bouss_small',
+/
+
+&BOUSSINESQ
+  boussinesq_flag = 1,
+  beta_T = 3.0e-3,
+  T_ref = 0.0,
+  grav = 9.81,
+  Pr = 0.7,
+  Pr_t = 0.85,
+  T_bc_bot = 1, T_bc_top = 1,
+  T_wall_bot = 1.0, T_wall_top = 0.0,
+  T_ic_type = 1,
+  T_ic_grad = -0.5,
 /

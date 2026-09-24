@@ -11,8 +11,11 @@ Exit code 0 = all monitored columns agree within tolerance at every step
 printed by both runs; 1 = a mismatch or a run failure.
 """
 import argparse
+import array
+import glob
 import os
 import re
+import struct
 import subprocess
 import sys
 
@@ -32,6 +35,38 @@ def parse_monitor(log_text):
             istep = int(m.group(1))
             rows[istep] = [float(g) for g in m.groups()[1:]]
     return rows
+
+
+def clear_snapshots(case_dir):
+    for f in glob.glob(os.path.join(case_dir, 'fields', '*.[0-9]*')):
+        os.remove(f)
+
+
+def read_snapshot(case_dir):
+    """Parse the newest big-endian stream snapshot written by output_data (src/input_output.f90): six mesh
+    blocks (int32 count + float64 array), then one (int32 nx,ny,nz + float64 nx*ny*nz) block per field
+    (U,V,W,P, then C/nu_t/T when active). Returns a list of float64 arrays, one per field block."""
+    files = sorted(glob.glob(os.path.join(case_dir, 'fields', '*.[0-9]*')),
+                   key=lambda f: int(f.rsplit('.', 1)[1]))
+    if not files:
+        print('ERROR: --fields given but no snapshot was written (set nsave in the case input)', file=sys.stderr)
+        sys.exit(1)
+    b = open(files[-1], 'rb').read()
+    p = 0
+    for _ in range(6):
+        n, = struct.unpack_from('>i', b, p)
+        p += 4 + 8 * n
+    blocks = []
+    while p < len(b):
+        nx, ny, nz = struct.unpack_from('>iii', b, p)
+        p += 12
+        n = nx * ny * nz
+        a = array.array('d')
+        a.frombytes(b[p:p + 8 * n])
+        a.byteswap()
+        p += 8 * n
+        blocks.append(a)
+    return blocks
 
 
 def run_case(mpirun, exe, np, case_dir, extra_env):
@@ -68,6 +103,11 @@ def main():
                          'as |a-b| <= atol + rtol*max(|a|,|b|) -- needed because meanU '
                          'oscillates through zero on this decaying-TGV case, where a '
                          'pure relative tolerance is meaningless')
+    p.add_argument('--fields', action='store_true',
+                    help='also compare the final field snapshot block by block (needs nsave in the case input); '
+                         'catches errors in P, nu_t, scalars, ghost cells that the monitor columns cannot see')
+    p.add_argument('--field-tol', type=float, default=1e-7,
+                    help='per-block bound on max|a-b| relative to max|a| (default 1e-7)')
     p.add_argument('--label-a', default='A')
     p.add_argument('--label-b', default='B')
     args = p.parse_args()
@@ -79,8 +119,14 @@ def main():
             out[k] = v
         return out
 
+    if args.fields:
+        clear_snapshots(args.case_dir)
     out_a = run_case(args.mpirun, args.exe_a, args.np_a, args.case_dir, parse_env(args.env_a))
+    snap_a = read_snapshot(args.case_dir) if args.fields else None
+    if args.fields:
+        clear_snapshots(args.case_dir)
     out_b = run_case(args.mpirun_b or args.mpirun, args.exe_b, args.np_b, args.case_dir, parse_env(args.env_b))
+    snap_b = read_snapshot(args.case_dir) if args.fields else None
 
     rows_a = parse_monitor(out_a)
     rows_b = parse_monitor(out_b)
@@ -113,6 +159,19 @@ def main():
           f'{args.label_b} (np={args.np_b}), rtol={args.rtol:.1E}')
     for col in COLUMNS:
         print(f'  worst-case relative diff [{col}]: {worst.get(col, 0.0):.3E}')
+
+    if args.fields:
+        if len(snap_a) != len(snap_b):
+            failed = True
+            print(f'MISMATCH: snapshot has {len(snap_a)} field blocks vs {len(snap_b)}')
+        else:
+            for ib, (fa, fb) in enumerate(zip(snap_a, snap_b)):
+                scale = max(max(abs(v) for v in fa), 1e-30)
+                dmax = max(abs(x - y) for x, y in zip(fa, fb))
+                print(f'  field block {ib}: max|a-b|/max|a| = {dmax / scale:.3E}')
+                if dmax / scale > args.field_tol:
+                    failed = True
+                    print(f'MISMATCH field block {ib}: {dmax / scale:.3E} > {args.field_tol:.1E}')
 
     if failed:
         print('RESULT: FAIL')
