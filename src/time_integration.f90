@@ -46,6 +46,7 @@ Contains
   Subroutine compute_time_step_RK3
 
     Real(Int64) :: to
+    Integer(Int32) :: i, j, k
     Real(Int64) :: Fx_ibm,  Fy_ibm,  Fz_ibm
     Real(Int64) :: Fx_pres, Fy_pres, Fz_pres
     Real(Int64) :: Fx_visc, Fy_visc, Fz_visc
@@ -94,11 +95,35 @@ Contains
     to = t
     Call profiler_start(PROF_RK_UPDATE)
     ! U,V,W are already device-resident; copy directly on-device instead of bouncing through host
-    !$acc kernels present(U,V,W,Uo,Vo,Wo)
-    Uo = U
-    Vo = V
-    Wo = W
-    !$acc end kernels
+    ! explicit parallel loops: as whole-array assignments under `kernels`, nvfortran ran these three copies
+    ! in scalar mode (one thread, ~360 ms each at 8.6M points -- ~80% of the step)
+    !$acc parallel loop collapse(3) present(U,Uo)
+    Do k = 1, Size(U,3)
+       Do j = 1, Size(U,2)
+          Do i = 1, Size(U,1)
+             Uo(i,j,k) = U(i,j,k)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+    !$acc parallel loop collapse(3) present(V,Vo)
+    Do k = 1, Size(V,3)
+       Do j = 1, Size(V,2)
+          Do i = 1, Size(V,1)
+             Vo(i,j,k) = V(i,j,k)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+    !$acc parallel loop collapse(3) present(W,Wo)
+    Do k = 1, Size(W,3)
+       Do j = 1, Size(W,2)
+          Do i = 1, Size(W,1)
+             Wo(i,j,k) = W(i,j,k)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
     Call profiler_stop(PROF_RK_UPDATE)
     If ( sediment_flag >= 1 ) Then
        !$acc kernels present(Cscal,Cscal_o)
