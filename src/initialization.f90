@@ -80,7 +80,9 @@ Contains
 
 #ifdef GPU_POISSON
     ! single-GPU cuFFT Poisson solve (periodic or DCT-IV) only supports nprocs==1
-    If ( nprocs /= 1 ) Stop 'ERROR: GPU_POISSON build only supports nprocs=1 (single-GPU); rebuild without ENABLE_GPU for multi-rank runs'
+    ! Only the fully periodic (x,y,z) branch is pencil-decomposed (multi-GPU); the other BC branches of poisson_gpu.f90 still assume one rank owns the whole domain
+    If ( nprocs /= 1 .And. .Not. ( x_bc_type == 0 .And. y_bc_type == 0 .And. z_bc_type == 0 ) ) &
+         Stop 'ERROR: GPU_POISSON with nprocs>1 currently supports only the fully periodic case (x_bc_type=y_bc_type=z_bc_type=0); use nprocs=1 or the CPU build for other BCs'
     If ( x_bc_type /= 0 .And. x_bc_type /= 1 ) Stop 'ERROR: GPU_POISSON build only supports x_bc_type=0 or 1'
     If ( y_bc_type == 0 .And. x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
     If ( z_bc_type == 1 .And. ( y_bc_type /= 1 .Or. x_bc_type /= 0 ) ) &
@@ -770,10 +772,14 @@ Contains
     ! x,xg needed on device by compute_rhs_scalar_core (non-uniform-grid-style stencil, even though x itself is uniform)
     !$acc enter data copyin(x,xg)
     !$acc enter data create(term,term_1,term_2)
+    ! zero them (host+device): stencils read planes/rows a given call may not write, so uninitialised device scratch makes results decomposition/allocation dependent
+    term = 0d0; term_1 = 0d0; term_2 = 0d0
+    !$acc update device(term,term_1,term_2)
     ! Evolving per-substage fields: allocated here (create, not copyin) so time_integration.f90's per-RK-substage update device/host calls have a target
     !$acc enter data create(U,V,W,nu_t,Fu1,Fv1,Fw1,Fu2,Fv2,Fw2,Fu3,Fv3,Fw3)
     ! One-time initial sync: enter data create only allocates, so push host U,V,W or step 1 runs on uninitialized device data
-    !$acc update device(U,V,W)
+    ! nu_t too: DNS (sgs_model==0) never writes it on device, but the viscous stencils read it (incl. z wrap ghost planes)
+    !$acc update device(U,V,W,nu_t)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
     !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,alpha_z_u,alpha_z_v)
     ! Boussinesq temperature: stays device-resident end-to-end so compute_rhs_v can read it directly

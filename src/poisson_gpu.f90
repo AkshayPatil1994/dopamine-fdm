@@ -1,11 +1,13 @@
-!> Single-GPU cuFFT periodic Poisson transform (nprocs==1 only)
+!> GPU cuFFT/cuSPARSE Poisson solve. The fully periodic (x,y,z) branch is pencil-decomposed across MPI ranks/GPUs (multi-GPU capable); all other branches are single-GPU (nprocs==1 only)
 Module poisson_gpu
 
   Use iso_fortran_env, Only : Int32, Int64
   Use cufft
   Use cusparse
+  Use decomp, Only : decomp_poisson, transpose_x_to_y, transpose_y_to_x, transpose_y_to_z, transpose_z_to_y
   Use global, Only : nxp_global, nzp_global, mx, mz, nyg, rhs_p, rhs_p_hat, Dyy, kxx, kyy, kzz, x_bc_type, y_bc_type, pi, &
-                     z_bc_type, nzm_global, Qz, sqrt_w_z, lambda_z
+                     z_bc_type, nzm_global, Qz, sqrt_w_z, lambda_z, &
+                     poisson_y_r, poisson_x_r, poisson_x_c, poisson_y_c, poisson_z_c
 
   Implicit None
 
@@ -16,8 +18,9 @@ Module poisson_gpu
   Complex(Int64), Allocatable :: slab(:,:,:)
 
   ! Genuine 3D periodic cuFFT transform (y_bc_type==0 AND x_bc_type==0 only)
-  Integer :: plan_fwd3d, plan_bwd3d
-  Complex(Int64), Allocatable :: cube3d(:,:,:)   ! (nx1, nslabs, nz1), device-resident
+  ! (pencil-decomposed: batched 1-D cuFFT plans, one per pencil orientation, wired between
+  ! 2decomp&fft's GPU (CUDA-aware) transposes exactly like projection.f90's CPU FFTW path)
+  Integer :: plan_p3_x, plan_p3_y, plan_p3_z
 
   ! DCT-IV (x_bc_type==1) state: zero-padded 4N-point Z2Z FFT + twiddle, then z-FFT
   Integer :: plan_dct_L, plan_z, Lx
@@ -44,7 +47,7 @@ Contains
   !> Create the batched cuFFT plans once, on first use; branches on x_bc_type
   Subroutine gpu_poisson_init
 
-    Integer :: ierr, nx1, nz1, ny_i
+    Integer :: ierr, nx1, nz1, ny_i, nyp_l
 
     nx1    = Int(nxp_global)
     nz1    = Int(nzp_global)
@@ -92,18 +95,23 @@ Contains
        !$acc enter data create(kyy)
        !$acc update device(kyy)
 
-       ! Same "last interior cell is a redundant duplicate of the first" convention as
-       ! periodic x/z (nxp_global=nxm_global-1): the periodic y transform only covers
-       ! nslabs-1 independent cells; the excluded last cell (rhs_p y-index nyg-1) is
-       ! reconstructed by a plain copy from index 2 in projection.f90, after
-       ! apply_periodic_xz_pressure -- mirrors that routine's own x-periodic fixup.
-       Allocate( cube3d( nx1, nslabs-1, nz1 ) )
-       !$acc enter data create(cube3d)
+       ! Periodic y transforms only the first nyp=ysz(2)-1 y-slots ("last interior cell is a
+       ! redundant duplicate of the first", as for periodic x/z); the excluded last cell
+       ! (rhs_p y-index nyg-1) is restored by a plain copy in projection.f90.
+       nyp_l = decomp_poisson%ysz(2) - 1
+       !$acc enter data create(poisson_y_r,poisson_x_r,poisson_x_c,poisson_y_c,poisson_z_c)
 
-       ! cufftPlan3d dims use the reversed-relative-to-Fortran convention (see cufftPlanMany note below)
-       ierr =         cufftPlan3d( plan_fwd3d, nz1, nslabs-1, nx1, CUFFT_Z2Z )
-       ierr = ierr + cufftPlan3d( plan_bwd3d, nz1, nslabs-1, nx1, CUFFT_Z2Z )
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT 3D periodic plan creation failed'
+       ! x-pencil: contiguous length-nxp transforms, batch over (j,k)
+       ierr =         cufftPlanMany( plan_p3_x, 1, [nx1], [nx1], 1, nx1, [nx1], 1, nx1, CUFFT_Z2Z, &
+                                     decomp_poisson%xsz(2)*decomp_poisson%xsz(3) )
+       ! z-pencil: length-nzp transforms at stride zsz1*zsz2, batch over (i,j)
+       ierr = ierr + cufftPlanMany( plan_p3_z, 1, [nz1], [nz1], decomp_poisson%zsz(1)*decomp_poisson%zsz(2), 1, &
+                                    [nz1], decomp_poisson%zsz(1)*decomp_poisson%zsz(2), 1, CUFFT_Z2Z, &
+                                    decomp_poisson%zsz(1)*decomp_poisson%zsz(2) )
+       ! y-pencil: length-nyp transforms at stride ysz1, batch over i (one plan execution per k-slice)
+       ierr = ierr + cufftPlanMany( plan_p3_y, 1, [nyp_l], [nyp_l], decomp_poisson%ysz(1), 1, &
+                                    [nyp_l], decomp_poisson%ysz(1), 1, CUFFT_Z2Z, decomp_poisson%ysz(1) )
+       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil periodic plan creation failed'
 
     Else If ( x_bc_type == 0 ) Then
 
@@ -210,52 +218,101 @@ Contains
 
   End Subroutine gpu_inverse_transform_all_slabs
 
-  !> Forward 3D periodic cuFFT transform of the whole domain in one call (y_bc_type==0, x_bc_type==0, nprocs==1 only)
+  !> Pencil-decomposed forward transform, fully periodic case: y(real) -> x (cuFFT) -> y -> z (cuFFT) -> y, leaving poisson_y_c in (kx,y,kz) space; mirrors projection.f90's CPU chain with device-resident arrays and CUDA-aware transposes
   Subroutine gpu_forward_transform_3d
 
-    Integer :: ix, iy, iz, ierr, nx1, nz1
+    Integer :: i, j, k, ierr, n1, n2, n3
 
     If ( .Not. plans_created ) Call gpu_poisson_init
 
-    nx1 = Int(nxp_global)
-    nz1 = Int(nzp_global)
+    n1 = decomp_poisson%ysz(1); n2 = decomp_poisson%ysz(2); n3 = decomp_poisson%ysz(3)
 
-    !$acc parallel loop collapse(3) present(rhs_p,cube3d)
-    Do iz = 1, nz1
-       Do iy = 1, nslabs-1
-          Do ix = 1, nx1
-             cube3d(ix,iy,iz) = dcmplx( rhs_p(ix+1, iy+1, iz+1) )
+    !$acc parallel loop collapse(3) present(rhs_p,poisson_y_r)
+    Do k = 1, n3
+       Do j = 1, n2
+          Do i = 1, n1
+             poisson_y_r(i,j,k) = rhs_p(i+1,j+1,k+1)
           End Do
        End Do
     End Do
     !$acc end parallel loop
 
-    !$acc host_data use_device(cube3d)
-    ierr = cufftExecZ2Z( plan_fwd3d, cube3d, cube3d, CUFFT_FORWARD )
+    Call transpose_y_to_x( poisson_y_r, poisson_x_r, decomp_poisson )
+
+    n1 = decomp_poisson%xsz(1); n2 = decomp_poisson%xsz(2); n3 = decomp_poisson%xsz(3)
+    !$acc parallel loop collapse(3) present(poisson_x_r,poisson_x_c)
+    Do k = 1, n3
+       Do j = 1, n2
+          Do i = 1, n1
+             poisson_x_c(i,j,k) = dcmplx( poisson_x_r(i,j,k) )
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+    !$acc host_data use_device(poisson_x_c)
+    ierr = cufftExecZ2Z( plan_p3_x, poisson_x_c, poisson_x_c, CUFFT_FORWARD )
     !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cuFFT 3D forward exec failed'
+    If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil x forward exec failed'
+    Call transpose_x_to_y( poisson_x_c, poisson_y_c, decomp_poisson )
+
+    Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_poisson )
+    !$acc host_data use_device(poisson_z_c)
+    ierr = cufftExecZ2Z( plan_p3_z, poisson_z_c, poisson_z_c, CUFFT_FORWARD )
+    !$acc end host_data
+    If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil z forward exec failed'
+    Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_poisson )
 
   End Subroutine gpu_forward_transform_3d
 
-  !> Elementwise divide by (kxx+kyy+kzz) in Fourier space; (0,0,0) mode fixed to zero (periodic Poisson null-space)
+  !> y-FFT, elementwise divide by (kxx+kyy+kzz) in Fourier space, inverse y-FFT on this rank's y-pencil; (0,0,0) mode fixed to zero (periodic Poisson null-space), owned by whichever rank holds global mode (0,0,0)
   Subroutine gpu_solve_periodic_3d
 
-    Integer :: ix, iy, iz, mx_i, mz_i, my_i
+    Integer :: i, j, k, k_global, i_global, ierr, nyp, n1, n3, yst1, yst3
+    Real(Int64) :: inv_nyp
 
-    mx_i = Int(mx,Int32)
-    mz_i = Int(mz,Int32)
-    my_i = nslabs - 2   ! max 0-based y-mode index (nslabs-1 independent y samples)
+    n1   = decomp_poisson%ysz(1)
+    n3   = decomp_poisson%ysz(3)
+    nyp  = decomp_poisson%ysz(2) - 1
+    yst1 = decomp_poisson%yst(1)
+    yst3 = decomp_poisson%yst(3)
+    inv_nyp = 1d0 / Real(nyp,Int64)
+
+    Do k = 1, n3
+       !$acc host_data use_device(poisson_y_c)
+       ierr = cufftExecZ2Z( plan_p3_y, poisson_y_c(:,:,k), poisson_y_c(:,:,k), CUFFT_FORWARD )
+       !$acc end host_data
+       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil y forward exec failed'
+    End Do
 
     ! kxx/kyy/kzz are made persistently device-resident once in gpu_poisson_init
-    !$acc parallel loop collapse(3) present(kxx,kyy,kzz,cube3d)
-    Do iz = 0, mz_i
-       Do iy = 0, my_i
-          Do ix = 0, mx_i
-             If ( ix==0 .And. iy==0 .And. iz==0 ) Then
-                cube3d(1,1,1) = (0d0,0d0)
+    !$acc parallel loop collapse(3) present(kxx,kyy,kzz,poisson_y_c) private(i_global,k_global)
+    Do k = 1, n3
+       Do j = 1, nyp
+          Do i = 1, n1
+             i_global = yst1 + i - 2
+             k_global = yst3 + k - 2
+             If ( i_global==0 .And. j==1 .And. k_global==0 ) Then
+                poisson_y_c(i,j,k) = (0d0,0d0)
              Else
-                cube3d(ix+1,iy+1,iz+1) = cube3d(ix+1,iy+1,iz+1) / ( kxx(ix) + kyy(iy) + kzz(iz) )
+                poisson_y_c(i,j,k) = poisson_y_c(i,j,k) / ( kxx(i_global) + kyy(j-1) + kzz(k_global) )
              End If
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    Do k = 1, n3
+       !$acc host_data use_device(poisson_y_c)
+       ierr = cufftExecZ2Z( plan_p3_y, poisson_y_c(:,:,k), poisson_y_c(:,:,k), CUFFT_INVERSE )
+       !$acc end host_data
+       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil y inverse exec failed'
+    End Do
+
+    !$acc parallel loop collapse(3) present(poisson_y_c)
+    Do k = 1, n3
+       Do j = 1, nyp
+          Do i = 1, n1
+             poisson_y_c(i,j,k) = poisson_y_c(i,j,k) * inv_nyp
           End Do
        End Do
     End Do
@@ -263,26 +320,44 @@ Contains
 
   End Subroutine gpu_solve_periodic_3d
 
-  !> Inverse 3D periodic cuFFT transform, normalised by nx1*nslabs*nz1
+  !> Pencil-decomposed inverse transform, fully periodic case: y -> z (inverse cuFFT) -> y -> x (inverse cuFFT) -> y(real) -> rhs_p, normalised by nxp*nzp (the y factor is applied in gpu_solve_periodic_3d)
   Subroutine gpu_inverse_transform_3d
 
-    Integer :: ix, iy, iz, ierr, nx1, nz1
-    Real(Int64) :: norm
+    Integer :: i, j, k, ierr, n1, n2, n3
+    Real(Int64) :: inv_norm
 
-    nx1  = Int(nxp_global)
-    nz1  = Int(nzp_global)
-    norm = Real(nx1,Int64) * Real(nslabs-1,Int64) * Real(nz1,Int64)
-
-    !$acc host_data use_device(cube3d)
-    ierr = cufftExecZ2Z( plan_bwd3d, cube3d, cube3d, CUFFT_INVERSE )
+    Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_poisson )
+    !$acc host_data use_device(poisson_z_c)
+    ierr = cufftExecZ2Z( plan_p3_z, poisson_z_c, poisson_z_c, CUFFT_INVERSE )
     !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cuFFT 3D inverse exec failed'
+    If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil z inverse exec failed'
+    Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_poisson )
 
-    !$acc parallel loop collapse(3) present(cube3d,rhs_p)
-    Do iz = 1, nz1
-       Do iy = 1, nslabs-1
-          Do ix = 1, nx1
-             rhs_p(ix+1, iy+1, iz+1) = Real(cube3d(ix,iy,iz),Int64) / norm
+    Call transpose_y_to_x( poisson_y_c, poisson_x_c, decomp_poisson )
+    !$acc host_data use_device(poisson_x_c)
+    ierr = cufftExecZ2Z( plan_p3_x, poisson_x_c, poisson_x_c, CUFFT_INVERSE )
+    !$acc end host_data
+    If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil x inverse exec failed'
+
+    inv_norm = 1d0 / ( Real(nxp_global,Int64) * Real(nzp_global,Int64) )
+    n1 = decomp_poisson%xsz(1); n2 = decomp_poisson%xsz(2); n3 = decomp_poisson%xsz(3)
+    !$acc parallel loop collapse(3) present(poisson_x_c,poisson_x_r)
+    Do k = 1, n3
+       Do j = 1, n2
+          Do i = 1, n1
+             poisson_x_r(i,j,k) = Real( poisson_x_c(i,j,k), Int64 ) * inv_norm
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+    Call transpose_x_to_y( poisson_x_r, poisson_y_r, decomp_poisson )
+
+    n1 = decomp_poisson%ysz(1); n2 = decomp_poisson%ysz(2); n3 = decomp_poisson%ysz(3)
+    !$acc parallel loop collapse(3) present(poisson_y_r,rhs_p)
+    Do k = 1, n3
+       Do j = 1, n2
+          Do i = 1, n1
+             rhs_p(i+1,j+1,k+1) = poisson_y_r(i,j,k)
           End Do
        End Do
     End Do

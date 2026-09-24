@@ -351,8 +351,15 @@ Contains
        ! x/z ghosts: cross-rank halo + domain-periodic wrap (id=4, generic scalar-shaped convention), not
        ! a same-rank self-copy -- a self-copy here duplicated the neighbour rank's own edge plane in the
        ! output snapshot at every interior MPI boundary (visible as spurious repeated planes along z/x)
+#ifdef GPU_POISSON
+       ! these halo exchanges stage F through host in GPU builds and treat the device copy as authoritative
+       !$acc update device(P)
+#endif
        Call update_ghost_interior_planes_x(P,4)
        Call update_ghost_interior_planes(P,4)
+#ifdef GPU_POISSON
+       !$acc update host(P)
+#endif
        If ( x_bc_type == 0 ) Then
 #ifdef GPU_POISSON
           ! apply_periodic_bc_x assumes its argument is already device-resident (shared
@@ -404,11 +411,17 @@ Contains
           rhs_p ( nxg-1, :, : ) = rhs_p ( 2, :, : )
           !$acc end kernels
        Elseif ( is_first_x ) Then
+#ifdef GPU_POISSON
+          !$acc update host(rhs_p(2,:,:))
+#endif
           buffer_px = rhs_p ( 2, :, : )
           Call Mpi_send(buffer_px, (nyg-2)*(nzg-1), MPI_real8, partner_x, 0, MPI_COMM_WORLD, ierr)
        Elseif ( is_last_x ) Then
           Call Mpi_recv(buffer_px, (nyg-2)*(nzg-1), MPI_real8, partner_x, 0, MPI_COMM_WORLD, istat, ierr)
           rhs_p ( nxg-1, :, : ) = buffer_px
+#ifdef GPU_POISSON
+          !$acc update device(rhs_p(nxg-1,:,:))
+#endif
        End If
     End If
 
@@ -424,6 +437,9 @@ Contains
           rhs_p ( 2:nxg-1, :, nzp+1+1 ) = rhs_p ( 2:nxg-1, :, 2 )
           !$acc end kernels
        Elseif ( is_first ) Then
+#ifdef GPU_POISSON
+          !$acc update host(rhs_p(2:nxg-1,:,2))
+#endif
           buffer_p = rhs_p ( 2:nxg-1, :, 2 )
           Call Mpi_send(buffer_p, (nxg-2)*(nyg-2), MPI_real8, partner, 0, &
                MPI_COMM_WORLD,ierr)
@@ -431,6 +447,9 @@ Contains
           Call Mpi_recv(buffer_p, (nxg-2)*(nyg-2), MPI_real8, partner, 0, &
                MPI_COMM_WORLD,istat,ierr)
           rhs_p ( 2:nxg-1, :, nzp+1+1 ) = buffer_p
+#ifdef GPU_POISSON
+          !$acc update device(rhs_p(2:nxg-1,:,nzp+1+1))
+#endif
        End If
     End If
 
@@ -444,11 +463,19 @@ Contains
     Call z_halo_neighbors(up, down)
 
     ! update P: send towards +z, receive from -z
+#ifdef GPU_POISSON
+    !$acc update host(rhs_p(2:nxg-1,:,2))
+#endif
     buffer_ps = rhs_p(2:nxg-1,:,2)  ! send buffer
     Call Mpi_sendrecv(buffer_ps, (nxg-2)*(nyg-2), Mpi_real8, down, 0,             &
          buffer_pr, (nxg-2)*(nyg-2), Mpi_real8, up,   0, MPI_COMM_WORLD, &
          istat, ierr)
-    If ( up /= MPI_PROC_NULL ) rhs_p(2:nxg-1,:,nzg) = buffer_pr ! received buffer
+    If ( up /= MPI_PROC_NULL ) Then
+       rhs_p(2:nxg-1,:,nzg) = buffer_pr ! received buffer
+#ifdef GPU_POISSON
+       !$acc update device(rhs_p(2:nxg-1,:,nzg))
+#endif
+    End If
 
   End Subroutine update_ghost_interior_planes_pressure
 
@@ -459,10 +486,18 @@ Contains
 
     Call x_halo_neighbors(up, down)
 
+#ifdef GPU_POISSON
+    !$acc update host(rhs_p(2,:,:))
+#endif
     buffer_pgxs = rhs_p(2,:,:)
     Call Mpi_sendrecv(buffer_pgxs, (nyg-2)*(nzg-1), Mpi_real8, down, 0,             &
          buffer_pgxr, (nyg-2)*(nzg-1), Mpi_real8, up,   0, MPI_COMM_WORLD, istat, ierr)
-    If ( up /= MPI_PROC_NULL ) rhs_p(nxg,:,:) = buffer_pgxr
+    If ( up /= MPI_PROC_NULL ) Then
+       rhs_p(nxg,:,:) = buffer_pgxr
+#ifdef GPU_POISSON
+       !$acc update device(rhs_p(nxg,:,:))
+#endif
+    End If
 
   End Subroutine update_ghost_interior_planes_pressure_x
 

@@ -121,6 +121,13 @@ Contains
        Return
     End If
 
+#ifdef GPU_POISSON
+    ! U/V/W/scalars are device-resident in GPU builds but this MPI exchange works on host slices: stage through host (multi-rank only; nprocs==1 wraps on device above)
+    If ( nprocs > 1 ) Then
+       !$acc update host(F)
+    End If
+#endif
+
     n2 = Size(F,2)
     n3 = Size(F,3)
 
@@ -160,6 +167,12 @@ Contains
     End If
 
     ! Note: handles non-periodic ICs; redundant after the first time step.
+#ifdef GPU_POISSON
+    If ( nprocs > 1 ) Then
+       !$acc update device(F)
+    End If
+#endif
+
   End Subroutine apply_periodic_bc_x
 
   ! Dirichlet inflow (x_bc_type==1): F face/ghost = mean profile + SEM fluctuation (sem.f90); comp: 1=U,2=V,3=W; F in/out; no-op except on the rank owning the x=1 boundary
@@ -339,6 +352,13 @@ Contains
        Return
     End If
 
+#ifdef GPU_POISSON
+    ! U/V/W/scalars are device-resident in GPU builds but this MPI exchange works on host slices: stage through host (multi-rank only; nprocs==1 wraps on device above)
+    If ( nprocs > 1 ) Then
+       !$acc update host(F)
+    End If
+#endif
+
     ! save planes
     If ( is_first ) Then
       ! begin planes
@@ -454,6 +474,12 @@ Contains
       End If    
     End If   
     
+#ifdef GPU_POISSON
+    If ( nprocs > 1 ) Then
+       !$acc update device(F)
+    End If
+#endif
+
   End Subroutine apply_periodic_bc_z
 
   ! Dirichlet (no-slip) BC in z; z is domain-decomposed (unlike y) so only the
@@ -657,6 +683,13 @@ Contains
 
     Call z_halo_neighbors(up, down)
 
+#ifdef GPU_POISSON
+    ! U/V/W/scalars are device-resident in GPU builds but this MPI exchange works on host slices: stage through host (multi-rank only; nprocs==1 wraps on device above)
+    If ( nprocs > 1 ) Then
+       !$acc update host(F)
+    End If
+#endif
+
     If (id == 1) Then
       ! update U
       buffer_us(:,:,1) = F(:,:,nzg-1) ! send buffer, towards +z
@@ -706,6 +739,12 @@ Contains
       If ( up   /= MPI_PROC_NULL ) F(:,:,nzg) = buffer_wr(:,:,2) ! received from +z neighbour
     End if
 
+#ifdef GPU_POISSON
+    If ( nprocs > 1 ) Then
+       !$acc update device(F)
+    End If
+#endif
+
   End Subroutine update_ghost_interior_planes
 
   !          Update ghost interior planes (x-direction, same column/adjacent row)
@@ -720,6 +759,13 @@ Contains
     Integer(Int32) :: reqs(4)
 
     Call x_halo_neighbors(up, down)
+
+#ifdef GPU_POISSON
+    ! U/V/W/scalars are device-resident in GPU builds but this MPI exchange works on host slices: stage through host (multi-rank only; nprocs==1 wraps on device above)
+    If ( nprocs > 1 ) Then
+       !$acc update host(F)
+    End If
+#endif
 
     n2 = Size(F,2)
     n3 = Size(F,3)
@@ -753,6 +799,12 @@ Contains
        If ( down /= MPI_PROC_NULL ) F(1,:,:)   = buffer_bcxr1(1:n2,1:n3) ! received from -x neighbour
        If ( up   /= MPI_PROC_NULL ) F(nxg,:,:) = buffer_bcxr2(1:n2,1:n3) ! received from +x neighbour
     End If
+
+#ifdef GPU_POISSON
+    If ( nprocs > 1 ) Then
+       !$acc update device(F)
+    End If
+#endif
 
   End Subroutine update_ghost_interior_planes_x
 
