@@ -1,0 +1,54 @@
+! ================================================================
+! Tiny fully-periodic Taylor-Green Vortex case used as a deterministic
+! parity regression case: ic_type=6 is analytic (no random noise), so
+! output_monitor's per-step (meanU, maxU, max_divergence) line is bit-for-bit
+! reproducible across rank counts and (later) across CPU vs GPU builds --
+! see tests/regression/compare_monitor.py.
+! ================================================================
+
+&DOMAIN
+  nx         = 18,
+  ny         = 17,
+  nz         = 18,
+  Lx         = 6.283185307179586,
+  Ly         = 6.283185307179586,
+  Lz         = 6.283185307179586,
+  grid_type  = 1,
+  p_row      = 0,
+  p_col      = 0,
+/
+
+&PHYSICS
+  nu                   = 0.01,
+  dPdx                 = 0.0,
+  dPdz                 = 0.0,
+  sgs_model            = 0,       ! DNS, no SGS model -- keeps the comparison purely numerical
+  flat_wall_model_flag = 0,
+/
+
+&NUMERICS
+  dt           = 0.01,
+  nsteps       = 20,
+  nsave        = 1000,    ! > nsteps: never fires, so the case never touches disk for I/O
+  nmonitor     = 1,
+  cfl_adaptive = 0,
+/
+
+&BOUNDARY_CONDITIONS
+  x_bc_type = 0,   ! periodic x
+  y_bc_type = 0,   ! periodic y (no walls) -- required by ic_type=6
+  z_bc_type = 0,   ! periodic z
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 1.0,
+  ic_type      = 6,       ! Taylor-Green Vortex: analytic, deterministic, divergence-free
+  noise_percent  = 0.0,
+  nstep_init     = 0,
+  restart        = 0,
+/
+
+&IO
+  filein  = 'restart/tgv_small.1',
+  fileout = 'tgv_small',
+/

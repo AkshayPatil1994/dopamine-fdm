@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 project(dopamine LANGUAGES Fortran)
 
 #------------------------------------------------------------------------------
+# Testing (CTest) -- `ctest` after building runs the verify_* unit drivers
+# plus the tgv_small MPI-rank-count parity regression (see tests/regression/),
+# the same harness later reused for CPU-vs-GPU and 1-GPU-vs-N-GPU parity.
+#------------------------------------------------------------------------------
+enable_testing()
+
+#------------------------------------------------------------------------------
 # GPU (OpenACC via nvfortran) — optional, off by default; CPU build is untouched
 #------------------------------------------------------------------------------
 option(ENABLE_GPU "Build with OpenACC GPU offload (requires nvfortran)" OFF)
@@ -303,6 +310,35 @@ target_link_libraries(dopamine-ESEM
     BLAS::BLAS
     decomp2d
 )
+
+#------------------------------------------------------------------------------
+# Tests
+#------------------------------------------------------------------------------
+add_test(NAME verify_sem_divergence_free
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 $<TARGET_FILE:verify_sem_divergence_free>)
+add_test(NAME verify_ti_profile
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 $<TARGET_FILE:verify_ti_profile>)
+add_test(NAME verify_inflow_opt
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 $<TARGET_FILE:verify_inflow_opt>)
+
+# tgv_small MPI-rank-count parity regression: np=1 vs np=TEST_PARITY_NPROCS CPU
+# runs of the same deterministic Taylor-Green-Vortex case must agree within
+# tolerance in output_monitor's per-step diagnostics (src/monitor.f90:61) --
+# see tests/regression/compare_monitor.py. Reused unmodified for CPU-vs-GPU
+# and 1-GPU-vs-N-GPU parity once ENABLE_GPU supports nprocs>1.
+set(TEST_PARITY_NPROCS "2" CACHE STRING
+    "Second rank count for the tgv_small MPI parity regression (compared against np=1)")
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME tgv_small_mpi_parity
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/tgv_small
+                --mpirun ${MPIEXEC_EXECUTABLE}
+                --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine>
+                --np-a 1 --np-b ${TEST_PARITY_NPROCS}
+                --label-a cpu-np1 --label-b cpu-np${TEST_PARITY_NPROCS})
+endif()
 
 #------------------------------------------------------------------------------
 # Install
