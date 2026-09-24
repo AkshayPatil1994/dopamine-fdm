@@ -4,7 +4,7 @@ Module poisson_gpu
   Use iso_fortran_env, Only : Int32, Int64
   Use cufft
   Use cusparse
-  Use decomp, Only : decomp_poisson, transpose_x_to_y, transpose_y_to_x, transpose_y_to_z, transpose_z_to_y
+  Use decomp, Only : decomp_poisson, decomp_spec, transpose_x_to_y, transpose_y_to_x, transpose_y_to_z, transpose_z_to_y
   Use global, Only : nxp_global, nzp_global, nyg, rhs_p, Dyy, kxx, kyy, kzz, x_bc_type, y_bc_type, pi, &
                      z_bc_type, nzm_global, Qz, sqrt_w_z, lambda_z, &
                      poisson_y_r, poisson_x_r, poisson_x_c, poisson_y_c, poisson_z_c
@@ -16,7 +16,10 @@ Module poisson_gpu
   ! Genuine 3D periodic cuFFT transform (y_bc_type==0 AND x_bc_type==0 only)
   ! (pencil-decomposed: batched 1-D cuFFT plans, one per pencil orientation, wired between
   ! 2decomp&fft's GPU (CUDA-aware) transposes exactly like projection.f90's CPU FFTW path)
-  Integer :: plan_p3_x, plan_p3_y, plan_p3_z
+  ! plan_p3_x: real-to-complex (D2Z) forward x transform, plan_p3_xi: its complex-to-real (Z2D) inverse; the
+  ! spectral arrays (poisson_x_c/y_c/z_c) hold only the nxp/2+1 non-redundant kx modes (decomp_spec), halving
+  ! the data moved by the y<->z pencil transposes
+  Integer :: plan_p3_x, plan_p3_xi, plan_p3_y, plan_p3_z
 
   ! DCT-IV (x_bc_type==1) state: zero-padded 4N-point Z2Z FFT of every x-line of this rank's x-pencil + twiddle
   Integer :: plan_dct_L, Lx
@@ -42,7 +45,7 @@ Contains
   !> Create the batched cuFFT plans once, on first use (pencil-decomposed: one batched 1-D plan per pencil orientation)
   Subroutine gpu_poisson_init
 
-    Integer :: ierr, nx1, nz1, nyp_l
+    Integer :: ierr, nx1, nxh, nz1, nyp_l
 
     nx1    = Int(nxp_global)
     nz1    = Int(nzp_global)
@@ -78,8 +81,11 @@ Contains
 
     ierr = 0
     If ( x_bc_type == 0 ) Then
-       ! x-pencil: contiguous length-nxp transforms, batch over (j,k)
-       ierr = ierr + cufftPlanMany( plan_p3_x, 1, [nx1], [nx1], 1, nx1, [nx1], 1, nx1, CUFFT_Z2Z, &
+       ! x-pencil: contiguous length-nxp real-to-complex transforms (nxp/2+1 output modes), batch over (j,k)
+       nxh = nx1/2 + 1
+       ierr = ierr + cufftPlanMany( plan_p3_x,  1, [nx1], [nx1], 1, nx1, [nxh], 1, nxh, CUFFT_D2Z, &
+                                    decomp_poisson%xsz(2)*decomp_poisson%xsz(3) )
+       ierr = ierr + cufftPlanMany( plan_p3_xi, 1, [nx1], [nxh], 1, nxh, [nx1], 1, nx1, CUFFT_Z2D, &
                                     decomp_poisson%xsz(2)*decomp_poisson%xsz(3) )
     Else
        ! DCT-IV via zero-padded 4N FFT, batch over the x-pencil's (j,k) lines
@@ -91,19 +97,19 @@ Contains
     End If
     If ( z_bc_type == 0 ) Then
        ! z-pencil: length-nzp transforms at stride zsz1*zsz2, batch over (i,j)
-       ierr = ierr + cufftPlanMany( plan_p3_z, 1, [nz1], [nz1], decomp_poisson%zsz(1)*decomp_poisson%zsz(2), 1, &
-                                    [nz1], decomp_poisson%zsz(1)*decomp_poisson%zsz(2), 1, CUFFT_Z2Z, &
-                                    decomp_poisson%zsz(1)*decomp_poisson%zsz(2) )
+       ierr = ierr + cufftPlanMany( plan_p3_z, 1, [nz1], [nz1], decomp_spec%zsz(1)*decomp_spec%zsz(2), 1, &
+                                    [nz1], decomp_spec%zsz(1)*decomp_spec%zsz(2), 1, CUFFT_Z2Z, &
+                                    decomp_spec%zsz(1)*decomp_spec%zsz(2) )
     End If
     ! y-pencil (periodic y only): length-nyp transforms at stride ysz1, batch over i (one plan execution per k-slice)
     If ( y_bc_type == 0 ) Then
-       ierr = ierr + cufftPlanMany( plan_p3_y, 1, [nyp_l], [nyp_l], decomp_poisson%ysz(1), 1, &
-                                    [nyp_l], decomp_poisson%ysz(1), 1, CUFFT_Z2Z, decomp_poisson%ysz(1) )
+       ierr = ierr + cufftPlanMany( plan_p3_y, 1, [nyp_l], [nyp_l], decomp_spec%ysz(1), 1, &
+                                    [nyp_l], decomp_spec%ysz(1), 1, CUFFT_Z2Z, decomp_spec%ysz(1) )
     End If
     If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil plan creation failed'
 
     If ( z_bc_type == 1 ) Then
-       Allocate( duct_c(decomp_poisson%ysz(1), decomp_poisson%ysz(2), decomp_poisson%ysz(3)) )
+       Allocate( duct_c(decomp_spec%ysz(1), decomp_spec%ysz(2), decomp_spec%ysz(3)) )
        !$acc enter data create(duct_c)
        ! Qz/sqrt_w_z/lambda_z are built once on the host in initialization.f90 -- just upload them here
        Allocate( Qz_gpu(nzm_global,nzm_global), sqrt_w_z_gpu(nzm_global), lambda_z_gpu(nzm_global) )
@@ -230,33 +236,23 @@ Contains
     Call transpose_y_to_x( poisson_y_r, poisson_x_r, decomp_poisson )
 
     If ( x_bc_type == 0 ) Then
-       n1 = decomp_poisson%xsz(1); n2 = decomp_poisson%xsz(2); n3 = decomp_poisson%xsz(3)
-       !$acc parallel loop collapse(3) present(poisson_x_r,poisson_x_c)
-       Do k = 1, n3
-          Do j = 1, n2
-             Do i = 1, n1
-                poisson_x_c(i,j,k) = dcmplx( poisson_x_r(i,j,k) )
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-       !$acc host_data use_device(poisson_x_c)
-       ierr = cufftExecZ2Z( plan_p3_x, poisson_x_c, poisson_x_c, CUFFT_FORWARD )
+       !$acc host_data use_device(poisson_x_r,poisson_x_c)
+       ierr = cufftExecD2Z( plan_p3_x, poisson_x_r, poisson_x_c )
        !$acc end host_data
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil x forward exec failed'
+       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil x forward (D2Z) exec failed'
     Else
        Call gpu_dct_x_forward
     End If
-    Call transpose_x_to_y( poisson_x_c, poisson_y_c, decomp_poisson )
+    Call transpose_x_to_y( poisson_x_c, poisson_y_c, decomp_spec )
 
     ! z FFT for periodic z; the duct (z_bc_type==1) stays in physical z (eigenmode transform in the solve)
     If ( z_bc_type == 0 ) Then
-       Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_poisson )
+       Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_spec )
        !$acc host_data use_device(poisson_z_c)
        ierr = cufftExecZ2Z( plan_p3_z, poisson_z_c, poisson_z_c, CUFFT_FORWARD )
        !$acc end host_data
        If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil z forward exec failed'
-       Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_poisson )
+       Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_spec )
     End If
 
   End Subroutine gpu_forward_transform_3d
@@ -267,11 +263,11 @@ Contains
     Integer :: i, j, k, k_global, i_global, ierr, nyp, n1, n3, yst1, yst3
     Real(Int64) :: inv_nyp
 
-    n1   = decomp_poisson%ysz(1)
-    n3   = decomp_poisson%ysz(3)
-    nyp  = decomp_poisson%ysz(2) - 1
-    yst1 = decomp_poisson%yst(1)
-    yst3 = decomp_poisson%yst(3)
+    n1   = decomp_spec%ysz(1)
+    n3   = decomp_spec%ysz(3)
+    nyp  = decomp_spec%ysz(2) - 1
+    yst1 = decomp_spec%yst(1)
+    yst3 = decomp_spec%yst(3)
     inv_nyp = 1d0 / Real(nyp,Int64)
 
     Do k = 1, n3
@@ -324,15 +320,15 @@ Contains
     Real(Int64) :: inv_norm, znorm
 
     If ( z_bc_type == 0 ) Then
-       Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_poisson )
+       Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_spec )
        !$acc host_data use_device(poisson_z_c)
        ierr = cufftExecZ2Z( plan_p3_z, poisson_z_c, poisson_z_c, CUFFT_INVERSE )
        !$acc end host_data
        If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil z inverse exec failed'
-       Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_poisson )
+       Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_spec )
     End If
 
-    Call transpose_y_to_x( poisson_y_c, poisson_x_c, decomp_poisson )
+    Call transpose_y_to_x( poisson_y_c, poisson_x_c, decomp_spec )
     ! z solved via a real-space tridiagonal/eigenmode solve (duct) needs no z normalisation
     If ( z_bc_type == 0 ) Then
        znorm = Real(nzp_global,Int64)
@@ -340,18 +336,18 @@ Contains
        znorm = 1d0
     End If
     If ( x_bc_type == 0 ) Then
-       !$acc host_data use_device(poisson_x_c)
-       ierr = cufftExecZ2Z( plan_p3_x, poisson_x_c, poisson_x_c, CUFFT_INVERSE )
+       !$acc host_data use_device(poisson_x_c,poisson_x_r)
+       ierr = cufftExecZ2D( plan_p3_xi, poisson_x_c, poisson_x_r )
        !$acc end host_data
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil x inverse exec failed'
+       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil x inverse (Z2D) exec failed'
 
        inv_norm = 1d0 / ( Real(nxp_global,Int64) * znorm )
        n1 = decomp_poisson%xsz(1); n2 = decomp_poisson%xsz(2); n3 = decomp_poisson%xsz(3)
-       !$acc parallel loop collapse(3) present(poisson_x_c,poisson_x_r)
+       !$acc parallel loop collapse(3) present(poisson_x_r)
        Do k = 1, n3
           Do j = 1, n2
              Do i = 1, n1
-                poisson_x_r(i,j,k) = Real( poisson_x_c(i,j,k), Int64 ) * inv_norm
+                poisson_x_r(i,j,k) = poisson_x_r(i,j,k) * inv_norm
              End Do
           End Do
        End Do
@@ -382,7 +378,7 @@ Contains
 
     gtsv_m     = nyg - 2
     ! one system per (kx,kz) mode (or (kx,z-eigenmode) for the duct) this rank owns in its y-pencil
-    gtsv_batch = decomp_poisson%ysz(1) * decomp_poisson%ysz(3)
+    gtsv_batch = decomp_spec%ysz(1) * decomp_spec%ysz(3)
 
     Allocate( gtsv_dl(gtsv_m*gtsv_batch), gtsv_d(gtsv_m*gtsv_batch), &
               gtsv_du(gtsv_m*gtsv_batch), gtsv_x(gtsv_m*gtsv_batch) )
@@ -421,10 +417,10 @@ Contains
 
     If ( .Not. gtsv_created ) Call gpu_gtsv_init
 
-    n1   = decomp_poisson%ysz(1)
-    n3   = decomp_poisson%ysz(3)
-    yst1 = decomp_poisson%yst(1)
-    yst3 = decomp_poisson%yst(3)
+    n1   = decomp_spec%ysz(1)
+    n3   = decomp_spec%ysz(3)
+    yst1 = decomp_spec%yst(1)
+    yst3 = decomp_spec%yst(3)
 
     !$acc data present(Dyy,kxx,kzz,poisson_y_c,gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
 
@@ -486,10 +482,10 @@ Contains
 
     If ( .Not. gtsv_created ) Call gpu_gtsv_init
 
-    n1   = decomp_poisson%ysz(1)
-    ny_i = decomp_poisson%ysz(2)
+    n1   = decomp_spec%ysz(1)
+    ny_i = decomp_spec%ysz(2)
     nz1  = Int(nzm_global)
-    yst1 = decomp_poisson%yst(1)
+    yst1 = decomp_spec%yst(1)
 
     !$acc data present(Dyy,kxx,lambda_z_gpu,Qz_gpu,sqrt_w_z_gpu,poisson_y_c,duct_c,gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
 

@@ -20,6 +20,9 @@ Module decomp
   ! Fourier-transform grid (nxp_global x nym_global x nzp_global), which
   ! differs from the main (face-count) pencil grid above
   Type(decomp_info) :: decomp_poisson
+  ! pencil grid of the *spectral* (complex) Poisson arrays: same as decomp_poisson except that GPU builds with
+  ! periodic x use a real-to-complex x transform and keep only nxp/2+1 kx modes (halves the transposed data)
+  Type(decomp_info) :: decomp_spec
 
 Contains
 
@@ -97,6 +100,13 @@ Contains
     Integer(Int32), Intent(In) :: nxp_g, nyp_g, nzp_g
 
     Call decomp_info_init(nxp_g, nyp_g, nzp_g, decomp_poisson)
+#ifdef GPU_POISSON
+    If ( x_bc_type == 0 ) Then
+       Call decomp_info_init(nxp_g/2+1, nyp_g, nzp_g, decomp_spec)
+    Else
+       Call decomp_info_init(nxp_g, nyp_g, nzp_g, decomp_spec)
+    End If
+#endif
     ! register decomp_poisson's complex shape with the shared memory pool too (see note above)
     ! (2decomp&fft's GPU build has no shared pool -- use_pool is .false. there)
     If ( use_pool ) Call decomp_pool%new_shape(complex_type, decomp_poisson)

@@ -7,6 +7,12 @@ Module initialization
   Use global
   Use mpi
   Use decomp, Only : decomp_init_pencil, decomp_build_xz_ranges, decomp_init_poisson_pencil, decomp_poisson, z_periodic_partner
+#ifdef GPU_POISSON
+  Use decomp, Only : decomp_spec
+#define DSPEC decomp_spec
+#else
+#define DSPEC decomp_poisson
+#endif
   Use input_output
   Use ibmSetup
   Use scalar_transport, Only : compute_settling_velocity
@@ -352,27 +358,36 @@ Contains
     ! pencil work arrays for the transpose chain
     Allocate ( poisson_y_r ( decomp_poisson%ysz(1), decomp_poisson%ysz(2), decomp_poisson%ysz(3) ) )
     Allocate ( poisson_x_r ( decomp_poisson%xsz(1), decomp_poisson%xsz(2), decomp_poisson%xsz(3) ) )
+#ifdef GPU_POISSON
+    ! spectral arrays sized by decomp_spec (nxp/2+1 kx modes when x is periodic; see decomp.f90)
+    Allocate ( poisson_x_c ( decomp_spec%xsz(1), decomp_spec%xsz(2), decomp_spec%xsz(3) ) )
+    Allocate ( poisson_y_c ( decomp_spec%ysz(1), decomp_spec%ysz(2), decomp_spec%ysz(3) ) )
+    Allocate ( poisson_z_c ( decomp_spec%zsz(1), decomp_spec%zsz(2), decomp_spec%zsz(3) ) )
+#else
     Allocate ( poisson_x_c ( decomp_poisson%xsz(1), decomp_poisson%xsz(2), decomp_poisson%xsz(3) ) )
     Allocate ( poisson_y_c ( decomp_poisson%ysz(1), decomp_poisson%ysz(2), decomp_poisson%ysz(3) ) )
     Allocate ( poisson_z_c ( decomp_poisson%zsz(1), decomp_poisson%zsz(2), decomp_poisson%zsz(3) ) )
+#endif
 
     ! local (non-MPI) batched complex 1-D FFT in z, dimension 3 (fully local in the z-pencil); periodic z only (z_bc_type==0) -- the wall case (z_bc_type==1) solves z via Zgtsv/Dzz instead, see below
     If ( z_bc_type == 0 ) Then
     plan_fz_fwd = fftw_plan_many_dft( 1_C_INT, [Int(nzp_global,C_INT)],                          &
-             Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT),                             &
-             poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
-             poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
+             Int(DSPEC%zsz(1)*DSPEC%zsz(2),C_INT),                             &
+             poisson_z_c, [Int(nzp_global,C_INT)], Int(DSPEC%zsz(1)*DSPEC%zsz(2),C_INT), 1_C_INT, &
+             poisson_z_c, [Int(nzp_global,C_INT)], Int(DSPEC%zsz(1)*DSPEC%zsz(2),C_INT), 1_C_INT, &
              FFTW_FORWARD, FFTW_MEASURE )
     plan_fz_inv = fftw_plan_many_dft( 1_C_INT, [Int(nzp_global,C_INT)],                          &
-             Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT),                             &
-             poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
-             poisson_z_c, [Int(nzp_global,C_INT)], Int(decomp_poisson%zsz(1)*decomp_poisson%zsz(2),C_INT), 1_C_INT, &
+             Int(DSPEC%zsz(1)*DSPEC%zsz(2),C_INT),                             &
+             poisson_z_c, [Int(nzp_global,C_INT)], Int(DSPEC%zsz(1)*DSPEC%zsz(2),C_INT), 1_C_INT, &
+             poisson_z_c, [Int(nzp_global,C_INT)], Int(DSPEC%zsz(1)*DSPEC%zsz(2),C_INT), 1_C_INT, &
              FFTW_BACKWARD, FFTW_MEASURE )
     End If
 
     If ( x_bc_type == 0 ) Then
 
        ! ---- periodic x: local batched complex 1-D FFT in x, dimension 1 (fully local in the x-pencil) ----------
+#ifndef GPU_POISSON
+       ! (the GPU build transforms x with cuFFT D2Z/Z2D on decomp_spec-sized arrays instead; see poisson_gpu.f90)
        plan_fx_fwd = fftw_plan_many_dft( 1_C_INT, [Int(nxp_global,C_INT)],                    &
                 Int(decomp_poisson%xsz(2)*decomp_poisson%xsz(3),C_INT),                       &
                 poisson_x_c, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),         &
@@ -383,6 +398,8 @@ Contains
                 poisson_x_c, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),         &
                 poisson_x_c, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),         &
                 FFTW_BACKWARD, FFTW_MEASURE )
+
+#endif
 
        ! global Fourier coeficients with modified wave-number for the second derivative
        Allocate ( kxx(0:mx_global), kzz(0:mz_global) )
@@ -444,14 +461,14 @@ Contains
     If ( y_bc_type == 0 ) Then
 
        plan_fy_fwd = fftw_plan_many_dft( 1_C_INT, [Int(decomp_poisson%ysz(2)-1,C_INT)],                      &
-                Int(decomp_poisson%ysz(1),C_INT),                                                            &
-                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(decomp_poisson%ysz(1),C_INT), 1_C_INT, &
-                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(decomp_poisson%ysz(1),C_INT), 1_C_INT, &
+                Int(DSPEC%ysz(1),C_INT),                                                            &
+                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(DSPEC%ysz(1),C_INT), 1_C_INT, &
+                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(DSPEC%ysz(1),C_INT), 1_C_INT, &
                 FFTW_FORWARD, FFTW_MEASURE )
        plan_fy_inv = fftw_plan_many_dft( 1_C_INT, [Int(decomp_poisson%ysz(2)-1,C_INT)],                      &
-                Int(decomp_poisson%ysz(1),C_INT),                                                            &
-                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(decomp_poisson%ysz(1),C_INT), 1_C_INT, &
-                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(decomp_poisson%ysz(1),C_INT), 1_C_INT, &
+                Int(DSPEC%ysz(1),C_INT),                                                            &
+                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(DSPEC%ysz(1),C_INT), 1_C_INT, &
+                poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(DSPEC%ysz(1),C_INT), 1_C_INT, &
                 FFTW_BACKWARD, FFTW_MEASURE )
 
        ! global Fourier coefficients with modified wave-number for the second derivative; uniform y grid (grid_type=1 enforced above)
@@ -800,8 +817,7 @@ Contains
        !$acc update device(Cscal,Cscal_o)
     End If
 #ifdef GPU_POISSON
-    ! rhs_p_hat stays device-resident end-to-end through the whole Poisson stage
-    !$acc enter data create(rhs_p_hat)
+    ! (rhs_p_hat is no longer used by the GPU Poisson path -- the pencil solve works in place on poisson_y_c)
     ! P itself is host-only (only ever touched at rk_step==3, 1-in-3 RK substages),
     ! but solve_poisson_equation's ghost/periodic-BC fill for it reuses the same
     ! apply_periodic_bc_x/z routines the device-resident U/V/W use, which assume
