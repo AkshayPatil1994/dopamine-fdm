@@ -5,7 +5,8 @@ Module scalar_transport
   Use global
   Use mpi
   Use decomp, Only : z_halo_neighbors
-  Use boundary_conditions, Only : apply_periodic_bc_z, apply_inflow_bc_scalar_x_C, outflow_convection_velocity
+  Use boundary_conditions, Only : apply_periodic_bc_x, apply_periodic_bc_z, update_ghost_interior_planes_x, &
+                                  apply_inflow_bc_scalar_x_C, outflow_convection_velocity
 
   Implicit None
 
@@ -287,12 +288,18 @@ Contains
 
     Real(Int64) :: Uc, courant
 
-    ! x direction: periodic, or Dirichlet inflow / convective outflow
-    If ( x_bc_type == 0 ) Then
-       C_(1,   :,:) = C_(nxg-2,:,:)
-       C_(nxg-1,:,:) = C_(2,   :,:)
-       C_(nxg,  :,:) = C_(3,   :,:)
-    Else
+    ! x direction: seam planes from the x-neighbour rank (p_row>1), then periodic wrap between the first and last
+    ! x rank (a local wrap within each slab is only right when x is not split), or Dirichlet inflow / convective
+    ! outflow. The exchange/wrap routines act on device memory in GPU builds, hence the update pair.
+#ifdef GPU_POISSON
+    !$acc update device(C_)
+#endif
+    Call update_ghost_interior_planes_x(C_, 4)
+    If ( x_bc_type == 0 ) Call apply_periodic_bc_x(C_, 4)
+#ifdef GPU_POISSON
+    !$acc update host(C_)
+#endif
+    If ( x_bc_type /= 0 ) Then
        Call apply_inflow_bc_scalar_x_C(C_)
        Uc = outflow_convection_velocity()
        courant = Min(Max(Uc,0d0)*dt/dx, 1d0)

@@ -4,7 +4,8 @@ Module thermal_transport
   Use iso_fortran_env,  Only : Int32, Int64
   Use global
   Use mpi
-  Use boundary_conditions, Only : apply_periodic_bc_z, apply_inflow_bc_scalar_x, outflow_convection_velocity, &
+  Use boundary_conditions, Only : apply_periodic_bc_x, apply_periodic_bc_z, update_ghost_interior_planes_x, &
+                                  apply_inflow_bc_scalar_x, outflow_convection_velocity, &
                                   apply_Robin_bc_y_scalar_lo, apply_Robin_bc_y_scalar_hi
   Use scalar_transport,    Only : compute_rhs_scalar_core, update_ghost_scalar
 
@@ -33,12 +34,18 @@ Contains
 
     Real(Int64) :: Uc, courant
 
-    ! x direction: periodic, or Dirichlet-SEM inflow / convective outflow
-    If ( x_bc_type == 0 ) Then
-       T_(1,   :,:) = T_(nxg-2,:,:)
-       T_(nxg-1,:,:) = T_(2,   :,:)
-       T_(nxg,  :,:) = T_(3,   :,:)
-    Else
+    ! x direction: seam planes from the x-neighbour rank (p_row>1), then periodic wrap between the first and last
+    ! x rank (a local wrap within each slab is only right when x is not split), or Dirichlet-SEM inflow /
+    ! convective outflow. The exchange/wrap routines act on device memory in GPU builds, hence the update pair.
+#ifdef GPU_POISSON
+    !$acc update device(T_)
+#endif
+    Call update_ghost_interior_planes_x(T_, 4)
+    If ( x_bc_type == 0 ) Call apply_periodic_bc_x(T_, 4)
+#ifdef GPU_POISSON
+    !$acc update host(T_)
+#endif
+    If ( x_bc_type /= 0 ) Then
        Call apply_inflow_bc_scalar_x(T_)
        Uc = outflow_convection_velocity()   ! scalar-only, safe to call from host code (see boundary_conditions.f90)
        courant = Min(Max(Uc,0d0)*dt/dx, 1d0)
