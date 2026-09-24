@@ -634,7 +634,14 @@ Contains
     weight_y_0 = ( yg(2:nyg) - y(1:ny) ) / ( yg(2:nyg) - yg(1:nyg-1)  )
     weight_y_1 = 1d0 - weight_y_0
     Allocate ( weight_z_0(nz), weight_z_1(nz) )
-    weight_z_0 = ( zg(2:nzg) - z(1:nz) ) / ( zg(2:nzg) - zg(1:nzg-1)  )
+    ! Explicit loop, not an array expression: on z-decomposed ranks whose slab has nz == nzg (e.g. rank 0
+    ! of a 2-rank z-split) zg(2:nzg) has one element fewer than z(1:nz), so the whole-array form was a
+    ! non-conformable assignment (undefined; nvfortran zeroed element 1, breaking the first z plane's
+    ! interpolation). Face nz then has no upper cell centre locally and is never read (interpolate_z runs to nzg-1).
+    weight_z_0 = 0.5d0
+    Do k = 1, Min(nz, nzg-1)
+       weight_z_0(k) = ( zg(k+1) - z(k) ) / ( zg(k+1) - zg(k) )
+    End Do
     weight_z_1 = 1d0 - weight_z_0
 
     ! Runge-Kutta 3
