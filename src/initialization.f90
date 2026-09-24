@@ -19,7 +19,7 @@ Module initialization
   Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
   Use uav_actuator, Only : setup_uav
 #ifdef GPU_POISSON
-  Use gpu_device, Only : assign_gpu_device
+  Use gpu_device, Only : assign_gpu_device, assign_gpu_device_pre_mpi
 #endif
 
   ! prevent implicit typing
@@ -39,6 +39,11 @@ Contains
     Logical        :: is_first_z, is_last_z
     Integer(Int32) :: z_partner
 
+#ifdef GPU_POISSON
+    ! bind to a GPU before MPI_Init (when the launcher exports a node-local rank) so a CUDA-aware MPI
+    ! creates its context on this rank's device, not device 0 -- see src/gpu_device.f90
+    Call assign_gpu_device_pre_mpi
+#endif
     ! first initialize MPI
     call Mpi_init(ierr)
     call Mpi_comm_size(MPI_COMM_WORLD, nprocs, ierr)
