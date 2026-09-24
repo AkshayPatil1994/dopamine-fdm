@@ -12,6 +12,9 @@ Module initialization
   Use scalar_transport, Only : compute_settling_velocity
   Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
   Use uav_actuator, Only : setup_uav
+#ifdef GPU_POISSON
+  Use gpu_device, Only : assign_gpu_device
+#endif
 
   ! prevent implicit typing
   Implicit None
@@ -34,6 +37,13 @@ Contains
     call Mpi_init(ierr)
     call Mpi_comm_size(MPI_COMM_WORLD, nprocs, ierr)
     call Mpi_comm_rank(MPI_COMM_WORLD,   myid, ierr)
+
+#ifdef GPU_POISSON
+    ! Must run before any device allocation or cuFFT/cuSPARSE plan creation
+    ! (gpu_poisson_init, called later below) so every rank binds to its own
+    ! physical GPU first -- see src/gpu_device.f90.
+    Call assign_gpu_device
+#endif
 
     time_wall_start = MPI_WTIME()
 

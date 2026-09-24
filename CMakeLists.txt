@@ -15,6 +15,17 @@ option(ENABLE_GPU "Build with OpenACC GPU offload (requires nvfortran)" OFF)
 if(ENABLE_GPU AND NOT CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
     message(FATAL_ERROR "ENABLE_GPU requires nvfortran: configure with -DCMAKE_Fortran_COMPILER=nvfortran")
 endif()
+# cc86 = compute capability 8.6 (RTX A6000/3090/A40 etc.); override with
+# -DCMAKE_CUDA_ARCHITECTURES=<cc> for other GPUs. Feeds both this project's
+# own -gpu=cc<N> nvfortran flag below and 2decomp&fft's gpu-target sub-build.
+# Optional CUDA toolkit pin for nvfortran (-gpu=cudaX.Y). Needed when the
+# installed NVIDIA driver is older than the toolkit NVHPC bundles by default
+# (e.g. driver 535 supports CUDA <=12.2 only; the 12.9 default segfaults in
+# cuModuleLoad at startup). Empty = use nvfortran's default toolkit.
+set(GPU_CUDA_VERSION "" CACHE STRING "CUDA toolkit version for nvfortran -gpu=cudaX.Y, e.g. 12.2 (empty = compiler default)")
+if(ENABLE_GPU AND NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES "86" CACHE STRING "CUDA compute capability (no dots, e.g. 86)")
+endif()
 
 #------------------------------------------------------------------------------
 # MPI
@@ -63,13 +74,29 @@ if(NOT EXISTS "${DECOMP2D_SRC_DIR}/CMakeLists.txt")
 endif()
 
 if(NOT EXISTS "${DECOMP2D_INSTALL_DIR}/lib/decomp2d/decomp2d-config.cmake")
+    # ENABLE_GPU: build 2decomp&fft's own gpu target (BUILD_TARGET=gpu,
+    # ENABLE_CUDA=ON) instead of mpi -- its transpose_x_to_y/y_to_z/etc.
+    # (the same calls src/projection.f90 and, from here on, src/poisson_gpu.f90
+    # use) compile to CUDA-aware-MPI device-to-device transposes under
+    # `#if defined(_GPU)` (see its src/transpose_*.f90), instead of the host
+    # staging path -- this is what makes a >nprocs=1 GPU build possible at
+    # all without hand-writing our own GPU-aware pencil transpose code.
+    set(_d2d_target_args -DBUILD_TARGET=mpi -DFFT_Choice=fftw)
+    if(ENABLE_GPU)
+        set(_d2d_target_args -DBUILD_TARGET=gpu -DENABLE_CUDA=ON -DFFT_Choice=fftw
+                              -DCMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES})
+        if(GPU_CUDA_VERSION)
+            list(APPEND _d2d_target_args "-DCMAKE_Fortran_FLAGS=-gpu=cuda${GPU_CUDA_VERSION}")
+        endif()
+    endif()
     execute_process(
         COMMAND ${CMAKE_COMMAND}
                 -S "${DECOMP2D_SRC_DIR}" -B "${DECOMP2D_BIN_DIR}"
                 -DCMAKE_INSTALL_PREFIX=${DECOMP2D_INSTALL_DIR}
                 -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
                 -DCMAKE_Fortran_COMPILER=${CMAKE_Fortran_COMPILER}
-                -DBUILD_TARGET=mpi -DFFT_Choice=fftw -DBUILD_TESTING=OFF
+                -DMPI_Fortran_COMPILER=${MPI_Fortran_COMPILER}
+                ${_d2d_target_args} -DBUILD_TESTING=OFF
                 -DCMAKE_MODULE_PATH=${CMAKE_CURRENT_SOURCE_DIR}/cmake
         RESULT_VARIABLE _d2d_cfg_result
     )
@@ -104,7 +131,11 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
         # docs/Installation.md#building-single-gpu-openacc--cufft--cusparse
         # rdc (relocatable device code): required so nvlink can resolve cross-procedure
         # !$acc routine seq calls (e.g. wallmodel/ibm device-callable helpers)
-        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -acc -gpu=cc86,rdc -Minfo=accel -DGPU_POISSON -cudalib=cufft,cusparse")
+        set(_gpu_cuda_flag "")
+        if(GPU_CUDA_VERSION)
+            set(_gpu_cuda_flag "cuda${GPU_CUDA_VERSION},")
+        endif()
+        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -acc -gpu=${_gpu_cuda_flag}cc${CMAKE_CUDA_ARCHITECTURES},rdc -Minfo=accel -DGPU_POISSON -cudalib=cufft,cusparse")
     endif()
 endif()
 
@@ -128,6 +159,18 @@ set(SRCS
     src/thermal_transport.f90
     src/genGridandIC.f90
     src/input_output.f90
+)
+
+if(ENABLE_GPU)
+    # gpu_device.f90 before initialization.f90: initialization.f90's
+    # `Use gpu_device` sits inside an #ifdef GPU_POISSON block (like
+    # projection.f90's `Use poisson_gpu` below), so it must precede
+    # initialization.f90 in SRCS for the (preprocessor-blind) module scanner
+    # to order the build correctly; see the matching OBJECT_DEPENDS below.
+    list(APPEND SRCS src/gpu_device.f90)
+endif()
+
+list(APPEND SRCS
     src/initialization.f90
     src/wallmodel.f90
     src/finalization.f90
@@ -164,6 +207,8 @@ if(ENABLE_GPU)
     # parallel batch. State the dependency explicitly.
     set_source_files_properties(src/projection.f90 PROPERTIES
         OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/dopamine.dir/src/poisson_gpu.f90.o")
+    set_source_files_properties(src/initialization.f90 PROPERTIES
+        OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/dopamine.dir/src/gpu_device.f90.o")
 endif()
 
 target_include_directories(dopamine PRIVATE
