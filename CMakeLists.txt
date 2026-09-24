@@ -23,6 +23,7 @@ endif()
 # (e.g. driver 535 supports CUDA <=12.2 only; the 12.9 default segfaults in
 # cuModuleLoad at startup). Empty = use nvfortran's default toolkit.
 set(GPU_CUDA_VERSION "" CACHE STRING "CUDA toolkit version for nvfortran -gpu=cudaX.Y, e.g. 12.2 (empty = compiler default)")
+option(DECOMP2D_GPU "With ENABLE_GPU, build 2decomp&fft in its GPU (CUDA-aware transpose) mode" ON)
 if(ENABLE_GPU AND NOT CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES "86" CACHE STRING "CUDA compute capability (no dots, e.g. 86)")
 endif()
@@ -82,19 +83,29 @@ if(NOT EXISTS "${DECOMP2D_INSTALL_DIR}/lib/decomp2d/decomp2d-config.cmake")
     # staging path -- this is what makes a >nprocs=1 GPU build possible at
     # all without hand-writing our own GPU-aware pencil transpose code.
     set(_d2d_target_args -DBUILD_TARGET=mpi -DFFT_Choice=fftw)
-    if(ENABLE_GPU)
+    set(_d2d_fc "${CMAKE_Fortran_COMPILER}")
+    if(ENABLE_GPU AND DECOMP2D_GPU)
         set(_d2d_target_args -DBUILD_TARGET=gpu -DENABLE_CUDA=ON -DFFT_Choice=fftw
                               -DCMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES})
+        # 2decomp&fft replaces CMAKE_Fortran_FLAGS with its own D2D_FFLAGS, so extra
+        # -gpu options can't be passed as flags; inject them via a compiler wrapper.
+        # rdc must match this project's own -gpu=...,rdc: a non-rdc lib linked into an
+        # rdc app crashes at startup, and the lib's CUDA version must not exceed ours.
+        set(_d2d_gpu_opts "rdc")
         if(GPU_CUDA_VERSION)
-            list(APPEND _d2d_target_args "-DCMAKE_Fortran_FLAGS=-gpu=cuda${GPU_CUDA_VERSION}")
+            set(_d2d_gpu_opts "cuda${GPU_CUDA_VERSION},rdc")
         endif()
+        set(_d2d_fc_wrapper "${CMAKE_BINARY_DIR}/nvfortran_d2d.sh")
+        file(WRITE "${_d2d_fc_wrapper}" "#!/bin/sh\nexec ${CMAKE_Fortran_COMPILER} \"$@\" -gpu=${_d2d_gpu_opts}\n")
+        file(CHMOD "${_d2d_fc_wrapper}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+        set(_d2d_fc "${_d2d_fc_wrapper}")
     endif()
     execute_process(
         COMMAND ${CMAKE_COMMAND}
                 -S "${DECOMP2D_SRC_DIR}" -B "${DECOMP2D_BIN_DIR}"
                 -DCMAKE_INSTALL_PREFIX=${DECOMP2D_INSTALL_DIR}
                 -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-                -DCMAKE_Fortran_COMPILER=${CMAKE_Fortran_COMPILER}
+                -DCMAKE_Fortran_COMPILER=${_d2d_fc}
                 -DMPI_Fortran_COMPILER=${MPI_Fortran_COMPILER}
                 ${_d2d_target_args} -DBUILD_TESTING=OFF
                 -DCMAKE_MODULE_PATH=${CMAKE_CURRENT_SOURCE_DIR}/cmake
@@ -132,10 +143,15 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
         # rdc (relocatable device code): required so nvlink can resolve cross-procedure
         # !$acc routine seq calls (e.g. wallmodel/ibm device-callable helpers)
         set(_gpu_cuda_flag "")
+        # 2decomp&fft's GPU lib is CUDA Fortran (-cuda); the app must link with the same language mode
+        set(_gpu_cuda_lang_flag "")
+        if(DECOMP2D_GPU)
+            set(_gpu_cuda_lang_flag "-cuda ")
+        endif()
         if(GPU_CUDA_VERSION)
             set(_gpu_cuda_flag "cuda${GPU_CUDA_VERSION},")
         endif()
-        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -acc -gpu=${_gpu_cuda_flag}cc${CMAKE_CUDA_ARCHITECTURES},rdc -Minfo=accel -DGPU_POISSON -cudalib=cufft,cusparse")
+        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -acc ${_gpu_cuda_lang_flag}-gpu=${_gpu_cuda_flag}cc${CMAKE_CUDA_ARCHITECTURES},rdc -Minfo=accel -DGPU_POISSON -cudalib=cufft,cusparse")
     endif()
 endif()
 

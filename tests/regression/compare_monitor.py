@@ -52,6 +52,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--case-dir', required=True)
     p.add_argument('--mpirun', default='mpirun')
+    p.add_argument('--mpirun-b', default=None, help='mpirun for run B (default: --mpirun); needed when A and B use different MPI stacks, e.g. CPU vs NVHPC GPU build')
     p.add_argument('--exe-a', required=True)
     p.add_argument('--exe-b', required=True)
     p.add_argument('--np-a', type=int, default=1)
@@ -79,7 +80,7 @@ def main():
         return out
 
     out_a = run_case(args.mpirun, args.exe_a, args.np_a, args.case_dir, parse_env(args.env_a))
-    out_b = run_case(args.mpirun, args.exe_b, args.np_b, args.case_dir, parse_env(args.env_b))
+    out_b = run_case(args.mpirun_b or args.mpirun, args.exe_b, args.np_b, args.case_dir, parse_env(args.env_b))
 
     rows_a = parse_monitor(out_a)
     rows_b = parse_monitor(out_b)

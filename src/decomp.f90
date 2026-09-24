@@ -9,7 +9,7 @@ Module decomp
        d2d_xstart => xstart, d2d_xend => xend, d2d_xsize => xsize, &
        d2d_ystart => ystart, d2d_yend => yend, d2d_ysize => ysize, &
        d2d_zstart => zstart, d2d_zend => zend, d2d_zsize => zsize, &
-       transpose_x_to_y, transpose_y_to_x, transpose_y_to_z, transpose_z_to_y
+       transpose_x_to_y, transpose_y_to_x, transpose_y_to_z, transpose_z_to_y, use_pool
   Use m_decomp_pool, Only : decomp_pool
   Use decomp_2d_constants, Only : complex_type
 
@@ -98,7 +98,8 @@ Contains
 
     Call decomp_info_init(nxp_g, nyp_g, nzp_g, decomp_poisson)
     ! register decomp_poisson's complex shape with the shared memory pool too (see note above)
-    Call decomp_pool%new_shape(complex_type, decomp_poisson)
+    ! (2decomp&fft's GPU build has no shared pool -- use_pool is .false. there)
+    If ( use_pool ) Call decomp_pool%new_shape(complex_type, decomp_poisson)
 
   End Subroutine decomp_init_poisson_pencil
 
