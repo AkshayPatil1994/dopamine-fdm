@@ -388,6 +388,8 @@ add_test(NAME verify_inflow_opt
 #   tgv_small      fully periodic Taylor-Green vortex (analytic IC)
 #   chan_small     periodic-x/z channel, no-slip y walls, DNS (wall-normal tridiagonal Poisson path)
 #   chan_les_small same with Vreman LES + equilibrium wall model on a stretched y grid
+#   duct_small     4-wall duct (z walls, alpha_grid_z stretched z), DNS+Vreman+EQWM (eigenmode Poisson path)
+#   sem_small      inflow/outflow x (DCT-IV Poisson path), uniform inflow
 # Every build: np=1 vs np=TEST_PARITY_NPROCS of this same executable. GPU build additionally
 # compares against a CPU build if CPU_REFERENCE_EXE (+ CPU_REFERENCE_MPIRUN) point at one.
 set(TEST_PARITY_NPROCS "2" CACHE STRING
@@ -397,7 +399,7 @@ set(CPU_REFERENCE_MPIRUN "" CACHE FILEPATH "mpirun matching CPU_REFERENCE_EXE (d
 set(TEST_LD_LIBRARY_PATH "" CACHE STRING "LD_LIBRARY_PATH prepended for parity tests (e.g. a matching user-space libcuda)")
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small)
+    foreach(case tgv_small chan_small chan_les_small duct_small sem_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE})

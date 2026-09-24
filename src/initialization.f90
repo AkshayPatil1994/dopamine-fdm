@@ -79,10 +79,7 @@ Contains
     End If
 
 #ifdef GPU_POISSON
-    ! single-GPU cuFFT Poisson solve (periodic or DCT-IV) only supports nprocs==1
-    ! Only the x,z-periodic branches (y periodic or walls) are pencil-decomposed (multi-GPU); the other BC branches of poisson_gpu.f90 still assume one rank owns the whole domain
-    If ( nprocs /= 1 .And. .Not. ( x_bc_type == 0 .And. z_bc_type == 0 ) ) &
-         Stop 'ERROR: GPU_POISSON with nprocs>1 currently requires periodic x and z (x_bc_type=z_bc_type=0; y periodic or walls); use nprocs=1 or the CPU build for other BCs'
+    ! Poisson solve is pencil-decomposed (multi-GPU) for every supported BC combination below
     If ( x_bc_type /= 0 .And. x_bc_type /= 1 ) Stop 'ERROR: GPU_POISSON build only supports x_bc_type=0 or 1'
     If ( y_bc_type == 0 .And. x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
     If ( z_bc_type == 1 .And. ( y_bc_type /= 1 .Or. x_bc_type /= 0 ) ) &

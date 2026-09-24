@@ -70,14 +70,13 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
 (`src/gpu_device.f90`). Launch with one rank per GPU.
 
 **Scope — read before using**:
-- **Multi-GPU (`nprocs>1`)**: supported when **`x_bc_type=0` and `z_bc_type=0`** (periodic
-  streamwise and spanwise) with either periodic or wall `y` — i.e. periodic boxes and
-  channels, pencil-decomposed like the CPU build (`p_row`/`p_col`). Wall models, SGS,
-  scalars etc. work as on one GPU; IBM host-side halo code is unchanged.
-- **Single GPU only (`nprocs=1`)**: inflow/outflow x (`x_bc_type=1`, DCT-IV) and the
-  4-wall duct (`y_bc_type=1` with `z_bc_type=1`, `x_bc_type=0`). A spanwise wall alone
-  (`z_bc_type=1`, `y_bc_type=0`), or a duct with `x_bc_type=1`, is CPU-only. A runtime
-  guard `Stop`s immediately on unsupported combinations.
+- **Multi-GPU (`nprocs>1`)**: supported for every GPU-supported BC combination, pencil-decomposed
+  like the CPU build (`p_row`/`p_col`): periodic/wall `y`, periodic (FFT) or inflow/outflow
+  (`x_bc_type=1`, DCT-IV) `x`, periodic `z`, and the 4-wall duct (`y_bc_type=1`, `z_bc_type=1`,
+  `x_bc_type=0`; `p_col=1` is forced, `x` is split). Wall models, SGS, scalars etc. work as on
+  one GPU; IBM host-side halo code is unchanged.
+- **CPU-only**: a spanwise wall alone (`z_bc_type=1`, `y_bc_type=0`), or a duct with
+  `x_bc_type=1`. A runtime guard `Stop`s immediately on unsupported combinations.
 
 Put the NVHPC SDK's `nvfortran` and bundled MPI on your `PATH`/`LD_LIBRARY_PATH` first,
 e.g.:

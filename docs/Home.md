@@ -35,7 +35,7 @@ here, then jump to whichever page matches what you're doing.
   2decomp&fft pencil transposes) Poisson solver.
 - **Parallelism** — [2decomp&fft](https://github.com/2decomp-fft/2decomp-fft) 2-D pencil
   MPI decomposition (auto-prefers a cheap 1-D z-slab split when the rank count allows);
-  optional single-GPU (OpenACC + cuFFT + cuSPARSE) build for `nprocs=1`.
+  optional multi-GPU (OpenACC + cuFFT + cuSPARSE) build.
 - **Physics** — DNS or Vreman-model LES, flat-wall/IBM log-law wall models, rough-wall
   ghost-cell IBM, oscillatory/pulsatile forcing, suspended-sediment transport, Boussinesq
   buoyancy (thermal stratification), periodic or inflow/outflow (synthetic-eddy-method)

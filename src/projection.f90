@@ -76,14 +76,8 @@ Contains
     ! rhs_p/rhs_p_hat stay device-resident through the whole Poisson stage; single-GPU cuFFT transform (nprocs==1 only)
     ! z_bc_type==1 (4-wall duct, y_bc_type==1 .And. x_bc_type==0 only -- other z-wall
     ! combinations are rejected for GPU_POISSON builds at init time, initialization.f90)
-    If ( z_bc_type == 1 ) Then
-       Call gpu_forward_transform_duct
-    Else If ( x_bc_type == 0 ) Then
-       ! x,z periodic (y periodic or walls): pencil-decomposed transform chain, multi-GPU capable
-       Call gpu_forward_transform_3d
-    Else
-       Call gpu_forward_transform_dct_slabs
-    End If
+    ! pencil-decomposed transform chain (x FFT or DCT-IV, z FFT unless duct), multi-GPU capable for every BC combination
+    Call gpu_forward_transform_3d
 #else
     ! Forward chain, common part: y(real) -> x(local FFT/DCT) -> y(complex)
     poisson_y_r = rhs_p ( 2:decomp_poisson%ysz(1)+1, 2:decomp_poisson%ysz(2)+1, 2:decomp_poisson%ysz(3)+1 )
@@ -124,17 +118,14 @@ Contains
     Call profiler_start(PROF_POISSON_TRIDIAG)
 #ifdef GPU_POISSON
     If ( z_bc_type == 1 ) Then
-       ! 4-wall duct: batched cuSPARSE solve of one y-tridiagonal system per (x-mode, z-eigenmode) pair
-       Call gpu_solve_duct_tridiagonal_batched
+       ! 4-wall duct: z-eigenmode transform + batched cuSPARSE solve of one y-tridiagonal system per (x-mode, z-eigenmode) pair
+       Call gpu_solve_duct_pencil
     Else If ( x_bc_type == 0 .And. y_bc_type == 0 ) Then
        ! Fully periodic: elementwise divide by kxx+kyy+kzz in Fourier space (no tridiagonal solve needed)
        Call gpu_solve_periodic_3d
-    Else If ( x_bc_type == 0 ) Then
-       ! x,z periodic, y walls: per-rank batched cuSPARSE tridiagonal solve over the local (kx,kz) modes
-       Call gpu_solve_tridiagonal_pencil
     Else
-       ! Batched cuSPARSE solve of all (mx+1)*(mz+1) y-tridiagonal systems in one call
-       Call gpu_solve_tridiagonal_batched
+       ! y walls: per-rank batched cuSPARSE tridiagonal solve over the local (kx,kz) modes
+       Call gpu_solve_tridiagonal_pencil
     End If
 #else
     If ( z_bc_type == 1 .And. y_bc_type == 1 ) Then
@@ -275,13 +266,7 @@ Contains
 
     Call profiler_start(PROF_POISSON_FFT)
 #ifdef GPU_POISSON
-    If ( z_bc_type == 1 ) Then
-       Call gpu_inverse_transform_duct
-    Else If ( x_bc_type == 0 ) Then
-       Call gpu_inverse_transform_3d
-    Else
-       Call gpu_inverse_transform_dct_slabs
-    End If
+    Call gpu_inverse_transform_3d
 #else
     If ( z_bc_type == 0 ) Then
        ! ---- default: z -> y (inverse local FFT) ----

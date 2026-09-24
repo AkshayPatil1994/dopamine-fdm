@@ -67,7 +67,7 @@ See [[Numerics § Time integration|Numerics#3-time-integration]].
 |-----------|---------|-------------|
 | `bc_face_ylo` | `1` | Bottom wall: 1=no-slip (Dirichlet), 2=free-slip (Neumann) |
 | `bc_face_yhi` | `1` | Top wall: 1=no-slip (Dirichlet), 2=free-slip (Neumann) |
-| `x_bc_type` | `0` | Streamwise BC: 0=periodic (spectral FFT pressure solve); 1=inflow/outflow (Dirichlet velocity at inflow, see `&INFLOW`; convective outflow; DCT-IV pressure solve). GPU build supports both, `nprocs=1` only |
+| `x_bc_type` | `0` | Streamwise BC: 0=periodic (spectral FFT pressure solve); 1=inflow/outflow (Dirichlet velocity at inflow, see `&INFLOW`; convective outflow; DCT-IV pressure solve). GPU build supports both, including multi-GPU |
 | `y_bc_type` | `1` | Wall-normal BC: 0=periodic (requires `grid_type=1`, uniform $y$; `bc_face_ylo/yhi` ignored); 1=wall (default, uses `bc_face_ylo/yhi`) |
 | `z_bc_type` | `0` | Spanwise BC: 0=periodic (default, spectral FFT pressure solve, same as `x_bc_type=0`); 1=wall — DNS no-slip or smooth log-law EQWM on both $z$ walls (`flat_wall_model_flag`, see `&PHYSICS`; no free-slip option, no rough EQWM yet). May combine with `y_bc_type=0` (spanwise-only wall) or `y_bc_type=1` (4-wall duct, coupled 2D $y$-$z$ pressure solve — needs `p_col=1`, see `&DOMAIN`). $z$ may optionally be grid-stretched via `alpha_grid_z`. **GPU build**: the 4-wall duct (`y_bc_type=1`) combined with `x_bc_type=0` (periodic streamwise) is supported, via a batched cuSPARSE eigenmode+tridiagonal solve; a spanwise wall alone (`y_bc_type=0`) or a duct with `x_bc_type=1` still `Stop`s at startup — use the CPU build for those |
 
