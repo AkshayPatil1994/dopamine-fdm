@@ -7,7 +7,8 @@ Module finalization
   Use mpi
   Use monitor,   Only : close_force_csv
   Use profiler,  Only : profiler_print_summary
-  Use decomp_2d, Only : decomp_2d_finalize
+  Use decomp_2d, Only : decomp_2d_finalize, decomp_info_finalize
+  Use decomp,    Only : comm_outflow_x, decomp_poisson
   
   ! prevent implicit typing
   Implicit None
@@ -30,6 +31,10 @@ Contains
     Else
        Call dfftw_destroy_plan(plan_dct)
     End If
+    If ( y_bc_type == 0 ) Then
+       Call dfftw_destroy_plan(plan_fy_fwd)
+       Call dfftw_destroy_plan(plan_fy_inv)
+    End If
 
     Call Mpi_barrier(MPI_COMM_WORLD, ierr)
     total_wall_time = MPI_WTIME() - time_wall_start
@@ -51,6 +56,13 @@ Contains
     Call close_force_csv
 
     Call profiler_print_summary
+
+    ! free the outflow-row sub-communicator (init_outflow_x_comm, decomp.f90), if built
+    If ( comm_outflow_x /= MPI_COMM_NULL ) Call MPI_Comm_free(comm_outflow_x, ierr)
+
+    ! tear down the self-registered Poisson decomp_info (decomp_info_init, decomp.f90) before
+    ! decomp_2d_finalize tears down the shared memory pool it was registered against
+    Call decomp_info_finalize(decomp_poisson)
 
     ! tear down 2decomp&fft's pencil/pool state before MPI goes away
     Call decomp_2d_finalize

@@ -3,8 +3,8 @@ Module decomp
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global,   Only : nx_global, ny_global, nz_global, p_row, p_col, x_bc_type, y_bc_type, z_bc_type
-  Use mpi,      Only : nprocs, myid, ierr, MPI_PROC_NULL, MPI_COMM_WORLD, k1_global, k2_global, kg1_global, kg2_global, &
-                        i1_global, i2_global, ig1_global, ig2_global
+  Use mpi,      Only : nprocs, myid, ierr, MPI_PROC_NULL, MPI_COMM_WORLD, MPI_COMM_NULL, MPI_UNDEFINED, &
+                        k1_global, k2_global, kg1_global, kg2_global, i1_global, i2_global, ig1_global, ig2_global
   Use decomp_2d, Only : decomp_2d_init, decomp_2d_finalize, decomp_info, decomp_info_init, &
        d2d_xstart => xstart, d2d_xend => xend, d2d_xsize => xsize, &
        d2d_ystart => ystart, d2d_yend => yend, d2d_ysize => ysize, &
@@ -24,7 +24,27 @@ Module decomp
   ! periodic x use a real-to-complex x transform and keep only nxp/2+1 kx modes (halves the transposed data)
   Type(decomp_info) :: decomp_spec
 
+  ! Sub-communicator containing only the ranks on the x-outflow face (row==p_row-1, one
+  ! row of p_col ranks); built once by init_outflow_x_comm (x_bc_type==1 only) so
+  ! outflow_convection_velocity's Allreduce doesn't have to synchronise the whole
+  ! p_row*p_col process grid just to share one scalar. MPI_COMM_NULL (unused) elsewhere.
+  Integer(Int32) :: comm_outflow_x = MPI_COMM_NULL
+
 Contains
+
+  !> Build comm_outflow_x: collective over MPI_COMM_WORLD (every rank must call this
+  !> together), but only ranks on the outflow row get a real communicator back --
+  !> everyone else gets MPI_COMM_NULL and never uses it (outflow_convection_velocity
+  !> returns early on non-outflow ranks before touching comm_outflow_x).
+  Subroutine init_outflow_x_comm
+
+    Integer(Int32) :: row, color
+
+    row   = myid / p_col
+    color = Merge(1, MPI_UNDEFINED, row == p_row-1)
+    Call MPI_Comm_split(MPI_COMM_WORLD, color, myid, comm_outflow_x, ierr)
+
+  End Subroutine init_outflow_x_comm
 
   !> Initialise the main 2decomp&fft pencil grid; nx/ny/nz here are face-point counts, matching this code's existing (not cell-count) convention
   Subroutine decomp_init_pencil

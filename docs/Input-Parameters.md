@@ -39,7 +39,7 @@ See [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]].
 | `z0_ylo`, `z0_yhi` | `0.0` | Momentum roughness length [m] per wall (`flat_wall_model_flag=2` only); `Stop` at startup if `<= 0` on an active no-slip wall |
 | `z0h_ylo`, `z0h_yhi` | `0.0` | Thermal roughness length [m] per wall, independent of `z0_ylo/yhi` (used with `T_bc_bot/top=2`, see `&BOUSSINESQ`) |
 | `rotation_active` | `0` | 0=off, 1=rigid-body rotation about the streamwise ($x$) axis (Coriolis + centrifugal forcing added to the $v$/$w$-momentum equations) |
-| `Omega_x` | `0.0` | Rotation rate [rad/s] about the $x$ axis (`rotation_active=1` only). The rotation axis is fixed at the domain centreline ($L_y/2$, $L_z/2$), not user-configurable |
+| `Omega_x` | `0.0` | Rotation rate [rad/s] about the $x$ axis (`rotation_active=1` only). Positive $\Omega_x$ is a right-handed rotation about $+x$ (the $y$ axis turning towards $z$), giving Coriolis forcing $-2\boldsymbol{\Omega}\times\mathbf{u}$. The rotation axis is fixed at the domain centreline ($L_y/2$, $L_z/2$), not user-configurable |
 
 See [[Numerics § Forcing|Numerics#1-governing-equations]],
 [[§ SGS model|Numerics#5-sub-grid-scale-model]], and
@@ -120,7 +120,7 @@ and the [[precursor/successor example|Examples#precursor_successor]].
 ## `&INITIAL_CONDITIONS`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `ic_type` | `1` | 1=log-law + noise; 2=linear/tent + noise; 3=zero mean + noise; 4=Reichardt turbulent channel profile + structured perturbation; 5=inverse-linear/anti-tent + noise |
+| `ic_type` | `1` | 1=log-law + noise; 2=linear/tent + noise; 3=zero mean + noise; 4=Reichardt turbulent channel profile + structured perturbation; 5=inverse-linear/anti-tent + noise; 7=deterministic two-mode perturbation on uniform `Utarget` (ε₁=`noise_percent`/100, ε₂=0.04·ε₁; 25 % gives ε₁=0.25, ε₂=0.01) |
 | `noise_percent` | `5.0` | White-noise amplitude as % of `Utarget` (applied to U, V, W for types 1–3) |
 | `Utarget` | — | Target bulk or centreline velocity |
 | `nstep_init` | — | Starting step number (non-zero for hot-start logging) |
@@ -156,7 +156,7 @@ See [[Numerics § Initial conditions|Numerics#12-initial-conditions]].
 | `d_s` | `1e-4` | Particle diameter [m] |
 | `rho_s` | `2650.0` | Particle density [kg m⁻³] |
 | `rho_f` | `1000.0` | Fluid density [kg m⁻³] |
-| `grav` | `9.81` | Gravitational acceleration [m s⁻²] |
+| `grav` | `0.0` | Gravitational acceleration [m s⁻²]; off unless set here or in `&BOUSSINESQ` |
 | `Sc` | `1.0` | Molecular Schmidt number |
 | `Sc_t` | `0.7` | Turbulent Schmidt number |
 | `C_ref` | `0.0` | Reference near-bed concentration |
@@ -166,13 +166,18 @@ See [[Numerics § Initial conditions|Numerics#12-initial-conditions]].
 
 See [[Numerics § Scalar transport|Numerics#8-scalar-transport-suspended-sediment]].
 
+`grav` is also applied unconditionally to inertial point-particles (`&PARTICLES`,
+`particle_mode = 1`) regardless of `sediment_flag`/`boussinesq_flag` — set it here (or in
+`&BOUSSINESQ`) if an inertial-particle case needs gravity, e.g. for sedimentation rather
+than a zero-gravity turbophoresis-style run.
+
 ## `&BOUSSINESQ` *(optional — omit to disable)*
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `boussinesq_flag` | `0` | 0=off, 1=transport temperature $T$ and couple it into the $v$-momentum equation via Boussinesq buoyancy |
 | `beta_T` | `0.0` | Thermal expansion coefficient $\beta_T$ [1/K] |
 | `T_ref` | `0.0` | Reference temperature $T_\text{ref}$ [K] used in the buoyancy source term |
-| `grav` | — | Gravitational acceleration [m s⁻²] (shared with `&SEDIMENT`; a warning is printed if the two disagree) |
+| `grav` | `0.0` | Gravitational acceleration [m s⁻²] (shared with `&SEDIMENT`; a warning is printed if the two disagree) |
 | `Pr` | `0.7` | Molecular Prandtl number |
 | `Pr_t` | `0.85` | Turbulent Prandtl number |
 | `T_bc_bot`, `T_bc_top` | `0`, `0` | Wall BC type: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet), 2=rough EQWM flux BC (isothermal target `T_wall_*`, flux set via `z0h_ylo/yhi` and, under stratification, the iterated Businger-Dyer Obukhov length; requires `flat_wall_model_flag=2` and `boussinesq_flag>=1`) |
@@ -219,7 +224,8 @@ with a fixed or scheduled thrust.
 | `uav_thrust_active` | `0` | 0=fixed thrust `uav_hover_thrust` for the whole run, 1=follow `uav_thrust_file` |
 | `uav_thrust_file` | `''` | Thrust schedule (required when `uav_thrust_active = 1`): same format/interpolation/clamping convention as `uav_path_file`, but rows are `t T` [s, m⁴ s⁻²] -- e.g. a takeoff surge above hover thrust, a reduced-thrust controlled descent, a landing flare, all independent of the path itself |
 | `uav_load_profile` | `0` | 0=uniform disk loading (default), 1=parabolic tip-taper: each marker's thrust share is weighted by `1-(r/R)^2` and renormalized to still sum to 1. A drop-in reweighting of the marker table -- no change to the force-application code path. |
-| `uav_tilt_active` | `0` | 0=disk stays horizontal (default -- identical to the original untilted model), 1=the disk normal is derived automatically each step from the path's own kinematic acceleration: a differentially-flat point-mass argument (as used in quadrotor minimum-snap trajectory generation) gives `n = normalize(ax, grav+ay, az)`, independent of vehicle mass. Requires `uav_path_active = 1` to have any effect (a static disk's path acceleration is identically zero, so `n` stays at `(0,1,0)`). |
+| `uav_tilt_active` | `0` | 0=disk stays horizontal (default -- identical to the original untilted model), 1=the disk normal is derived automatically each step from the path's own kinematic acceleration: a differentially-flat point-mass argument (as used in quadrotor minimum-snap trajectory generation) gives `n = normalize(ax, uav_grav+ay, az)`, independent of vehicle mass. Requires `uav_path_active = 1` to have any effect (a static disk's path acceleration is identically zero, so `n` stays at `(0,1,0)`). |
+| `uav_grav` | `9.81` | Gravitational acceleration [m s⁻²] used only by the tilt model (`n = normalize(ax, uav_grav+ay, az)`); independent of the global `grav`, which defaults to 0. |
 | `uav_tilt_tau` | `0.2` | Low-pass time constant [s] for the tilt-normal filter. The Catmull-Rom path interpolation is only C¹ (velocity-continuous, not acceleration-continuous), so the raw per-step acceleration has knot-to-knot jump discontinuities; the filter keeps the disk orientation -- and hence the force it applies -- from jumping at path waypoints. Direction only: this does not adjust `uav_hover_thrust`/`uav_thrust_file` to match the kinematically-required thrust magnitude, so the model is kinematically tilt-consistent but not dynamically trimmed. |
 | `uav_swirl_frac` | `0.0` | In-plane tangential (swirl) reaction force per marker, as a fraction of that marker's own thrust share -- represents rotor-torque reaction. A pure swirl field integrates to zero net linear force (only a net torque), so it does not by itself move the flow's bulk momentum the way tilt does; it is a local, not global, effect. Rotation sense is an arbitrary modelling choice, not derived from any tracked rotor RPM/direction. |
 

@@ -32,6 +32,7 @@ Module global
   Integer(Int32) :: nsteps
   Integer(Int32) :: nstep_init = 0
   Real   (Int64) :: dt, t
+  Real   (Int64) :: dt_step = 0d0   ! size of the step just completed (dt itself is restored to its pre-snap value at the end of each step)
   ! explicit restart start time (overrides nstep_init*dt when >=0d0 -- needed
   ! for restarts under adaptive dt, where step count no longer maps to a fixed
   ! dt*nstep_init); default -1d0 means "not given, fall back to nstep_init*dt"
@@ -180,9 +181,10 @@ Module global
   Integer(Int32) :: y_bc_type  = 1
 
   ! spanwise (z) pressure/velocity BC selector: 0=periodic (default), 1=wall (DNS no-slip only --
-  ! no wall model yet). y_bc_type==1 .And. z_bc_type==1 simultaneously is not supported: that needs
-  ! a coupled 2D (y-z) elliptic pressure solve, not the independent 1D tridiagonal solves this
-  ! selector adds (validated at input read time, see read_input_parameters).
+  ! no wall model yet). y_bc_type==1 .And. z_bc_type==1 (4-wall duct) is supported via a coupled
+  ! per-eigenmode 2D (y-z) solve (decomp.f90, initialization.f90, projection.f90), but requires
+  ! p_col==1 so the full z-extent is local to every rank (enforced at input read time, see
+  ! read_input_parameters).
   Integer(Int32) :: z_bc_type  = 0
 
   ! &INFLOW streamwise inflow condition (x_bc_type==1 only): inflow_type 0=constant, 1=SEM, 2=recycled precursor slice
@@ -458,8 +460,9 @@ Module global
   Real   (Int64) :: dt_min        = 1d-10
   Real   (Int64) :: dt_max        = 1d10
   Real   (Int64) :: cfl_current   = 0d0
-  Real   (Int64) :: cfl_conv_last = 0d0   ! convective CFL from last step
-  Real   (Int64) :: cfl_visc_last = 0d0   ! viscous CFL from last step
+  Real   (Int64) :: cfl_conv_last  = 0d0   ! convective CFL from last step
+  Real   (Int64) :: cfl_visc_last  = 0d0   ! viscous CFL from last step
+  Real   (Int64) :: cfl_accel_last = 0d0   ! source-term (buoyancy/rotation/UAV) accel-CFL from last step
 
   ! Suspended sediment transport: sediment_flag 0=off,1=on; sed_bc_bot 0=flux,1=equilibrium; C_ic_type 0=uniform,1=Rouse,2=ramp,3=slab
   Integer(Int32) :: sediment_flag = 0
@@ -468,7 +471,7 @@ Module global
   Real   (Int64) :: d_s           = 1d-4    ! particle diameter [m]
   Real   (Int64) :: rho_s         = 2650d0  ! particle density [kg/m^3]
   Real   (Int64) :: rho_f         = 1000d0  ! fluid density [kg/m^3]
-  Real   (Int64) :: grav          = 9.81d0  ! gravitational acceleration [m/s^2]
+  Real   (Int64) :: grav          = 0d0     ! gravitational acceleration [m/s^2]; off unless set via &SEDIMENT or &BOUSSINESQ
   Real   (Int64) :: Sc            = 1d0     ! molecular Schmidt number
   Real   (Int64) :: Sc_t          = 0.7d0   ! turbulent Schmidt number
   Real   (Int64) :: ws            = 0d0     ! settling velocity (computed at init)
@@ -566,6 +569,9 @@ Module global
   Integer(Int32) :: uav_load_profile  = 0
   Integer(Int32) :: uav_tilt_active   = 0
   Real   (Int64) :: uav_tilt_tau      = 0.2d0
+  ! uav_grav: gravitational acceleration [m/s^2] in the tilt model n = normalize(a, g+a_y); independent of the global `grav`
+  ! (which is 0 unless sediment/Boussinesq/inertial particles ask for gravity -- with g=0 a hovering disk has no defined normal)
+  Real   (Int64) :: uav_grav          = 9.81d0
   Real   (Int64) :: uav_swirl_frac    = 0d0
   !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
@@ -636,6 +642,75 @@ Module global
   Real   (Int64) :: slice_pos    (MAX_PROBES) = 0d0
   Character(8)   :: slice_comps  (MAX_PROBES) = 'UVW'
   Character(200) :: slice_fileout(MAX_PROBES) = 'slice'
+
+  ! Lagrangian point-particle tracking (src/particles.f90): particles_active 0=off,1=on.
+  ! Per-direction particle BC codes (bc_particle_x/y/z): -1=auto (periodic if the matching
+  ! fluid x_bc_type/y_bc_type/z_bc_type==0, else exit(x)/reflect(y,z)); explicit override
+  ! 0=periodic,1=exit(inflow/outflow),2=reflect(wall),3=absorb(wall, no bounce).
+  ! particle_reinit_on_exit: 0=none (population decays as particles exit), 1=inflow
+  ! (replace an outflow exit with a new particle at the inflow plane).
+  Integer(Int32) :: particles_active       = 0
+  Integer(Int32) :: n_particles_init       = 0
+  Real   (Int64) :: particle_seed_xmin = 0d0, particle_seed_xmax = -1d0   ! <0 (xmax): resolved to the full domain once Lx is known
+  Real   (Int64) :: particle_seed_ymin = 0d0, particle_seed_ymax = -1d0
+  Real   (Int64) :: particle_seed_zmin = 0d0, particle_seed_zmax = -1d0
+  Integer(Int32) :: particle_seed_seed     = 987654
+  Integer(Int32) :: bc_particle_x = -1, bc_particle_y = -1, bc_particle_z = -1
+  Integer(Int32) :: particle_reinit_on_exit = 0
+  Real   (Int64) :: particle_max_age       = 1d30
+  Character(200) :: particle_restart_file  = 'particles_restart'
+  ! particle_restart_load: 1=read particles from particle_restart_file when restart==1
+  ! (default, mirrors the main fluid restart); 0=always seed fresh particles even when
+  ! restart==1 (e.g. hot-starting the flow field but starting a new particle release) --
+  ! same idea as scalar_restart for C.
+  Integer(Int32) :: particle_restart_load  = 1
+
+  ! Phase 2: inertial force model. particle_mode: 0=tracer (dx/dt=u_fluid, Phase 1
+  ! behaviour, default), 1=inertial (independent particle velocity, Maxey-Riley-reduced
+  ! ODE: nonlinear (Schiller-Naumann) drag + gravity, both always on in this mode; a
+  ! small-Stokes-number inertial particle already reproduces settling/tracer-like
+  ! behaviour on its own, so there is no separate "settling_tracer" mode). Saffman-Mei
+  ! lift is deferred to Phase 3 (its usual near-wall gating needs the IBM SDF wall
+  ! distance that Phase 3 introduces).
+  Integer(Int32) :: particle_mode        = 0
+  Real   (Int64) :: particle_diam        = 1d-4    ! d_p [m]
+  Real   (Int64) :: particle_rho         = 2650d0  ! rho_p [kg/m^3]
+  Real   (Int64) :: particle_rho_f       = 1000d0  ! rho_f [kg/m^3] for the particle force balance -- independent of sediment/Boussinesq rho_f by default
+  Integer(Int32) :: particle_added_mass  = 0       ! 0=off (default), 1=on: local Eulerian dU/dt added-mass approximation (see advance_particles)
+  Integer(Int32) :: particle_brownian    = 0       ! 0=off (default), 1=on: isotropic Stokes-Einstein Brownian kick
+  Real   (Int64) :: particle_temp_abs    = 293d0   ! [K], particle_brownian==1 only
+
+  ! Phase 3: IBM/SDF collision (ibm_input_mode>=1 only). Per-object BC by solid ID (same
+  ! 0..max_ibm_objects convention as ibm_T_bc_type/ibm_z0): 1=absorb (deposit, removed),
+  ! 2=reflect (default), 3=deposit_resuspend (reflect if the local relative speed exceeds
+  ! particle_resuspend_ucrit, else absorb -- a simplified proxy for a full Shields/van Rijn
+  ! pickup function). Reflection uses a simple Stokes-number-dependent restitution heuristic
+  ! e=Min(1,tau_p/particle_ibm_tau_crit) (documented simplification, not a validated closed
+  ! form) -- see particles.f90's apply_ibm_collision.
+  Integer(Int32) :: particle_ibm_bc(0:max_ibm_objects) = 2
+  Real   (Int64) :: particle_ibm_tau_crit    = 1d-3
+  Real   (Int64) :: particle_resuspend_ucrit = 1d30   ! effectively "always deposits" until set
+
+  ! Phase 4: Boussinesq coupling (boussinesq_flag>=1 only). 0=off (default): particle_rho_f
+  ! stays the fixed value the user set. 1=on: the buoyancy term's fluid density is instead
+  ! the local Boussinesq value rho_f*(1-beta_T*(T-T_ref)) interpolated at the particle -- only
+  ! the buoyancy term uses this local value (drag/Re_p keep the constant particle_rho_f, a
+  ! scoped simplification). Ships one-way (particles never feed back into Tscal/momentum).
+  Integer(Int32) :: particle_boussinesq_coupling = 0
+  ! Deposition diagnostic (any ibm_input_mode>=1 collision that removes a particle, both
+  ! Phase 3's absorb and deposit_resuspend outcomes): streamwise deposition-rate accumulator,
+  ! written to particle_deposit_file every particle_deposit_freq monitor reports. Structured
+  ! so a later two-way concentration/deposition feedback into the flow is a small increment.
+  Character(200) :: particle_deposit_file = 'particle_deposit_x.csv'
+  Integer(Int32) :: particle_deposit_freq = 10
+
+  ! Phase 5: LES sub-grid dispersion. 0=none (default, correct for DNS resolution); 1=langevin:
+  ! a simplified (isotropic) Thomson/Weil-Sullivan-Moeng well-mixed Langevin model, diagnosing
+  ! k_sgs/eps_sgs from the existing eddy-viscosity SGS model's nu_t via a Deardorff-style
+  ! mixing-length closure (nu_t=C_k*sqrt(k_sgs)*Delta) rather than a transported k_sgs
+  ! equation -- a documented simplification, see particles.f90's compute_sgs_stats.
+  Integer(Int32) :: sgs_particle_model  = 0
+  Real   (Int64) :: particle_langevin_C0 = 2.1d0   ! Kolmogorov constant
 
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0

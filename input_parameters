@@ -86,7 +86,8 @@
 !       or 1 with a spanwise wall.
 !
 ! rotation_active/Omega_x: rigid-body rotation about the streamwise (x) axis
-! (e.g. a rotating duct). 0=off (default). When active, adds Coriolis
+! (e.g. a rotating duct); positive Omega_x is right-handed about +x (y turning
+! towards z). 0=off (default). When active, adds Coriolis
 ! (+/-2*Omega_x*w or v) and centrifugal (Omega_x^2*(y-y0_rot) / (z-z0_rot))
 ! forcing to the v/w-momentum equations; the rotation axis is fixed at the
 ! domain centreline (Ly/2, Lz/2), not user-configurable.

@@ -4,7 +4,7 @@ Module ibm
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner
+  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner, z_periodic_partner
   Use boundary_conditions, Only : exchange_velocity_halos
 
   Implicit None
@@ -138,6 +138,68 @@ Contains
 
   End Subroutine exchange_phi_x_ghost_planes
 
+  !> Periodic wrap of the cell-centred phi in x, host-only (setup runs before any device data or device scalars exist, so the
+  !  device-resident apply_periodic_bc_x cannot be used here): ghost 1 <- cell nxg-2, cells nxg-1, nxg <- 2, 3 (the periodic
+  !  duplicate cell convention of apply_periodic_bc_x), across the partner rank when x is split
+  Subroutine phi_wrap_x_host
+
+    Logical        :: is_first, is_last
+    Integer(Int32) :: partner
+    Real   (Int64), Allocatable :: b2(:,:,:), b1(:,:)
+
+    Call x_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       phi(1,    :,:) = phi(nxg-2,:,:)
+       phi(nxg-1,:,:) = phi(2,    :,:)
+       phi(nxg,  :,:) = phi(3,    :,:)
+    Else If ( is_first .Or. is_last ) Then
+       Allocate( b2(2,nyg,nzg), b1(nyg,nzg) )
+       If ( is_first ) Then
+          b2(1,:,:) = phi(2,:,:);  b2(2,:,:) = phi(3,:,:)
+          Call MPI_Sendrecv( b2, 2*nyg*nzg, MPI_real8, partner, 41, b1, nyg*nzg, MPI_real8, partner, 42, &
+                             MPI_COMM_WORLD, istat, ierr )
+          phi(1,:,:) = b1
+       Else
+          b1 = phi(nxg-2,:,:)
+          Call MPI_Sendrecv( b1, nyg*nzg, MPI_real8, partner, 42, b2, 2*nyg*nzg, MPI_real8, partner, 41, &
+                             MPI_COMM_WORLD, istat, ierr )
+          phi(nxg-1,:,:) = b2(1,:,:);  phi(nxg,:,:) = b2(2,:,:)
+       End If
+       Deallocate( b2, b1 )
+    End If
+
+  End Subroutine phi_wrap_x_host
+
+  !> Periodic wrap of phi in z, host-only (see phi_wrap_x_host)
+  Subroutine phi_wrap_z_host
+
+    Logical        :: is_first, is_last
+    Integer(Int32) :: partner
+    Real   (Int64), Allocatable :: b2(:,:,:), b1(:,:)
+
+    Call z_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       phi(:,:,1    ) = phi(:,:,nzg-2)
+       phi(:,:,nzg-1) = phi(:,:,2    )
+       phi(:,:,nzg  ) = phi(:,:,3    )
+    Else If ( is_first .Or. is_last ) Then
+       Allocate( b2(nxg,nyg,2), b1(nxg,nyg) )
+       If ( is_first ) Then
+          b2(:,:,1) = phi(:,:,2);  b2(:,:,2) = phi(:,:,3)
+          Call MPI_Sendrecv( b2, 2*nxg*nyg, MPI_real8, partner, 43, b1, nxg*nyg, MPI_real8, partner, 44, &
+                             MPI_COMM_WORLD, istat, ierr )
+          phi(:,:,1) = b1
+       Else
+          b1 = phi(:,:,nzg-2)
+          Call MPI_Sendrecv( b1, nxg*nyg, MPI_real8, partner, 44, b2, 2*nxg*nyg, MPI_real8, partner, 43, &
+                             MPI_COMM_WORLD, istat, ierr )
+          phi(:,:,nzg-1) = b2(:,:,1);  phi(:,:,nzg) = b2(:,:,2)
+       End If
+       Deallocate( b2, b1 )
+    End If
+
+  End Subroutine phi_wrap_z_host
+
   !> Read a distributed cell-centre scalar field from file: (nxg_global,nyg_global,nzm_global) Real(8), column-major, big-endian (x,y already ghosted in-file, z interior-only, same convention as xg_global/kg-based reads elsewhere)
   Subroutine read_distributed_scalar_field(filename, field)
 
@@ -146,14 +208,25 @@ Contains
 
     Integer(Int32) :: iproc, nxge_r, nzge_r, n_interior
     Integer(Int32) :: sdf_unit
+    Integer(Int64) :: file_size, expected_size, expected_elements
     Real   (Int64), Allocatable :: global_field(:,:,:), tmp_read(:), send_buf(:,:,:)
 
     ! Rank iproc owns global x-columns ig1_global(iproc):ig2_global(iproc) (already ghosted in-file)
     ! and interior z-planes kg1_global(iproc):kg2_global(iproc)-2.
     If ( myid==0 ) Then
 
+       expected_elements = Int(nxg_global, Int64) * Int(nyg_global, Int64) * Int(nzm_global, Int64)
+       expected_size = expected_elements * Int(storage_size(1d0)/8, Int64)
+       Inquire(file=Trim(filename), size=file_size)
+       If ( file_size /= expected_size ) Then
+          Write(error_unit,*) 'IBM: file size mismatch reading ', Trim(filename)
+          Write(error_unit,*) '  expected ', expected_elements, ' elements (', expected_size, ' bytes),', &
+               ' found ', file_size, ' bytes'
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+
        Open(newunit=sdf_unit, file=Trim(filename), access='stream', form='unformatted', action='read', convert='big_endian')
-       Allocate( tmp_read(Int(nxg_global, Int64) * Int(nyg_global, Int64) * Int(nzm_global, Int64)) )
+       Allocate( tmp_read(expected_elements) )
        Read(sdf_unit) tmp_read
        Close(sdf_unit)
        Allocate( global_field(nxg_global, nyg_global, nzm_global) )
@@ -201,16 +274,28 @@ Contains
 
     Call read_distributed_scalar_field(ibm_sdf_file, phi)
 
-    ! Apply Neumann (zero-gradient) ghost BCs for phi at domain boundaries; x=1/nxg is an
-    ! inter-rank seam (already correctly populated straight from the global file slice) on
-    ! any rank that doesn't own the true global x edge, so skip it there
+    ! Ghost BCs for phi at domain boundaries: true periodic wrap when x_bc_type/z_bc_type
+    ! select periodic (matches solve_poisson_equation's treatment of P, projection.f90),
+    ! Neumann (zero-gradient) otherwise. x=1/nxg (resp. z=1/nzg) is an inter-rank seam
+    ! (already correctly populated straight from the global file slice) on any rank that
+    ! doesn't own the true global domain edge, so the Neumann branch skips it there.
+    ! is_first_x/is_last_x are needed below regardless of branch (passed to
+    ! smooth_ibm_corners), so resolve them unconditionally -- cheap, no communication.
     Call x_periodic_partner(is_first_x, is_last_x, partner_x)
-    If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
-    If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+    If ( x_bc_type == 0 ) Then
+       Call phi_wrap_x_host
+    Else
+       If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
+       If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+    End If
     phi(:,1,:)   = phi(:,2,:)
     phi(:,nyg,:) = phi(:,nyg-1,:)
-    phi(:,:,1)   = phi(:,:,2)
-    phi(:,:,nzg) = phi(:,:,nzg-1)
+    If ( z_bc_type == 0 ) Then
+       Call phi_wrap_z_host
+    Else
+       phi(:,:,1)   = phi(:,:,2)
+       phi(:,:,nzg) = phi(:,:,nzg-1)
+    End If
     ! Overwrite interior-rank z ghost planes with actual neighbour values
     Call exchange_phi_ghost_planes
 
@@ -284,14 +369,23 @@ Contains
        End Do
        phi(2:nxg-1,2:nyg-1,2:nzg-1) = phi_new(2:nxg-1,2:nyg-1,2:nzg-1)
 
-       ! Refresh ghosts before the next pass: Neumann at true domain boundaries, MPI
-       ! exchange at interior-rank seams (both x and z; y is never decomposed)
-       If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
-       If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+       ! Refresh ghosts before the next pass: true periodic wrap when x_bc_type/z_bc_type
+       ! select periodic, Neumann at true domain boundaries otherwise, MPI exchange at
+       ! interior-rank seams (both x and z; y is never decomposed)
+       If ( x_bc_type == 0 ) Then
+          Call phi_wrap_x_host
+       Else
+          If ( is_first_x ) phi(1,:,:)   = phi(2,:,:)
+          If ( is_last_x  ) phi(nxg,:,:) = phi(nxg-1,:,:)
+       End If
        phi(:,1,:)   = phi(:,2,:)
        phi(:,nyg,:) = phi(:,nyg-1,:)
-       phi(:,:,1)   = phi(:,:,2)
-       phi(:,:,nzg) = phi(:,:,nzg-1)
+       If ( z_bc_type == 0 ) Then
+          Call phi_wrap_z_host
+       Else
+          phi(:,:,1)   = phi(:,:,2)
+          phi(:,:,nzg) = phi(:,:,nzg-1)
+       End If
        Call exchange_phi_x_ghost_planes
        Call exchange_phi_ghost_planes
     End Do
@@ -870,6 +964,22 @@ Contains
     !$acc end parallel loop
 
   End Subroutine apply_ghost_cell_ibm_scalar
+
+  !> No-flux (zero-gradient) ghost-cell condition for a cell-centred scalar at the immersed boundary: each ghost cell takes its image-point value (used for sediment; solid cells are otherwise held at C=0, which would make the body an absorbing surface)
+  Subroutine apply_ghost_cell_ibm_scalar_noflux(C_)
+
+    Real(Int64), Dimension(nxg,nyg,nzg), Intent(InOut) :: C_
+
+    Integer(Int32) :: n, i, j, k
+
+    !$acc parallel loop present(C_,ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc)
+    Do n = 1, n_ghost_cc
+       i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)
+       C_(i,j,k) = trilinear_interp_p(C_, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n))
+    End Do
+    !$acc end parallel loop
+
+  End Subroutine apply_ghost_cell_ibm_scalar_noflux
 
   !                     Helper routines
 

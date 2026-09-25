@@ -25,6 +25,7 @@ Module reynolds_stress_budget
 
   ! ── accumulation counter ─────────────────────────────────────────────────
   Integer(Int32) :: n_accum = 0        ! steps accumulated in current window
+  Real   (Int64) :: t_accum = 0d0      ! physical time accumulated in current window (accumulators are dt-weighted, so adaptive dt doesn't bias the averages)
   Integer(Int32) :: nsamples = 0       ! windows written so far (across restarts)
 
   ! accumulator arrays (cell-centre, local z-slab): shape (nxm, nym_global, nzm) -- x and y always full since MPI decomposition is along z only
@@ -191,41 +192,41 @@ Contains
              If ( sgs_model > 0 ) nut_c = nu_t(i, j, k)
 
              ! ── accumulate 1st moments ───────────────────────────────
-             acc_U(i-1,j-1,k-1) = acc_U(i-1,j-1,k-1) + uc
-             acc_V(i-1,j-1,k-1) = acc_V(i-1,j-1,k-1) + vc
-             acc_W(i-1,j-1,k-1) = acc_W(i-1,j-1,k-1) + wc
-             acc_P(i-1,j-1,k-1) = acc_P(i-1,j-1,k-1) + pc
+             acc_U(i-1,j-1,k-1) = acc_U(i-1,j-1,k-1) + dt_step*( uc )
+             acc_V(i-1,j-1,k-1) = acc_V(i-1,j-1,k-1) + dt_step*( vc )
+             acc_W(i-1,j-1,k-1) = acc_W(i-1,j-1,k-1) + dt_step*( wc )
+             acc_P(i-1,j-1,k-1) = acc_P(i-1,j-1,k-1) + dt_step*( pc )
 
              ! ── accumulate raw 2nd velocity moments (order: 11,22,33,12,13,23) ──
-             acc_UiUj(1,i-1,j-1,k-1) = acc_UiUj(1,i-1,j-1,k-1) + uc*uc
-             acc_UiUj(2,i-1,j-1,k-1) = acc_UiUj(2,i-1,j-1,k-1) + vc*vc
-             acc_UiUj(3,i-1,j-1,k-1) = acc_UiUj(3,i-1,j-1,k-1) + wc*wc
-             acc_UiUj(4,i-1,j-1,k-1) = acc_UiUj(4,i-1,j-1,k-1) + uc*vc
-             acc_UiUj(5,i-1,j-1,k-1) = acc_UiUj(5,i-1,j-1,k-1) + uc*wc
-             acc_UiUj(6,i-1,j-1,k-1) = acc_UiUj(6,i-1,j-1,k-1) + vc*wc
+             acc_UiUj(1,i-1,j-1,k-1) = acc_UiUj(1,i-1,j-1,k-1) + dt_step*( uc*uc )
+             acc_UiUj(2,i-1,j-1,k-1) = acc_UiUj(2,i-1,j-1,k-1) + dt_step*( vc*vc )
+             acc_UiUj(3,i-1,j-1,k-1) = acc_UiUj(3,i-1,j-1,k-1) + dt_step*( wc*wc )
+             acc_UiUj(4,i-1,j-1,k-1) = acc_UiUj(4,i-1,j-1,k-1) + dt_step*( uc*vc )
+             acc_UiUj(5,i-1,j-1,k-1) = acc_UiUj(5,i-1,j-1,k-1) + dt_step*( uc*wc )
+             acc_UiUj(6,i-1,j-1,k-1) = acc_UiUj(6,i-1,j-1,k-1) + dt_step*( vc*wc )
 
              ! ── pressure-velocity for pressure diffusion ─────────────
-             acc_PVel(1,i-1,j-1,k-1) = acc_PVel(1,i-1,j-1,k-1) + pc*uc
-             acc_PVel(2,i-1,j-1,k-1) = acc_PVel(2,i-1,j-1,k-1) + pc*vc
-             acc_PVel(3,i-1,j-1,k-1) = acc_PVel(3,i-1,j-1,k-1) + pc*wc
+             acc_PVel(1,i-1,j-1,k-1) = acc_PVel(1,i-1,j-1,k-1) + dt_step*( pc*uc )
+             acc_PVel(2,i-1,j-1,k-1) = acc_PVel(2,i-1,j-1,k-1) + dt_step*( pc*vc )
+             acc_PVel(3,i-1,j-1,k-1) = acc_PVel(3,i-1,j-1,k-1) + dt_step*( pc*wc )
 
              ! ── Boussinesq temperature statistics (already cell-centred, no interpolation) ──
              If ( boussinesq_flag >= 1 ) Then
-                acc_T (i-1,j-1,k-1) = acc_T (i-1,j-1,k-1) + Tscal(i,j,k)
-                acc_TT(i-1,j-1,k-1) = acc_TT(i-1,j-1,k-1) + Tscal(i,j,k)*Tscal(i,j,k)
-                acc_UiT(1,i-1,j-1,k-1) = acc_UiT(1,i-1,j-1,k-1) + uc*Tscal(i,j,k)
-                acc_UiT(2,i-1,j-1,k-1) = acc_UiT(2,i-1,j-1,k-1) + vc*Tscal(i,j,k)
-                acc_UiT(3,i-1,j-1,k-1) = acc_UiT(3,i-1,j-1,k-1) + wc*Tscal(i,j,k)
+                acc_T (i-1,j-1,k-1) = acc_T (i-1,j-1,k-1) + dt_step*( Tscal(i,j,k) )
+                acc_TT(i-1,j-1,k-1) = acc_TT(i-1,j-1,k-1) + dt_step*( Tscal(i,j,k)*Tscal(i,j,k) )
+                acc_UiT(1,i-1,j-1,k-1) = acc_UiT(1,i-1,j-1,k-1) + dt_step*( uc*Tscal(i,j,k) )
+                acc_UiT(2,i-1,j-1,k-1) = acc_UiT(2,i-1,j-1,k-1) + dt_step*( vc*Tscal(i,j,k) )
+                acc_UiT(3,i-1,j-1,k-1) = acc_UiT(3,i-1,j-1,k-1) + dt_step*( wc*Tscal(i,j,k) )
              End If
 
              ! ── triple correlations for turbulent diffusion ───────────
              !  y-direction flux (always stored): u_i u_j v
-             acc_TijY(1,i-1,j-1,k-1) = acc_TijY(1,i-1,j-1,k-1) + uc*uc*vc
-             acc_TijY(2,i-1,j-1,k-1) = acc_TijY(2,i-1,j-1,k-1) + vc*vc*vc
-             acc_TijY(3,i-1,j-1,k-1) = acc_TijY(3,i-1,j-1,k-1) + wc*wc*vc
-             acc_TijY(4,i-1,j-1,k-1) = acc_TijY(4,i-1,j-1,k-1) + uc*vc*vc
-             acc_TijY(5,i-1,j-1,k-1) = acc_TijY(5,i-1,j-1,k-1) + uc*wc*vc
-             acc_TijY(6,i-1,j-1,k-1) = acc_TijY(6,i-1,j-1,k-1) + vc*wc*vc
+             acc_TijY(1,i-1,j-1,k-1) = acc_TijY(1,i-1,j-1,k-1) + dt_step*( uc*uc*vc )
+             acc_TijY(2,i-1,j-1,k-1) = acc_TijY(2,i-1,j-1,k-1) + dt_step*( vc*vc*vc )
+             acc_TijY(3,i-1,j-1,k-1) = acc_TijY(3,i-1,j-1,k-1) + dt_step*( wc*wc*vc )
+             acc_TijY(4,i-1,j-1,k-1) = acc_TijY(4,i-1,j-1,k-1) + dt_step*( uc*vc*vc )
+             acc_TijY(5,i-1,j-1,k-1) = acc_TijY(5,i-1,j-1,k-1) + dt_step*( uc*wc*vc )
+             acc_TijY(6,i-1,j-1,k-1) = acc_TijY(6,i-1,j-1,k-1) + dt_step*( vc*wc*vc )
 
              ! IBM: skip gradient stencils crossing the solid-fluid interface
              If ( ibm_input_mode >= 1 ) Then
@@ -263,39 +264,39 @@ Contains
 
              ! ── resolved dissipation products: (dui/dxk)(duj/dxk) ─────
              ! Component 11: sum_k (du/dxk)^2
-             acc_GijRes(1,i-1,j-1,k-1) = acc_GijRes(1,i-1,j-1,k-1) + &
-                  dudx*dudx + dudy*dudy + dudz*dudz
+             acc_GijRes(1,i-1,j-1,k-1) = acc_GijRes(1,i-1,j-1,k-1) + dt_step*( &
+                  dudx*dudx + dudy*dudy + dudz*dudz )
              ! Component 22: sum_k (dv/dxk)^2
-             acc_GijRes(2,i-1,j-1,k-1) = acc_GijRes(2,i-1,j-1,k-1) + &
-                  dvdx*dvdx + dvdy*dvdy + dvdz*dvdz
+             acc_GijRes(2,i-1,j-1,k-1) = acc_GijRes(2,i-1,j-1,k-1) + dt_step*( &
+                  dvdx*dvdx + dvdy*dvdy + dvdz*dvdz )
              ! Component 33: sum_k (dw/dxk)^2
-             acc_GijRes(3,i-1,j-1,k-1) = acc_GijRes(3,i-1,j-1,k-1) + &
-                  dwdx*dwdx + dwdy*dwdy + dwdz*dwdz
+             acc_GijRes(3,i-1,j-1,k-1) = acc_GijRes(3,i-1,j-1,k-1) + dt_step*( &
+                  dwdx*dwdx + dwdy*dwdy + dwdz*dwdz )
              ! Component 12: sum_k (du/dxk)(dv/dxk)
-             acc_GijRes(4,i-1,j-1,k-1) = acc_GijRes(4,i-1,j-1,k-1) + &
-                  dudx*dvdx + dudy*dvdy + dudz*dvdz
+             acc_GijRes(4,i-1,j-1,k-1) = acc_GijRes(4,i-1,j-1,k-1) + dt_step*( &
+                  dudx*dvdx + dudy*dvdy + dudz*dvdz )
              ! Component 13: sum_k (du/dxk)(dw/dxk)
-             acc_GijRes(5,i-1,j-1,k-1) = acc_GijRes(5,i-1,j-1,k-1) + &
-                  dudx*dwdx + dudy*dwdy + dudz*dwdz
+             acc_GijRes(5,i-1,j-1,k-1) = acc_GijRes(5,i-1,j-1,k-1) + dt_step*( &
+                  dudx*dwdx + dudy*dwdy + dudz*dwdz )
              ! Component 23: sum_k (dv/dxk)(dw/dxk)
-             acc_GijRes(6,i-1,j-1,k-1) = acc_GijRes(6,i-1,j-1,k-1) + &
-                  dvdx*dwdx + dvdy*dwdy + dvdz*dwdz
+             acc_GijRes(6,i-1,j-1,k-1) = acc_GijRes(6,i-1,j-1,k-1) + dt_step*( &
+                  dvdx*dwdx + dvdy*dwdy + dvdz*dwdz )
 
              ! ── SGS dissipation: 2*nu_t*s_ij ──────────────────────────────
-             acc_GijSGS(1,i-1,j-1,k-1) = acc_GijSGS(1,i-1,j-1,k-1) + 2d0*nut_c*sij_11
-             acc_GijSGS(2,i-1,j-1,k-1) = acc_GijSGS(2,i-1,j-1,k-1) + 2d0*nut_c*sij_22
-             acc_GijSGS(3,i-1,j-1,k-1) = acc_GijSGS(3,i-1,j-1,k-1) + 2d0*nut_c*sij_33
-             acc_GijSGS(4,i-1,j-1,k-1) = acc_GijSGS(4,i-1,j-1,k-1) + 2d0*nut_c*sij_12
-             acc_GijSGS(5,i-1,j-1,k-1) = acc_GijSGS(5,i-1,j-1,k-1) + 2d0*nut_c*sij_13
-             acc_GijSGS(6,i-1,j-1,k-1) = acc_GijSGS(6,i-1,j-1,k-1) + 2d0*nut_c*sij_23
+             acc_GijSGS(1,i-1,j-1,k-1) = acc_GijSGS(1,i-1,j-1,k-1) + dt_step*( 2d0*nut_c*sij_11 )
+             acc_GijSGS(2,i-1,j-1,k-1) = acc_GijSGS(2,i-1,j-1,k-1) + dt_step*( 2d0*nut_c*sij_22 )
+             acc_GijSGS(3,i-1,j-1,k-1) = acc_GijSGS(3,i-1,j-1,k-1) + dt_step*( 2d0*nut_c*sij_33 )
+             acc_GijSGS(4,i-1,j-1,k-1) = acc_GijSGS(4,i-1,j-1,k-1) + dt_step*( 2d0*nut_c*sij_12 )
+             acc_GijSGS(5,i-1,j-1,k-1) = acc_GijSGS(5,i-1,j-1,k-1) + dt_step*( 2d0*nut_c*sij_13 )
+             acc_GijSGS(6,i-1,j-1,k-1) = acc_GijSGS(6,i-1,j-1,k-1) + dt_step*( 2d0*nut_c*sij_23 )
 
              ! ── pressure-strain: p * (du_i/dx_j + du_j/dx_i) ────────
-             acc_PiStrain(1,i-1,j-1,k-1) = acc_PiStrain(1,i-1,j-1,k-1) + 2d0*pc*dudx
-             acc_PiStrain(2,i-1,j-1,k-1) = acc_PiStrain(2,i-1,j-1,k-1) + 2d0*pc*dvdy
-             acc_PiStrain(3,i-1,j-1,k-1) = acc_PiStrain(3,i-1,j-1,k-1) + 2d0*pc*dwdz
-             acc_PiStrain(4,i-1,j-1,k-1) = acc_PiStrain(4,i-1,j-1,k-1) + pc*(dudy+dvdx)
-             acc_PiStrain(5,i-1,j-1,k-1) = acc_PiStrain(5,i-1,j-1,k-1) + pc*(dudz+dwdx)
-             acc_PiStrain(6,i-1,j-1,k-1) = acc_PiStrain(6,i-1,j-1,k-1) + pc*(dvdz+dwdy)
+             acc_PiStrain(1,i-1,j-1,k-1) = acc_PiStrain(1,i-1,j-1,k-1) + dt_step*( 2d0*pc*dudx )
+             acc_PiStrain(2,i-1,j-1,k-1) = acc_PiStrain(2,i-1,j-1,k-1) + dt_step*( 2d0*pc*dvdy )
+             acc_PiStrain(3,i-1,j-1,k-1) = acc_PiStrain(3,i-1,j-1,k-1) + dt_step*( 2d0*pc*dwdz )
+             acc_PiStrain(4,i-1,j-1,k-1) = acc_PiStrain(4,i-1,j-1,k-1) + dt_step*( pc*(dudy+dvdx) )
+             acc_PiStrain(5,i-1,j-1,k-1) = acc_PiStrain(5,i-1,j-1,k-1) + dt_step*( pc*(dudz+dwdx) )
+             acc_PiStrain(6,i-1,j-1,k-1) = acc_PiStrain(6,i-1,j-1,k-1) + dt_step*( pc*(dvdz+dwdy) )
 
           End Do
        End Do
@@ -312,12 +313,12 @@ Contains
                 uc = 0.5d0 * ( U(i-1,j,k) + U(i,j,k) )
                 vc = 0.5d0 * ( V(i,j-1,k) + V(i,j,k) )
                 wc = 0.5d0 * ( W(i,j,k-1) + W(i,j,k) )
-                acc_TijX(1,i-1,j-1,k-1) = acc_TijX(1,i-1,j-1,k-1) + uc*uc*uc
-                acc_TijX(2,i-1,j-1,k-1) = acc_TijX(2,i-1,j-1,k-1) + vc*vc*uc
-                acc_TijX(3,i-1,j-1,k-1) = acc_TijX(3,i-1,j-1,k-1) + wc*wc*uc
-                acc_TijX(4,i-1,j-1,k-1) = acc_TijX(4,i-1,j-1,k-1) + uc*vc*uc
-                acc_TijX(5,i-1,j-1,k-1) = acc_TijX(5,i-1,j-1,k-1) + uc*wc*uc
-                acc_TijX(6,i-1,j-1,k-1) = acc_TijX(6,i-1,j-1,k-1) + vc*wc*uc
+                acc_TijX(1,i-1,j-1,k-1) = acc_TijX(1,i-1,j-1,k-1) + dt_step*( uc*uc*uc )
+                acc_TijX(2,i-1,j-1,k-1) = acc_TijX(2,i-1,j-1,k-1) + dt_step*( vc*vc*uc )
+                acc_TijX(3,i-1,j-1,k-1) = acc_TijX(3,i-1,j-1,k-1) + dt_step*( wc*wc*uc )
+                acc_TijX(4,i-1,j-1,k-1) = acc_TijX(4,i-1,j-1,k-1) + dt_step*( uc*vc*uc )
+                acc_TijX(5,i-1,j-1,k-1) = acc_TijX(5,i-1,j-1,k-1) + dt_step*( uc*wc*uc )
+                acc_TijX(6,i-1,j-1,k-1) = acc_TijX(6,i-1,j-1,k-1) + dt_step*( vc*wc*uc )
              End Do
           End Do
        End Do
@@ -334,18 +335,20 @@ Contains
                 uc = 0.5d0 * ( U(i-1,j,k) + U(i,j,k) )
                 vc = 0.5d0 * ( V(i,j-1,k) + V(i,j,k) )
                 wc = 0.5d0 * ( W(i,j,k-1) + W(i,j,k) )
-                acc_TijZ(1,i-1,j-1,k-1) = acc_TijZ(1,i-1,j-1,k-1) + uc*uc*wc
-                acc_TijZ(2,i-1,j-1,k-1) = acc_TijZ(2,i-1,j-1,k-1) + vc*vc*wc
-                acc_TijZ(3,i-1,j-1,k-1) = acc_TijZ(3,i-1,j-1,k-1) + wc*wc*wc
-                acc_TijZ(4,i-1,j-1,k-1) = acc_TijZ(4,i-1,j-1,k-1) + uc*vc*wc
-                acc_TijZ(5,i-1,j-1,k-1) = acc_TijZ(5,i-1,j-1,k-1) + uc*wc*wc
-                acc_TijZ(6,i-1,j-1,k-1) = acc_TijZ(6,i-1,j-1,k-1) + vc*wc*wc
+                acc_TijZ(1,i-1,j-1,k-1) = acc_TijZ(1,i-1,j-1,k-1) + dt_step*( uc*uc*wc )
+                acc_TijZ(2,i-1,j-1,k-1) = acc_TijZ(2,i-1,j-1,k-1) + dt_step*( vc*vc*wc )
+                acc_TijZ(3,i-1,j-1,k-1) = acc_TijZ(3,i-1,j-1,k-1) + dt_step*( wc*wc*wc )
+                acc_TijZ(4,i-1,j-1,k-1) = acc_TijZ(4,i-1,j-1,k-1) + dt_step*( uc*vc*wc )
+                acc_TijZ(5,i-1,j-1,k-1) = acc_TijZ(5,i-1,j-1,k-1) + dt_step*( uc*wc*wc )
+                acc_TijZ(6,i-1,j-1,k-1) = acc_TijZ(6,i-1,j-1,k-1) + dt_step*( vc*wc*wc )
              End Do
           End Do
        End Do
     End If
 
+
     n_accum = n_accum + 1
+    t_accum = t_accum + dt_step
 
   End Subroutine accumulate_rsb
 
@@ -382,12 +385,12 @@ Contains
     Real(Int64), Allocatable, Save :: Tmean(:,:,:,:), Tvar(:,:,:,:), UiT(:,:,:,:), BuoyProd(:,:,:,:)
 
     Integer(Int32) :: c, i, j, k
-    Real(Int64)    :: dn   ! = 1 / n_accum (for averaging)
+    Real(Int64)    :: dn   ! = 1 / t_accum (for averaging)
 
     If ( rsb_active /= 1 ) Return
     If ( n_accum == 0 ) Return  ! nothing accumulated yet
 
-    dn = 1d0 / Real(n_accum, Int64)
+    dn = 1d0 / t_accum
 
     ! ── MPI-reduce accumulators to rank 0 ─────────────────────────────
     If ( .Not. Allocated(g_U) ) Then
@@ -432,7 +435,7 @@ Contains
     ! ── rank 0: compute budget and write ─────────────────────────────────
     If ( myid == 0 ) Then
 
-       ! scale by 1/n_accum
+       ! scale by 1/t_accum
        g_U       = g_U       * dn;  g_V  = g_V  * dn;  g_W = g_W * dn
        g_P       = g_P       * dn
        g_UiUj    = g_UiUj    * dn
@@ -533,6 +536,7 @@ Contains
     ! ── reset accumulators for next window ───────────────────────────────
     Call zero_accumulators
     n_accum = 0
+    t_accum = 0d0
 
   End Subroutine output_rsb
 

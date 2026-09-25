@@ -7,7 +7,8 @@ Module initialization
   Use global
   Use mpi
   Use boundary_conditions, Only : exchange_velocity_halos, apply_periodic_bc_x, apply_periodic_bc_z
-  Use decomp, Only : decomp_init_pencil, decomp_build_xz_ranges, decomp_init_poisson_pencil, decomp_poisson, z_periodic_partner
+  Use decomp, Only : decomp_init_pencil, decomp_build_xz_ranges, decomp_init_poisson_pencil, &
+       decomp_poisson, z_periodic_partner, init_outflow_x_comm
 #ifdef GPU_POISSON
   Use decomp, Only : decomp_spec
 #define DSPEC decomp_spec
@@ -22,6 +23,7 @@ Module initialization
 #ifdef GPU_POISSON
   Use gpu_device, Only : assign_gpu_device, assign_gpu_device_pre_mpi
 #endif
+  Use particles, Only : setup_particles
 
   ! prevent implicit typing
   Implicit None
@@ -132,6 +134,8 @@ Contains
        If ( bc_face_yhi /= 2 .And. z0_yhi <= 0d0 ) &
           Stop 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_yhi > 0 for a no-slip top wall'
     End If
+    If ( ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) .And. z_bc_type /= 0 ) &
+       Stop 'ERROR: sediment/Boussinesq scalars require periodic z (z_bc_type=0); the scalar z BC and MUSCL halo assume it'
     If ( T_bc_bot == 2 .Or. T_bc_top == 2 ) Then
        If ( boussinesq_flag < 1 ) &
           Stop 'ERROR: T_bc_bot/top=2 (rough EQWM flux BC) requires boussinesq_flag >= 1'
@@ -147,6 +151,12 @@ Contains
     Call decomp_init_pencil
     If ( myid==0 ) Write(*,'(A,I0,A,I0)') '   p_row, p_col (resolved)     =  ', p_row, '  ', p_col
     Call decomp_build_xz_ranges
+
+    ! Sub-communicator for outflow_convection_velocity (boundary_conditions.f90): x_bc_type
+    ! is a broadcast namelist value (identical on every rank), so this If is not
+    ! rank-divergent -- every rank enters (or skips) the collective MPI_Comm_split together.
+    ! Unused (comm_outflow_x stays MPI_COMM_NULL) unless x_bc_type==1.
+    If ( x_bc_type == 1 ) Call init_outflow_x_comm
 
     ! restriction for MPI boundaries (ghost-cell stencils need >=2 interior cells per rank)
     If ( Any( (kg2_global-kg1_global-1) < 2 ) ) Stop 'Error: each rank needs at least 2 interior z-cells'
@@ -290,6 +300,15 @@ Contains
     ! inflow-optimization setup (no-op unless inflow_opt_active==1); must come after init_inflow (needs prof_R11/22/33 already read)
     Call init_inflow_opt
 
+    ! Boundary-condition z-plane buffers: only depend on grid-size integers (already
+    ! set), not on xg/yg/zg contents; allocated here (ahead of IBM setup below) because
+    ! read_phi_from_sdf_file/smooth_ibm_corners now call apply_periodic_bc_z(phi,4) for
+    ! periodic-z domains, which reads/writes these same shared buffers.
+    ! local velocity, initial z-planes
+    Allocate ( buffer_ui(nx,nyg,2:3), buffer_vi(nxg,ny,2:3), buffer_wi(nxg,nyg), buffer_ci(nxg,nyg,2:3) )
+    ! local velocity, ending  z-planes
+    Allocate ( buffer_ue(nx,nyg),     buffer_ve(nxg,ny),     buffer_we(nxg,nyg), buffer_ce(nxg,nyg) )
+
     ! IBM setup: must come after xg/yg/zg/dxmin/dymin/dzmin are set
     ! (compute_normal_at_face_* divides by grid spacings).
     If ( ibm_input_mode >= 1 ) Then
@@ -300,13 +319,13 @@ Contains
     ! dependency but grouped here alongside IBM setup for readability
     If ( uav_active >= 1 ) Call setup_uav
 
+    ! Point-particle seeding/restart (no-op unless particles_active>=1); needs the grid
+    ! (xg/yg/zg) and x/z periodic-partner topology, both already set up above
+    Call setup_particles
+
     ! Boundary conditions
-    ! local velocity, initial z-planes
-    Allocate ( buffer_ui(nx,nyg,2:3), buffer_vi(nxg,ny,2:3), buffer_wi(nxg,nyg), buffer_ci(nxg,nyg,2:3) )
-    ! local velocity, ending  z-planes
-    Allocate ( buffer_ue(nx,nyg),     buffer_ve(nxg,ny),     buffer_we(nxg,nyg), buffer_ce(nxg,nyg) )
     ! local pressure z-plane
-    Allocate ( buffer_p(2:nxg-1,2:nyg-1) ) 
+    Allocate ( buffer_p(2:nxg-1,2:nyg-1) )
 
     ! Interior communications; 3rd dim: 1=+z exchange, 2=-z exchange, issued concurrently
     Allocate ( buffer_us(nx ,nyg,2), buffer_ur(nx ,nyg,2) )
@@ -937,15 +956,6 @@ Contains
     End Select
 
     Cscal_o = Cscal
-
-    ! Zero scalar concentration inside IBM solid cells so that the IC value
-    ! never persists inside solid and pollutes adjacent fluid via diffusion.
-    If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
-       Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) <= 0d0 )
-          Cscal(2:nxg-1, 2:nyg-1, 2:nzg-1) = 0d0
-       End Where
-       Cscal_o = Cscal
-    End If
 
     If (myid == 0) Write(*,'(A,I1,A,E12.4)') &
        '   C_ic_type = ', C_ic_type, '  Max Cscal = ', MaxVal(Cscal)

@@ -21,12 +21,12 @@ import subprocess
 import sys
 import tempfile
 
-# src/monitor.f90:61 -- istep, t, meanU, maxU, max_divergence, cfl_conv, cfl_visc, dt, wall_dt_s
+# src/monitor.f90:63 -- istep, t, meanU, maxU, max_divergence, cfl_conv, cfl_visc, cfl_accel, dt, wall_dt_s
 MONITOR_LINE = re.compile(
     r'^\s*(\d+)\s+([-\d.E+]+)\s+([-\d.E+]+)\s+([-\d.E+]+)\s+([-\d.E+]+)\s+'
-    r'([-\d.E+]+)\s+([-\d.E+]+)\s+([-\d.E+]+)\s+[-\d.]+\s*$'
+    r'([-\d.E+]+)\s+([-\d.E+]+)\s+([-\d.E+]+)\s+([-\d.E+]+)\s+[-\d.]+\s*$'
 )
-COLUMNS = ['t', 'meanU', 'maxU', 'max_divergence', 'cfl_conv', 'cfl_visc', 'dt']
+COLUMNS = ['t', 'meanU', 'maxU', 'max_divergence', 'cfl_conv', 'cfl_visc', 'cfl_accel', 'dt']
 
 
 def parse_monitor(log_text):

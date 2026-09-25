@@ -86,6 +86,36 @@ python3 postProcessing/generateXMF.py
 > The `--case`/`--nx`/`--ny`/`--nz` flags shown in the top-level README are stale — the
 > current script takes no CLI arguments and auto-detects everything from `fields/`.
 
+### `generate_particles_xmf.py`
+
+Writes XDMF metadata (`paraview/particles.xmf`) for the point-particle snapshots written
+by `src/particles.f90` (`fields/<fileout>_particles.<step>`, active whenever
+`particles_active=1` in `&PARTICLES`), and its `<Time Value=...>` uses the step number
+rather than physical time for the same reason `generateXMF.py`'s does (`DT=1`): opened
+alongside `channel_test.xmf`, ParaView's shared time toolbar then scrubs the point cloud
+and the flow fields together, frame for frame. Each snapshot's particle count varies
+(particles exit/deposit/reinject); by default the script pads every timestep up to the
+run's own maximum particle count (writing one small auxiliary `..._particles_padded.
+<step>.bin` file per timestep into `paraview/`, with `id=-1`/`active=0` on padding
+rows) so every `<Grid>` shares one fixed-size Topology/Geometry — vtkXdmfReader
+otherwise treats a variable-size series as a `vtkMultiBlockDataSet` rather than a
+homogeneous time-varying dataset, which ParaView warns about and can animate
+incorrectly. Pass `--no-pad` for the original zero-duplication, byte-seek-only,
+variable-size-per-timestep behaviour if you don't hit that warning. Exposes `id`,
+`age`, `Velocity`, and (padded mode only) `active` as point-cloud Attributes for
+colouring — Threshold on `active > 0.5` to hide padding rows. Run it the same way as
+`generateXMF.py`, from the case directory:
+
+```bash
+python3 postProcessing/generate_particles_xmf.py            # padded (default)
+python3 postProcessing/generate_particles_xmf.py --no-pad    # original byte-seek-only
+```
+
+Per-monitor-interval particle event counts (exited/deposited/reinjected/active,
+`src/particles.f90`'s `report_particle_counts`) are no longer printed to stdout — they're
+appended as CSV rows to `fields/particle_count.dat` (`istep,t,exited,deposited,
+reinjected,active`, one row every `nmonitor` steps) instead.
+
 ### `generate_slice_xmf.py`
 
 XDMF time-series generator for 2-D slice-probe output (`<base>.bin` +

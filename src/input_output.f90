@@ -5,7 +5,8 @@ Module input_output
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
-  Use genGridAndIC    
+  Use genGridAndIC
+  Use particles, Only : write_particle_restart, write_particle_snapshot
 
   ! prevent implicit typing
   Implicit None
@@ -74,11 +75,23 @@ Contains
     Namelist /UAV/ uav_active, uav_xc, uav_yc, uav_zc, uav_disk_radius, &
                    uav_n_r, uav_n_theta, uav_hover_thrust, uav_kernel_ncell, &
                    uav_path_active, uav_path_file, uav_thrust_active, uav_thrust_file, &
-                   uav_load_profile, uav_tilt_active, uav_tilt_tau, uav_swirl_frac
+                   uav_load_profile, uav_tilt_active, uav_tilt_tau, uav_grav, uav_swirl_frac
 
     Namelist /INFLOW_OPT/ inflow_opt_active, inflow_opt_x, inflow_opt_nstart, inflow_opt_window, &
                           n_bezier, inflow_opt_wall_exclude, inflow_opt_trust, inflow_opt_max_iter, &
                           inflow_opt_relax, inflow_opt_tol
+
+    Namelist /PARTICLES/ particles_active, n_particles_init, &
+                         particle_seed_xmin, particle_seed_xmax, particle_seed_ymin, particle_seed_ymax, &
+                         particle_seed_zmin, particle_seed_zmax, particle_seed_seed, &
+                         bc_particle_x, bc_particle_y, bc_particle_z, &
+                         particle_reinit_on_exit, particle_max_age, particle_restart_file, &
+                         particle_restart_load, &
+                         particle_mode, particle_diam, particle_rho, particle_rho_f, &
+                         particle_added_mass, particle_brownian, particle_temp_abs, &
+                         particle_ibm_bc, particle_ibm_tau_crit, particle_resuspend_ucrit, &
+                         particle_boussinesq_coupling, particle_deposit_file, particle_deposit_freq, &
+                         sgs_particle_model, particle_langevin_C0
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -95,6 +108,7 @@ Contains
     ic_type       = 1
     noise_percent = 5.0d0
     advection_scheme = 0
+    nsteps = 0; nsave = 0; nmonitor = 0   ! no valid default: must be set in &NUMERICS (checked after the read)
 
     fname = 'input_parameters'
     If ( Present(input_file) ) fname = input_file
@@ -104,24 +118,24 @@ Contains
 
        Open(newunit=unit_in, file=fname, status='old',    &
             action='read', iostat=ios)
-       If ( ios /= 0 ) Stop 'ERROR: cannot open input parameters file: '//fname
+       If ( ios /= 0 ) Call abort_input( 'ERROR: cannot open input parameters file: '//fname )
 
        Rewind(unit_in)
        Read(unit_in, nml=DOMAIN,              iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &DOMAIN missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &DOMAIN missing or failed to parse (check for unrecognized variable names)' )
 
        Rewind(unit_in)
        Read(unit_in, nml=PHYSICS,             iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &PHYSICS missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &PHYSICS missing or failed to parse (check for unrecognized variable names)' )
 
        Rewind(unit_in)
        Read(unit_in, nml=NUMERICS,            iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &NUMERICS missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &NUMERICS missing or failed to parse (check for unrecognized variable names)' )
 
        If ( namelist_group_present(unit_in, 'BOUNDARY_CONDITIONS') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=BOUNDARY_CONDITIONS, iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &BOUNDARY_CONDITIONS present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &BOUNDARY_CONDITIONS present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &BOUNDARY_CONDITIONS found, using defaults'
        End If
@@ -129,7 +143,7 @@ Contains
        If ( namelist_group_present(unit_in, 'INFLOW') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=INFLOW,              iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &INFLOW present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &INFLOW present but failed to parse (check variable names)' )
        Else If ( x_bc_type == 1 ) Then
           Write(*,'(A)') ' INFO: no &INFLOW found, using defaults (inflow_type=0, constant uniform flow)'
        End If
@@ -137,7 +151,7 @@ Contains
        If ( namelist_group_present(unit_in, 'IBM') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=IBM,                 iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &IBM present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &IBM present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &IBM found, using defaults (no IBM body)'
           ibm_input_mode      = 0
@@ -152,16 +166,17 @@ Contains
 
        Rewind(unit_in)
        Read(unit_in, nml=INITIAL_CONDITIONS,  iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &INITIAL_CONDITIONS missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &INITIAL_CONDITIONS missing or failed to parse ' // &
+            '(check for unrecognized variable names)' )
 
        Rewind(unit_in)
        Read(unit_in, nml=IO,                  iostat=ios)
-       If (ios /= 0) Stop 'ERROR: &IO missing or failed to parse (check for unrecognized variable names)'
+       If (ios /= 0) Call abort_input( 'ERROR: &IO missing or failed to parse (check for unrecognized variable names)' )
 
        If ( namelist_group_present(unit_in, 'SEDIMENT') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=SEDIMENT,            iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &SEDIMENT present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &SEDIMENT present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &SEDIMENT found, scalar transport disabled'
        End If
@@ -170,7 +185,7 @@ Contains
        If ( namelist_group_present(unit_in, 'BOUSSINESQ') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=BOUSSINESQ,          iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &BOUSSINESQ present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &BOUSSINESQ present but failed to parse (check variable names)' )
           If ( sediment_flag >= 1 .And. grav /= grav_sediment ) Then
              Write(*,'(A)') ' WARNING: &SEDIMENT and &BOUSSINESQ specify different grav, using &BOUSSINESQ value'
           End If
@@ -181,7 +196,7 @@ Contains
        If ( namelist_group_present(unit_in, 'STATISTICS') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=STATISTICS,          iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &STATISTICS present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &STATISTICS present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &STATISTICS found, Reynolds stress budget disabled'
        End If
@@ -189,7 +204,7 @@ Contains
        If ( namelist_group_present(unit_in, 'UAV') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=UAV,                 iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &UAV present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &UAV present but failed to parse (check variable names)' )
        Else
           Write(*,'(A)') ' INFO: no &UAV found, UAV actuator disk disabled'
        End If
@@ -197,10 +212,34 @@ Contains
        If ( namelist_group_present(unit_in, 'INFLOW_OPT') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=INFLOW_OPT,          iostat=ios)
-          If (ios /= 0) Stop 'ERROR: &INFLOW_OPT present but failed to parse (check variable names)'
+          If (ios /= 0) Call abort_input( 'ERROR: &INFLOW_OPT present but failed to parse (check variable names)' )
+       End If
+
+       ! particle_seed_*max defaults to the full domain; resolved here (using the DOMAIN
+       ! group's local Lx/Ly/Lz aliases, already read above) rather than in the declaration
+       ! block, since the domain size isn't known until DOMAIN is read.
+       If ( namelist_group_present(unit_in, 'PARTICLES') ) Then
+          Rewind(unit_in)
+          Read(unit_in, nml=PARTICLES,           iostat=ios)
+          If (ios /= 0) Call abort_input( 'ERROR: &PARTICLES present but failed to parse (check variable names)' )
+          If ( particle_seed_xmax < 0d0 ) particle_seed_xmax = Lx
+          If ( particle_seed_ymax < 0d0 ) particle_seed_ymax = Ly
+          If ( particle_seed_zmax < 0d0 ) particle_seed_zmax = Lz
+          If ( bc_particle_x < 0 ) bc_particle_x = Merge(0, 1, x_bc_type == 0)
+          If ( bc_particle_y < 0 ) bc_particle_y = Merge(0, 2, y_bc_type == 0)
+          If ( bc_particle_z < 0 ) bc_particle_z = Merge(0, 2, z_bc_type == 0)
+          If ( particle_reinit_on_exit < 0 .Or. particle_reinit_on_exit > 1 ) Then
+             Call abort_input( 'ERROR: &PARTICLES particle_reinit_on_exit must be 0 (none) or 1 (inflow)' )
+          End If
+       Else
+          Write(*,'(A)') ' INFO: no &PARTICLES found, point-particle tracking disabled'
        End If
 
        Close(unit_in)
+
+       If ( nsteps == 0 ) Call abort_input( 'ERROR: &NUMERICS nsteps must be set (>0 fixed step count, <0 run until sim_end_time)' )
+       If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
+       If ( nmonitor <= 0 ) Call abort_input( 'ERROR: &NUMERICS nmonitor must be set to a positive step interval' )
 
        ! Map short namelist names to the global variable names
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
@@ -232,10 +271,10 @@ Contains
        z0_rot = 0.5d0 * Lz_i
 
        If ( flow_forcing_mode == 1 .And. T_wave_x > 0d0 ) Then
-          Stop 'ERROR: flow_forcing_mode=1 (constant mass flux) is incompatible with oscillatory forcing (T_wave_x)'
+          Call abort_input( 'ERROR: flow_forcing_mode=1 (constant mass flux) is incompatible with oscillatory forcing (T_wave_x)' )
        End If
        If ( flow_forcing_mode == 1 .And. x_bc_type /= 0 ) Then
-          Stop 'ERROR: flow_forcing_mode=1 (constant mass flux) requires periodic streamwise BC (x_bc_type=0)'
+          Call abort_input( 'ERROR: flow_forcing_mode=1 (constant mass flux) requires periodic streamwise BC (x_bc_type=0)' )
        End If
        ! 4-wall duct: the coupled 2D (y,z) pressure solve (solve_poisson_equation) needs the full
        ! z-extent locally available within the y-pencil for every rank, which only holds when z is
@@ -243,17 +282,17 @@ Contains
        ! handles this itself (decomp_auto_factorize forces p_col=1 for this BC combination); an
        ! explicit p_col/=1 request is rejected here rather than silently doing the wrong thing.
        If ( alpha_grid_z > 0d0 .And. z_bc_type == 0 ) Then
-          Stop 'ERROR: alpha_grid_z>0 (spanwise grid stretching) requires z_bc_type=1 -- periodic z ' // &
-               '(z_bc_type=0) is FFT-based and needs uniform spacing'
+          Call abort_input( 'ERROR: alpha_grid_z>0 (spanwise grid stretching) requires z_bc_type=1 -- periodic z ' // &
+               '(z_bc_type=0) is FFT-based and needs uniform spacing' )
        End If
        If ( z_bc_type == 1 .And. flat_wall_model_flag == 2 ) Then
-          Stop 'ERROR: flat_wall_model_flag=2 (rough EQWM) is not yet supported for z walls (z_bc_type=1) ' // &
-               '-- use flat_wall_model_flag=0 (DNS no-slip) or 1 (smooth Reichardt EQWM) with a spanwise wall'
+          Call abort_input( 'ERROR: flat_wall_model_flag=2 (rough EQWM) is not yet supported for z walls (z_bc_type=1) ' // &
+               '-- use flat_wall_model_flag=0 (DNS no-slip) or 1 (smooth Reichardt EQWM) with a spanwise wall' )
        End If
        If ( y_bc_type == 1 .And. z_bc_type == 1 .And. p_col > 1 ) Then
-          Stop 'ERROR: y_bc_type=1 and z_bc_type=1 (4-wall duct) requires p_col=1 (decompose only in ' // &
+          Call abort_input( 'ERROR: y_bc_type=1 and z_bc_type=1 (4-wall duct) requires p_col=1 (decompose only in ' // &
                'x, via p_row) -- the 2D (y,z) pressure solve needs the full z-extent local to every ' // &
-               'rank; leave p_row/p_col=0 for auto, or set p_col=1 explicitly'
+               'rank; leave p_row/p_col=0 for auto, or set p_col=1 explicitly' )
        End If
 
        Write(*,'(A)') ' Input parameters read from namelist file.'
@@ -408,6 +447,22 @@ Contains
           Write(*,'(A,I4)')  '   n_lines                     = ', n_lines
           Write(*,'(A,I8)')  '   line_freq                   = ', line_freq
        End If
+       If ( particles_active >= 1 ) Then
+          Write(*,'(A,I2)')    '   particles_active            = ', particles_active
+          Write(*,'(A,I8)')    '   n_particles_init            = ', n_particles_init
+          Write(*,'(A,3I3)')   '   bc_particle (x,y,z) (0=periodic,1=exit,2=reflect,3=absorb) = ', &
+               bc_particle_x, bc_particle_y, bc_particle_z
+          Write(*,'(A,I2)')    '   particle_reinit_on_exit (0=none,1=inflow) = ', particle_reinit_on_exit
+          If ( restart == 1 ) Write(*,'(A,I2)') '   particle_restart_load (0=fresh seed,1=from file) = ', particle_restart_load
+          Write(*,'(A,I2)')    '   particle_mode (0=tracer,1=inertial)       = ', particle_mode
+          If ( particle_mode >= 1 ) Then
+             Write(*,'(A,E12.4)') '   particle_diam                = ', particle_diam
+             Write(*,'(A,E12.4)') '   particle_rho                 = ', particle_rho
+             Write(*,'(A,E12.4)') '   particle_rho_f               = ', particle_rho_f
+             Write(*,'(A,I2)')    '   particle_added_mass          = ', particle_added_mass
+             Write(*,'(A,I2)')    '   particle_brownian            = ', particle_brownian
+          End If
+       End If
     End If
 
     ! ---- Broadcast everything to all ranks ---------------------------
@@ -544,6 +599,7 @@ Contains
     Call Mpi_bcast ( uav_load_profile,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_tilt_active,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_tilt_tau,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( uav_grav,             1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_swirl_frac,       1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( boussinesq_flag,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -595,7 +651,49 @@ Contains
     Call Mpi_bcast ( inflow_opt_max_iter, 1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( inflow_opt_tol,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
+    Call Mpi_bcast ( particles_active,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( n_particles_init,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_xmin,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_xmax,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_ymin,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_ymax,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_zmin,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_zmax,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_seed_seed,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( bc_particle_x,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( bc_particle_y,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( bc_particle_z,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_reinit_on_exit, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_max_age,      1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_restart_file, Len(particle_restart_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_restart_load, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_mode,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_diam,         1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_rho,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_rho_f,        1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_added_mass,   1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_brownian,     1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_temp_abs,     1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_ibm_bc, Size(particle_ibm_bc), MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_ibm_tau_crit,    1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_resuspend_ucrit, 1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_boussinesq_coupling, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_deposit_file, Len(particle_deposit_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_deposit_freq, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( sgs_particle_model,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_langevin_C0,  1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+
   End Subroutine read_input_parameters
+
+  !> Report an input-file error and abort every rank (a bare Stop on rank 0 alone leaves the others blocked in the bcast below)
+  Subroutine abort_input(msg)
+
+    Character(*), Intent(In) :: msg
+
+    Write(*,'(A)') Trim(msg)
+    Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+
+  End Subroutine abort_input
 
   ! Scan the input file for an uncommented "&<group_name>" header, without consuming it; iostat-ambiguity rationale
   Function namelist_group_present(unit_in, group_name) result(found)
@@ -936,8 +1034,8 @@ Contains
   ! Output: fileout
   Subroutine output_data
 
-    Character(200)   :: fname
-    Character(8)     :: ext
+    Character(200)   :: fname, pfname
+    Character(8)     :: ext, pext
     Integer  (Int64) :: fsize
     Logical          :: dirExists
     Logical          :: save_now
@@ -1002,6 +1100,19 @@ Contains
        ! T (Boussinesq temperature, cell-centred)
        If ( boussinesq_flag >= 1 ) Then
           Call write_distributed_field_block(1, Tscal, nxg_global, nyg_global, nzg_global, .False., .False.)
+       End If
+
+       ! Particle positions/state (src/particles.f90): separate restart file (latest state
+       ! only, gather/scatter I/O), plus a timestamped snapshot for ParaView visualization
+       ! (postProcessing/generate_particles_xmf.py) alongside the field snapshot above.
+       ! ext (above) is only ever assigned inside the myid==0 block, so pext/pfname are
+       ! recomputed here identically on every rank -- write_particle_snapshot is a
+       ! collective call and every rank must agree on the filename.
+       If ( particles_active >= 1 ) Then
+          Call write_particle_restart
+          Write(pext,'(I8)') istep + nstep_init
+          pfname = 'fields/'//Trim(Adjustl(fileout))//'_particles.'//Trim(Adjustl(pext))
+          Call write_particle_snapshot(pfname)
        End If
 
        ! close file and report size

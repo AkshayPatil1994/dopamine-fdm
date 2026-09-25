@@ -21,7 +21,7 @@
 !  Tilt (uav_tilt_active=1): the disk normal is derived each step from the
 !  path's own kinematic acceleration (a differentially-flat point-mass
 !  argument: the thrust vector must equal m*(a + g*yhat), so its direction
-!  is n = normalize(ax, grav+ay, az), independent of mass). The Catmull-Rom
+!  is n = normalize(ax, uav_grav+ay, az), independent of mass). The Catmull-Rom
 !  path interpolation is only C1 (velocity-continuous, not acceleration-
 !  continuous), so the raw per-step acceleration has knot-to-knot jump
 !  discontinuities; n is low-pass filtered (time constant uav_tilt_tau)
@@ -136,7 +136,7 @@ Contains
     ! reproducing the original snap-to-raw behaviour on a fresh run.
     If ( uav_tilt_active >= 1 .And. uav_path_active >= 1 ) Then
        uav_tilt_smooth(1) = hermite_accel(t, path_t, path_x, n_path)
-       uav_tilt_smooth(2) = grav + hermite_accel(t, path_t, path_y, n_path)
+       uav_tilt_smooth(2) = uav_grav + hermite_accel(t, path_t, path_y, n_path)
        uav_tilt_smooth(3) = hermite_accel(t, path_t, path_z, n_path)
        If ( Sqrt( Sum(uav_tilt_smooth**2) ) > 1d-30 ) &
           uav_tilt_smooth = uav_tilt_smooth / Sqrt( Sum(uav_tilt_smooth**2) )
@@ -447,7 +447,7 @@ Contains
           ay = hermite_accel(tt, path_t, path_y, n_path)
           az = hermite_accel(tt, path_t, path_z, n_path)
 
-          n_raw(1) = ax;  n_raw(2) = grav + ay;  n_raw(3) = az
+          n_raw(1) = ax;  n_raw(2) = uav_grav + ay;  n_raw(3) = az
           norm_raw = Sqrt( n_raw(1)**2 + n_raw(2)**2 + n_raw(3)**2 )
           If ( norm_raw > 1d-30 ) n_raw = n_raw / norm_raw
 
@@ -775,24 +775,57 @@ Contains
     End If
   End Function z_face_at
 
-  !> Global index of the interior cell centre nearest zp (z stretched and MPI-decomposed, so searched over the global array)
+  !> Global index of the interior cell centre nearest zp (z stretched and MPI-decomposed, so
+  !  searched over the global array). zg_global is monotonic, so bracket by binary search
+  !  (was an O(n) linear scan -- hot in apply_uav_forcing_u/v/w, called per marker per RK
+  !  substage), same structure as sem.f90's invert_cdf.
   Function nearest_zg_index(zp) Result(kbest)
     Real(Int64), Intent(In) :: zp
-    Integer(Int32) :: kbest, kk
-    kbest = 2
-    Do kk = 3, nzg_global-1
-       If ( Abs(zg_global(kk)-zp) < Abs(zg_global(kbest)-zp) ) kbest = kk
+    Integer(Int32) :: kbest, kk, lo, hi
+    If ( zp <= zg_global(2) ) Then
+       kbest = 2
+       Return
+    Else If ( zp >= zg_global(nzg_global-1) ) Then
+       kbest = nzg_global-1
+       Return
+    End If
+    lo = 2
+    hi = nzg_global-2
+    Do While ( lo < hi )
+       kk = (lo+hi)/2
+       If ( zg_global(kk+1) < zp ) Then
+          lo = kk+1
+       Else
+          hi = kk
+       End If
     End Do
+    kbest = lo
+    If ( Abs(zg_global(lo+1)-zp) < Abs(zg_global(lo)-zp) ) kbest = lo+1
   End Function nearest_zg_index
 
-  !> Global index of the interior z-face nearest zp
+  !> Global index of the interior z-face nearest zp (same binary-search structure as nearest_zg_index)
   Function nearest_z_face_index(zp) Result(kbest)
     Real(Int64), Intent(In) :: zp
-    Integer(Int32) :: kbest, kk
-    kbest = 2
-    Do kk = 3, nz_global-1
-       If ( Abs(z_global(kk)-zp) < Abs(z_global(kbest)-zp) ) kbest = kk
+    Integer(Int32) :: kbest, kk, lo, hi
+    If ( zp <= z_global(2) ) Then
+       kbest = 2
+       Return
+    Else If ( zp >= z_global(nz_global-1) ) Then
+       kbest = nz_global-1
+       Return
+    End If
+    lo = 2
+    hi = nz_global-2
+    Do While ( lo < hi )
+       kk = (lo+hi)/2
+       If ( z_global(kk+1) < zp ) Then
+          lo = kk+1
+       Else
+          hi = kk
+       End If
     End Do
+    kbest = lo
+    If ( Abs(z_global(lo+1)-zp) < Abs(z_global(lo)-zp) ) kbest = lo+1
   End Function nearest_z_face_index
 
 End Module uav_actuator

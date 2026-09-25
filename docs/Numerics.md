@@ -42,7 +42,7 @@ better conserves kinetic energy) or pure central-difference (divergence) form
 
 **Rigid-body rotation about the streamwise axis** (`rotation_active = 1`, e.g. for a
 rotating duct) adds Coriolis and centrifugal forcing to the $v$- and $w$-momentum
-equations, for a rotation rate $\Omega_x$ about $x$:
+equations, for a rotation rate $\Omega_x$ about $x$ (positive = right-handed about $+x$, i.e. $y$ turning towards $z$, with Coriolis forcing $-2\boldsymbol{\Omega}\times\mathbf{u}$):
 
 $$f_v = 2\Omega_x w + \Omega_x^2 (y - y_0), \qquad f_w = -2\Omega_x v + \Omega_x^2 (z - z_0)$$
 
@@ -660,6 +660,7 @@ its original target.
 | 3 | Zero mean + white noise |
 | 4 | Reichardt (1951) composite law-of-the-wall + structured perturbation |
 | 5 | Inverse-linear (anti-tent, promotes rapid transition) + white noise |
+| 7 | Uniform `Utarget` + two deterministic sin/cos modes (α,β)=(3,2) and (17,6.5) in (y,x); amplitudes ε₁=`noise_percent`/100, ε₂=0.04ε₁ |
 
 The Reichardt (1951) profile for IC type 4:
 

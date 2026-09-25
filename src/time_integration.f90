@@ -14,6 +14,7 @@ Module time_integration
   Use scalar_transport,  Only : compute_rhs_scalar, apply_scalar_bc
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
   Use monitor,          Only : compute_cfl, write_force_csv, compute_bulk_velocity
+  Use particles,        Only : advance_particles
   Use profiler
   Use debug_trace,      Only : trace_stage, trace_interior, trace_active
 
@@ -51,7 +52,7 @@ Contains
     Real(Int64) :: Fx_ibm,  Fy_ibm,  Fz_ibm
     Real(Int64) :: Fx_pres, Fy_pres, Fz_pres
     Real(Int64) :: Fx_visc, Fy_visc, Fz_visc
-    Real(Int64) :: cfl_conv, cfl_visc, dt_new, dt_presnap
+    Real(Int64) :: cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap
     Real(Int64) :: Ub_now, dU_cmfr
     Logical     :: needs_final_sync
 
@@ -74,11 +75,12 @@ Contains
 
     ! CFL check and adaptive dt, evaluated from the start-of-step velocity so dt is enforced on the current step, not lagged by one
     Call profiler_start(PROF_CFL)
-    Call compute_cfl(cfl_conv, cfl_visc)
+    Call compute_cfl(cfl_conv, cfl_visc, cfl_accel)
     Call profiler_stop(PROF_CFL)
-    cfl_conv_last = cfl_conv
-    cfl_visc_last = cfl_visc
-    cfl_current   = Max(cfl_conv, cfl_visc)
+    cfl_conv_last  = cfl_conv
+    cfl_visc_last  = cfl_visc
+    cfl_accel_last = cfl_accel
+    cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
     If ( cfl_adaptive == 1 .And. cfl_current > 0d0 ) Then
        dt_new = dt * cfl_target / cfl_current * cfl_safety
        dt = Max(dt_min, Min(dt_max, dt_new))
@@ -127,6 +129,11 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+    ! particles.f90's simplified added-mass term reads Uo/Vo/Wo host-side; on a GPU build these
+    ! otherwise stay device-only until something else happens to sync them
+    If ( particles_active >= 1 .And. particle_mode == 1 .And. particle_added_mass == 1 ) Then
+       !$acc update host(Uo,Vo,Wo)
+    End If
     Call profiler_stop(PROF_RK_UPDATE)
     If ( sediment_flag >= 1 ) Then
        !$acc kernels present(Cscal,Cscal_o)
@@ -157,6 +164,23 @@ Contains
     Call compute_rhs_v(U,V,W,Fv1)
     Call compute_rhs_w(U,V,W,Fw1)
     Call profiler_stop(PROF_RHS)
+
+    ! Scalar RHS from the same stage-start state (C, T, U,V,W) as the momentum RHS above, so the scalar RK3 sees consistent stage times; the update itself follows the velocity stage below
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) Call profiler_start(PROF_SCALAR)
+    If ( sediment_flag >= 1 ) Call compute_rhs_scalar(Cscal, U, V, W, Fcs1)
+    If ( boussinesq_flag >= 1 ) Call compute_rhs_temperature(Tscal, U, V, W, Ft1)
+    If ( trace_active() ) Then
+       If ( sediment_flag   >= 1 ) Then
+          !$acc update host(Fcs1)
+          Call trace_interior('s1_rhsS', 'Fc', Fcs1, 1)
+       End If
+       If ( boussinesq_flag >= 1 ) Then
+          !$acc update host(Ft1)
+          Call trace_interior('s1_rhsS', 'Ft', Ft1, 1)
+       End If
+       Call trace_stage('s1_rhsS')
+    End If
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) Call profiler_stop(PROF_SCALAR)
 
     ! RK-stage velocity update, GPU-resident (Fu1/Fw1 never leave device; Fv1 round-trips to host inside apply_uav_forcing when uav_active>=1)
     Call profiler_start(PROF_RK_UPDATE)
@@ -232,18 +256,13 @@ Contains
     ! Scalar step 1
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
-       Call trace_stage('s1_preC')
-       Call compute_rhs_scalar(Cscal, U, V, W, Fcs1)
-       If ( trace_active() ) Then
-          !$acc update host(Fcs1)
-          Call trace_interior('s1_preC', 'Fc', Fcs1, 1)
-       End If
        !$acc kernels present(Cscal,Cscal_o,Fcs1)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Fcs1
        !$acc end kernels
        !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
        !$acc update device(Cscal)
+       If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
        Call trace_stage('s1_C')
        Call profiler_stop(PROF_SCALAR)
     End If
@@ -251,12 +270,6 @@ Contains
     ! Temperature step 1 (buoyancy in stage n's compute_rhs_v reads Tscal as finalized at the end of stage n-1)
     If ( boussinesq_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
-       Call trace_stage('s1_preT')
-       Call compute_rhs_temperature(Tscal, U, V, W, Ft1)
-       If ( trace_active() ) Then
-          !$acc update host(Ft1)
-          Call trace_interior('s1_preT', 'Ft', Ft1, 1)
-       End If
        !$acc kernels present(Tscal,Tscal_o,Ft1)
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Ft1
        !$acc end kernels
@@ -270,6 +283,8 @@ Contains
 
     ! step 2
     rk_step = 2
+    ! t is now this stage's own time, so time-dependent forcing must be re-evaluated per stage
+    If ( flow_forcing_mode == 0 ) Call update_pressure_forcing
     Call profiler_start(PROF_SGS)
     ! U,V,W already device-resident; nothing in this design ever writes them from the host
     Call compute_sgs_model(U,V,W,nu_t)
@@ -282,6 +297,23 @@ Contains
     Call compute_rhs_v(U,V,W,Fv2)
     Call compute_rhs_w(U,V,W,Fw2)
     Call profiler_stop(PROF_RHS)
+
+    ! Scalar RHS from the same stage-start state (C, T, U,V,W) as the momentum RHS above, so the scalar RK3 sees consistent stage times; the update itself follows the velocity stage below
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) Call profiler_start(PROF_SCALAR)
+    If ( sediment_flag >= 1 ) Call compute_rhs_scalar(Cscal, U, V, W, Fcs2)
+    If ( boussinesq_flag >= 1 ) Call compute_rhs_temperature(Tscal, U, V, W, Ft2)
+    If ( trace_active() ) Then
+       If ( sediment_flag   >= 1 ) Then
+          !$acc update host(Fcs2)
+          Call trace_interior('s2_rhsS', 'Fc', Fcs2, 1)
+       End If
+       If ( boussinesq_flag >= 1 ) Then
+          !$acc update host(Ft2)
+          Call trace_interior('s2_rhsS', 'Ft', Ft2, 1)
+       End If
+       Call trace_stage('s2_rhsS')
+    End If
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) Call profiler_stop(PROF_SCALAR)
 
     Call profiler_start(PROF_RK_UPDATE)
     !$acc kernels present(U,V,W,Uo,Vo,Wo,Fu1,Fv1,Fw1,Fu2,Fv2,Fw2)
@@ -350,12 +382,6 @@ Contains
     ! Scalar step 2
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
-       Call trace_stage('s2_preC')
-       Call compute_rhs_scalar(Cscal, U, V, W, Fcs2)
-       If ( trace_active() ) Then
-          !$acc update host(Fcs2)
-          Call trace_interior('s2_preC', 'Fc', Fcs2, 1)
-       End If
        !$acc kernels present(Cscal,Cscal_o,Fcs1,Fcs2)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(2,1)*Fcs1 + rk_coef(2,2)*Fcs2 )
@@ -363,6 +389,7 @@ Contains
        !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
        !$acc update device(Cscal)
+       If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
        Call trace_stage('s2_C')
        Call profiler_stop(PROF_SCALAR)
     End If
@@ -370,12 +397,6 @@ Contains
     ! Temperature step 2
     If ( boussinesq_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
-       Call trace_stage('s2_preT')
-       Call compute_rhs_temperature(Tscal, U, V, W, Ft2)
-       If ( trace_active() ) Then
-          !$acc update host(Ft2)
-          Call trace_interior('s2_preT', 'Ft', Ft2, 1)
-       End If
        !$acc kernels present(Tscal,Tscal_o,Ft1,Ft2)
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(2,1)*Ft1 + rk_coef(2,2)*Ft2 )
@@ -390,6 +411,8 @@ Contains
 
     ! step 3
     rk_step = 3
+    ! t is now this stage's own time, so time-dependent forcing must be re-evaluated per stage
+    If ( flow_forcing_mode == 0 ) Call update_pressure_forcing
     Call profiler_start(PROF_SGS)
     ! U,V,W already device-resident; nothing in this design ever writes them from the host
     Call compute_sgs_model(U,V,W,nu_t)
@@ -402,6 +425,23 @@ Contains
     Call compute_rhs_v(U,V,W,Fv3)
     Call compute_rhs_w(U,V,W,Fw3)
     Call profiler_stop(PROF_RHS)
+
+    ! Scalar RHS from the same stage-start state (C, T, U,V,W) as the momentum RHS above, so the scalar RK3 sees consistent stage times; the update itself follows the velocity stage below
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) Call profiler_start(PROF_SCALAR)
+    If ( sediment_flag >= 1 ) Call compute_rhs_scalar(Cscal, U, V, W, Fcs3)
+    If ( boussinesq_flag >= 1 ) Call compute_rhs_temperature(Tscal, U, V, W, Ft3)
+    If ( trace_active() ) Then
+       If ( sediment_flag   >= 1 ) Then
+          !$acc update host(Fcs3)
+          Call trace_interior('s3_rhsS', 'Fc', Fcs3, 1)
+       End If
+       If ( boussinesq_flag >= 1 ) Then
+          !$acc update host(Ft3)
+          Call trace_interior('s3_rhsS', 'Ft', Ft3, 1)
+       End If
+       Call trace_stage('s3_rhsS')
+    End If
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) Call profiler_stop(PROF_SCALAR)
 
     Call profiler_start(PROF_RK_UPDATE)
     !$acc kernels present(U,V,W,Uo,Vo,Wo,Fu1,Fv1,Fw1,Fu2,Fv2,Fw2,Fu3,Fv3,Fw3)
@@ -466,6 +506,7 @@ Contains
 
     ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (IBM re-enforce below, RSB/inflow-optimization accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
     needs_final_sync = ( ibm_input_mode >= 1 ) .Or. &
+         ( particles_active >= 1 ) .Or. &
          ( rsb_active == 1 .And. istep >= rsb_nstart ) .Or. &
          ( inflow_opt_active == 1 .And. istep >= inflow_opt_nstart ) .Or. &
          ( Mod(istep, nmonitor) == 0 ) .Or. &
@@ -501,15 +542,14 @@ Contains
        Call profiler_stop(PROF_IBM)
     End If
 
+    ! Advance particles once per full step against this step's final, consistent (divergence-free,
+    ! BC/IBM-applied) host-resident U,V,W -- needs_final_sync above guarantees the host mirror is
+    ! current whenever particles_active>=1, even on steps that wouldn't otherwise need it.
+    If ( particles_active >= 1 ) Call advance_particles
+
     ! Scalar step 3
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
-       Call trace_stage('s3_preC')
-       Call compute_rhs_scalar(Cscal, U, V, W, Fcs3)
-       If ( trace_active() ) Then
-          !$acc update host(Fcs3)
-          Call trace_interior('s3_preC', 'Fc', Fcs3, 1)
-       End If
        !$acc kernels present(Cscal,Cscal_o,Fcs1,Fcs2,Fcs3)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(3,1)*Fcs1 + rk_coef(3,2)*Fcs2 + rk_coef(3,3)*Fcs3 )
@@ -517,6 +557,7 @@ Contains
        !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
        !$acc update device(Cscal)
+       If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
        Call trace_stage('s3_C')
        Call profiler_stop(PROF_SCALAR)
     End If
@@ -524,12 +565,6 @@ Contains
     ! Temperature step 3
     If ( boussinesq_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
-       Call trace_stage('s3_preT')
-       Call compute_rhs_temperature(Tscal, U, V, W, Ft3)
-       If ( trace_active() ) Then
-          !$acc update host(Ft3)
-          Call trace_interior('s3_preT', 'Ft', Ft3, 1)
-       End If
        !$acc kernels present(Tscal,Tscal_o,Ft1,Ft2,Ft3)
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(3,1)*Ft1 + rk_coef(3,2)*Ft2 + rk_coef(3,3)*Ft3 )
@@ -566,6 +601,7 @@ Contains
     End If
 
     Call trace_stage('step_end')
+    dt_step = dt
 
     ! restore the pre-snap dt so next step's CFL-based scaling isn't anchored to the output-snapped value
     dt = dt_presnap

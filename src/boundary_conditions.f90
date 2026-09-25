@@ -5,7 +5,7 @@ Module boundary_conditions
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, z_periodic_partner, x_periodic_partner
+  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, z_periodic_partner, x_periodic_partner, comm_outflow_x
   Use synthetic_eddy_method
 
   ! prevent implicit typing
@@ -432,32 +432,41 @@ Contains
 
   End Subroutine apply_inflow_bc_scalar_x_C
 
-  ! Plane-averaged streamwise velocity at the outlet (x_bc_type==1, no MPI reduction: local-rank average, consistent with the other x_bc_type==1 routines' no-MPI scope), used as the convection speed for apply_outflow_bc_x
+  ! Plane-averaged streamwise velocity at the outlet (x_bc_type==1), reduced over every rank of the last x-row so all z-slabs share one convection speed (collective: every rank must call it), used as the convection speed for apply_outflow_bc_x
   Function outflow_convection_velocity() Result(Uc)
 
     Real(Int64) :: Uc
-    Integer(Int32) :: n2, n3
-    Logical :: is_first, is_last
+    Integer(Int32) :: n2, n3, khi
+    Real(Int64) :: local_buf(2), global_buf(2), usum
+    Logical :: is_first_x, is_last_x, is_first_z, is_last_z
     Integer(Int32) :: partner
-    Real(Int64) :: loc(2), glob(2), s
 
     n2 = Size(U,2)
     n3 = Size(U,3)
 
-    ! Mean of U over the WHOLE outlet plane: every rank owning a slab of the plane (the last x-row; with a z-split all
-    ! ranks) contributes its sum and cell count, reduced over all ranks. A per-rank mean made the convective outflow
-    ! BC, and hence the whole solution, depend on the rank count.
+    Call x_periodic_partner(is_first_x, is_last_x, partner)
+    Call z_periodic_partner(is_first_z, is_last_z, partner)
+
+    ! z-periodic: the last column's final interior plane duplicates the first one, so leave it out
+    khi = n3-1
+    If ( z_bc_type == 0 .And. is_last_z ) khi = n3-2
+
+    ! Only the outflow row (is_last_x, one row of p_col ranks) has anything to
+    ! contribute -- apply_outflow_bc_x is itself a no-op on every other rank, so this
+    ! function's result is never read there either. Reduce over comm_outflow_x (built
+    ! once at init, decomp.f90) rather than MPI_COMM_WORLD: at high p_row this avoids
+    ! synchronising the whole p_row*p_col process grid just to share one scalar.
+    Uc = 0d0
+    If ( .Not. is_last_x ) Return
+
     !$acc kernels present(U)
-    s = Sum(U(nx-1,2:n2-1,2:n3-1))
+    usum = Sum(U(nx-1,2:n2-1,2:khi))
     !$acc end kernels
-    Call x_periodic_partner(is_first, is_last, partner)
-    If ( is_last ) Then
-       loc = [ s, Real((n2-2)*(n3-2),Int64) ]
-    Else
-       loc = 0d0
-    End If
-    Call MPI_Allreduce(loc, glob, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Uc = glob(1) / glob(2)
+    local_buf(1) = usum
+    local_buf(2) = Real((n2-2)*(khi-1),Int64)
+
+    Call MPI_Allreduce(local_buf, global_buf, 2, MPI_real8, MPI_SUM, comm_outflow_x, ierr)
+    Uc = global_buf(1) / Max(global_buf(2), 1d0)
 
   End Function outflow_convection_velocity
 
