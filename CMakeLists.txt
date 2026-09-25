@@ -163,6 +163,7 @@ set(SRCS
     src/profiler.f90
     src/global.f90
     src/decomp.f90
+    src/halo_pad.f90
     src/uav_actuator.f90
     src/interpolation.f90
     src/sem.f90
@@ -350,6 +351,7 @@ add_executable(dopamine-ESEM
     src/profiler.f90
     src/global.f90
     src/decomp.f90
+    src/halo_pad.f90
     src/sem.f90
     src/particles.f90
     src/genGridandIC.f90

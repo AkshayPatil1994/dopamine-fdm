@@ -12,6 +12,7 @@ Module particles
   Use global
   Use mpi
   Use decomp, Only : x_halo_neighbors, z_halo_neighbors, x_periodic_partner, z_periodic_partner
+  Use halo_pad, Only : pad_axis, pad_field
   Use synthetic_eddy_method, Only : random_seed_from
 
   Implicit None
@@ -105,7 +106,7 @@ Contains
     If ( ibm_input_mode >= 1 ) Then
        Call ensure_pad_axes
        Allocate( phipad(0:nxg+1, nyg, 0:nzg+1) )
-       Call pad_field( phi, nxg, nyg, nzg, .False., .False., phipad )
+       Call pad_field( phi, nxg, nyg, nzg, .False., .False., 1, phipad )
     End If
 
     loaded = .False.
@@ -235,135 +236,15 @@ Contains
 
   End Function interp3
 
-  !> Padded axis a(0:n+1) from the local axis a(1:n): the neighbouring points from the global axis where they exist, otherwise
-  !  mirrored (a periodic edge; the axes involved there are uniform)
-  Subroutine pad_axis(a, n, aglob, ng, g1, apad)
-
-    Integer(Int32), Intent(In)  :: n, ng, g1
-    Real   (Int64), Intent(In)  :: a(n), aglob(ng)
-    Real   (Int64), Intent(Out) :: apad(0:n+1)
-
-    apad(1:n) = a
-    If ( g1 > 1 ) Then
-       apad(0) = aglob(g1-1)
-    Else
-       apad(0) = a(1) - ( a(2) - a(1) )
-    End If
-    If ( g1 + n - 1 < ng ) Then
-       apad(n+1) = aglob(g1+n)
-    Else
-       apad(n+1) = a(n) + ( a(n) - a(n-1) )
-    End If
-
-  End Subroutine pad_axis
-
-  !> P(0:n1+1, :, 0:n3+1) = F with one extra plane in x and z (see Upad). Plane rules follow apply_periodic_bc_x/z: across a
-  !  rank seam the extra plane is the neighbour's plane 3 (high side) or n-2 (low side); across the periodic wrap the first rank
-  !  supplies plane 4 (cell-centred) or 3 (face) and the last rank plane n-3 (cell-centred) or n-2 (face).
-  Subroutine pad_field(F, n1, n2, n3, xface, zface, P)
-
-    Integer(Int32), Intent(In)  :: n1, n2, n3
-    Real   (Int64), Intent(In)  :: F(n1,n2,n3)
-    Logical,        Intent(In)  :: xface, zface
-    Real   (Int64), Intent(Out) :: P(0:n1+1,n2,0:n3+1)
-
-    Logical        :: is_first, is_last, per
-    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup
-    Real   (Int64), Allocatable :: sb(:,:), rb(:,:)
-
-    P(1:n1,:,1:n3) = F
-
-    !-- x -----------------------------------------------------------------
-    per = ( x_bc_type == 0 )
-    Call x_halo_neighbors(up, down)
-    Call x_periodic_partner(is_first, is_last, partner)
-    If ( is_first .And. is_last ) Then
-       If ( per ) Then
-          P(n1+1,:,1:n3) = F(Merge(3,4,xface),:,:)
-          P(0,   :,1:n3) = F(Merge(n1-2,n1-3,xface),:,:)
-       Else
-          P(n1+1,:,1:n3) = F(n1,:,:)
-          P(0,   :,1:n3) = F(1, :,:)
-       End If
-    Else
-       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
-       sdn = 3;  sup = n1-2
-       If ( per .And. is_first ) Then
-          dst_dn = partner;  src_dn = partner;  sdn = Merge(3,4,xface)
-       End If
-       If ( per .And. is_last ) Then
-          dst_up = partner;  src_up = partner;  sup = Merge(n1-2,n1-3,xface)
-       End If
-       Allocate( sb(n2,n3), rb(n2,n3) )
-       sb = F(sdn,:,:)
-       Call Mpi_sendrecv( sb, n2*n3, Mpi_real8, dst_dn, 51, rb, n2*n3, Mpi_real8, src_up, 51, MPI_COMM_WORLD, istat, ierr )
-       If ( src_up /= MPI_PROC_NULL ) Then
-          P(n1+1,:,1:n3) = rb
-       Else
-          P(n1+1,:,1:n3) = F(n1,:,:)
-       End If
-       sb = F(sup,:,:)
-       Call Mpi_sendrecv( sb, n2*n3, Mpi_real8, dst_up, 52, rb, n2*n3, Mpi_real8, src_dn, 52, MPI_COMM_WORLD, istat, ierr )
-       If ( src_dn /= MPI_PROC_NULL ) Then
-          P(0,:,1:n3) = rb
-       Else
-          P(0,:,1:n3) = F(1,:,:)
-       End If
-       Deallocate( sb, rb )
-    End If
-
-    !-- z (over the x-extended extent, so the corners are consistent) ---------
-    per = ( z_bc_type == 0 )
-    Call z_halo_neighbors(up, down)
-    Call z_periodic_partner(is_first, is_last, partner)
-    If ( is_first .And. is_last ) Then
-       If ( per ) Then
-          P(:,:,n3+1) = P(:,:,Merge(3,4,zface))
-          P(:,:,0)    = P(:,:,Merge(n3-2,n3-3,zface))
-       Else
-          P(:,:,n3+1) = P(:,:,n3)
-          P(:,:,0)    = P(:,:,1)
-       End If
-    Else
-       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
-       sdn = 3;  sup = n3-2
-       If ( per .And. is_first ) Then
-          dst_dn = partner;  src_dn = partner;  sdn = Merge(3,4,zface)
-       End If
-       If ( per .And. is_last ) Then
-          dst_up = partner;  src_up = partner;  sup = Merge(n3-2,n3-3,zface)
-       End If
-       Allocate( sb(n1+2,n2), rb(n1+2,n2) )
-       sb = P(:,:,sdn)
-       Call Mpi_sendrecv( sb, (n1+2)*n2, Mpi_real8, dst_dn, 53, rb, (n1+2)*n2, Mpi_real8, src_up, 53, &
-                          MPI_COMM_WORLD, istat, ierr )
-       If ( src_up /= MPI_PROC_NULL ) Then
-          P(:,:,n3+1) = rb
-       Else
-          P(:,:,n3+1) = P(:,:,n3)
-       End If
-       sb = P(:,:,sup)
-       Call Mpi_sendrecv( sb, (n1+2)*n2, Mpi_real8, dst_up, 54, rb, (n1+2)*n2, Mpi_real8, src_dn, 54, &
-                          MPI_COMM_WORLD, istat, ierr )
-       If ( src_dn /= MPI_PROC_NULL ) Then
-          P(:,:,0) = rb
-       Else
-          P(:,:,0) = P(:,:,1)
-       End If
-       Deallocate( sb, rb )
-    End If
-
-  End Subroutine pad_field
-
   !> Padded axes (built once)
   Subroutine ensure_pad_axes
 
     If ( Allocated(xpad_f) ) Return
     Allocate( xpad_f(0:nx+1), xpad_c(0:nxg+1), zpad_f(0:nz+1), zpad_c(0:nzg+1) )
-    Call pad_axis( x,  nx,  x_global,  nx_global,  i1_global(myid),  xpad_f )
-    Call pad_axis( xg, nxg, xg_global, nxg_global, ig1_global(myid), xpad_c )
-    Call pad_axis( z,  nz,  z_global,  nz_global,  k1_global(myid),  zpad_f )
-    Call pad_axis( zg, nzg, zg_global, nzg_global, kg1_global(myid), zpad_c )
+    Call pad_axis( x,  nx,  x_global,  nx_global,  i1_global(myid),  1, xpad_f )
+    Call pad_axis( xg, nxg, xg_global, nxg_global, ig1_global(myid), 1, xpad_c )
+    Call pad_axis( z,  nz,  z_global,  nz_global,  k1_global(myid),  1, zpad_f )
+    Call pad_axis( zg, nzg, zg_global, nzg_global, kg1_global(myid), 1, zpad_c )
 
   End Subroutine ensure_pad_axes
 
@@ -374,9 +255,9 @@ Contains
        Allocate( Upad(0:nx+1, nyg, 0:nzg+1), Vpad(0:nxg+1, ny, 0:nzg+1), Wpad(0:nxg+1, nyg, 0:nz+1) )
        Call ensure_pad_axes
     End If
-    Call pad_field( U, nx,  nyg, nzg, .True.,  .False., Upad )
-    Call pad_field( V, nxg, ny,  nzg, .False., .False., Vpad )
-    Call pad_field( W, nxg, nyg, nz,  .False., .True.,  Wpad )
+    Call pad_field( U, nx,  nyg, nzg, .True.,  .False., 1, Upad )
+    Call pad_field( V, nxg, ny,  nzg, .False., .False., 1, Vpad )
+    Call pad_field( W, nxg, nyg, nz,  .False., .True.,  1, Wpad )
 
   End Subroutine build_velocity_pads
 
