@@ -41,7 +41,12 @@ Module particles
   ! Per-rank event counters since the last report_particle_counts call
   Integer(Int64) :: n_exited_local = 0, n_deposited_local = 0, n_reinjected_local = 0
   Integer(Int32) :: n_exit_outflow_local = 0   ! outflow (is_last_x, x exit) exits this step, feeds reinject_at_inflow
-  Integer(Int32) :: n_reinject_counter  = 0    ! per-rank running counter for reinjected-particle IDs
+  ! Reinjection is layout independent: every step the IDs of the particles that left through the outflow are gathered over all
+  ! ranks and sorted; the j-th of them is replaced by a new particle with the next global ID, placed from a hash of that ID,
+  ! and created by whichever inlet-row rank owns its (x,z). next_particle_id is identical on every rank.
+  Integer(Int32), Allocatable :: exit_ids_local(:)
+  Integer(Int32) :: n_exit_ids_local = 0
+  Integer(Int32) :: next_particle_id = 0
 
   ! Phase 2 (particle_mode==1 only): Stokes response time, computed once in setup_particles
   Real(Int64) :: tau_p_stokes
@@ -53,6 +58,14 @@ Module particles
   ! no double-counting. Reset to 0 after each write, so the written value is a RATE per
   ! particle_deposit_freq*nmonitor steps, not a running total.
   Real(Int64), Allocatable :: particle_deposit_x(:)
+
+  ! Padded copies of U, V, W with one extra plane on each x and z side (local indices 0 and n+1, filled from the neighbouring
+  ! rank, the periodic partner, or by clamping at a non-periodic domain edge) and the matching padded coordinate axes. The
+  ! tracer's RK3 evaluates the velocity at positions displaced by up to about one step of travel, which near a rank seam can
+  ! lie beyond the single ghost cell; without the extra plane the interpolation clamps there and the result depends on the
+  ! rank layout.
+  Real(Int64), Allocatable :: Upad(:,:,:), Vpad(:,:,:), Wpad(:,:,:)
+  Real(Int64), Allocatable :: xpad_f(:), xpad_c(:), zpad_f(:), zpad_c(:)
 
 Contains
 
@@ -77,7 +90,10 @@ Contains
 
     n_particles_local = 0
     particle_capacity = 0
-    n_reinject_counter = 0
+    next_particle_id = n_particles_init
+    ! per-rank stream for the stochastic terms (Brownian kick, SGS Langevin); seeding and reinjection use id_uniform instead, which
+    ! does not depend on it
+    Call random_seed_from( particle_seed_seed + 7919*myid )
 
     If ( ibm_input_mode >= 1 ) Then
        Allocate ( particle_deposit_x(nxg_global) )
@@ -101,12 +117,8 @@ Contains
     Integer(Int32) :: i
     Real   (Int64) :: xp, yp, zp, rx, ry, rz
 
-    Call random_seed_from(particle_seed_seed)
-
     Do i = 1, n_particles_init
-       Call random_number(rx)
-       Call random_number(ry)
-       Call random_number(rz)
+       Call id_uniform(i - 1, particle_seed_seed, rx, ry, rz)
        xp = particle_seed_xmin + rx*(particle_seed_xmax - particle_seed_xmin)
        yp = particle_seed_ymin + ry*(particle_seed_ymax - particle_seed_ymin)
        zp = particle_seed_zmin + rz*(particle_seed_zmax - particle_seed_zmin)
@@ -215,6 +227,144 @@ Contains
 
   End Function interp3
 
+  !> Padded axis a(0:n+1) from the local axis a(1:n): the neighbouring points from the global axis where they exist, otherwise
+  !  mirrored (a periodic edge; the axes involved there are uniform)
+  Subroutine pad_axis(a, n, aglob, ng, g1, apad)
+
+    Integer(Int32), Intent(In)  :: n, ng, g1
+    Real   (Int64), Intent(In)  :: a(n), aglob(ng)
+    Real   (Int64), Intent(Out) :: apad(0:n+1)
+
+    apad(1:n) = a
+    If ( g1 > 1 ) Then
+       apad(0) = aglob(g1-1)
+    Else
+       apad(0) = a(1) - ( a(2) - a(1) )
+    End If
+    If ( g1 + n - 1 < ng ) Then
+       apad(n+1) = aglob(g1+n)
+    Else
+       apad(n+1) = a(n) + ( a(n) - a(n-1) )
+    End If
+
+  End Subroutine pad_axis
+
+  !> P(0:n1+1, :, 0:n3+1) = F with one extra plane in x and z (see Upad). Plane rules follow apply_periodic_bc_x/z: across a
+  !  rank seam the extra plane is the neighbour's plane 3 (high side) or n-2 (low side); across the periodic wrap the first rank
+  !  supplies plane 4 (cell-centred) or 3 (face) and the last rank plane n-3 (cell-centred) or n-2 (face).
+  Subroutine pad_field(F, n1, n2, n3, xface, zface, P)
+
+    Integer(Int32), Intent(In)  :: n1, n2, n3
+    Real   (Int64), Intent(In)  :: F(n1,n2,n3)
+    Logical,        Intent(In)  :: xface, zface
+    Real   (Int64), Intent(Out) :: P(0:n1+1,n2,0:n3+1)
+
+    Logical        :: is_first, is_last, per
+    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup
+    Real   (Int64), Allocatable :: sb(:,:), rb(:,:)
+
+    P(1:n1,:,1:n3) = F
+
+    !-- x -----------------------------------------------------------------
+    per = ( x_bc_type == 0 )
+    Call x_halo_neighbors(up, down)
+    Call x_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       If ( per ) Then
+          P(n1+1,:,1:n3) = F(Merge(3,4,xface),:,:)
+          P(0,   :,1:n3) = F(Merge(n1-2,n1-3,xface),:,:)
+       Else
+          P(n1+1,:,1:n3) = F(n1,:,:)
+          P(0,   :,1:n3) = F(1, :,:)
+       End If
+    Else
+       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
+       sdn = 3;  sup = n1-2
+       If ( per .And. is_first ) Then
+          dst_dn = partner;  src_dn = partner;  sdn = Merge(3,4,xface)
+       End If
+       If ( per .And. is_last ) Then
+          dst_up = partner;  src_up = partner;  sup = Merge(n1-2,n1-3,xface)
+       End If
+       Allocate( sb(n2,n3), rb(n2,n3) )
+       sb = F(sdn,:,:)
+       Call Mpi_sendrecv( sb, n2*n3, Mpi_real8, dst_dn, 51, rb, n2*n3, Mpi_real8, src_up, 51, MPI_COMM_WORLD, istat, ierr )
+       If ( src_up /= MPI_PROC_NULL ) Then
+          P(n1+1,:,1:n3) = rb
+       Else
+          P(n1+1,:,1:n3) = F(n1,:,:)
+       End If
+       sb = F(sup,:,:)
+       Call Mpi_sendrecv( sb, n2*n3, Mpi_real8, dst_up, 52, rb, n2*n3, Mpi_real8, src_dn, 52, MPI_COMM_WORLD, istat, ierr )
+       If ( src_dn /= MPI_PROC_NULL ) Then
+          P(0,:,1:n3) = rb
+       Else
+          P(0,:,1:n3) = F(1,:,:)
+       End If
+       Deallocate( sb, rb )
+    End If
+
+    !-- z (over the x-extended extent, so the corners are consistent) ---------
+    per = ( z_bc_type == 0 )
+    Call z_halo_neighbors(up, down)
+    Call z_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       If ( per ) Then
+          P(:,:,n3+1) = P(:,:,Merge(3,4,zface))
+          P(:,:,0)    = P(:,:,Merge(n3-2,n3-3,zface))
+       Else
+          P(:,:,n3+1) = P(:,:,n3)
+          P(:,:,0)    = P(:,:,1)
+       End If
+    Else
+       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
+       sdn = 3;  sup = n3-2
+       If ( per .And. is_first ) Then
+          dst_dn = partner;  src_dn = partner;  sdn = Merge(3,4,zface)
+       End If
+       If ( per .And. is_last ) Then
+          dst_up = partner;  src_up = partner;  sup = Merge(n3-2,n3-3,zface)
+       End If
+       Allocate( sb(n1+2,n2), rb(n1+2,n2) )
+       sb = P(:,:,sdn)
+       Call Mpi_sendrecv( sb, (n1+2)*n2, Mpi_real8, dst_dn, 53, rb, (n1+2)*n2, Mpi_real8, src_up, 53, &
+                          MPI_COMM_WORLD, istat, ierr )
+       If ( src_up /= MPI_PROC_NULL ) Then
+          P(:,:,n3+1) = rb
+       Else
+          P(:,:,n3+1) = P(:,:,n3)
+       End If
+       sb = P(:,:,sup)
+       Call Mpi_sendrecv( sb, (n1+2)*n2, Mpi_real8, dst_up, 54, rb, (n1+2)*n2, Mpi_real8, src_dn, 54, &
+                          MPI_COMM_WORLD, istat, ierr )
+       If ( src_dn /= MPI_PROC_NULL ) Then
+          P(:,:,0) = rb
+       Else
+          P(:,:,0) = P(:,:,1)
+       End If
+       Deallocate( sb, rb )
+    End If
+
+  End Subroutine pad_field
+
+  !> Refresh Upad/Vpad/Wpad from the current host U,V,W (once per step, before the particles are advanced); the padded axes are
+  !  built on the first call
+  Subroutine build_velocity_pads
+
+    If ( .Not. Allocated(Upad) ) Then
+       Allocate( Upad(0:nx+1, nyg, 0:nzg+1), Vpad(0:nxg+1, ny, 0:nzg+1), Wpad(0:nxg+1, nyg, 0:nz+1) )
+       Allocate( xpad_f(0:nx+1), xpad_c(0:nxg+1), zpad_f(0:nz+1), zpad_c(0:nzg+1) )
+       Call pad_axis( x,  nx,  x_global,  nx_global,  i1_global(myid),  xpad_f )
+       Call pad_axis( xg, nxg, xg_global, nxg_global, ig1_global(myid), xpad_c )
+       Call pad_axis( z,  nz,  z_global,  nz_global,  k1_global(myid),  zpad_f )
+       Call pad_axis( zg, nzg, zg_global, nzg_global, kg1_global(myid), zpad_c )
+    End If
+    Call pad_field( U, nx,  nyg, nzg, .True.,  .False., Upad )
+    Call pad_field( V, nxg, ny,  nzg, .False., .False., Vpad )
+    Call pad_field( W, nxg, nyg, nz,  .False., .True.,  Wpad )
+
+  End Subroutine build_velocity_pads
+
   !> Fluid velocity at (xp,yp,zp), one trilinear read per staggered component (U on x-face/
   !  yg/zg centres, V on xg/y-face/zg, W on xg/yg/z-face -- this solver's usual staggering).
   Subroutine interpolate_velocity(xp, yp, zp, up, vp, wp)
@@ -222,9 +372,9 @@ Contains
     Real(Int64), Intent(In)  :: xp, yp, zp
     Real(Int64), Intent(Out) :: up, vp, wp
 
-    up = interp3(U, x,  nx,  yg, nyg, zg, nzg, xp, yp, zp)
-    vp = interp3(V, xg, nxg, y,  ny,  zg, nzg, xp, yp, zp)
-    wp = interp3(W, xg, nxg, yg, nyg, z,  nz,  xp, yp, zp)
+    up = interp3(Upad, xpad_f, nx+2,  yg, nyg, zpad_c, nzg+2, xp, yp, zp)
+    vp = interp3(Vpad, xpad_c, nxg+2, y,  ny,  zpad_c, nzg+2, xp, yp, zp)
+    wp = interp3(Wpad, xpad_c, nxg+2, yg, nyg, zpad_f, nz+2,  xp, yp, zp)
 
   End Subroutine interpolate_velocity
 
@@ -477,7 +627,10 @@ Contains
        If ( p_x(i) < x_global(1) .Or. p_x(i) >= x_global(nx_global) ) Then
           do_remove = .True.
           n_exited_local = n_exited_local + 1
-          If ( is_last_x_m .And. p_x(i) >= x_global(nx_global) ) n_exit_outflow_local = n_exit_outflow_local + 1
+          If ( is_last_x_m .And. p_x(i) >= x_global(nx_global) ) Then
+             n_exit_outflow_local = n_exit_outflow_local + 1
+             Call record_exit_id(p_id(i))
+          End If
           Return
        End If
     Case (2)
@@ -622,7 +775,10 @@ Contains
 
     If ( particles_active < 1 ) Return
 
+    Call build_velocity_pads
+
     n_exit_outflow_local = 0
+    n_exit_ids_local = 0
 
     i = 1
     Do While ( i <= n_particles_local )
@@ -846,58 +1002,112 @@ Contains
     End If
   End Subroutine unpack_particle
 
-  !> Replace particles that exited through the outflow face (n_exit_outflow_local, counted on
-  !  the is_last-x-row rank that detected each exit) with new ones at the inflow plane, on the
-  !  is_first-x-row rank in the SAME z-column (rank = Mod(myid,p_col) when row-major
-  !  rank=row*p_col+col) -- a direct, communication-cheap pairing that needs no search, since
-  !  x- and z-decomposition are independent. New particles are seeded at a small offset past
-  !  the inflow face, with y/z drawn uniformly from this receiving rank's own owned z-range
-  !  (not the full inflow plane) and the seed box's y-range, so no further ownership check or
-  !  hand-off is needed after creation. A no-op when p_row==1 (is_first==is_last==this rank).
-  Subroutine reinject_at_inflow
+  !> Remember the ID of a particle that left through the outflow face this step
+  Subroutine record_exit_id(id)
 
-    Integer(Int32) :: target_rank, source_rank, n_new, i, new_id
-    Real   (Int64) :: eps, yp, zp, ry, rz
+    Integer(Int32), Intent(In) :: id
+    Integer(Int32), Allocatable :: tmp(:)
 
-    target_rank = Mod(myid, p_col)          ! row 0, same column -- only meaningful if this rank is on the outflow row
-    source_rank = (p_row-1)*p_col + Mod(myid, p_col)   ! the outflow-row rank in this rank's own column
+    If ( .Not. Allocated(exit_ids_local) ) Allocate( exit_ids_local(64) )
+    If ( n_exit_ids_local >= Size(exit_ids_local) ) Then
+       Allocate( tmp(2*Size(exit_ids_local)) )
+       tmp(1:n_exit_ids_local) = exit_ids_local(1:n_exit_ids_local)
+       Call Move_Alloc(tmp, exit_ids_local)
+    End If
+    n_exit_ids_local = n_exit_ids_local + 1
+    exit_ids_local(n_exit_ids_local) = id
 
-    If ( is_first_x_m .And. is_last_x_m ) Then
-       ! single x-row: reinject locally using this rank's own exit count, no communication
-       n_new = n_exit_outflow_local
-    Else If ( is_first_x_m ) Then
-       Call Mpi_recv(n_new, 1, MPI_INTEGER, source_rank, 300, MPI_COMM_WORLD, istat, ierr)
-    Else If ( is_last_x_m ) Then
-       Call Mpi_send(n_exit_outflow_local, 1, MPI_INTEGER, target_rank, 300, MPI_COMM_WORLD, ierr)
-       Return
-    Else
-       Return
+  End Subroutine record_exit_id
+
+  !> Uniform (0,1) draws that depend only on (id, salt): Park-Miller minimal standard generator seeded from a mix of the two,
+  !  in Int64 arithmetic without overflow, so a seeded or reinjected particle's position is the same for every rank layout and
+  !  every compiler (Fortran's Random_Number is not: gfortran and nvfortran give different streams)
+  Subroutine id_uniform(id, salt, r1, r2, r3)
+
+    Integer(Int32), Intent(In)  :: id, salt
+    Real   (Int64), Intent(Out) :: r1, r2
+    Real   (Int64), Intent(Out), Optional :: r3
+    Integer(Int64), Parameter :: m = 2147483647_Int64
+    Integer(Int64) :: st
+    Integer(Int32) :: k
+
+    st = Mod( (Int(id,Int64)+1_Int64)*40503_Int64 + Int(salt,Int64)*9973_Int64 + 12345_Int64, m )
+    If ( st <= 0_Int64 ) st = st + m - 1_Int64
+    Do k = 1, 6                                   ! warm up: neighbouring IDs give unrelated first draws
+       st = Mod( 48271_Int64*st, m )
+    End Do
+    st = Mod( 48271_Int64*st, m );  r1 = Real(st,Int64) / Real(m,Int64)
+    st = Mod( 48271_Int64*st, m );  r2 = Real(st,Int64) / Real(m,Int64)
+    If ( Present(r3) ) Then
+       st = Mod( 48271_Int64*st, m );  r3 = Real(st,Int64) / Real(m,Int64)
     End If
 
-    eps = 1d-6 * (x_global(2) - x_global(1))
-    Do i = 1, n_new
-       Call random_number(ry);  Call random_number(rz)
-       yp = particle_seed_ymin + ry*(particle_seed_ymax - particle_seed_ymin)
-       zp = zg(2) + rz*(zg(nzg-1) - zg(2))   ! this rank's own owned z-range only, see header note
-       n_reinject_counter = n_reinject_counter + 1
-       new_id = myid*10000000 + n_reinject_counter
-       Call ensure_capacity(n_particles_local + 1)
-       n_particles_local = n_particles_local + 1
-       p_id (n_particles_local) = new_id
-       p_x  (n_particles_local) = x_global(1) + eps
-       p_y  (n_particles_local) = yp
-       p_z  (n_particles_local) = zp
-       p_u  (n_particles_local) = 0d0
-       p_v  (n_particles_local) = 0d0
-       p_w  (n_particles_local) = 0d0
-       p_age(n_particles_local) = 0d0
-       If ( sgs_particle_model == 1 ) Then
-          p_sgs_u(n_particles_local) = 0d0
-          p_sgs_v(n_particles_local) = 0d0
-          p_sgs_w(n_particles_local) = 0d0
-       End If
-       n_reinjected_local = n_reinjected_local + 1
+  End Subroutine id_uniform
+
+  !> Replace particles that exited through the outflow face (particle_reinit_on_exit==1) by fresh ones at the inflow, at a
+  !  hash-determined (y,z) with zero velocity. Collective: every rank takes part in the gather.
+  Subroutine reinject_at_inflow
+
+    Integer(Int32), Allocatable :: counts(:), displs(:), all_ids(:)
+    Integer(Int32) :: total, i, j, new_id, tmpid
+    Real   (Int64) :: eps, xp, yp, zp, r1, r2
+
+    Allocate( counts(0:nprocs-1), displs(0:nprocs-1) )
+    Call Mpi_allgather(n_exit_ids_local, 1, MPI_INTEGER, counts, 1, MPI_INTEGER, MPI_COMM_WORLD, ierr)
+    total = Sum(counts)
+    If ( total == 0 ) Then
+       Deallocate( counts, displs )
+       Return
+    End If
+    displs(0) = 0
+    Do i = 1, nprocs-1
+       displs(i) = displs(i-1) + counts(i-1)
     End Do
+    Allocate( all_ids(total) )
+    If ( .Not. Allocated(exit_ids_local) ) Allocate( exit_ids_local(1) )
+    Call Mpi_allgatherv(exit_ids_local, n_exit_ids_local, MPI_INTEGER, all_ids, counts, displs, MPI_INTEGER, MPI_COMM_WORLD, ierr)
+
+    ! sort ascending (insertion sort: only the few particles that left this step)
+    Do i = 2, total
+       tmpid = all_ids(i)
+       j = i - 1
+       Do While ( j >= 1 )
+          If ( all_ids(j) <= tmpid ) Exit
+          all_ids(j+1) = all_ids(j)
+          j = j - 1
+       End Do
+       all_ids(j+1) = tmpid
+    End Do
+
+    eps = 1d-6 * (x_global(2) - x_global(1))
+    xp  = x_global(1) + eps
+    Do i = 1, total
+       new_id = next_particle_id + i - 1
+       Call id_uniform(new_id, 1, r1, r2)
+       yp = particle_seed_ymin + r1*(particle_seed_ymax - particle_seed_ymin)
+       zp = z_global(1) + r2*(z_global(nz_global) - z_global(1))
+       If ( owns_particle(xp, zp) ) Then
+          Call ensure_capacity(n_particles_local + 1)
+          n_particles_local = n_particles_local + 1
+          p_id (n_particles_local) = new_id
+          p_x  (n_particles_local) = xp
+          p_y  (n_particles_local) = yp
+          p_z  (n_particles_local) = zp
+          p_u  (n_particles_local) = 0d0
+          p_v  (n_particles_local) = 0d0
+          p_w  (n_particles_local) = 0d0
+          p_age(n_particles_local) = 0d0
+          If ( sgs_particle_model == 1 ) Then
+             p_sgs_u(n_particles_local) = 0d0
+             p_sgs_v(n_particles_local) = 0d0
+             p_sgs_w(n_particles_local) = 0d0
+          End If
+          n_reinjected_local = n_reinjected_local + 1
+       End If
+    End Do
+    next_particle_id = next_particle_id + total
+
+    Deallocate( counts, displs, all_ids )
 
   End Subroutine reinject_at_inflow
 
@@ -1125,6 +1335,8 @@ Contains
           End If
        End If
     End Do
+
+    If ( total > 0 ) next_particle_id = Max( next_particle_id, MaxVal(id_all(1:total)) + 1 )
 
     Deallocate ( id_all, dat_all )
     loaded = .True.

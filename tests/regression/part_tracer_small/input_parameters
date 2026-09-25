@@ -1,0 +1,63 @@
+! Tiny periodic-x/z channel, LES (Vreman) + smooth equilibrium wall model, stretched y grid,
+! laminar Reichardt profile + prescribed sinusoidal perturbation, no random noise) used as a
+! rank-count / CPU-vs-GPU parity case exercising the wall-normal tridiagonal Poisson path.
+
+&DOMAIN
+  nx         = 18,
+  ny         = 17,
+  nz         = 18,
+  Lx         = 3.0,
+  Ly         = 2.0,
+  Lz         = 1.5,
+  grid_type  = 2,
+  alpha_grid = 2.0,
+  p_row      = 0,
+  p_col      = 0,
+/
+
+&PHYSICS
+  nu                   = 0.002531645569620253,
+  dPdx                 = 1.0,
+  dPdz                 = 0.0,
+  sgs_model            = 1,
+  Cs_vreman            = 0.17,
+  flat_wall_model_flag = 1,
+/
+
+&NUMERICS
+  dt           = 0.002,
+  nsteps       = 20,
+  nsave        = 20,
+  nmonitor     = 1,
+  cfl_adaptive = 0,
+/
+
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 1,
+  bc_face_yhi = 1,
+  x_bc_type = 0,
+  y_bc_type = 1,
+  z_bc_type = 0,
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 5.0,
+  ic_type      = 4,
+  noise_percent  = 5.0,
+  nstep_init     = 0,
+  restart        = 0,
+/
+
+&IO
+  filein  = 'restart/part_tracer_small.1',
+  fileout = 'part_tracer_small',
+/
+
+! Lagrangian tracers (particle_mode=0), 300 particles seeded in the whole domain; periodic x/z, reflecting y walls.
+&PARTICLES
+  particles_active = 1,
+  n_particles_init = 300,
+  particle_seed_seed = 11,
+  bc_particle_x = 0, bc_particle_y = 2, bc_particle_z = 0,
+  particle_mode = 0,
+/

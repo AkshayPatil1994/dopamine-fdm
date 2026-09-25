@@ -471,14 +471,8 @@ if(Python3_Interpreter_FOUND)
         endforeach()
 
         # hot-start restart reproduces an uninterrupted run (all field blocks incl. scalars), at np=1 and np=N
-        # KNOWN ISSUE (CPU build too): restart at np>1 is not bit-exact (~3e-4 after one step, in every case);
-        # the np=1 check is strict, np>1 uses a loose bound. Only difference seen between np=1 and np=2 state:
-        # one top-wall ghost row of U/W at the rank seam (see tests/regression/README notes in CMakeLists).
         foreach(_np 1 ${TEST_PARITY_NPROCS})
             set(_rtol 1e-12)
-            if(_np GREATER 1)
-                set(_rtol 1e-3)
-            endif()
             add_test(NAME ${case}_${_kind}_restart_np${_np}
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
                         --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE} --exe $<TARGET_FILE:dopamine> --np ${_np}
@@ -502,6 +496,58 @@ if(Python3_Interpreter_FOUND)
                             --label-a cpu-np${_np} --label-b gpu-np${_np})
                 if(TEST_LD_LIBRARY_PATH)
                     set_tests_properties(${case}_cpu_vs_gpu_np${_np} PROPERTIES
+                        ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
+                endif()
+            endforeach()
+        endif()
+    endforeach()
+
+    # Point-particle parity (tests/regression/compare_particles.py): final particle state by ID, np=1 vs other layouts and, in a
+    # GPU build with CPU_REFERENCE_EXE, CPU vs GPU at the same layout. Deterministic cases only: Brownian motion and the SGS
+    # Langevin closure draw from per-rank random streams, so their results are statistically, not bitwise, layout independent.
+    set(_particle_cases part_tracer_small part_inertial_small part_bouss_small part_outflow_small)
+    set(_pkind cpu)
+    if(ENABLE_GPU)
+        set(_pkind gpu)
+    endif()
+    foreach(_pc ${_particle_cases})
+        set(_pdir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_pc})
+        set(_pcmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
+                  --case-dir ${_pdir} --mpirun ${MPIEXEC_EXECUTABLE} --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine>)
+        foreach(_lay "2:" "3:" "4:2,2" "4:4,1")
+            string(REPLACE ":" ";" _lparts "${_lay}")
+            list(GET _lparts 0 _lnp)
+            list(LENGTH _lparts _llen)
+            set(_lgrid "")
+            set(_ltag np${_lnp})
+            if(_llen GREATER 1)
+                list(GET _lparts 1 _lgrid_raw)
+                if(_lgrid_raw)
+                    set(_lgrid --p-grid ${_lgrid_raw})
+                    string(REPLACE "," "x" _lgt ${_lgrid_raw})
+                    set(_ltag np${_lnp}_${_lgt})
+                endif()
+            endif()
+            add_test(NAME ${_pc}_${_pkind}_np1_vs_${_ltag}
+                COMMAND ${_pcmp} --np-a 1 --np-b ${_lnp} ${_lgrid})
+            if(TEST_LD_LIBRARY_PATH)
+                set_tests_properties(${_pc}_${_pkind}_np1_vs_${_ltag} PROPERTIES
+                    ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
+            endif()
+        endforeach()
+        if(ENABLE_GPU AND CPU_REFERENCE_EXE)
+            set(_pref_mpirun ${MPIEXEC_EXECUTABLE})
+            if(CPU_REFERENCE_MPIRUN)
+                set(_pref_mpirun ${CPU_REFERENCE_MPIRUN})
+            endif()
+            foreach(_pn 1 2)
+                add_test(NAME ${_pc}_cpu_vs_gpu_np${_pn}
+                    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
+                            --case-dir ${_pdir} --mpirun ${_pref_mpirun} --exe-a ${CPU_REFERENCE_EXE} --np-a ${_pn}
+                            --mpirun-b ${MPIEXEC_EXECUTABLE} --exe-b $<TARGET_FILE:dopamine> --np-b ${_pn}
+                            --label-a cpu --label-b gpu)
+                if(TEST_LD_LIBRARY_PATH)
+                    set_tests_properties(${_pc}_cpu_vs_gpu_np${_pn} PROPERTIES
                         ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
                 endif()
             endforeach()
