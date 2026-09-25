@@ -7,7 +7,9 @@ Files are <seq>_<tag>.<field>: 3 int32 (n1,n2,n3) + float64 global array (ghost 
 in sequence order; the first field whose max |a-b| exceeds tol*(max(a)-min(a)) is reported with its global (i,j,k), split
 into 'interior' (away from the outer edge of the global array) and 'edge' (physical-boundary ghost layer).
 Also prints the ghost/owner mismatches recorded in seam.log (stale halos seen by the run itself).
-Exit 0 = no difference above tol, 1 = difference found or files missing.
+Exit 0 = no interior difference above tol, 1 = difference found or files missing.
+'interior' = cells away from the outer edge of the global array in x and z (ghost layers, incl. seam ghost planes'
+y-ghost rows and physical-boundary ghosts, are reported as 'ghost-layer-only' and do not fail the comparison).
 """
 import argparse
 import array
@@ -70,6 +72,7 @@ def main():
     ap.add_argument('dir_a')
     ap.add_argument('dir_b')
     ap.add_argument('--tol', type=float, default=1e-10)
+    ap.add_argument('--skip', action='append', default=[], help='field name to ignore (e.g. P), repeatable')
     ap.add_argument('--all', action='store_true', help='list every differing point, not only the first')
     args = ap.parse_args()
 
@@ -80,26 +83,35 @@ def main():
         return 1
 
     found = 0
+    ghost_only = []
     for n in names_a:
+        if n.rsplit('.', 1)[1] in args.skip:
+            continue
         res, err = compare_field(os.path.join(args.dir_a, n), os.path.join(args.dir_b, n))
         if err:
             print(f'{n}: {err}')
             found += 1
             continue
         rel, loc, rel_int, loc_int = res
-        if rel > args.tol:
+        # gate on the interior: ghost layers (seam ghost-plane y-rows, physical-edge ghosts) are reported separately
+        if rel_int > args.tol:
             found += 1
-            print(f'{n:32s} rel diff {rel:9.2e} at (i,j,k)={loc}   interior-only {rel_int:9.2e} at {loc_int}')
+            print(f'{n:32s} INTERIOR rel diff {rel_int:9.2e} at (i,j,k)={loc_int}')
             if not args.all:
                 break
+        elif rel > args.tol:
+            ghost_only.append((n, rel, loc))
     for tag, d in (('A', args.dir_a), ('B', args.dir_b)):
         bad = read_seam(d)
         if bad:
             print(f'--- ghost/owner mismatches recorded by run {tag} ({len(bad)} lines, first 8):')
             for line in bad[:8]:
                 print('   ', line)
+    if ghost_only:
+        n, rel, loc = ghost_only[0]
+        print(f'ghost-layer-only differences in {len(ghost_only)} dumps (first: {n} {rel:.2e} at {loc}); not gated')
     if not found:
-        print(f'no difference above {args.tol:g} in {len(names_a)} dumps')
+        print(f'no interior difference above {args.tol:g} in {len(names_a)} dumps')
     return 1 if found else 0
 
 

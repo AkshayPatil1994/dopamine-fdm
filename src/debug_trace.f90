@@ -2,7 +2,7 @@
 !  index on rank 0, and checks each rank's ghost cells against the owning rank's interior value.
 !
 !  Enabled by the environment variable DOPAMINE_TRACE_DIR (unset = one cheap logical test per call, nothing else).
-!  DOPAMINE_TRACE_STEPS (default 2) limits tracing to the first steps.
+!  DOPAMINE_TRACE_STEPS (default 2) is the number of steps traced, starting at step DOPAMINE_TRACE_START (default 1).
 !
 !  Outputs, per trace point and field:
 !    <dir>/<seq>_<tag>.<field>   3 int32 (n1,n2,n3) + float64 global array, ghost cells included
@@ -20,7 +20,7 @@ Module debug_trace
 
   Logical,             Save :: trace_on = .False., trace_ready = .False.
   Character(Len=1024), Save :: trace_dir = ''
-  Integer(Int32),      Save :: trace_nsteps = 2, trace_seq = 0
+  Integer(Int32),      Save :: trace_nsteps = 2, trace_first = 1, trace_seq = 0
 
 Contains
 
@@ -31,7 +31,7 @@ Contains
 
     If ( .Not. trace_ready ) Call trace_setup
     If ( .Not. trace_on ) Return
-    If ( istep > trace_nsteps ) Return
+    If ( istep < trace_first .Or. istep >= trace_first + trace_nsteps ) Return
 
     trace_seq = trace_seq + 1
 
@@ -58,7 +58,7 @@ Contains
   !> True while tracing is enabled and within the traced steps (guard for callers that must first sync device data to the host)
   Logical Function trace_active()
     If ( .Not. trace_ready ) Call trace_setup
-    trace_active = trace_on .And. ( istep <= trace_nsteps )
+    trace_active = trace_on .And. istep >= trace_first .And. istep < trace_first + trace_nsteps
   End Function trace_active
 
   !> Dump an interior-only array (indices 2..n-1 in each dim, as the RHS arrays) under the current sequence number.
@@ -72,7 +72,7 @@ Contains
     Real(Int64), Allocatable :: full(:,:,:)
 
     If ( .Not. trace_on ) Return
-    If ( istep > trace_nsteps ) Return
+    If ( istep < trace_first .Or. istep >= trace_first + trace_nsteps ) Return
     If ( kind /= 1 ) Return
     Allocate( full(nxg,nyg,nzg) )
     full = 0d0
@@ -97,9 +97,12 @@ Contains
        End If
        Call Get_Environment_Variable('DOPAMINE_TRACE_STEPS', val, length, stat)
        If ( stat == 0 .And. length > 0 ) Read(val(1:length),*) trace_nsteps
+       Call Get_Environment_Variable('DOPAMINE_TRACE_START', val, length, stat)
+       If ( stat == 0 .And. length > 0 ) Read(val(1:length),*) trace_first
     End If
     Call Mpi_bcast(flag,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr)
     Call Mpi_bcast(trace_nsteps, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr)
+    Call Mpi_bcast(trace_first,  1, MPI_integer, 0, MPI_COMM_WORLD, ierr)
     trace_on = ( flag == 1 )
 
   End Subroutine trace_setup
