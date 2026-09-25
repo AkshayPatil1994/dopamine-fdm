@@ -39,7 +39,8 @@ def compare_field(pa, pb):
     if shape_b != (n1, n2, n3):
         return None, ('shape', (n1, n2, n3), shape_b)
     # scale by the field's spread, not its magnitude: a fluctuation field on a large offset (T ~ T_ref) would otherwise hide real differences
-    scale = max(max(a) - min(a), 1e-12)
+    # ... with a floor of 1e-8*max|a| so a nearly uniform field (spread ~ roundoff) does not turn roundoff into a 'difference'
+    scale = max(max(a) - min(a), 1e-8 * max(abs(max(a)), abs(min(a))), 1e-30)
     worst, loc = 0.0, None
     worst_int, loc_int = 0.0, None
     for idx in range(len(a)):

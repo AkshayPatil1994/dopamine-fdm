@@ -232,13 +232,19 @@ Contains
     ! Scalar step 1
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
+       Call trace_stage('s1_preC')
        Call compute_rhs_scalar(Cscal, U, V, W, Fcs1)
+       If ( trace_active() ) Then
+          !$acc update host(Fcs1)
+          Call trace_interior('s1_preC', 'Fc', Fcs1, 1)
+       End If
        !$acc kernels present(Cscal,Cscal_o,Fcs1)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Fcs1
        !$acc end kernels
        !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
        !$acc update device(Cscal)
+       Call trace_stage('s1_C')
        Call profiler_stop(PROF_SCALAR)
     End If
 
@@ -344,7 +350,12 @@ Contains
     ! Scalar step 2
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
+       Call trace_stage('s2_preC')
        Call compute_rhs_scalar(Cscal, U, V, W, Fcs2)
+       If ( trace_active() ) Then
+          !$acc update host(Fcs2)
+          Call trace_interior('s2_preC', 'Fc', Fcs2, 1)
+       End If
        !$acc kernels present(Cscal,Cscal_o,Fcs1,Fcs2)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(2,1)*Fcs1 + rk_coef(2,2)*Fcs2 )
@@ -352,6 +363,7 @@ Contains
        !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
        !$acc update device(Cscal)
+       Call trace_stage('s2_C')
        Call profiler_stop(PROF_SCALAR)
     End If
 
@@ -492,7 +504,12 @@ Contains
     ! Scalar step 3
     If ( sediment_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
+       Call trace_stage('s3_preC')
        Call compute_rhs_scalar(Cscal, U, V, W, Fcs3)
+       If ( trace_active() ) Then
+          !$acc update host(Fcs3)
+          Call trace_interior('s3_preC', 'Fc', Fcs3, 1)
+       End If
        !$acc kernels present(Cscal,Cscal_o,Fcs1,Fcs2,Fcs3)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(3,1)*Fcs1 + rk_coef(3,2)*Fcs2 + rk_coef(3,3)*Fcs3 )
@@ -500,6 +517,7 @@ Contains
        !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
        !$acc update device(Cscal)
+       Call trace_stage('s3_C')
        Call profiler_stop(PROF_SCALAR)
     End If
 

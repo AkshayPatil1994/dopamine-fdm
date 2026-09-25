@@ -416,15 +416,10 @@ if(Python3_Interpreter_FOUND)
         if(ENABLE_GPU)
             set(_kind gpu)
         endif()
-        # KNOWN ISSUE (CPU build too): the Boussinesq temperature still differs by ~1e-6/step (up to ~2e-4 after 20
-        # steps) between np=1 and np>1 near rank seams, in DNS as well (so not the SGS model); the passive scalar with
-        # the same transport core agrees to 1e-8. Bound loosened for that comparison only; CPU-vs-GPU stays strict.
         set(_ftol 1e-8)
         set(_rtol 1e-12)
         set(_extra "")
-        if(case STREQUAL "bouss_small")
-            set(_ftol 1e-3)
-        elseif(case STREQUAL "rsb_small")
+        if(case STREQUAL "rsb_small")
             set(_extra --files stats/rsb_*.bin)
         endif()
         add_test(NAME ${case}_${_kind}_np1_vs_np${TEST_PARITY_NPROCS}

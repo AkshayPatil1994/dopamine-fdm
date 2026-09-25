@@ -4,7 +4,7 @@ Module scalar_transport
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors
+  Use decomp, Only : z_halo_neighbors, x_halo_neighbors, z_periodic_partner, x_periodic_partner
   Use boundary_conditions, Only : apply_periodic_bc_x, apply_periodic_bc_z, update_ghost_interior_planes_x, &
                                   apply_inflow_bc_scalar_x_C, outflow_convection_velocity
 
@@ -13,6 +13,16 @@ Module scalar_transport
   ! Module-level halo buffers for C z-exchange (avoids per-call heap allocation)
   Real(Int64), Allocatable, Dimension(:,:,:) :: sc_snd_lo, sc_snd_hi
   Real(Int64), Allocatable, Dimension(:,:,:) :: sc_rcv_lo, sc_rcv_hi
+
+  ! Far planes for the MUSCL reconstruction: the second cell beyond a face at the local array edge (local index 0 and
+  ! n+1), taken from the neighbouring rank or the periodic partner, so the stencil does not depend on the decomposition.
+  ! have_far_* = .False. at a true non-periodic domain boundary (first-order there); dfar_* = centre spacing from the
+  ! ghost cell to the far cell.
+  Real(Int64), Allocatable, Dimension(:,:) :: far_xlo, far_xhi, far_zlo, far_zhi
+  Real(Int64), Allocatable, Dimension(:,:) :: fsend_xdn, fsend_xup, fsend_zdn, fsend_zup
+  Logical        :: have_far_xlo = .False., have_far_xhi = .False., have_far_zlo = .False., have_far_zhi = .False.
+  Real(Int64)    :: dfar_xlo = 1d0, dfar_xhi = 1d0, dfar_zlo = 1d0, dfar_zhi = 1d0
+  Logical        :: far_ready = .False.
 
 Contains
 
@@ -57,6 +67,132 @@ Contains
   End Subroutine compute_rhs_scalar
 
 
+  !> Refresh the MUSCL far planes of C_ (device-resident in GPU builds; only four small planes go through the host)
+  Subroutine update_far_planes(C_)
+
+    Real(Int64), Dimension(nxg, nyg, nzg), Intent(In) :: C_
+
+    Logical        :: is_first, is_last, per_x, per_z
+    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, p, nplane
+    Integer(Int32) :: kg2, ig2
+
+    per_x = ( x_bc_type == 0 )
+    per_z = ( z_bc_type == 0 )
+
+    If ( .Not. far_ready ) Then
+       Allocate( far_xlo(nyg,nzg), far_xhi(nyg,nzg), far_zlo(nxg,nyg), far_zhi(nxg,nyg) )
+       Allocate( fsend_xdn(nyg,nzg), fsend_xup(nyg,nzg), fsend_zdn(nxg,nyg), fsend_zup(nxg,nyg) )
+       far_xlo = 0d0;  far_xhi = 0d0;  far_zlo = 0d0;  far_zhi = 0d0
+       fsend_xdn = 0d0;  fsend_xup = 0d0;  fsend_zdn = 0d0;  fsend_zup = 0d0
+       !$acc enter data copyin(far_xlo,far_xhi,far_zlo,far_zhi,fsend_xdn,fsend_xup,fsend_zdn,fsend_zup)
+
+       ! availability and centre spacings, from the global grid (cells wrap as F(1)=F(n-2), F(n)=F(3), F(n+1)=F(4))
+       Call z_halo_neighbors(up, down)
+       have_far_zhi = ( up   /= MPI_PROC_NULL ) .Or. per_z
+       have_far_zlo = ( down /= MPI_PROC_NULL ) .Or. per_z
+       kg2 = kg2_global(myid)
+       If ( up /= MPI_PROC_NULL ) Then
+          dfar_zhi = zg_global(kg2+1) - zg_global(kg2)
+       Else
+          dfar_zhi = zg_global(4) - zg_global(3)
+       End If
+       If ( down /= MPI_PROC_NULL ) Then
+          dfar_zlo = zg_global(kg1_global(myid)) - zg_global(kg1_global(myid)-1)
+       Else
+          dfar_zlo = zg_global(nzg_global-2) - zg_global(nzg_global-3)
+       End If
+
+       Call x_halo_neighbors(up, down)
+       have_far_xhi = ( up   /= MPI_PROC_NULL ) .Or. per_x
+       have_far_xlo = ( down /= MPI_PROC_NULL ) .Or. per_x
+       ig2 = ig2_global(myid)
+       If ( up /= MPI_PROC_NULL ) Then
+          dfar_xhi = xg_global(ig2+1) - xg_global(ig2)
+       Else
+          dfar_xhi = xg_global(4) - xg_global(3)
+       End If
+       If ( down /= MPI_PROC_NULL ) Then
+          dfar_xlo = xg_global(ig1_global(myid)) - xg_global(ig1_global(myid)-1)
+       Else
+          dfar_xlo = xg_global(nxg_global-2) - xg_global(nxg_global-3)
+       End If
+       far_ready = .True.
+    End If
+
+    !-- z ------------------------------------------------------------------
+    Call z_halo_neighbors(up, down)
+    Call z_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       If ( per_z ) Then
+          !$acc kernels present(C_,far_zlo,far_zhi)
+          far_zhi = C_(:,:,4)
+          far_zlo = C_(:,:,nzg-3)
+          !$acc end kernels
+       End If
+    Else
+       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
+       If ( per_z .And. is_first ) Then
+          dst_dn = partner;  src_dn = partner
+       End If
+       If ( per_z .And. is_last ) Then
+          dst_up = partner;  src_up = partner
+       End If
+       ! plane sent to the lower neighbour becomes its high far plane; the periodic wrap sends plane 4 instead of 3
+       p = 3;  If ( is_first ) p = 4
+       !$acc kernels present(C_,fsend_zdn)
+       fsend_zdn = C_(:,:,p)
+       !$acc end kernels
+       p = nzg-2;  If ( is_last ) p = nzg-3
+       !$acc kernels present(C_,fsend_zup)
+       fsend_zup = C_(:,:,p)
+       !$acc end kernels
+       !$acc update host(fsend_zdn,fsend_zup)
+       nplane = nxg*nyg
+       Call Mpi_sendrecv( fsend_zdn, nplane, Mpi_real8, dst_dn, 31, far_zhi, nplane, Mpi_real8, src_up, 31, &
+                          MPI_COMM_WORLD, istat, ierr )
+       Call Mpi_sendrecv( fsend_zup, nplane, Mpi_real8, dst_up, 32, far_zlo, nplane, Mpi_real8, src_dn, 32, &
+                          MPI_COMM_WORLD, istat, ierr )
+       !$acc update device(far_zlo,far_zhi)
+    End If
+
+    !-- x ------------------------------------------------------------------
+    Call x_halo_neighbors(up, down)
+    Call x_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       If ( per_x ) Then
+          !$acc kernels present(C_,far_xlo,far_xhi)
+          far_xhi = C_(4,:,:)
+          far_xlo = C_(nxg-3,:,:)
+          !$acc end kernels
+       End If
+    Else
+       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
+       If ( per_x .And. is_first ) Then
+          dst_dn = partner;  src_dn = partner
+       End If
+       If ( per_x .And. is_last ) Then
+          dst_up = partner;  src_up = partner
+       End If
+       p = 3;  If ( is_first ) p = 4
+       !$acc kernels present(C_,fsend_xdn)
+       fsend_xdn = C_(p,:,:)
+       !$acc end kernels
+       p = nxg-2;  If ( is_last ) p = nxg-3
+       !$acc kernels present(C_,fsend_xup)
+       fsend_xup = C_(p,:,:)
+       !$acc end kernels
+       !$acc update host(fsend_xdn,fsend_xup)
+       nplane = nyg*nzg
+       Call Mpi_sendrecv( fsend_xdn, nplane, Mpi_real8, dst_dn, 33, far_xhi, nplane, Mpi_real8, src_up, 33, &
+                          MPI_COMM_WORLD, istat, ierr )
+       Call Mpi_sendrecv( fsend_xup, nplane, Mpi_real8, dst_up, 34, far_xlo, nplane, Mpi_real8, src_dn, 34, &
+                          MPI_COMM_WORLD, istat, ierr )
+       !$acc update device(far_xlo,far_xhi)
+    End If
+
+  End Subroutine update_far_planes
+
+
   !> Shared MUSCL advection-diffusion core for any cell-centred scalar (sediment concentration, temperature, ...)
   Subroutine compute_rhs_scalar_core(C_, U_, V_, W_, w_settle, kappa_mol, kappa_t_inv, Fc_)
 
@@ -75,8 +211,15 @@ Contains
     Real   (Int64) :: C_lo, C_hi                    ! TVD reconstructed face values
     Real   (Int64) :: gf, gb, slp                   ! face gradients & limited slope
     Real   (Int64) :: dx_f, dy_f, dz_f
+    Real   (Int64) :: c2, ddf                       ! far upwind cell value and its centre spacing
+    Logical        :: hxlo, hxhi, hzlo, hzhi         ! far planes available (local copies for the device kernel)
+    Real   (Int64) :: dxlo, dxhi, dzlo, dzhi
 
-    !$acc parallel loop collapse(3) present(C_,U_,V_,W_,Fc_,nu_t,phi,x,xg,y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
+    Call update_far_planes(C_)
+    hxlo = have_far_xlo;  hxhi = have_far_xhi;  hzlo = have_far_zlo;  hzhi = have_far_zhi
+    dxlo = dfar_xlo;      dxhi = dfar_xhi;      dzlo = dfar_zlo;      dzhi = dfar_zhi
+
+    !$acc parallel loop collapse(3) present(C_,U_,V_,W_,Fc_,nu_t,phi,x,xg,y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1,far_xlo,far_xhi,far_zlo,far_zhi)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
@@ -92,11 +235,16 @@ Contains
                 slp = vanleer_slope(gf, gb)
                 C_hi = C_(i,j,k) + slp * ( x(i) - xg(i) )
              Else
-                ! upwind cell = i+1; guard far-upwind C_(i+2) out of bounds at i=nxg-1
-                If ( i == nxg-1 ) Then
+                ! upwind cell = i+1; the far-upwind cell at i=nxg-1 is the far plane (first order where there is none)
+                If ( i == nxg-1 .And. .Not. hxhi ) Then
                    C_hi = C_(i+1,j,k)
                 Else
-                   gf  = ( C_(i+2,j,k) - C_(i+1,j,k) ) / ( xg(i+2) - xg(i+1) )
+                   If ( i == nxg-1 ) Then
+                      c2 = far_xhi(j,k);  ddf = dxhi
+                   Else
+                      c2 = C_(i+2,j,k);   ddf = xg(i+2) - xg(i+1)
+                   End If
+                   gf  = ( c2 - C_(i+1,j,k) ) / ddf
                    gb  = ( C_(i+1,j,k) - C_(i,j,k)   ) / ( xg(i+1) - xg(i)   )
                    slp = vanleer_slope(gf, gb)
                    C_hi = C_(i+1,j,k) + slp * ( x(i) - xg(i+1) )
@@ -106,12 +254,17 @@ Contains
              ! -- low face (i-1/2) at x(i-1): U_(i-1,j,k)
              uf = U_(i-1,j,k)
              If ( uf >= 0d0 ) Then
-                ! upwind cell = i-1; guard far-upwind C_(i-2) out of bounds at i=2
-                If ( i == 2 ) Then
+                ! upwind cell = i-1; the far-upwind cell at i=2 is the far plane (first order where there is none)
+                If ( i == 2 .And. .Not. hxlo ) Then
                    C_lo = C_(i-1,j,k)
                 Else
+                   If ( i == 2 ) Then
+                      c2 = far_xlo(j,k);  ddf = dxlo
+                   Else
+                      c2 = C_(i-2,j,k);   ddf = xg(i-1) - xg(i-2)
+                   End If
                    gf  = ( C_(i,j,k)   - C_(i-1,j,k) ) / ( xg(i)   - xg(i-1) )
-                   gb  = ( C_(i-1,j,k) - C_(i-2,j,k) ) / ( xg(i-1) - xg(i-2) )
+                   gb  = ( C_(i-1,j,k) - c2 ) / ddf
                    slp = vanleer_slope(gf, gb)
                    C_lo = C_(i-1,j,k) + slp * ( x(i-1) - xg(i-1) )
                 End If
@@ -180,11 +333,16 @@ Contains
                 slp = vanleer_slope(gf, gb)
                 C_hi = C_(i,j,k) + slp * ( z(k) - zg(k) )
              Else
-                ! upwind cell = k+1; guard C_(i,j,k+2) out of bounds at k=nzg-1
-                If ( k == nzg-1 ) Then
+                ! upwind cell = k+1; the far-upwind cell at k=nzg-1 is the far plane (first order where there is none)
+                If ( k == nzg-1 .And. .Not. hzhi ) Then
                    C_hi = C_(i,j,k+1)
                 Else
-                   gf  = ( C_(i,j,k+2) - C_(i,j,k+1) ) / ( zg(k+2) - zg(k+1) )
+                   If ( k == nzg-1 ) Then
+                      c2 = far_zhi(i,j);  ddf = dzhi
+                   Else
+                      c2 = C_(i,j,k+2);   ddf = zg(k+2) - zg(k+1)
+                   End If
+                   gf  = ( c2 - C_(i,j,k+1) ) / ddf
                    gb  = ( C_(i,j,k+1) - C_(i,j,k)   ) / ( zg(k+1) - zg(k)   )
                    slp = vanleer_slope(gf, gb)
                    C_hi = C_(i,j,k+1) + slp * ( z(k) - zg(k+1) )
@@ -194,12 +352,17 @@ Contains
              ! -- low face (k-1/2) at z(k-1): W_(i,j,k-1)
              wf = W_(i,j,k-1)
              If ( wf >= 0d0 ) Then
-                ! upwind cell = k-1; guard C_(i,j,k-2) out of bounds at k=2
-                If ( k == 2 ) Then
+                ! upwind cell = k-1; the far-upwind cell at k=2 is the far plane (first order where there is none)
+                If ( k == 2 .And. .Not. hzlo ) Then
                    C_lo = C_(i,j,k-1)
                 Else
+                   If ( k == 2 ) Then
+                      c2 = far_zlo(i,j);  ddf = dzlo
+                   Else
+                      c2 = C_(i,j,k-2);   ddf = zg(k-1) - zg(k-2)
+                   End If
                    gf  = ( C_(i,j,k)   - C_(i,j,k-1) ) / ( zg(k)   - zg(k-1) )
-                   gb  = ( C_(i,j,k-1) - C_(i,j,k-2) ) / ( zg(k-1) - zg(k-2) )
+                   gb  = ( C_(i,j,k-1) - c2 ) / ddf
                    slp = vanleer_slope(gf, gb)
                    C_lo = C_(i,j,k-1) + slp * ( z(k-1) - zg(k-1) )
                 End If

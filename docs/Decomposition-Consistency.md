@@ -31,8 +31,8 @@ on 2 GPUs can fail spuriously when several GPU tests run concurrently (`ctest -j
 |---|---|
 | tgv, chan, chan_les, sem, rsb, uav, uavpath | interior identical to 1e-11 at every trace point |
 | duct | np=2 identical; 2x2 not applicable (`p_col=1` is forced) |
-| **bouss** (Boussinesq T) | `T` RHS differs at the two seam planes from RK stage 2 (rel. 1.5e-5); all inputs to the RHS are identical there |
-| **sed** (passive scalar C) | identical at np=2, differs at 2x2 (1.7e-6 after 2 steps): same cause as bouss |
+| **bouss** (Boussinesq T) — FIXED (see below) | `T` RHS differs at the two seam planes from RK stage 2 (rel. 1.5e-5); all inputs to the RHS are identical there |
+| **sed** (passive scalar C) | identical at np=2; the 2x2 'difference' (1.7e-6 relative to the spread) was 1.7e-18 absolute on a field of 0.01, i.e. roundoff. The comparison now floors the scale at 1e-8*max\|a\| |
 | **ibm** | np=2 identical; **2x2: 0.46 relative difference in U at step 1**, at the x seam |
 | restart at np>1 | every wall-model case differs at step start in the y-ghost row of the plane next to the seam; DNS `chan_small` and all np=1 restarts are clean |
 
@@ -47,7 +47,7 @@ Evidence: the difference first appears in the stage-2 T RHS, only on the seam pl
 rank 0, 9 on the first plane of rank 1: the asymmetry follows the sign of W). Forcing the same fallback on the same two
 global planes at np=1 removed the T, RHS and V differences (< 1e-11).
 
-The fix must give the reconstruction its second upwind cell on all layouts (a second halo plane for scalars, or an
+**Fixed**: `update_far_planes` (scalar_transport.f90) exchanges the second upwind plane with the neighbour rank or periodic partner (x and z), so the stencil is the same at every layout; it stays first-order only at true non-periodic boundaries. bouss_small is now identical to 1e-11 at np=2, 3, 2x2 and 4x1 (420 dumps, 4 steps), on CPU and GPU, and its test bound is back to 1e-8. np=1 results change slightly (the periodic edge is now second order). The fix had to give the reconstruction its second upwind cell on all layouts (a second halo plane for scalars, or an
 extra far-plane exchange), which also corrects the np=1 periodic edge. That changes np=1 results slightly.
 
 ### 2. IBM ghost-cell bookkeeping depends on the layout
