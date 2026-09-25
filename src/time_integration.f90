@@ -15,6 +15,7 @@ Module time_integration
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
   Use monitor,          Only : compute_cfl, write_force_csv, compute_bulk_velocity
   Use profiler
+  Use debug_trace,      Only : trace_stage, trace_interior, trace_active
 
   ! prevent implicit typing
   Implicit None
@@ -53,6 +54,8 @@ Contains
     Real(Int64) :: cfl_conv, cfl_visc, dt_new, dt_presnap
     Real(Int64) :: Ub_now, dU_cmfr
     Logical     :: needs_final_sync
+
+    Call trace_stage('step_start')
 
     ! Enforce IBM before saving old state (zeroes solid cells on step 1, no-op thereafter); apply_ghost_cell_ibm is device-resident and U,V,W are already device-current, so no sync needed
     If ( ibm_input_mode >= 1 ) Then
@@ -195,10 +198,13 @@ Contains
 
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions
+    Call trace_stage('s1_bc_pre')
     Call profiler_stop(PROF_BC)
     Call compute_projection_step
+    Call trace_stage('s1_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
+    Call trace_stage('s1_bc_post1')
     Call profiler_stop(PROF_BC)
     ! U,V,W now correct+resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
     If ( ibm_input_mode >= 1 ) Then
@@ -239,7 +245,12 @@ Contains
     ! Temperature step 1 (buoyancy in stage n's compute_rhs_v reads Tscal as finalized at the end of stage n-1)
     If ( boussinesq_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
+       Call trace_stage('s1_preT')
        Call compute_rhs_temperature(Tscal, U, V, W, Ft1)
+       If ( trace_active() ) Then
+          !$acc update host(Ft1)
+          Call trace_interior('s1_preT', 'Ft', Ft1, 1)
+       End If
        !$acc kernels present(Tscal,Tscal_o,Ft1)
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Ft1
        !$acc end kernels
@@ -247,6 +258,7 @@ Contains
        Call apply_temperature_bc(Tscal)
        !$acc update device(Tscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
+       Call trace_stage('s1_T')
        Call profiler_stop(PROF_SCALAR)
     End If
 
@@ -298,10 +310,13 @@ Contains
 
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions
+    Call trace_stage('s2_bc_pre')
     Call profiler_stop(PROF_BC)
     Call compute_projection_step
+    Call trace_stage('s2_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
+    Call trace_stage('s2_bc_post1')
     Call profiler_stop(PROF_BC)
     ! U,V,W now correct+resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
     If ( ibm_input_mode >= 1 ) Then
@@ -343,7 +358,12 @@ Contains
     ! Temperature step 2
     If ( boussinesq_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
+       Call trace_stage('s2_preT')
        Call compute_rhs_temperature(Tscal, U, V, W, Ft2)
+       If ( trace_active() ) Then
+          !$acc update host(Ft2)
+          Call trace_interior('s2_preT', 'Ft', Ft2, 1)
+       End If
        !$acc kernels present(Tscal,Tscal_o,Ft1,Ft2)
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(2,1)*Ft1 + rk_coef(2,2)*Ft2 )
@@ -352,6 +372,7 @@ Contains
        Call apply_temperature_bc(Tscal)
        !$acc update device(Tscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
+       Call trace_stage('s2_T')
        Call profiler_stop(PROF_SCALAR)
     End If
 
@@ -406,10 +427,13 @@ Contains
 
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions
+    Call trace_stage('s3_bc_pre')
     Call profiler_stop(PROF_BC)
     Call compute_projection_step
+    Call trace_stage('s3_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
+    Call trace_stage('s3_bc_post1')
     Call profiler_stop(PROF_BC)
 
     ! Constant-mass-flux forcing: shift U by a uniform constant so the volume-averaged bulk velocity hits Ub_target exactly (div-free preserved since the shift is spatially uniform); dPdx tracks the equivalent forcing for diagnostics
@@ -424,6 +448,7 @@ Contains
        Call profiler_stop(PROF_CMFR)
        Call profiler_start(PROF_BC)
        Call apply_boundary_conditions(after_projection=.True.)
+       Call trace_stage('s3_bc_post2')
        Call profiler_stop(PROF_BC)
     End If
 
@@ -481,7 +506,12 @@ Contains
     ! Temperature step 3
     If ( boussinesq_flag >= 1 ) Then
        Call profiler_start(PROF_SCALAR)
+       Call trace_stage('s3_preT')
        Call compute_rhs_temperature(Tscal, U, V, W, Ft3)
+       If ( trace_active() ) Then
+          !$acc update host(Ft3)
+          Call trace_interior('s3_preT', 'Ft', Ft3, 1)
+       End If
        !$acc kernels present(Tscal,Tscal_o,Ft1,Ft2,Ft3)
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(3,1)*Ft1 + rk_coef(3,2)*Ft2 + rk_coef(3,3)*Ft3 )
@@ -490,6 +520,7 @@ Contains
        Call apply_temperature_bc(Tscal)
        !$acc update device(Tscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
+       Call trace_stage('s3_T')
        Call profiler_stop(PROF_SCALAR)
     End If
 
@@ -515,6 +546,8 @@ Contains
        Call sample_ibm_surface(U, V, W)
        Call profiler_stop(PROF_IBM)
     End If
+
+    Call trace_stage('step_end')
 
     ! restore the pre-snap dt so next step's CFL-based scaling isn't anchored to the output-snapped value
     dt = dt_presnap

@@ -175,6 +175,7 @@ set(SRCS
     src/thermal_transport.f90
     src/genGridandIC.f90
     src/input_output.f90
+    src/debug_trace.f90
 )
 
 if(ENABLE_GPU)
