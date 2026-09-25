@@ -74,7 +74,8 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
   like the CPU build (`p_row`/`p_col`): periodic/wall `y`, periodic (FFT) or inflow/outflow
   (`x_bc_type=1`, DCT-IV) `x`, periodic `z`, and the 4-wall duct (`y_bc_type=1`, `z_bc_type=1`,
   `x_bc_type=0`; `p_col=1` is forced, `x` is split). Wall models, SGS, scalars etc. work as on
-  one GPU; IBM host-side halo code is unchanged.
+  one GPU, including the ghost-cell IBM and point particles (results match the CPU build and every rank layout; see
+  [[Decomposition Consistency|Decomposition-Consistency]]). The IBM needs a few interior cells per rank in x and z (checked at start-up).
 - **CPU-only**: a spanwise wall alone (`z_bc_type=1`, `y_bc_type=0`), or a duct with
   `x_bc_type=1`. A runtime guard `Stop`s immediately on unsupported combinations.
 
@@ -129,9 +130,10 @@ time is going on either build.
 
 `ctest` (in the build directory) runs the unit drivers plus deterministic regression
 cases in `tests/regression/` (TGV, LES/DNS channel, 4-wall duct, inflow/outflow, passive
-scalar, Boussinesq temperature, UAV actuator disk, IBM sphere, Reynolds-stress budget).
+scalar, Boussinesq temperature, UAV actuator disk, IBM sphere, Reynolds-stress budget) and point-particle cases
+(tracers, inertial, Boussinesq-coupled, IBM collisions, inflow/outflow with reinjection; compared by particle ID).
 Each case is run on 1 rank and on `TEST_PARITY_NPROCS` ranks (default 2), plus explicit
-4-rank `2x2` and `4x1` pencil layouts, and must agree within tolerance on the per-step
+4-rank `2x2` and `4x1` pencil layouts (particles also on 3 ranks), and must agree within tolerance on the per-step
 monitor diagnostics **and** field-by-field on the final snapshot (ghost layers excluded;
 RSB output files are compared too). A hot-start restart must reproduce an uninterrupted
 run. In a GPU build, pass a CPU build to also compare CPU vs GPU at the same rank
@@ -143,12 +145,12 @@ cmake -S . -B build_gpu ... -DCPU_REFERENCE_EXE=$PWD/build/dopamine \
 ctest --test-dir build_gpu
 ```
 
-**Known decomposition dependence (present in the CPU build too; bounds are loosened in
-`CMakeLists.txt` and marked `KNOWN ISSUE`)**: the Boussinesq temperature differs by
-~1e-6 per step across rank counts near rank seams; restart at more than one rank is not
-bit-exact (~3e-4 after one step); ghost-cell IBM results depend on the rank count from
-3 ranks up (image-point stencils are limited to the one-cell halo); recycled precursor
-inflow (`inflow_type=2`) is decomposition-dependent and was not brought under test.
+**Layout independence**: results are independent of the rank count and pencil layout (np=1, 2, 3, 2x2, 4x1, ...) and agree
+between the CPU and GPU builds, for LES, IBM, Boussinesq, scalars, UAV, inflow/outflow and point particles; restart reproduces an
+uninterrupted run. Details, the debugging tools (`DOPAMINE_TRACE_DIR`, `tests/regression/trace_case.sh`) and what was fixed are in
+[[Decomposition Consistency|Decomposition-Consistency]]. Known gaps: recycled precursor inflow (`inflow_type=2`) is not under test,
+and Brownian motion / the SGS Langevin particle closure use per-rank random streams (statistically, not bitwise, layout independent).
+Run 4-rank GPU tests on 2 GPUs one at a time (`ctest` without `-j`).
 
 ## Output files
 

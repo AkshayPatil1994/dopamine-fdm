@@ -18,7 +18,10 @@ fdm-dopamine/
 │   ├── equations.f90        # RHS convection + diffusion
 │   ├── boundary_conditions.f90
 │   ├── readMask.f90         # IBM setup driver (reads precomputed SDF)
-│   ├── ibm.f90              # Ghost-cell IBM module
+│   ├── ibm.f90              # Ghost-cell IBM module (extended halo for image-point stencils)
+│   ├── halo_pad.f90         # Host-side padded copies (extra x/z planes) of decomposed fields, used by the IBM and particles
+│   ├── particles.f90        # Lagrangian point particles (tracers, inertial, IBM collisions, reinjection)
+│   ├── debug_trace.f90      # DOPAMINE_TRACE_DIR stage tracing for layout-consistency debugging
 │   ├── genGridandIC.f90     # Grid generation and initial conditions
 │   ├── input_output.f90     # Namelist reader and field I/O
 │   ├── initialization.f90

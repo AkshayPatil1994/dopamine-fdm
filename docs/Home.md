@@ -23,6 +23,7 @@ here, then jump to whichever page matches what you're doing.
 | [[Numerics & Governing Equations\|Numerics]] | The discretisation, time integration, Poisson solver, SGS model, IBM, wall models, scalar transport, Reynolds stress budget, inflow/outflow BCs |
 | [[Examples\|Examples]] | Walkthroughs of the bundled example cases |
 | [[Pre- and Post-Processing Tools\|Tools]] | `GenSDF` mesh/SDF generator and the Python scripts in `postProcessing/` |
+| [[Decomposition Consistency\|Decomposition-Consistency]] | Layout/CPU/GPU consistency: what is guaranteed, the trace tools, and the fixes |
 | [[Code Structure\|Code-Structure]] | Repository layout and the role of each Fortran module |
 | [[Showcase Animations\|Animations]] | Scripts that render the README animations from validation-run snapshots |
 | [[References\|References]] | Published methods implemented in the solver |
