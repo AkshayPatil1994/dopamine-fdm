@@ -435,16 +435,14 @@ if(Python3_Interpreter_FOUND)
                 ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
         endif()
         # Explicit 4-rank pencil layouts, so the x and z halos interact (2x2: corner planes) and x is split without z (4x1);
-        # duct needs p_col=1. The np=1-vs-np=4 check skips ibm_small: its ghost-cell image stencils are limited to the
-        # 1-cell halo, so the IBM solution legitimately depends on the rank count from 3 ranks up (CPU build too);
-        # CPU-vs-GPU at equal layout is still checked for it.
+        # duct needs p_col=1.
         set(_layouts "2,2" "4,1")
         if(case STREQUAL "duct_small")
             set(_layouts "4,1")
         endif()
         foreach(_lay ${_layouts})
             string(REPLACE "," "x" _laytag ${_lay})
-            if(NOT case STREQUAL "ibm_small")
+            if(TRUE)
                 add_test(NAME ${case}_${_kind}_np1_vs_np4_${_laytag}
                     COMMAND ${_cmp} --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine>
                             --np-a 1 --np-b 4 --p-grid ${_lay} --p-grid-b-only --field-tol ${_ftol} ${_extra}
@@ -507,7 +505,7 @@ if(Python3_Interpreter_FOUND)
     # Point-particle parity (tests/regression/compare_particles.py): final particle state by ID, np=1 vs other layouts and, in a
     # GPU build with CPU_REFERENCE_EXE, CPU vs GPU at the same layout. Deterministic cases only: Brownian motion and the SGS
     # Langevin closure draw from per-rank random streams, so their results are statistically, not bitwise, layout independent.
-    set(_particle_cases part_tracer_small part_inertial_small part_bouss_small part_outflow_small)
+    set(_particle_cases part_tracer_small part_inertial_small part_bouss_small part_outflow_small part_ibm_small)
     set(_pkind cpu)
     if(ENABLE_GPU)
         set(_pkind gpu)
@@ -556,19 +554,13 @@ if(Python3_Interpreter_FOUND)
         endif()
     endforeach()
 
-    # IBM ghost-cell bookkeeping must not depend on the decomposition (tests/regression/ibm_ghost_counts.py). The 2-rank
-    # z split matches np=1; the layouts below currently do not (KNOWN ISSUE, CPU build too): with a 1-cell halo the image
-    # stencils of ghost cells near a rank seam are dropped (z/1x4) or spurious ghost cells appear on the last face of an
-    # x-split rank (2x2, 4x1). WILL_FAIL marks them as expected failures until the IBM stencil gather is reworked;
-    # remove the property when it is fixed. Use tests/regression/ibm_ghost_diff.py on a DOPAMINE_TRACE_DIR run to list cells.
+    # IBM ghost-cell bookkeeping must not depend on the decomposition (tests/regression/ibm_ghost_counts.py; ibm_ghost_diff.py lists
+    # the cells of a DOPAMINE_TRACE_DIR run that differ). The image-point stencils use an extended halo (ibm.f90, halo_pad.f90).
     foreach(_lay 2 1x4 2x2 4x1)
         add_test(NAME ibm_small_ghost_counts_np1_vs_${_lay}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_ghost_counts.py
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_small
                     --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --layout-a 1 --layout-b ${_lay})
-        if(NOT _lay STREQUAL "2")
-            set_tests_properties(ibm_small_ghost_counts_np1_vs_${_lay} PROPERTIES WILL_FAIL TRUE)
-        endif()
         if(TEST_LD_LIBRARY_PATH)
             set_tests_properties(ibm_small_ghost_counts_np1_vs_${_lay} PROPERTIES
                 ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")

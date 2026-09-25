@@ -6,6 +6,7 @@ Module ibm
   Use mpi
   Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner, z_periodic_partner
   Use boundary_conditions, Only : exchange_velocity_halos
+  Use halo_pad, Only : pad_axis, pad_field
 
   Implicit None
 
@@ -20,6 +21,20 @@ Module ibm
   ! Ghost cells whose image stencil is not usable, counted while building the lists (1=U, 2=V, 3=W, 4=cell-centre):
   ! stencil clipping solid (concave corner) vs image outside this rank's local array (domain edge, or across a rank seam)
   Integer(Int32) :: ibm_drop_solid(4) = 0, ibm_drop_outside(4) = 0
+
+  ! Extended halo for everything that samples the fields at image points. The solver arrays carry ONE ghost plane per side in x
+  ! and z; the image point of a ghost cell lies up to ~2 cells from it, so near a rank seam its interpolation stencil (and the
+  ! SDF around it) reaches past that plane. ibm_E extra planes (halo_pad.f90) make the stencil, and hence the ghost-cell
+  ! boundary condition, independent of the rank layout. All setup-time lookups use the xge/xe/zge/ze axes and the phie/Umaske
+  ! fields (bounds 1-ibm_E : n+ibm_E); the runtime kernels interpolate from Uext/Vext/Wext/Cext, refreshed before use.
+  Integer(Int32), Save :: ibm_E = 2
+  Logical,        Save :: ibm_lo_x = .False., ibm_hi_x = .False., ibm_lo_z = .False., ibm_hi_z = .False.
+  Integer(Int32), Save :: ext_cx_lo, ext_cx_hi, ext_fx_lo, ext_fx_hi, ext_cz_lo, ext_cz_hi, ext_fz_lo, ext_fz_hi
+  Logical,        Save :: stencil_out = .False.
+  Real   (Int64), Allocatable, Dimension(:)     :: xge, xe, zge, ze
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: phie, Umaske
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: Uext, Vext, Wext, Cext
+  Real   (Int64), Allocatable, Dimension(:)     :: ext_bs, ext_br
 
   ! Accumulators for Method 1 IBM force (summed over 6 IBM applications/step)
   Real(Int64) :: ibm_Fx_acc = 0d0
@@ -39,6 +54,8 @@ Contains
 
     If ( myid==0 ) Write(*,*) 'IBM: reading cell-centre SDF from ', Trim(ibm_sdf_file), '...'
     Call read_phi_from_sdf_file
+
+    Call setup_ibm_ext
 
     If ( myid==0 ) Write(*,*) 'IBM: building ghost-cell lists for U, V, W...'
     Call build_ghost_list_u
@@ -409,26 +426,26 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i+1,j,k)) < 0d0 ) Then
-                If ( 0.5d0*(phi(i-1,j,k)+phi(i,  j,  k  )) >= 0d0 .Or. &
-                     0.5d0*(phi(i+1,j,k)+phi(i+2,j,  k  )) >= 0d0 .Or. &
-                     0.5d0*(phi(i,  j-1,k)+phi(i+1,j-1,k)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,  j+1,k)+phi(i+1,j+1,k)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,  j,  k-1)+phi(i+1,j,k-1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,  j,  k+1)+phi(i+1,j,k+1)) >= 0d0 ) Then
+             If ( 0.5d0*(phie(i,j,k)+phie(i+1,j,k)) < 0d0 ) Then
+                If ( 0.5d0*(phie(i-1,j,k)+phie(i,  j,  k  )) >= 0d0 .Or. &
+                     0.5d0*(phie(i+1,j,k)+phie(i+2,j,  k  )) >= 0d0 .Or. &
+                     0.5d0*(phie(i,  j-1,k)+phie(i+1,j-1,k)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,  j+1,k)+phie(i+1,j+1,k)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,  j,  k-1)+phie(i+1,j,k-1)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,  j,  k+1)+phie(i+1,j,k+1)) >= 0d0 ) Then
                    Call compute_normal_at_face_u(i,j,k, nx_,ny_,nz_)
-                   dGB = Abs( 0.5d0*(phi(i,j,k)+phi(i+1,j,k)) )
+                   dGB = Abs( 0.5d0*(phie(i,j,k)+phie(i+1,j,k)) )
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
-                   xI  = x(i)  + dGI*nx_
+                   xI  = xe(i)  + dGI*nx_
                    yI  = yg(j) + dGI*ny_
-                   zI  = zg(k) + dGI*nz_
+                   zI  = zge(k) + dGI*nz_
                    Call find_stencil_u(xI, yI, zI, ii, jj, kk)
-                   If ( ii>=2 .And. ii<=nx-1 .And. jj>=1 .And. jj<=nyg-1 .And. &
-                        kk>=1 .And. kk<=nzg-1 ) Then
-                      If ( Umask_cc(ii,  jj,  kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj,  kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk+1) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk+1) > 0.5d0 ) Then
+                   If ( .Not. stencil_out .And. ii>=ext_fx_lo .And. ii<=ext_fx_hi .And. jj>=1 .And. jj<=nyg-1 .And. &
+                        kk>=ext_cz_lo .And. kk<=ext_cz_hi ) Then
+                      If ( Umaske(ii,  jj,  kk  ) > 0.5d0 .And. Umaske(ii+1,jj,  kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk  ) > 0.5d0 .And. Umaske(ii+1,jj+1,kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj,  kk+1) > 0.5d0 .And. Umaske(ii+1,jj,  kk+1) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk+1) > 0.5d0 .And. Umaske(ii+1,jj+1,kk+1) > 0.5d0 ) Then
                          ng = ng + 1
                       Else
                          nd = nd + 1   ! image stencil clips solid — concave corner
@@ -464,21 +481,21 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i+1,j,k)) < 0d0 ) Then
-                If ( 0.5d0*(phi(i-1,j,k)+phi(i,  j,  k  )) >= 0d0 .Or. &
-                     0.5d0*(phi(i+1,j,k)+phi(i+2,j,  k  )) >= 0d0 .Or. &
-                     0.5d0*(phi(i,  j-1,k)+phi(i+1,j-1,k)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,  j+1,k)+phi(i+1,j+1,k)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,  j,  k-1)+phi(i+1,j,k-1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,  j,  k+1)+phi(i+1,j,k+1)) >= 0d0 ) Then
+             If ( 0.5d0*(phie(i,j,k)+phie(i+1,j,k)) < 0d0 ) Then
+                If ( 0.5d0*(phie(i-1,j,k)+phie(i,  j,  k  )) >= 0d0 .Or. &
+                     0.5d0*(phie(i+1,j,k)+phie(i+2,j,  k  )) >= 0d0 .Or. &
+                     0.5d0*(phie(i,  j-1,k)+phie(i+1,j-1,k)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,  j+1,k)+phie(i+1,j+1,k)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,  j,  k-1)+phie(i+1,j,k-1)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,  j,  k+1)+phie(i+1,j,k+1)) >= 0d0 ) Then
 
-                   xGc = x(i)
+                   xGc = xe(i)
                    yGc = yg(j)
-                   zGc = zg(k)
+                   zGc = zge(k)
 
                    Call compute_normal_at_face_u(i,j,k, nx_,ny_,nz_)
 
-                   dGB = Abs( 0.5d0*(phi(i,j,k)+phi(i+1,j,k)) )
+                   dGB = Abs( 0.5d0*(phie(i,j,k)+phie(i+1,j,k)) )
 
                    xB = xGc + dGB*nx_
                    yB = yGc + dGB*ny_
@@ -491,12 +508,12 @@ Contains
 
                    Call find_stencil_u(xI, yI, zI, ii, jj, kk)
 
-                   If ( ii>=2 .And. ii<=nx-1 .And. jj>=1 .And. jj<=nyg-1 .And. &
-                        kk>=1 .And. kk<=nzg-1 ) Then
-                      If ( Umask_cc(ii,  jj,  kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj,  kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk+1) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk+1) > 0.5d0 ) Then
+                   If ( .Not. stencil_out .And. ii>=ext_fx_lo .And. ii<=ext_fx_hi .And. jj>=1 .And. jj<=nyg-1 .And. &
+                        kk>=ext_cz_lo .And. kk<=ext_cz_hi ) Then
+                      If ( Umaske(ii,  jj,  kk  ) > 0.5d0 .And. Umaske(ii+1,jj,  kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk  ) > 0.5d0 .And. Umaske(ii+1,jj+1,kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj,  kk+1) > 0.5d0 .And. Umaske(ii+1,jj,  kk+1) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk+1) > 0.5d0 .And. Umaske(ii+1,jj+1,kk+1) > 0.5d0 ) Then
 
                          ng = ng + 1
                          ghost_u_idx(1,ng) = i
@@ -514,7 +531,7 @@ Contains
                                                   yB + Real(n_image_layers,8)*dymin*ny_, &
                                                   zB + Real(n_image_layers,8)*dymin*nz_, &
                                                   ir, jr, kr)
-                         yref_ = Max( Abs( (xg(ir)-xB)*nx_ + (yg(jr)-yB)*ny_ + (zg(kr)-zB)*nz_ ), 1d-14 )
+                         yref_ = Max( Abs( (xge(ir)-xB)*nx_ + (yg(jr)-yB)*ny_ + (zge(kr)-zB)*nz_ ), 1d-14 )
                          ghost_u_yref(ng)   = yref_
                          ghost_u_ref(1,ng) = ir
                          ghost_u_ref(2,ng) = jr
@@ -533,10 +550,10 @@ Contains
     Do ng = 1, n_ghost_u
        i = ghost_u_idx(1,ng);  j = ghost_u_idx(2,ng);  k = ghost_u_idx(3,ng)
        ghost_u_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
-       ghost_u_dGB(ng)   = Abs( 0.5d0*(phi(i,j,k)+phi(i+1,j,k)) )
-       ghost_u_xB(1,ng)  = x (i)  + ghost_u_dGB(ng)*ghost_u_nrm(1,ng)
+       ghost_u_dGB(ng)   = Abs( 0.5d0*(phie(i,j,k)+phie(i+1,j,k)) )
+       ghost_u_xB(1,ng)  = xe(i)  + ghost_u_dGB(ng)*ghost_u_nrm(1,ng)
        ghost_u_xB(2,ng)  = yg(j)  + ghost_u_dGB(ng)*ghost_u_nrm(2,ng)
-       ghost_u_xB(3,ng)  = zg(k)  + ghost_u_dGB(ng)*ghost_u_nrm(3,ng)
+       ghost_u_xB(3,ng)  = zge(k)  + ghost_u_dGB(ng)*ghost_u_nrm(3,ng)
        ! Cell-centre stencil at image point I = xB + (dGI-dGB)*nrm = xG + dGI*nrm
        ! (same xI as velocity image point, on cell-centre grid for P interpolation)
        Call find_stencil_centre( ghost_u_xB(1,ng) + (ghost_u_dGI(ng)-ghost_u_dGB(ng))*ghost_u_nrm(1,ng), &
@@ -575,16 +592,16 @@ Contains
                    Call compute_normal_at_face_v(i,j,k, nx_,ny_,nz_)
                    dGB = Abs( phi_v(i,j,k) )
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
-                   xI = xg(i) + dGI*nx_
+                   xI = xge(i) + dGI*nx_
                    yI = y(j)  + dGI*ny_
-                   zI = zg(k) + dGI*nz_
+                   zI = zge(k) + dGI*nz_
                    Call find_stencil_v(xI, yI, zI, ii, jj, kk)
-                   If ( ii>=1 .And. ii<=nxg-1 .And. jj>=2 .And. jj<=ny-1 .And. &
-                        kk>=1 .And. kk<=nzg-1 ) Then
-                      If ( Umask_cc(ii,  jj,  kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj,  kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk+1) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk+1) > 0.5d0 ) Then
+                   If ( .Not. stencil_out .And. ii>=ext_cx_lo .And. ii<=ext_cx_hi .And. jj>=2 .And. jj<=ny-1 .And. &
+                        kk>=ext_cz_lo .And. kk<=ext_cz_hi ) Then
+                      If ( Umaske(ii,  jj,  kk  ) > 0.5d0 .And. Umaske(ii+1,jj,  kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk  ) > 0.5d0 .And. Umaske(ii+1,jj+1,kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj,  kk+1) > 0.5d0 .And. Umaske(ii+1,jj,  kk+1) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk+1) > 0.5d0 .And. Umaske(ii+1,jj+1,kk+1) > 0.5d0 ) Then
                          ng = ng + 1
                       Else
                          nd = nd + 1   ! image stencil clips solid — concave corner
@@ -628,9 +645,9 @@ Contains
                      phi_v(i,j,k-1) >= 0d0 .Or. &
                      phi_v(i,j,k+1) >= 0d0 ) Then
 
-                   xGc = xg(i)
+                   xGc = xge(i)
                    yGc = y(j)
-                   zGc = zg(k)
+                   zGc = zge(k)
 
                    Call compute_normal_at_face_v(i,j,k, nx_,ny_,nz_)
 
@@ -640,12 +657,12 @@ Contains
                    xI = xGc + dGI*nx_;  yI = yGc + dGI*ny_;  zI = zGc + dGI*nz_
 
                    Call find_stencil_v(xI, yI, zI, ii, jj, kk)
-                   If ( ii>=1 .And. ii<=nxg-1 .And. jj>=2 .And. jj<=ny-1 .And. &
-                        kk>=1 .And. kk<=nzg-1 ) Then
-                      If ( Umask_cc(ii,  jj,  kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj,  kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk+1) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk+1) > 0.5d0 ) Then
+                   If ( .Not. stencil_out .And. ii>=ext_cx_lo .And. ii<=ext_cx_hi .And. jj>=2 .And. jj<=ny-1 .And. &
+                        kk>=ext_cz_lo .And. kk<=ext_cz_hi ) Then
+                      If ( Umaske(ii,  jj,  kk  ) > 0.5d0 .And. Umaske(ii+1,jj,  kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk  ) > 0.5d0 .And. Umaske(ii+1,jj+1,kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj,  kk+1) > 0.5d0 .And. Umaske(ii+1,jj,  kk+1) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk+1) > 0.5d0 .And. Umaske(ii+1,jj+1,kk+1) > 0.5d0 ) Then
                          ng = ng + 1
                          ghost_v_idx(1,ng)=i; ghost_v_idx(2,ng)=j; ghost_v_idx(3,ng)=k
                          ghost_v_dGI(ng) = dGI
@@ -656,7 +673,7 @@ Contains
                                                   yB+Real(n_image_layers,8)*dymin*ny_, &
                                                   zB+Real(n_image_layers,8)*dymin*nz_, &
                                                   ir,jr,kr)
-                         ghost_v_yref(ng) = Max( Abs( (xg(ir)-xB)*nx_ + (yg(jr)-yB)*ny_ + (zg(kr)-zB)*nz_ ), 1d-14 )
+                         ghost_v_yref(ng) = Max( Abs( (xge(ir)-xB)*nx_ + (yg(jr)-yB)*ny_ + (zge(kr)-zB)*nz_ ), 1d-14 )
                          ghost_v_ref(:,ng)=[ir,jr,kr]
                       End If
                    End If
@@ -670,9 +687,9 @@ Contains
        i = ghost_v_idx(1,ng);  j = ghost_v_idx(2,ng);  k = ghost_v_idx(3,ng)
        ghost_v_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
        ghost_v_dGB(ng)   = Abs( phi_v(i,j,k) )
-       ghost_v_xB(1,ng)  = xg(i)  + ghost_v_dGB(ng)*ghost_v_nrm(1,ng)
+       ghost_v_xB(1,ng)  = xge(i)  + ghost_v_dGB(ng)*ghost_v_nrm(1,ng)
        ghost_v_xB(2,ng)  = y (j)  + ghost_v_dGB(ng)*ghost_v_nrm(2,ng)
-       ghost_v_xB(3,ng)  = zg(k)  + ghost_v_dGB(ng)*ghost_v_nrm(3,ng)
+       ghost_v_xB(3,ng)  = zge(k)  + ghost_v_dGB(ng)*ghost_v_nrm(3,ng)
        Call find_stencil_centre( ghost_v_xB(1,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(1,ng), &
                                  ghost_v_xB(2,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(2,ng), &
                                  ghost_v_xB(3,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(3,ng), &
@@ -700,25 +717,25 @@ Contains
        Do j = 2, nyg-1
           Do i = 2, nxg-1
              If ( phi_w(i,j,k) < 0d0 ) Then
-                If ( 0.5d0*(phi(i-1,j,k)+phi(i-1,j,k+1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i+1,j,k)+phi(i+1,j,k+1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j-1,k)+phi(i,j-1,k+1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j+1,k)+phi(i,j+1,k+1)) >= 0d0 .Or. &
+                If ( 0.5d0*(phie(i-1,j,k)+phie(i-1,j,k+1)) >= 0d0 .Or. &
+                     0.5d0*(phie(i+1,j,k)+phie(i+1,j,k+1)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,j-1,k)+phie(i,j-1,k+1)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,j+1,k)+phie(i,j+1,k+1)) >= 0d0 .Or. &
                      phi_w(i,j,k-1) >= 0d0 .Or. &
                      phi_w(i,j,k+1) >= 0d0 ) Then
                    Call compute_normal_at_face_w(i,j,k, nx_,ny_,nz_)
                    dGB = Abs( phi_w(i,j,k) )
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
-                   xI = xg(i) + dGI*nx_
+                   xI = xge(i) + dGI*nx_
                    yI = yg(j) + dGI*ny_
-                   zI = z(k)  + dGI*nz_
+                   zI = ze(k)  + dGI*nz_
                    Call find_stencil_w(xI, yI, zI, ii, jj, kk)
-                   If ( ii>=1 .And. ii<=nxg-1 .And. jj>=1 .And. jj<=nyg-1 .And. &
-                        kk>=2 .And. kk<=nz-1 ) Then
-                      If ( Umask_cc(ii,  jj,  kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj,  kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk+1) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk+1) > 0.5d0 ) Then
+                   If ( .Not. stencil_out .And. ii>=ext_cx_lo .And. ii<=ext_cx_hi .And. jj>=1 .And. jj<=nyg-1 .And. &
+                        kk>=ext_fz_lo .And. kk<=ext_fz_hi ) Then
+                      If ( Umaske(ii,  jj,  kk  ) > 0.5d0 .And. Umaske(ii+1,jj,  kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk  ) > 0.5d0 .And. Umaske(ii+1,jj+1,kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj,  kk+1) > 0.5d0 .And. Umaske(ii+1,jj,  kk+1) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk+1) > 0.5d0 .And. Umaske(ii+1,jj+1,kk+1) > 0.5d0 ) Then
                          ng = ng + 1
                       Else
                          nd = nd + 1   ! image stencil clips solid — concave corner
@@ -755,16 +772,16 @@ Contains
        Do j = 2, nyg-1
           Do i = 2, nxg-1
              If ( phi_w(i,j,k) < 0d0 ) Then
-                If ( 0.5d0*(phi(i-1,j,k)+phi(i-1,j,k+1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i+1,j,k)+phi(i+1,j,k+1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j-1,k)+phi(i,j-1,k+1)) >= 0d0 .Or. &
-                     0.5d0*(phi(i,j+1,k)+phi(i,j+1,k+1)) >= 0d0 .Or. &
+                If ( 0.5d0*(phie(i-1,j,k)+phie(i-1,j,k+1)) >= 0d0 .Or. &
+                     0.5d0*(phie(i+1,j,k)+phie(i+1,j,k+1)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,j-1,k)+phie(i,j-1,k+1)) >= 0d0 .Or. &
+                     0.5d0*(phie(i,j+1,k)+phie(i,j+1,k+1)) >= 0d0 .Or. &
                      phi_w(i,j,k-1) >= 0d0 .Or. &
                      phi_w(i,j,k+1) >= 0d0 ) Then
 
-                   xGc = xg(i)
+                   xGc = xge(i)
                    yGc = yg(j)
-                   zGc = z(k)
+                   zGc = ze(k)
 
                    Call compute_normal_at_face_w(i,j,k, nx_,ny_,nz_)
 
@@ -774,12 +791,12 @@ Contains
                    xI = xGc+dGI*nx_;  yI = yGc+dGI*ny_;  zI = zGc+dGI*nz_
 
                    Call find_stencil_w(xI, yI, zI, ii, jj, kk)
-                   If ( ii>=1 .And. ii<=nxg-1 .And. jj>=1 .And. jj<=nyg-1 .And. &
-                        kk>=2 .And. kk<=nz-1 ) Then
-                      If ( Umask_cc(ii,  jj,  kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk  ) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk  ) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj,  kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj,  kk+1) > 0.5d0 .And. &
-                           Umask_cc(ii,  jj+1,kk+1) > 0.5d0 .And. Umask_cc(ii+1,jj+1,kk+1) > 0.5d0 ) Then
+                   If ( .Not. stencil_out .And. ii>=ext_cx_lo .And. ii<=ext_cx_hi .And. jj>=1 .And. jj<=nyg-1 .And. &
+                        kk>=ext_fz_lo .And. kk<=ext_fz_hi ) Then
+                      If ( Umaske(ii,  jj,  kk  ) > 0.5d0 .And. Umaske(ii+1,jj,  kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk  ) > 0.5d0 .And. Umaske(ii+1,jj+1,kk  ) > 0.5d0 .And. &
+                           Umaske(ii,  jj,  kk+1) > 0.5d0 .And. Umaske(ii+1,jj,  kk+1) > 0.5d0 .And. &
+                           Umaske(ii,  jj+1,kk+1) > 0.5d0 .And. Umaske(ii+1,jj+1,kk+1) > 0.5d0 ) Then
                          ng = ng + 1
                          ghost_w_idx(1,ng)=i; ghost_w_idx(2,ng)=j; ghost_w_idx(3,ng)=k
                          ghost_w_dGI(ng) = dGI
@@ -790,7 +807,7 @@ Contains
                                                   yB+Real(n_image_layers,8)*dymin*ny_, &
                                                   zB+Real(n_image_layers,8)*dymin*nz_, &
                                                   ir,jr,kr)
-                         ghost_w_yref(ng) = Max( Abs( (xg(ir)-xB)*nx_ + (yg(jr)-yB)*ny_ + (zg(kr)-zB)*nz_ ), 1d-14 )
+                         ghost_w_yref(ng) = Max( Abs( (xge(ir)-xB)*nx_ + (yg(jr)-yB)*ny_ + (zge(kr)-zB)*nz_ ), 1d-14 )
                          ghost_w_ref(:,ng)=[ir,jr,kr]
                       End If
                    End If
@@ -804,9 +821,9 @@ Contains
        i = ghost_w_idx(1,ng);  j = ghost_w_idx(2,ng);  k = ghost_w_idx(3,ng)
        ghost_w_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
        ghost_w_dGB(ng)   = Abs( phi_w(i,j,k) )
-       ghost_w_xB(1,ng)  = xg(i)  + ghost_w_dGB(ng)*ghost_w_nrm(1,ng)
+       ghost_w_xB(1,ng)  = xge(i)  + ghost_w_dGB(ng)*ghost_w_nrm(1,ng)
        ghost_w_xB(2,ng)  = yg(j)  + ghost_w_dGB(ng)*ghost_w_nrm(2,ng)
-       ghost_w_xB(3,ng)  = z (k)  + ghost_w_dGB(ng)*ghost_w_nrm(3,ng)
+       ghost_w_xB(3,ng)  = ze(k)  + ghost_w_dGB(ng)*ghost_w_nrm(3,ng)
        Call find_stencil_centre( ghost_w_xB(1,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(1,ng), &
                                  ghost_w_xB(2,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(2,ng), &
                                  ghost_w_xB(3,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(3,ng), &
@@ -856,6 +873,231 @@ Contains
 
   End Subroutine trace_ghost_lists
 
+  !> Fe(1-E:n1+E, :, 1-E:n3+E) = F plus E extra planes in x and z from the neighbour rank / periodic partner / edge (the rules of
+  !  halo_pad.pad_field). Device-aware: the copy and the pack/unpack run on the device in GPU builds, only the small exchanged
+  !  planes go through the host for MPI.
+  Subroutine ibm_fill_ext(F, Fe, n1, n2, n3, xface, zface)
+
+    Integer(Int32), Intent(In)    :: n1, n2, n3
+    Real   (Int64), Intent(In)    :: F(n1,n2,n3)
+    Real   (Int64), Intent(InOut) :: Fe(1-ibm_E:n1+ibm_E, n2, 1-ibm_E:n3+ibm_E)
+    Logical,        Intent(In)    :: xface, zface
+
+    Logical        :: is_first, is_last, per
+    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup, m, i, j, k, E, cnt, idx
+
+    E = ibm_E
+
+    !$acc parallel loop collapse(3) present(F,Fe)
+    Do k = 1, n3
+       Do j = 1, n2
+          Do i = 1, n1
+             Fe(i,j,k) = F(i,j,k)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !-- x --
+    per = ( x_bc_type == 0 )
+    Call x_halo_neighbors(up, down)
+    Call x_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       If ( per ) Then
+          sdn = Merge(3, 4, xface);  sup = Merge(n1-2, n1-3, xface)
+          !$acc parallel loop collapse(3) present(Fe)
+          Do k = 1, n3
+             Do j = 1, n2
+                Do m = 1, E
+                   Fe(n1+m,j,k) = Fe(sdn+m-1,j,k)
+                   Fe(1-m, j,k) = Fe(sup-m+1,j,k)
+                End Do
+             End Do
+          End Do
+          !$acc end parallel loop
+       Else
+          !$acc parallel loop collapse(3) present(Fe)
+          Do k = 1, n3
+             Do j = 1, n2
+                Do m = 1, E
+                   Fe(n1+m,j,k) = Fe(n1,j,k)
+                   Fe(1-m, j,k) = Fe(1, j,k)
+                End Do
+             End Do
+          End Do
+          !$acc end parallel loop
+       End If
+    Else
+       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
+       sdn = 3;  sup = n1-2
+       If ( per .And. is_first ) Then
+          dst_dn = partner;  src_dn = partner;  sdn = Merge(3, 4, xface)
+       End If
+       If ( per .And. is_last ) Then
+          dst_up = partner;  src_up = partner;  sup = Merge(n1-2, n1-3, xface)
+       End If
+       cnt = E*n2*n3
+       !$acc parallel loop collapse(3) present(Fe,ext_bs)
+       Do k = 1, n3
+          Do j = 1, n2
+             Do m = 1, E
+                ext_bs(m + E*((j-1) + n2*(k-1))) = Fe(sdn+m-1,j,k)
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+       !$acc update host(ext_bs(1:cnt))
+       Call MPI_Sendrecv( ext_bs, cnt, MPI_real8, dst_dn, 71, ext_br, cnt, MPI_real8, src_up, 71, MPI_COMM_WORLD, istat, ierr )
+       !$acc update device(ext_br(1:cnt))
+       !$acc parallel loop collapse(3) present(Fe,ext_br)
+       Do k = 1, n3
+          Do j = 1, n2
+             Do m = 1, E
+                If ( src_up /= MPI_PROC_NULL ) Then
+                   Fe(n1+m,j,k) = ext_br(m + E*((j-1) + n2*(k-1)))
+                Else
+                   Fe(n1+m,j,k) = Fe(n1,j,k)
+                End If
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+       !$acc parallel loop collapse(3) present(Fe,ext_bs)
+       Do k = 1, n3
+          Do j = 1, n2
+             Do m = 1, E
+                ext_bs(m + E*((j-1) + n2*(k-1))) = Fe(sup-E+m,j,k)
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+       !$acc update host(ext_bs(1:cnt))
+       Call MPI_Sendrecv( ext_bs, cnt, MPI_real8, dst_up, 72, ext_br, cnt, MPI_real8, src_dn, 72, MPI_COMM_WORLD, istat, ierr )
+       !$acc update device(ext_br(1:cnt))
+       !$acc parallel loop collapse(3) present(Fe,ext_br)
+       Do k = 1, n3
+          Do j = 1, n2
+             Do m = 1, E
+                If ( src_dn /= MPI_PROC_NULL ) Then
+                   Fe(m-E,j,k) = ext_br(m + E*((j-1) + n2*(k-1)))
+                Else
+                   Fe(m-E,j,k) = Fe(1,j,k)
+                End If
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+
+    !-- z (over the x-extended extent) --
+    per = ( z_bc_type == 0 )
+    Call z_halo_neighbors(up, down)
+    Call z_periodic_partner(is_first, is_last, partner)
+    If ( is_first .And. is_last ) Then
+       If ( per ) Then
+          sdn = Merge(3, 4, zface);  sup = Merge(n3-2, n3-3, zface)
+          !$acc parallel loop collapse(3) present(Fe)
+          Do m = 1, E
+             Do j = 1, n2
+                Do i = 1-E, n1+E
+                   Fe(i,j,n3+m) = Fe(i,j,sdn+m-1)
+                   Fe(i,j,1-m ) = Fe(i,j,sup-m+1)
+                End Do
+             End Do
+          End Do
+          !$acc end parallel loop
+       Else
+          !$acc parallel loop collapse(3) present(Fe)
+          Do m = 1, E
+             Do j = 1, n2
+                Do i = 1-E, n1+E
+                   Fe(i,j,n3+m) = Fe(i,j,n3)
+                   Fe(i,j,1-m ) = Fe(i,j,1)
+                End Do
+             End Do
+          End Do
+          !$acc end parallel loop
+       End If
+    Else
+       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
+       sdn = 3;  sup = n3-2
+       If ( per .And. is_first ) Then
+          dst_dn = partner;  src_dn = partner;  sdn = Merge(3, 4, zface)
+       End If
+       If ( per .And. is_last ) Then
+          dst_up = partner;  src_up = partner;  sup = Merge(n3-2, n3-3, zface)
+       End If
+       cnt = (n1+2*E)*n2*E
+       !$acc parallel loop collapse(3) present(Fe,ext_bs)
+       Do m = 1, E
+          Do j = 1, n2
+             Do i = 1, n1+2*E
+                ext_bs(i + (n1+2*E)*((j-1) + n2*(m-1))) = Fe(i-E,j,sdn+m-1)
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+       !$acc update host(ext_bs(1:cnt))
+       Call MPI_Sendrecv( ext_bs, cnt, MPI_real8, dst_dn, 73, ext_br, cnt, MPI_real8, src_up, 73, MPI_COMM_WORLD, istat, ierr )
+       !$acc update device(ext_br(1:cnt))
+       !$acc parallel loop collapse(3) present(Fe,ext_br)
+       Do m = 1, E
+          Do j = 1, n2
+             Do i = 1, n1+2*E
+                If ( src_up /= MPI_PROC_NULL ) Then
+                   Fe(i-E,j,n3+m) = ext_br(i + (n1+2*E)*((j-1) + n2*(m-1)))
+                Else
+                   Fe(i-E,j,n3+m) = Fe(i-E,j,n3)
+                End If
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+       !$acc parallel loop collapse(3) present(Fe,ext_bs)
+       Do m = 1, E
+          Do j = 1, n2
+             Do i = 1, n1+2*E
+                ext_bs(i + (n1+2*E)*((j-1) + n2*(m-1))) = Fe(i-E,j,sup-E+m)
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+       !$acc update host(ext_bs(1:cnt))
+       Call MPI_Sendrecv( ext_bs, cnt, MPI_real8, dst_up, 74, ext_br, cnt, MPI_real8, src_dn, 74, MPI_COMM_WORLD, istat, ierr )
+       !$acc update device(ext_br(1:cnt))
+       !$acc parallel loop collapse(3) present(Fe,ext_br)
+       Do m = 1, E
+          Do j = 1, n2
+             Do i = 1, n1+2*E
+                If ( src_dn /= MPI_PROC_NULL ) Then
+                   Fe(i-E,j,m-E) = ext_br(i + (n1+2*E)*((j-1) + n2*(m-1)))
+                Else
+                   Fe(i-E,j,m-E) = Fe(i-E,j,1)
+                End If
+             End Do
+          End Do
+       End Do
+       !$acc end parallel loop
+    End If
+
+  End Subroutine ibm_fill_ext
+
+  !> Refresh Uext/Vext/Wext from the current velocity (device-resident in GPU builds)
+  Subroutine ibm_fill_ext_uvw(U_, V_, W_)
+    Real(Int64), Dimension(nx, nyg,nzg), Intent(In) :: U_
+    Real(Int64), Dimension(nxg, ny,nzg), Intent(In) :: V_
+    Real(Int64), Dimension(nxg,nyg, nz), Intent(In) :: W_
+    Call ibm_fill_ext( U_, Uext, nx,  nyg, nzg, .True.,  .False. )
+    Call ibm_fill_ext( V_, Vext, nxg, ny,  nzg, .False., .False. )
+    Call ibm_fill_ext( W_, Wext, nxg, nyg, nz,  .False., .True.  )
+  End Subroutine ibm_fill_ext_uvw
+
+  !> Refresh Cext from a cell-centred scalar (device-resident in GPU builds)
+  Subroutine ibm_fill_ext_cc(C_)
+    Real(Int64), Dimension(nxg,nyg,nzg), Intent(In) :: C_
+    Call ibm_fill_ext( C_, Cext, nxg, nyg, nzg, .False., .False. )
+  End Subroutine ibm_fill_ext_cc
+
   !> Apply ghost-cell IBM every RK sub-step in place of volume-penalisation
   Subroutine apply_ghost_cell_ibm(U_,V_,W_)
 
@@ -863,9 +1105,10 @@ Contains
     Real(Int64), Dimension(nxg, ny,nzg), Intent(InOut) :: V_
     Real(Int64), Dimension(nxg,nyg, nz), Intent(InOut) :: W_
 
-    Integer(Int32) :: n, i, j, k
+    Integer(Int32) :: n, i, j, k, ee
     Real   (Int64) :: r
 
+    ee = ibm_E
     ! Image-point stencils can reach into the seam halo planes, which are stale after the RK update / projection that precedes this call
     If ( nprocs > 1 ) Call exchange_velocity_halos
 
@@ -899,11 +1142,14 @@ Contains
     End Do
     !$acc end parallel loop
 
+    ! image-point stencils read the extended copies (extra planes beyond the seam ghost plane)
+    Call ibm_fill_ext_uvw(U_, V_, W_)
+
     !--- U ghost cells: general two-point mirror U_G = (U_wall - r*U_I)/(1-r), r = dGB/dGI
     !    (reduces to the textbook 2*U_wall - U_I when the image sits at the unclamped 2*dGB, r=0.5) ---
-    !$acc parallel loop present(U_,ghost_u_wgt,ghost_u_img,ghost_img_val)
+    !$acc parallel loop present(Uext,ghost_u_wgt,ghost_u_img,ghost_img_val)
     Do n = 1, n_ghost_u
-       ghost_img_val(n) = trilinear_interp_u(U_, ghost_u_wgt(1:8,n), ghost_u_img(:,n))
+       ghost_img_val(n) = trilinear_interp_u(Uext, ghost_u_wgt(1:8,n), ghost_u_img(:,n), ee)
     End Do
     !$acc end parallel loop
     !$acc parallel loop present(U_,ghost_u_idx,ghost_u_dGB,ghost_u_dGI,ghost_img_val) private(r)
@@ -915,9 +1161,9 @@ Contains
     !$acc end parallel loop
 
     !--- V ghost cells ---
-    !$acc parallel loop present(V_,ghost_v_wgt,ghost_v_img,ghost_img_val)
+    !$acc parallel loop present(Vext,ghost_v_wgt,ghost_v_img,ghost_img_val)
     Do n = 1, n_ghost_v
-       ghost_img_val(n) = trilinear_interp_v(V_, ghost_v_wgt(1:8,n), ghost_v_img(:,n))
+       ghost_img_val(n) = trilinear_interp_v(Vext, ghost_v_wgt(1:8,n), ghost_v_img(:,n), ee)
     End Do
     !$acc end parallel loop
     !$acc parallel loop present(V_,ghost_v_idx,ghost_v_dGB,ghost_v_dGI,ghost_img_val) private(r)
@@ -929,9 +1175,9 @@ Contains
     !$acc end parallel loop
 
     !--- W ghost cells ---
-    !$acc parallel loop present(W_,ghost_w_wgt,ghost_w_img,ghost_img_val)
+    !$acc parallel loop present(Wext,ghost_w_wgt,ghost_w_img,ghost_img_val)
     Do n = 1, n_ghost_w
-       ghost_img_val(n) = trilinear_interp_w(W_, ghost_w_wgt(1:8,n), ghost_w_img(:,n))
+       ghost_img_val(n) = trilinear_interp_w(Wext, ghost_w_wgt(1:8,n), ghost_w_img(:,n), ee)
     End Do
     !$acc end parallel loop
     !$acc parallel loop present(W_,ghost_w_idx,ghost_w_dGB,ghost_w_dGI,ghost_img_val) private(r)
@@ -952,14 +1198,16 @@ Contains
 
     Real(Int64), Dimension(nxg,nyg,nzg), Intent(InOut) :: T_
 
-    Integer(Int32) :: n, i, j, k, oid
+    Integer(Int32) :: n, i, j, k, oid, ee
     Real   (Int64) :: T_I, r
 
-    !$acc parallel loop present(T_,ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc,ghost_cc_objid,ibm_T_bc_type,ibm_T_wall,ghost_cc_dGB,ghost_cc_dGI) private(T_I,oid,r)
+    ee = ibm_E
+    Call ibm_fill_ext_cc(T_)
+    !$acc parallel loop present(T_,Cext,ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc,ghost_cc_objid,ibm_T_bc_type,ibm_T_wall,ghost_cc_dGB,ghost_cc_dGI) private(T_I,oid,r)
     Do n = 1, n_ghost_cc
        i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)
        oid = ghost_cc_objid(n)
-       T_I = trilinear_interp_p(T_, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n))
+       T_I = trilinear_interp_p(Cext, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ee)
        If ( ibm_T_bc_type(oid) == 1 ) Then
           ! isothermal: general two-point mirror, r = dGB/dGI (reduces to 2*T_wall-T_I at r=0.5)
           r = ghost_cc_dGB(n) / ghost_cc_dGI(n)
@@ -977,12 +1225,14 @@ Contains
 
     Real(Int64), Dimension(nxg,nyg,nzg), Intent(InOut) :: C_
 
-    Integer(Int32) :: n, i, j, k
+    Integer(Int32) :: n, i, j, k, ee
 
-    !$acc parallel loop present(C_,ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc)
+    ee = ibm_E
+    Call ibm_fill_ext_cc(C_)
+    !$acc parallel loop present(C_,Cext,ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc)
     Do n = 1, n_ghost_cc
        i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)
-       C_(i,j,k) = trilinear_interp_p(C_, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n))
+       C_(i,j,k) = trilinear_interp_p(Cext, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ee)
     End Do
     !$acc end parallel loop
 
@@ -1041,20 +1291,20 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             If ( phi(i,j,k) < 0d0 ) Then
-                If ( phi(i-1,j,k) >= 0d0 .Or. phi(i+1,j,k) >= 0d0 .Or. &
-                     phi(i,j-1,k) >= 0d0 .Or. phi(i,j+1,k) >= 0d0 .Or. &
-                     phi(i,j,k-1) >= 0d0 .Or. phi(i,j,k+1) >= 0d0 ) Then
+             If ( phie(i,j,k) < 0d0 ) Then
+                If ( phie(i-1,j,k) >= 0d0 .Or. phie(i+1,j,k) >= 0d0 .Or. &
+                     phie(i,j-1,k) >= 0d0 .Or. phie(i,j+1,k) >= 0d0 .Or. &
+                     phie(i,j,k-1) >= 0d0 .Or. phie(i,j,k+1) >= 0d0 ) Then
                    Call compute_normal_at_cc(i,j,k, nx_,ny_,nz_)
-                   dGB = Abs(phi(i,j,k))
+                   dGB = Abs(phie(i,j,k))
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
-                   xI = xg(i) + dGI*nx_
+                   xI = xge(i) + dGI*nx_
                    yI = yg(j) + dGI*ny_
-                   zI = zg(k) + dGI*nz_
+                   zI = zge(k) + dGI*nz_
                    Call find_stencil_centre(xI, yI, zI, ii, jj, kk)
-                   If ( ii>=1 .And. ii<=nxg-1 .And. jj>=1 .And. jj<=nyg-1 .And. &
-                        kk>=1 .And. kk<=nzg-1 ) Then
-                      If ( Umask_cc(ii,jj,kk) > 0.5d0 ) Then
+                   If ( .Not. stencil_out .And. ii>=ext_cx_lo .And. ii<=ext_cx_hi .And. jj>=1 .And. jj<=nyg-1 .And. &
+                        kk>=ext_cz_lo .And. kk<=ext_cz_hi ) Then
+                      If ( Umaske(ii,jj,kk) > 0.5d0 ) Then
                          ng = ng + 1
                       Else
                          nd = nd + 1   ! image in solid — concave corner
@@ -1094,20 +1344,20 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             If ( phi(i,j,k) < 0d0 ) Then
-                If ( phi(i-1,j,k) >= 0d0 .Or. phi(i+1,j,k) >= 0d0 .Or. &
-                     phi(i,j-1,k) >= 0d0 .Or. phi(i,j+1,k) >= 0d0 .Or. &
-                     phi(i,j,k-1) >= 0d0 .Or. phi(i,j,k+1) >= 0d0 ) Then
+             If ( phie(i,j,k) < 0d0 ) Then
+                If ( phie(i-1,j,k) >= 0d0 .Or. phie(i+1,j,k) >= 0d0 .Or. &
+                     phie(i,j-1,k) >= 0d0 .Or. phie(i,j+1,k) >= 0d0 .Or. &
+                     phie(i,j,k-1) >= 0d0 .Or. phie(i,j,k+1) >= 0d0 ) Then
                    Call compute_normal_at_cc(i,j,k, nx_,ny_,nz_)
-                   dGB = Abs(phi(i,j,k))
+                   dGB = Abs(phie(i,j,k))
                    dGI = Max( 2d0*dGB, Real(n_image_layers,8)*dymin )
-                   xI = xg(i) + dGI*nx_
+                   xI = xge(i) + dGI*nx_
                    yI = yg(j) + dGI*ny_
-                   zI = zg(k) + dGI*nz_
+                   zI = zge(k) + dGI*nz_
                    Call find_stencil_centre(xI, yI, zI, ii, jj, kk)
-                   If ( ii>=1 .And. ii<=nxg-1 .And. jj>=1 .And. jj<=nyg-1 .And. &
-                        kk>=1 .And. kk<=nzg-1 ) Then
-                      If ( Umask_cc(ii,jj,kk) > 0.5d0 ) Then
+                   If ( .Not. stencil_out .And. ii>=ext_cx_lo .And. ii<=ext_cx_hi .And. jj>=1 .And. jj<=nyg-1 .And. &
+                        kk>=ext_cz_lo .And. kk<=ext_cz_hi ) Then
+                      If ( Umaske(ii,jj,kk) > 0.5d0 ) Then
                          ng = ng + 1
                          ghost_cc_idx(1,ng) = i
                          ghost_cc_idx(2,ng) = j
@@ -1162,8 +1412,8 @@ Contains
   Pure Function phi_w(i,j,k) Result(v)
     Integer(Int32), Intent(In) :: i, j, k
     Real   (Int64) :: v, w0
-    w0 = ( zg(k+1) - z(k) ) / ( zg(k+1) - zg(k) )
-    v  = w0*phi(i,j,k) + ( 1d0 - w0 )*phi(i,j,k+1)
+    w0 = ( zge(k+1) - ze(k) ) / ( zge(k+1) - zge(k) )
+    v  = w0*phie(i,j,k) + ( 1d0 - w0 )*phie(i,j,k+1)
   End Function phi_w
 
   !> SDF at the V (y-face) location (i,j,k), interpolated from the two adjacent cell centres with the local
@@ -1172,21 +1422,21 @@ Contains
     Integer(Int32), Intent(In) :: i, j, k
     Real   (Int64) :: v, w0
     w0 = ( yg(j+1) - y(j) ) / ( yg(j+1) - yg(j) )
-    v  = w0*phi(i,j,k) + ( 1d0 - w0 )*phi(i,j+1,k)
+    v  = w0*phie(i,j,k) + ( 1d0 - w0 )*phie(i,j+1,k)
   End Function phi_v
 
   Subroutine compute_normal_at_cc(i,j,k, nx_,ny_,nz_)
     Integer(Int32), Intent(In)  :: i, j, k
     Real   (Int64), Intent(Out) :: nx_, ny_, nz_
     Real   (Int64)              :: nmag, h_up, h_dn
-    nx_  = (phi(i+1,j,k) - phi(i-1,j,k)) / (xg(i+1) - xg(i-1))
+    nx_  = (phie(i+1,j,k) - phie(i-1,j,k)) / (xge(i+1) - xge(i-1))
     ! Non-uniform central difference in y (2nd-order on stretched meshes)
     h_up = yg(j+1) - yg(j);  h_dn = yg(j) - yg(j-1)
-    ny_  = ( h_dn**2*phi(i,j+1,k) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j-1,k) ) &
+    ny_  = ( h_dn**2*phie(i,j+1,k) + (h_up**2-h_dn**2)*phie(i,j,k) - h_up**2*phie(i,j-1,k) ) &
            / ( h_up * h_dn * (h_up + h_dn) )
-    ! Non-uniform central difference in z (2nd-order on stretched meshes)
-    h_up = zg(k+1) - zg(k);  h_dn = zg(k) - zg(k-1)
-    nz_  = ( h_dn**2*phi(i,j,k+1) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j,k-1) ) &
+    ! Non-uniform central difference in ze(2nd-order on stretched meshes)
+    h_up = zge(k+1) - zge(k);  h_dn = zge(k) - zge(k-1)
+    nz_  = ( h_dn**2*phie(i,j,k+1) + (h_up**2-h_dn**2)*phie(i,j,k) - h_up**2*phie(i,j,k-1) ) &
            / ( h_up * h_dn * (h_up + h_dn) )
     nmag = Sqrt(nx_**2 + ny_**2 + nz_**2)
     If (nmag > 1d-14) Then
@@ -1203,14 +1453,14 @@ Contains
     Real   (Int64), Intent(Out) :: nx_, ny_, nz_
     Real   (Int64)              :: nmag, h_up, h_dn
 
-    nx_  = ( phi(i+1,j,k) - phi(i,j,k) ) / ( xg(i+1) - xg(i) )
+    nx_  = ( phie(i+1,j,k) - phie(i,j,k) ) / ( xge(i+1) - xge(i) )
     ! Non-uniform central difference in y (2nd-order on stretched meshes)
     h_up = yg(j+1) - yg(j);  h_dn = yg(j) - yg(j-1)
-    ny_  = ( h_dn**2*phi(i,j+1,k) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j-1,k) ) &
+    ny_  = ( h_dn**2*phie(i,j+1,k) + (h_up**2-h_dn**2)*phie(i,j,k) - h_up**2*phie(i,j-1,k) ) &
            / ( h_up * h_dn * (h_up + h_dn) )
-    ! Non-uniform central difference in z (2nd-order on stretched meshes)
-    h_up = zg(k+1) - zg(k);  h_dn = zg(k) - zg(k-1)
-    nz_  = ( h_dn**2*phi(i,j,k+1) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j,k-1) ) &
+    ! Non-uniform central difference in ze(2nd-order on stretched meshes)
+    h_up = zge(k+1) - zge(k);  h_dn = zge(k) - zge(k-1)
+    nz_  = ( h_dn**2*phie(i,j,k+1) + (h_up**2-h_dn**2)*phie(i,j,k) - h_up**2*phie(i,j,k-1) ) &
            / ( h_up * h_dn * (h_up + h_dn) )
     nmag = Sqrt(nx_**2 + ny_**2 + nz_**2)
     If (nmag > 1d-14) Then
@@ -1224,11 +1474,11 @@ Contains
     Integer(Int32), Intent(In)  :: i, j, k
     Real   (Int64), Intent(Out) :: nx_, ny_, nz_
     Real   (Int64)              :: nmag, h_up, h_dn
-    nx_ = ( phi(i+1,j,k) - phi(i-1,j,k) ) / ( xg(i+1) - xg(i-1) )
-    ny_ = ( phi(i,j+1,k) - phi(i,j,k) )   / ( yg(j+1) - yg(j) )
-    ! Non-uniform central difference in z (2nd-order on stretched meshes)
-    h_up = zg(k+1) - zg(k);  h_dn = zg(k) - zg(k-1)
-    nz_ = ( h_dn**2*phi(i,j,k+1) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j,k-1) ) &
+    nx_ = ( phie(i+1,j,k) - phie(i-1,j,k) ) / ( xge(i+1) - xge(i-1) )
+    ny_ = ( phie(i,j+1,k) - phie(i,j,k) )   / ( yg(j+1) - yg(j) )
+    ! Non-uniform central difference in ze(2nd-order on stretched meshes)
+    h_up = zge(k+1) - zge(k);  h_dn = zge(k) - zge(k-1)
+    nz_ = ( h_dn**2*phie(i,j,k+1) + (h_up**2-h_dn**2)*phie(i,j,k) - h_up**2*phie(i,j,k-1) ) &
            / ( h_up * h_dn * (h_up + h_dn) )
     nmag = Sqrt(nx_**2+ny_**2+nz_**2)
     If (nmag>1d-14) Then; nx_=nx_/nmag; ny_=ny_/nmag; nz_=nz_/nmag
@@ -1239,16 +1489,88 @@ Contains
     Integer(Int32), Intent(In)  :: i, j, k
     Real   (Int64), Intent(Out) :: nx_, ny_, nz_
     Real   (Int64)              :: nmag, h_up, h_dn
-    nx_  = ( phi(i+1,j,k) - phi(i-1,j,k) ) / ( xg(i+1) - xg(i-1) )
+    nx_  = ( phie(i+1,j,k) - phie(i-1,j,k) ) / ( xge(i+1) - xge(i-1) )
     ! Non-uniform central difference in y (2nd-order on stretched meshes)
     h_up = yg(j+1) - yg(j);  h_dn = yg(j) - yg(j-1)
-    ny_  = ( h_dn**2*phi(i,j+1,k) + (h_up**2-h_dn**2)*phi(i,j,k) - h_up**2*phi(i,j-1,k) ) &
+    ny_  = ( h_dn**2*phie(i,j+1,k) + (h_up**2-h_dn**2)*phie(i,j,k) - h_up**2*phie(i,j-1,k) ) &
            / ( h_up * h_dn * (h_up + h_dn) )
-    nz_  = ( phi(i,j,k+1) - phi(i,j,k) )   / ( zg(k+1) - zg(k) )
+    nz_  = ( phie(i,j,k+1) - phie(i,j,k) )   / ( zge(k+1) - zge(k) )
     nmag = Sqrt(nx_**2+ny_**2+nz_**2)
     If (nmag>1d-14) Then; nx_=nx_/nmag; ny_=ny_/nmag; nz_=nz_/nmag
     Else; nx_=0d0; ny_=1d0; nz_=0d0; End If
   End Subroutine compute_normal_at_face_w
+
+  !> Set stencil_out when a point lies beyond the extended range on a side where the extended planes exist (data would be
+  !  missing); on a non-periodic domain edge the legacy clamp to the edge stencil is kept
+  Subroutine flag_out(p, lo_coord, hi_coord, has_lo, has_hi)
+    Real   (Int64), Intent(In) :: p, lo_coord, hi_coord
+    Logical,        Intent(In) :: has_lo, has_hi
+    If ( has_lo .And. p <  lo_coord ) stencil_out = .True.
+    If ( has_hi .And. p >= hi_coord ) stencil_out = .True.
+  End Subroutine flag_out
+
+  !> Extended-halo setup (host): depth ibm_E from the image distance, padded axes, SDF and fluid mask, anchor ranges, staging buffers
+  Subroutine setup_ibm_ext
+
+    Logical        :: is_first, is_last, per
+    Integer(Int32) :: up, down, partner, Eloc, Emax, wmin, wmin_g, cnt
+    Real   (Int64) :: dmin_h
+
+    ! depth: image distance ~ max(2 dGB, n_image_layers*dymin) plus the trilinear corner and one cell of margin
+    dmin_h = Min( x_global(2)-x_global(1), z_global(2)-z_global(1) )
+    Eloc   = 2 + Ceiling( Real(n_image_layers,8)*dymin / dmin_h )
+    Eloc   = Min( Max(Eloc,2), 8 )
+    Call MPI_Allreduce(Eloc, Emax, 1, MPI_INTEGER, MPI_MAX, MPI_COMM_WORLD, ierr)
+    ibm_E = Emax
+    wmin  = Min( nxg-2, nzg-2 )
+    Call MPI_Allreduce(wmin, wmin_g, 1, MPI_INTEGER, MPI_MIN, MPI_COMM_WORLD, ierr)
+    If ( nprocs > 1 .And. wmin_g < ibm_E ) Then
+       If ( myid == 0 ) Write(*,'(A,I0,A,I0,A)') ' ERROR: IBM needs at least ', ibm_E, ' interior cells per rank in x and z ', &
+            'for its image-point stencils, but the thinnest slab has ', wmin_g, '. Use fewer ranks (or a different p_row/p_col).'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
+
+    Call x_halo_neighbors(up, down)
+    Call x_periodic_partner(is_first, is_last, partner)
+    per = ( x_bc_type == 0 )
+    ibm_lo_x = ( down /= MPI_PROC_NULL ) .Or. per
+    ibm_hi_x = ( up   /= MPI_PROC_NULL ) .Or. per
+    Call z_halo_neighbors(up, down)
+    per = ( z_bc_type == 0 )
+    ibm_lo_z = ( down /= MPI_PROC_NULL ) .Or. per
+    ibm_hi_z = ( up   /= MPI_PROC_NULL ) .Or. per
+
+    ext_cx_lo = 1 - Merge(ibm_E, 0, ibm_lo_x);  ext_cx_hi = nxg - 1 + Merge(ibm_E, 0, ibm_hi_x)
+    ext_fx_lo = Merge(1 - ibm_E, 2, ibm_lo_x);  ext_fx_hi = nx  - 1 + Merge(ibm_E, 0, ibm_hi_x)
+    ext_cz_lo = 1 - Merge(ibm_E, 0, ibm_lo_z);  ext_cz_hi = nzg - 1 + Merge(ibm_E, 0, ibm_hi_z)
+    ext_fz_lo = Merge(1 - ibm_E, 2, ibm_lo_z);  ext_fz_hi = nz  - 1 + Merge(ibm_E, 0, ibm_hi_z)
+
+    Allocate( xe (1-ibm_E:nx +ibm_E), xge(1-ibm_E:nxg+ibm_E) )
+    Allocate( ze (1-ibm_E:nz +ibm_E), zge(1-ibm_E:nzg+ibm_E) )
+    Call pad_axis( x,  nx,  x_global,  nx_global,  i1_global(myid),  ibm_E, xe  )
+    Call pad_axis( xg, nxg, xg_global, nxg_global, ig1_global(myid), ibm_E, xge )
+    Call pad_axis( z,  nz,  z_global,  nz_global,  k1_global(myid),  ibm_E, ze  )
+    Call pad_axis( zg, nzg, zg_global, nzg_global, kg1_global(myid), ibm_E, zge )
+
+    Allocate( phie(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E), Umaske(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E) )
+    Call pad_field( phi, nxg, nyg, nzg, .False., .False., ibm_E, phie )
+    Where ( phie > 0d0 )
+       Umaske = 1d0
+    Elsewhere
+       Umaske = 0d0
+    End Where
+
+    Allocate( Uext(1-ibm_E:nx +ibm_E, nyg, 1-ibm_E:nzg+ibm_E), Vext(1-ibm_E:nxg+ibm_E, ny,  1-ibm_E:nzg+ibm_E) )
+    Allocate( Wext(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nz +ibm_E), Cext(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E) )
+    Uext = 0d0;  Vext = 0d0;  Wext = 0d0;  Cext = 0d0
+    cnt = Max( ibm_E*nyg*nzg, (nxg+2*ibm_E)*nyg*ibm_E ) + 8
+    Allocate( ext_bs(cnt), ext_br(cnt) )
+    ext_bs = 0d0;  ext_br = 0d0
+    !$acc enter data create(Uext,Vext,Wext,Cext,ext_bs,ext_br)
+
+    If ( myid == 0 ) Write(*,'(A,I0,A)') ' IBM: extended halo of ', ibm_E, ' planes for image-point stencils'
+
+  End Subroutine setup_ibm_ext
 
   !  Find lower-left cell-centre index (ii,jj,kk) such that
   !  xg(ii) <= xp < xg(ii+1) etc. — trilinear stencil anchor.
@@ -1262,21 +1584,21 @@ Contains
     Real   (Int64), Intent(In)  :: xp, yp, zp
     Integer(Int32), Intent(Out) :: ii, jj, kk
     Integer(Int32) :: n
-
-    ii = 1
-    Do n = 1, nxg-1
-       If ( xg(n) <= xp ) ii = n
+    stencil_out = .False.
+    ii = ext_cx_lo
+    Do n = ext_cx_lo, ext_cx_hi
+       If ( xge(n) <= xp ) ii = n
     End Do
-
     jj = 1
     Do n = 1, nyg-1
        If ( yg(n) <= yp ) jj = n
     End Do
-
-    kk = 1
-    Do n = 1, nzg-1
-       If ( zg(n) <= zp ) kk = n
+    kk = ext_cz_lo
+    Do n = ext_cz_lo, ext_cz_hi
+       If ( zge(n) <= zp ) kk = n
     End Do
+    Call flag_out(xp, xge(ext_cx_lo), xge(ext_cx_hi+1), ibm_lo_x, ibm_hi_x)
+    Call flag_out(zp, zge(ext_cz_lo), zge(ext_cz_hi+1), ibm_lo_z, ibm_hi_z)
   End Subroutine find_stencil_centre
 
   ! Staggered stencil finders, one per velocity component: U uses x-faces x cell-centres, V cell-centres x y-faces, W cell-centres x z-faces
@@ -1287,54 +1609,63 @@ Contains
     Real   (Int64), Intent(In)  :: xp, yp, zp
     Integer(Int32), Intent(Out) :: ii, jj, kk
     Integer(Int32) :: n
-    ii = 2
-    Do n = 2, nx-1
-       If ( x(n) <= xp ) ii = n
+    stencil_out = .False.
+    ii = ext_fx_lo
+    Do n = ext_fx_lo, ext_fx_hi
+       If ( xe(n) <= xp ) ii = n
     End Do
     jj = 1
     Do n = 1, nyg-1
        If ( yg(n) <= yp ) jj = n
     End Do
-    kk = 1
-    Do n = 1, nzg-1
-       If ( zg(n) <= zp ) kk = n
+    kk = ext_cz_lo
+    Do n = ext_cz_lo, ext_cz_hi
+       If ( zge(n) <= zp ) kk = n
     End Do
+    Call flag_out(xp, xe(ext_fx_lo), xe(ext_fx_hi+1), ibm_lo_x, ibm_hi_x)
+    Call flag_out(zp, zge(ext_cz_lo), zge(ext_cz_hi+1), ibm_lo_z, ibm_hi_z)
   End Subroutine find_stencil_u
 
   Subroutine find_stencil_v(xp, yp, zp, ii, jj, kk)
     Real   (Int64), Intent(In)  :: xp, yp, zp
     Integer(Int32), Intent(Out) :: ii, jj, kk
     Integer(Int32) :: n
-    ii = 1
-    Do n = 1, nxg-1
-       If ( xg(n) <= xp ) ii = n
+    stencil_out = .False.
+    ii = ext_cx_lo
+    Do n = ext_cx_lo, ext_cx_hi
+       If ( xge(n) <= xp ) ii = n
     End Do
     jj = 2
     Do n = 2, ny-1
        If ( y(n) <= yp ) jj = n
     End Do
-    kk = 1
-    Do n = 1, nzg-1
-       If ( zg(n) <= zp ) kk = n
+    kk = ext_cz_lo
+    Do n = ext_cz_lo, ext_cz_hi
+       If ( zge(n) <= zp ) kk = n
     End Do
+    Call flag_out(xp, xge(ext_cx_lo), xge(ext_cx_hi+1), ibm_lo_x, ibm_hi_x)
+    Call flag_out(zp, zge(ext_cz_lo), zge(ext_cz_hi+1), ibm_lo_z, ibm_hi_z)
   End Subroutine find_stencil_v
 
   Subroutine find_stencil_w(xp, yp, zp, ii, jj, kk)
     Real   (Int64), Intent(In)  :: xp, yp, zp
     Integer(Int32), Intent(Out) :: ii, jj, kk
     Integer(Int32) :: n
-    ii = 1
-    Do n = 1, nxg-1
-       If ( xg(n) <= xp ) ii = n
+    stencil_out = .False.
+    ii = ext_cx_lo
+    Do n = ext_cx_lo, ext_cx_hi
+       If ( xge(n) <= xp ) ii = n
     End Do
     jj = 1
     Do n = 1, nyg-1
        If ( yg(n) <= yp ) jj = n
     End Do
-    kk = 2
-    Do n = 2, nz-1
-       If ( z(n) <= zp ) kk = n
+    kk = ext_fz_lo
+    Do n = ext_fz_lo, ext_fz_hi
+       If ( ze(n) <= zp ) kk = n
     End Do
+    Call flag_out(xp, xge(ext_cx_lo), xge(ext_cx_hi+1), ibm_lo_x, ibm_hi_x)
+    Call flag_out(zp, ze(ext_fz_lo), ze(ext_fz_hi+1), ibm_lo_z, ibm_hi_z)
   End Subroutine find_stencil_w
 
   !> Compute 8 trilinear weights (unit-cube corner order) for point (xp,yp,zp) anchored at centre index (ii,jj,kk)
@@ -1344,9 +1675,9 @@ Contains
     Real   (Int64), Intent(Out) :: w(8)
     Real   (Int64) :: tx, ty, tz
 
-    tx = (xp - xg(ii)) / Max(xg(ii+1)-xg(ii), 1d-14)
+    tx = (xp - xge(ii)) / Max(xge(ii+1)-xge(ii), 1d-14)
     ty = (yp - yg(jj)) / Max(yg(jj+1)-yg(jj), 1d-14)
-    tz = (zp - zg(kk)) / Max(zg(kk+1)-zg(kk), 1d-14)
+    tz = (zp - zge(kk)) / Max(zge(kk+1)-zge(kk), 1d-14)
 
     tx = Max(0d0, Min(1d0, tx))
     ty = Max(0d0, Min(1d0, ty))
@@ -1368,9 +1699,9 @@ Contains
     Integer(Int32), Intent(In)  :: ii, jj, kk
     Real   (Int64), Intent(Out) :: w(8)
     Real   (Int64) :: tx, ty, tz
-    tx = (xp - x(ii))  / Max(x(ii+1)  - x(ii),  1d-14)
+    tx = (xp - xe(ii))  / Max(xe(ii+1)  - xe(ii),  1d-14)
     ty = (yp - yg(jj)) / Max(yg(jj+1) - yg(jj), 1d-14)
-    tz = (zp - zg(kk)) / Max(zg(kk+1) - zg(kk), 1d-14)
+    tz = (zp - zge(kk)) / Max(zge(kk+1) - zge(kk), 1d-14)
     tx = Max(0d0, Min(1d0, tx));  ty = Max(0d0, Min(1d0, ty));  tz = Max(0d0, Min(1d0, tz))
     w(1) = (1d0-tx)*(1d0-ty)*(1d0-tz);  w(2) =      tx *(1d0-ty)*(1d0-tz)
     w(3) = (1d0-tx)*     ty *(1d0-tz);  w(4) =      tx *     ty *(1d0-tz)
@@ -1383,9 +1714,9 @@ Contains
     Integer(Int32), Intent(In)  :: ii, jj, kk
     Real   (Int64), Intent(Out) :: w(8)
     Real   (Int64) :: tx, ty, tz
-    tx = (xp - xg(ii)) / Max(xg(ii+1) - xg(ii), 1d-14)
+    tx = (xp - xge(ii)) / Max(xge(ii+1) - xge(ii), 1d-14)
     ty = (yp - y(jj))  / Max(y(jj+1)  - y(jj),  1d-14)
-    tz = (zp - zg(kk)) / Max(zg(kk+1) - zg(kk), 1d-14)
+    tz = (zp - zge(kk)) / Max(zge(kk+1) - zge(kk), 1d-14)
     tx = Max(0d0, Min(1d0, tx));  ty = Max(0d0, Min(1d0, ty));  tz = Max(0d0, Min(1d0, tz))
     w(1) = (1d0-tx)*(1d0-ty)*(1d0-tz);  w(2) =      tx *(1d0-ty)*(1d0-tz)
     w(3) = (1d0-tx)*     ty *(1d0-tz);  w(4) =      tx *     ty *(1d0-tz)
@@ -1398,9 +1729,9 @@ Contains
     Integer(Int32), Intent(In)  :: ii, jj, kk
     Real   (Int64), Intent(Out) :: w(8)
     Real   (Int64) :: tx, ty, tz
-    tx = (xp - xg(ii)) / Max(xg(ii+1) - xg(ii), 1d-14)
+    tx = (xp - xge(ii)) / Max(xge(ii+1) - xge(ii), 1d-14)
     ty = (yp - yg(jj)) / Max(yg(jj+1) - yg(jj), 1d-14)
-    tz = (zp - z(kk))  / Max(z(kk+1)  - z(kk),  1d-14)
+    tz = (zp - ze(kk))  / Max(ze(kk+1)  - ze(kk),  1d-14)
     tx = Max(0d0, Min(1d0, tx));  ty = Max(0d0, Min(1d0, ty));  tz = Max(0d0, Min(1d0, tz))
     w(1) = (1d0-tx)*(1d0-ty)*(1d0-tz);  w(2) =      tx *(1d0-ty)*(1d0-tz)
     w(3) = (1d0-tx)*     ty *(1d0-tz);  w(4) =      tx *     ty *(1d0-tz)
@@ -1409,9 +1740,10 @@ Contains
   End Subroutine trilinear_weights_w
 
   !> Trilinear interpolation at image point using stencil anchor (img) and weights (w) from setup_ibm, on the component's staggered grid
-  Real(Int64) Function trilinear_interp_u(U_, w, img)
+  Real(Int64) Function trilinear_interp_u(U_, w, img, e)
     !$acc routine seq
-    Real   (Int64), Dimension(nx,nyg,nzg), Intent(In) :: U_
+    Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
+    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: U_
     Real   (Int64), Dimension(8),          Intent(In) :: w
     Integer(Int32), Dimension(3),          Intent(In) :: img   ! image stencil anchor on U grid
     Integer(Int32) :: i0, j0, k0
@@ -1423,9 +1755,10 @@ Contains
          w(7)*U_(i0  ,j0+1,k0+1) + w(8)*U_(i0+1,j0+1,k0+1)
   End Function trilinear_interp_u
 
-  Real(Int64) Function trilinear_interp_v(V_, w, img)
+  Real(Int64) Function trilinear_interp_v(V_, w, img, e)
     !$acc routine seq
-    Real   (Int64), Dimension(nxg,ny,nzg), Intent(In) :: V_
+    Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
+    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: V_
     Real   (Int64), Dimension(8),          Intent(In) :: w
     Integer(Int32), Dimension(3),          Intent(In) :: img   ! image stencil anchor on V grid
     Integer(Int32) :: i0, j0, k0
@@ -1437,9 +1770,10 @@ Contains
          w(7)*V_(i0  ,j0+1,k0+1) + w(8)*V_(i0+1,j0+1,k0+1)
   End Function trilinear_interp_v
 
-  Real(Int64) Function trilinear_interp_w(W_, w, img)
+  Real(Int64) Function trilinear_interp_w(W_, w, img, e)
     !$acc routine seq
-    Real   (Int64), Dimension(nxg,nyg,nz), Intent(In) :: W_
+    Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
+    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: W_
     Real   (Int64), Dimension(8),          Intent(In) :: w
     Integer(Int32), Dimension(3),          Intent(In) :: img   ! image stencil anchor on W grid
     Integer(Int32) :: i0, j0, k0
@@ -1453,9 +1787,10 @@ Contains
 
   !  Trilinear interpolation of the cell-centred pressure field P
   !  to an arbitrary point, using the centre-grid stencil.
-  Real(Int64) Function trilinear_interp_p(P_, w, img)
+  Real(Int64) Function trilinear_interp_p(P_, w, img, e)
     !$acc routine seq
-    Real   (Int64), Dimension(nxg,nyg,nzg), Intent(In) :: P_
+    Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
+    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: P_
     Real   (Int64), Dimension(8),           Intent(In) :: w
     Integer(Int32), Dimension(3),           Intent(In) :: img
     Integer(Int32) :: i0, j0, k0
@@ -1485,6 +1820,16 @@ Contains
     Real   (Int64) :: lFx_pres, lFy_pres, lFz_pres
     Real   (Int64) :: lFx_visc, lFy_visc, lFz_visc
 
+    Real   (Int64), Allocatable :: Ue(:,:,:), Ve(:,:,:), We(:,:,:), Pe(:,:,:)
+
+    ! host copies with the extended halo, for the image-point stencils
+    Allocate( Ue(1-ibm_E:nx +ibm_E, nyg, 1-ibm_E:nzg+ibm_E), Ve(1-ibm_E:nxg+ibm_E, ny,  1-ibm_E:nzg+ibm_E), &
+              We(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nz +ibm_E), Pe(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E) )
+    Call pad_field( U_, nx,  nyg, nzg, .True.,  .False., ibm_E, Ue )
+    Call pad_field( V_, nxg, ny,  nzg, .False., .False., ibm_E, Ve )
+    Call pad_field( W_, nxg, nyg, nz,  .False., .True.,  ibm_E, We )
+    Call pad_field( P,  nxg, nyg, nzg, .False., .False., ibm_E, Pe )
+
     lFx_pres=0d0; lFy_pres=0d0; lFz_pres=0d0
     lFx_visc=0d0; lFy_visc=0d0; lFz_visc=0d0
 
@@ -1500,7 +1845,7 @@ Contains
        dGB = ghost_cc_dGB(n)
        dV  = (xg(i+1)-xg(i-1))*0.5d0 * (yg(j+1)-yg(j-1))*0.5d0 * (zg(k+1)-zg(k-1))*0.5d0
        dA  = dV / Max(dGB, 1d-14)
-       p_I = trilinear_interp_p(P, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n))
+       p_I = trilinear_interp_p(Pe, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
        lFx_pres = lFx_pres - p_I * ghost_cc_nrm(1,n) * dA
        lFy_pres = lFy_pres - p_I * ghost_cc_nrm(2,n) * dA
        lFz_pres = lFz_pres - p_I * ghost_cc_nrm(3,n) * dA
@@ -1515,7 +1860,7 @@ Contains
        dGB = ghost_u_dGB(n)
        dIB = ghost_u_dGI(n) - dGB
        dA  = (y(j)-y(j-1)) * (z(k)-z(k-1))             ! y-z face area
-       U_I = trilinear_interp_u(U_, ghost_u_wgt(1:8,n), ghost_u_img(:,n))
+       U_I = trilinear_interp_u(Ue, ghost_u_wgt(1:8,n), ghost_u_img(:,n), ibm_E)
        nu_t_B = 0.5d0*(nu_t(i,j,k) + nu_t(Min(i+1,nxg),j,k))
        lFx_visc = lFx_visc + (nu + nu_t_B) * (U_I - U_wall) / Max(dIB, 1d-14) * dA
     End Do
@@ -1525,7 +1870,7 @@ Contains
        dGB = ghost_v_dGB(n)
        dIB = ghost_v_dGI(n) - dGB
        dA  = (xg(i+1)-xg(i)) * (z(k)-z(k-1))           ! x-z face area
-       U_I = trilinear_interp_v(V_, ghost_v_wgt(1:8,n), ghost_v_img(:,n))
+       U_I = trilinear_interp_v(Ve, ghost_v_wgt(1:8,n), ghost_v_img(:,n), ibm_E)
        nu_t_B = 0.5d0*(nu_t(i,j,k) + nu_t(i,Min(j+1,nyg),k))
        lFy_visc = lFy_visc + (nu + nu_t_B) * (U_I - V_wall) / Max(dIB, 1d-14) * dA
     End Do
@@ -1535,10 +1880,12 @@ Contains
        dGB = ghost_w_dGB(n)
        dIB = ghost_w_dGI(n) - dGB
        dA  = (xg(i+1)-xg(i)) * (y(j)-y(j-1))           ! x-y face area
-       U_I = trilinear_interp_w(W_, ghost_w_wgt(1:8,n), ghost_w_img(:,n))
+       U_I = trilinear_interp_w(We, ghost_w_wgt(1:8,n), ghost_w_img(:,n), ibm_E)
        nu_t_B = 0.5d0*(nu_t(i,j,k) + nu_t(i,j,Min(k+1,nzg)))
        lFz_visc = lFz_visc + (nu + nu_t_B) * (U_I - W_wall) / Max(dIB, 1d-14) * dA
     End Do
+
+    Deallocate( Ue, Ve, We, Pe )
 
     !--- Global reduction for Method 2 ---
     Call MPI_Allreduce(lFx_pres, Fx_pres, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
@@ -1566,7 +1913,19 @@ Contains
     Character(16)  :: ext
     Logical        :: dir_exists
 
+    Real   (Int64), Allocatable :: Ue(:,:,:), Ve(:,:,:), We(:,:,:), Pe(:,:,:), Ne(:,:,:)
+
     nl = n_ghost_cc
+
+    ! host copies with the extended halo, for the image-point stencils
+    Allocate( Ue(1-ibm_E:nx +ibm_E, nyg, 1-ibm_E:nzg+ibm_E), Ve(1-ibm_E:nxg+ibm_E, ny,  1-ibm_E:nzg+ibm_E), &
+              We(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nz +ibm_E), Pe(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E), &
+              Ne(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E) )
+    Call pad_field( U_,   nx,  nyg, nzg, .True.,  .False., ibm_E, Ue )
+    Call pad_field( V_,   nxg, ny,  nzg, .False., .False., ibm_E, Ve )
+    Call pad_field( W_,   nxg, nyg, nz,  .False., .True.,  ibm_E, We )
+    Call pad_field( P,    nxg, nyg, nzg, .False., .False., ibm_E, Pe )
+    Call pad_field( nu_t, nxg, nyg, nzg, .False., .False., ibm_E, Ne )
 
     ! Fill the rank-local per-point buffer; row layout (NF=13): 1-3 x,y,z 4-6 nx,ny,nz 7 p 8-10 fp_x,fp_y,fp_z 11-13 fv_x,fv_y,fv_z
     Allocate ( lbuf(NF, Max(nl,1)) )
@@ -1582,11 +1941,11 @@ Contains
        dA   = dV * invd
 
        ! interpolate pressure, turbulent viscosity and velocity at image point I
-       pB   = trilinear_interp_p(P,    ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n))
-       nutB = trilinear_interp_p(nu_t, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n))
-       uI   = trilinear_interp_u(U_,   ghost_cc_wgt_u (1:8,n), ghost_cc_img_u (:,n))
-       vI   = trilinear_interp_v(V_,   ghost_cc_wgt_v (1:8,n), ghost_cc_img_v (:,n))
-       wI   = trilinear_interp_w(W_,   ghost_cc_wgt_w (1:8,n), ghost_cc_img_w (:,n))
+       pB   = trilinear_interp_p(Pe,   ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
+       nutB = trilinear_interp_p(Ne,   ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
+       uI   = trilinear_interp_u(Ue,   ghost_cc_wgt_u (1:8,n), ghost_cc_img_u (:,n), ibm_E)
+       vI   = trilinear_interp_v(Ve,   ghost_cc_wgt_v (1:8,n), ghost_cc_img_v (:,n), ibm_E)
+       wI   = trilinear_interp_w(We,   ghost_cc_wgt_w (1:8,n), ghost_cc_img_w (:,n), ibm_E)
 
        ! boundary-point coordinates B = cell-centre + dGB*nrm
        lbuf(1,n) = xg(i) + dGB*ghost_cc_nrm(1,n)
@@ -1605,6 +1964,8 @@ Contains
        lbuf(12,n) = (nu + nutB) * (vI - V_wall) * invdI * dA
        lbuf(13,n) = (nu + nutB) * (wI - W_wall) * invdI * dA
     End Do
+
+    Deallocate( Ue, Ve, We, Pe, Ne )
 
     ! ── Gather point counts, then the buffers, onto rank 0 ───────────
     Allocate ( counts(nprocs), recvc(nprocs), displs(nprocs) )

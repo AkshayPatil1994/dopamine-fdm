@@ -262,14 +262,14 @@ Contains
                     ghost_w_idx, ghost_w_img, ghost_w_wgt, ghost_w_ref, n_ghost_w, &
                     ghost_w_nrm, ghost_w_yref, ghost_w_objid,                      &
                     trilinear_interp_u, trilinear_interp_v, trilinear_interp_w, &
-                    U_wall, V_wall, W_wall
+                    U_wall, V_wall, W_wall, Uext, Vext, Wext, ibm_fill_ext_uvw, ext_fz_lo
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(InOut) :: U_
     Real(Int64), Dimension(nxg, ny,  nzg), Intent(InOut) :: V_
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(InOut) :: W_
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: nu_t_
 
-    Integer(Int32) :: n, i, j, k, ir, jr, kr, oid
+    Integer(Int32) :: n, i, j, k, ir, jr, kr, oid, kwmin
     Real   (Int64) :: u_ref, u_tau, y_ref
     Real   (Int64) :: uI_x, uI_y, uI_z   ! image-point velocity (all 3 components)
     Real   (Int64) :: uI_n                ! wall-normal projection of image velocity
@@ -279,8 +279,12 @@ Contains
     Real   (Int64) :: yplus, uplus_img, duplus_img
     Real   (Int64) :: nx_, ny_, nz_       ! unit inward wall normal
 
+    ! reference-cell velocities come from the extended copies (planes beyond the seam ghost plane)
+    Call ibm_fill_ext_uvw(U_, V_, W_)
+    kwmin = ext_fz_lo
+
     !--- EQWM for U ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,ghost_u_idx,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_objid,ibm_z0)
+    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_u_idx,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_objid,ibm_z0)
     Do n = 1, n_ghost_u
        i  = ghost_u_idx(1,n);  j  = ghost_u_idx(2,n);  k  = ghost_u_idx(3,n)
        ir = ghost_u_ref(1,n);  jr = ghost_u_ref(2,n);  kr = ghost_u_ref(3,n)
@@ -288,9 +292,9 @@ Contains
        nx_ = ghost_u_nrm(1,n);  ny_ = ghost_u_nrm(2,n);  nz_ = ghost_u_nrm(3,n)
 
        ! Reference-cell velocity averaging
-       uI_x = 0.5d0 * (U_(ir-1, jr, kr) + U_(ir, jr, kr))
-       uI_y = 0.5d0 * (V_(ir, Max(jr-1,2), kr) + V_(ir, jr, kr))
-       uI_z = 0.5d0 * (W_(ir, jr, Max(kr-1,2)) + W_(ir, jr, kr))
+       uI_x = 0.5d0 * (Uext(ir-1, jr, kr) + Uext(ir, jr, kr))
+       uI_y = 0.5d0 * (Vext(ir, Max(jr-1,2), kr) + Vext(ir, jr, kr))
+       uI_z = 0.5d0 * (Wext(ir, jr, Max(kr-1,kwmin)) + Wext(ir, jr, kr))
 
        ! Project out wall-normal component: u_tan = u_I - (u_I · n) n
        uI_n  = uI_x*nx_ + uI_y*ny_ + uI_z*nz_
@@ -326,16 +330,16 @@ Contains
     !$acc end parallel loop
 
     !--- EQWM for V ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,ghost_v_idx,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_objid,ibm_z0)
+    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_v_idx,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_objid,ibm_z0)
     Do n = 1, n_ghost_v
        i  = ghost_v_idx(1,n);  j  = ghost_v_idx(2,n);  k  = ghost_v_idx(3,n)
        ir = ghost_v_ref(1,n);  jr = ghost_v_ref(2,n);  kr = ghost_v_ref(3,n)
        oid = ghost_v_objid(n)
        nx_ = ghost_v_nrm(1,n);  ny_ = ghost_v_nrm(2,n);  nz_ = ghost_v_nrm(3,n)
 
-       uI_x = 0.5d0 * (U_(ir-1, jr, kr) + U_(ir, jr, kr))
-       uI_y = 0.5d0 * (V_(ir, Max(jr-1,2), kr) + V_(ir, jr, kr))
-       uI_z = 0.5d0 * (W_(ir, jr, Max(kr-1,2)) + W_(ir, jr, kr))
+       uI_x = 0.5d0 * (Uext(ir-1, jr, kr) + Uext(ir, jr, kr))
+       uI_y = 0.5d0 * (Vext(ir, Max(jr-1,2), kr) + Vext(ir, jr, kr))
+       uI_z = 0.5d0 * (Wext(ir, jr, Max(kr-1,kwmin)) + Wext(ir, jr, kr))
 
        uI_n  = uI_x*nx_ + uI_y*ny_ + uI_z*nz_
        uI_tx = uI_x - uI_n*nx_
@@ -365,16 +369,16 @@ Contains
     !$acc end parallel loop
 
     !--- EQWM for W ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,ghost_w_idx,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_objid,ibm_z0)
+    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_w_idx,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_objid,ibm_z0)
     Do n = 1, n_ghost_w
        i  = ghost_w_idx(1,n);  j  = ghost_w_idx(2,n);  k  = ghost_w_idx(3,n)
        ir = ghost_w_ref(1,n);  jr = ghost_w_ref(2,n);  kr = ghost_w_ref(3,n)
        oid = ghost_w_objid(n)
        nx_ = ghost_w_nrm(1,n);  ny_ = ghost_w_nrm(2,n);  nz_ = ghost_w_nrm(3,n)
 
-       uI_x = 0.5d0 * (U_(ir-1, jr, kr) + U_(ir, jr, kr))
-       uI_y = 0.5d0 * (V_(ir, Max(jr-1,2), kr) + V_(ir, jr, kr))
-       uI_z = 0.5d0 * (W_(ir, jr, Max(kr-1,2)) + W_(ir, jr, kr))
+       uI_x = 0.5d0 * (Uext(ir-1, jr, kr) + Uext(ir, jr, kr))
+       uI_y = 0.5d0 * (Vext(ir, Max(jr-1,2), kr) + Vext(ir, jr, kr))
+       uI_z = 0.5d0 * (Wext(ir, jr, Max(kr-1,kwmin)) + Wext(ir, jr, kr))
 
        uI_n  = uI_x*nx_ + uI_y*ny_ + uI_z*nz_
        uI_tx = uI_x - uI_n*nx_
