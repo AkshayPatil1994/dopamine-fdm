@@ -234,6 +234,23 @@ Contains
        Call apply_Robin_bc_y(W,alpha_z,2)
     End If
 
+    ! The y-wall rows (Robin from wall-model slip lengths, or periodic) were just applied over the seam ghost planes too, from
+    ! this rank's own coefficients, so they disagree with the owning rank's rows (and with the periodic partner's). Refill the
+    ! seam ghost planes and the periodic wraps from the owners: pure copies, so this is idempotent (it never re-applies an
+    ! inflow/outflow or wall condition). Without it a particle whose interpolation stencil touches a ghost plane next to a
+    ! wall sees a value that depends on the rank layout, and a restart file inherits the inconsistent row.
+    Call exchange_velocity_halos
+    If ( x_bc_type == 0 ) Then
+       Call apply_periodic_bc_x(U,1)
+       Call apply_periodic_bc_x(V,2)
+       Call apply_periodic_bc_x(W,2)
+    End If
+    If ( z_bc_type == 0 ) Then
+       Call apply_periodic_bc_z(U,1)
+       Call apply_periodic_bc_z(V,2)
+       Call apply_periodic_bc_z(W,3)
+    End If
+
     ! compute boundary conditions for pseudo-pressure
   End Subroutine apply_boundary_conditions
   
