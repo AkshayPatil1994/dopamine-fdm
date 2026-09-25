@@ -66,6 +66,8 @@ Module particles
   ! rank layout.
   Real(Int64), Allocatable :: Upad(:,:,:), Vpad(:,:,:), Wpad(:,:,:)
   Real(Int64), Allocatable :: xpad_f(:), xpad_c(:), zpad_f(:), zpad_c(:)
+  ! padded SDF for the IBM collision normal (a finite difference over +-0.5 cell, which also reaches past the ghost cell); static
+  Real(Int64), Allocatable :: phipad(:,:,:)
 
 Contains
 
@@ -98,6 +100,12 @@ Contains
     If ( ibm_input_mode >= 1 ) Then
        Allocate ( particle_deposit_x(nxg_global) )
        particle_deposit_x = 0d0
+    End If
+
+    If ( ibm_input_mode >= 1 ) Then
+       Call ensure_pad_axes
+       Allocate( phipad(0:nxg+1, nyg, 0:nzg+1) )
+       Call pad_field( phi, nxg, nyg, nzg, .False., .False., phipad )
     End If
 
     loaded = .False.
@@ -347,17 +355,24 @@ Contains
 
   End Subroutine pad_field
 
-  !> Refresh Upad/Vpad/Wpad from the current host U,V,W (once per step, before the particles are advanced); the padded axes are
-  !  built on the first call
+  !> Padded axes (built once)
+  Subroutine ensure_pad_axes
+
+    If ( Allocated(xpad_f) ) Return
+    Allocate( xpad_f(0:nx+1), xpad_c(0:nxg+1), zpad_f(0:nz+1), zpad_c(0:nzg+1) )
+    Call pad_axis( x,  nx,  x_global,  nx_global,  i1_global(myid),  xpad_f )
+    Call pad_axis( xg, nxg, xg_global, nxg_global, ig1_global(myid), xpad_c )
+    Call pad_axis( z,  nz,  z_global,  nz_global,  k1_global(myid),  zpad_f )
+    Call pad_axis( zg, nzg, zg_global, nzg_global, kg1_global(myid), zpad_c )
+
+  End Subroutine ensure_pad_axes
+
+  !> Refresh Upad/Vpad/Wpad from the current host U,V,W (once per step, before the particles are advanced)
   Subroutine build_velocity_pads
 
     If ( .Not. Allocated(Upad) ) Then
        Allocate( Upad(0:nx+1, nyg, 0:nzg+1), Vpad(0:nxg+1, ny, 0:nzg+1), Wpad(0:nxg+1, nyg, 0:nz+1) )
-       Allocate( xpad_f(0:nx+1), xpad_c(0:nxg+1), zpad_f(0:nz+1), zpad_c(0:nzg+1) )
-       Call pad_axis( x,  nx,  x_global,  nx_global,  i1_global(myid),  xpad_f )
-       Call pad_axis( xg, nxg, xg_global, nxg_global, ig1_global(myid), xpad_c )
-       Call pad_axis( z,  nz,  z_global,  nz_global,  k1_global(myid),  zpad_f )
-       Call pad_axis( zg, nzg, zg_global, nzg_global, kg1_global(myid), zpad_c )
+       Call ensure_pad_axes
     End If
     Call pad_field( U, nx,  nyg, nzg, .True.,  .False., Upad )
     Call pad_field( V, nxg, ny,  nzg, .False., .False., Vpad )
@@ -712,16 +727,16 @@ Contains
 
     do_remove = .False.
 
-    phi_c = interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i))
+    phi_c = interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i), p_z(i))
     If ( phi_c > 0d0 ) Return   ! still on the fluid side, nothing to do
 
     eps = 0.5d0*dxmin
-    gx = interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i)+eps, p_y(i), p_z(i)) - &
-         interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i)-eps, p_y(i), p_z(i))
-    gy = interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i)+eps, p_z(i)) - &
-         interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i)-eps, p_z(i))
-    gz = interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i)+eps) - &
-         interp3(phi, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i)-eps)
+    gx = interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i)+eps, p_y(i), p_z(i)) - &
+         interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i)-eps, p_y(i), p_z(i))
+    gy = interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i)+eps, p_z(i)) - &
+         interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i)-eps, p_z(i))
+    gz = interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i), p_z(i)+eps) - &
+         interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i), p_z(i)-eps)
     gmag = Sqrt(gx*gx + gy*gy + gz*gz)
     If ( gmag < 1d-14 ) Return   ! degenerate gradient (shouldn't happen inside a real solid); leave the particle as-is rather than divide by ~0
     gx = gx/gmag;  gy = gy/gmag;  gz = gz/gmag   ! unit normal, points from solid toward fluid

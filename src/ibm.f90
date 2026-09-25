@@ -847,6 +847,13 @@ Contains
     End Do
     Close(u)
 
+    ! the local SDF with its global offsets, to compare layouts cell by cell (ibm_ghost_diff.py --phi)
+    Write(fname,'(A,A,I4.4)') dir(1:length), '/ibm_phi.rank', myid
+    Open(newunit=u, file=Trim(fname), status='replace', access='stream', form='unformatted', action='write')
+    Write(u) nxg, nyg, nzg, ig1_global(myid), kg1_global(myid)
+    Write(u) phi
+    Close(u)
+
   End Subroutine trace_ghost_lists
 
   !> Apply ghost-cell IBM every RK sub-step in place of volume-penalisation
