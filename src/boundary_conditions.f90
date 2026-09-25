@@ -453,8 +453,8 @@ Contains
   Function outflow_convection_velocity() Result(Uc)
 
     Real(Int64) :: Uc
-    Integer(Int32) :: n2, n3, khi
-    Real(Int64) :: local_buf(2), global_buf(2), usum
+    Integer(Int32) :: n2, n3, khi, j, k
+    Real(Int64) :: local_buf(2), global_buf(2), usum, asum
     Logical :: is_first_x, is_last_x, is_first_z, is_last_z
     Integer(Int32) :: partner
 
@@ -476,16 +476,39 @@ Contains
     Uc = 0d0
     If ( .Not. is_last_x ) Return
 
-    !$acc kernels present(U)
-    usum = Sum(U(nx-1,2:n2-1,2:khi))
-    !$acc end kernels
+    ! area-weighted (cell dy*dz) so a stretched y grid does not bias the plane mean
+    usum = 0d0;  asum = 0d0
+    !$acc parallel loop collapse(2) present(U,y,z) reduction(+:usum,asum)
+    Do k = 2, khi
+       Do j = 2, n2-1
+          usum = usum + U(nx-1,j,k)*(y(j)-y(j-1))*(z(k)-z(k-1))
+          asum = asum + (y(j)-y(j-1))*(z(k)-z(k-1))
+       End Do
+    End Do
     local_buf(1) = usum
-    local_buf(2) = Real((n2-2)*(khi-1),Int64)
+    local_buf(2) = asum
 
     Call MPI_Allreduce(local_buf, global_buf, 2, MPI_real8, MPI_SUM, comm_outflow_x, ierr)
-    Uc = global_buf(1) / Max(global_buf(2), 1d0)
+    Uc = global_buf(1) / Max(global_buf(2), Tiny(1d0))
 
   End Function outflow_convection_velocity
+
+  !> Time increment covered by the current RK stage: the outflow relaxation is applied once per stage, so its Courant number must use
+  !> the stage's share of dt (8/15, 2/15, 1/3 -- summing to 1), not the full dt (which relaxed ~3x per step)
+  Function outflow_stage_dt() Result(dts)
+
+    Real(Int64) :: dts
+
+    dts = dt
+    If ( rk_step >= 1 .And. rk_step <= 3 .And. Allocated(rk_t) ) Then
+       If ( rk_step == 1 ) Then
+          dts = dt*rk_t(1)
+       Else
+          dts = dt*( rk_t(rk_step) - rk_t(rk_step-1) )
+       End If
+    End If
+
+  End Function outflow_stage_dt
 
   ! Convective outflow (x_bc_type==1): dF/dt + Uc*dF/dx = 0, explicit upwind from interior; pairs with homogeneous Dirichlet pressure BC in the DCT-IV solve; F (U,V, or W) in/out; no-op except on the rank owning the x=nx_global boundary
   Subroutine apply_outflow_bc_x(F,Uc)
@@ -502,7 +525,7 @@ Contains
 
     nlast = Size(F,1)
     ! clip to [0,1]: negative Uc (local backflow) would pull the outlet value from outside the domain, and Courant>1 is unconditionally unstable
-    courant = Min(Max(Uc,0d0)*dt/dx,1d0)
+    courant = Min(Max(Uc,0d0)*outflow_stage_dt()/dx,1d0)
 
     !$acc kernels present(F)
     F(nlast,:,:) = F(nlast,:,:) - courant*( F(nlast,:,:) - F(nlast-1,:,:) )

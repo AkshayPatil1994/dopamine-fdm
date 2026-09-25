@@ -4,6 +4,7 @@ Module poisson_gpu
   Use iso_fortran_env, Only : Int32, Int64
   Use cufft
   Use cusparse
+  Use mpi, Only : MPI_COMM_WORLD
   Use decomp, Only : decomp_poisson, decomp_spec, transpose_x_to_y, transpose_y_to_x, transpose_y_to_z, transpose_z_to_y
   Use global, Only : nxp_global, nzp_global, nyg, rhs_p, Dyy, kxx, kyy, kzz, x_bc_type, y_bc_type, pi, &
                      z_bc_type, nzm_global, Qz, sqrt_w_z, lambda_z, &
@@ -42,6 +43,14 @@ Module poisson_gpu
 
 Contains
 
+  !> Abort every rank (a bare Stop on one rank leaves the others hung in a collective and exits with status 0)
+  Subroutine gpu_abort(msg)
+    Character(*), Intent(In) :: msg
+    Integer :: ierr_a
+    Write(*,'(A)') Trim(msg)
+    Call MPI_Abort(MPI_COMM_WORLD, 1, ierr_a)
+  End Subroutine gpu_abort
+
   !> Create the batched cuFFT plans once, on first use (pencil-decomposed: one batched 1-D plan per pencil orientation)
   Subroutine gpu_poisson_init
 
@@ -61,7 +70,7 @@ Contains
        ! GPU-ported -- guarded at init time already (initialization.f90), Stop here
        ! too as a defensive check against this module being reached any other way
        If ( y_bc_type /= 1 .Or. x_bc_type /= 0 ) &
-            Stop 'ERROR: GPU_POISSON z_bc_type=1 only implemented for y_bc_type=1, x_bc_type=0 (4-wall duct, periodic x)'
+            Call gpu_abort('ERROR: GPU_POISSON z_bc_type=1 only implemented for y_bc_type=1, x_bc_type=0 (4-wall duct, periodic x)')
     End If
 
     ! kyy only exists (is Allocated) in the periodic-y case
@@ -106,7 +115,7 @@ Contains
        ierr = ierr + cufftPlanMany( plan_p3_y, 1, [nyp_l], [nyp_l], decomp_spec%ysz(1), 1, &
                                     [nyp_l], decomp_spec%ysz(1), 1, CUFFT_Z2Z, decomp_spec%ysz(1) )
     End If
-    If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil plan creation failed'
+    If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil plan creation failed')
 
     If ( z_bc_type == 1 ) Then
        Allocate( duct_c(decomp_spec%ysz(1), decomp_spec%ysz(2), decomp_spec%ysz(3)) )
@@ -152,7 +161,7 @@ Contains
     !$acc host_data use_device(dct_ext)
     ierr = cufftExecZ2Z( plan_dct_L, dct_ext, dct_ext, CUFFT_FORWARD )
     !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cuFFT DCT-IV forward exec failed'
+    If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT DCT-IV forward exec failed')
 
     ! extract DCT-IV coeffs via twiddle (S[k]=X4N(4N-2k-1), index Lx-2*imode)
     !$acc parallel loop collapse(3) present(dct_ext,poisson_x_c) private(theta,w)
@@ -198,7 +207,7 @@ Contains
     !$acc host_data use_device(dct_ext)
     ierr = cufftExecZ2Z( plan_dct_L, dct_ext, dct_ext, CUFFT_FORWARD )
     !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cuFFT DCT-IV inverse(self) exec failed'
+    If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT DCT-IV inverse(self) exec failed')
 
     !$acc parallel loop collapse(3) present(dct_ext,poisson_x_r) private(theta,w)
     Do k = 1, n3
@@ -239,7 +248,7 @@ Contains
        !$acc host_data use_device(poisson_x_r,poisson_x_c)
        ierr = cufftExecD2Z( plan_p3_x, poisson_x_r, poisson_x_c )
        !$acc end host_data
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil x forward (D2Z) exec failed'
+       If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil x forward (D2Z) exec failed')
     Else
        Call gpu_dct_x_forward
     End If
@@ -251,7 +260,7 @@ Contains
        !$acc host_data use_device(poisson_z_c)
        ierr = cufftExecZ2Z( plan_p3_z, poisson_z_c, poisson_z_c, CUFFT_FORWARD )
        !$acc end host_data
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil z forward exec failed'
+       If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil z forward exec failed')
        Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_spec )
     End If
 
@@ -274,7 +283,7 @@ Contains
        !$acc host_data use_device(poisson_y_c)
        ierr = cufftExecZ2Z( plan_p3_y, poisson_y_c(:,:,k), poisson_y_c(:,:,k), CUFFT_FORWARD )
        !$acc end host_data
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil y forward exec failed'
+       If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil y forward exec failed')
     End Do
 
     ! kxx/kyy/kzz are made persistently device-resident once in gpu_poisson_init
@@ -298,7 +307,7 @@ Contains
        !$acc host_data use_device(poisson_y_c)
        ierr = cufftExecZ2Z( plan_p3_y, poisson_y_c(:,:,k), poisson_y_c(:,:,k), CUFFT_INVERSE )
        !$acc end host_data
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil y inverse exec failed'
+       If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil y inverse exec failed')
     End Do
 
     !$acc parallel loop collapse(3) present(poisson_y_c)
@@ -324,7 +333,7 @@ Contains
        !$acc host_data use_device(poisson_z_c)
        ierr = cufftExecZ2Z( plan_p3_z, poisson_z_c, poisson_z_c, CUFFT_INVERSE )
        !$acc end host_data
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil z inverse exec failed'
+       If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil z inverse exec failed')
        Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_spec )
     End If
 
@@ -339,7 +348,7 @@ Contains
        !$acc host_data use_device(poisson_x_c,poisson_x_r)
        ierr = cufftExecZ2D( plan_p3_xi, poisson_x_c, poisson_x_r )
        !$acc end host_data
-       If ( ierr /= 0 ) Stop 'ERROR: cuFFT pencil x inverse (Z2D) exec failed'
+       If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil x inverse (Z2D) exec failed')
 
        inv_norm = 1d0 / ( Real(nxp_global,Int64) * znorm )
        n1 = decomp_poisson%xsz(1); n2 = decomp_poisson%xsz(2); n3 = decomp_poisson%xsz(3)
@@ -389,7 +398,7 @@ Contains
     gtsv_x  = (0d0,0d0)
 
     ierr = cusparseCreate( cusparse_h )
-    If ( ierr /= 0 ) Stop 'ERROR: cusparseCreate failed'
+    If ( ierr /= 0 ) Call gpu_abort('ERROR: cusparseCreate failed')
 
     ! gtsv_dl/d/du/x are pure per-call scratch (fully overwritten before being
     ! read each call in gpu_solve_tridiagonal_batched), so a one-time device
@@ -401,7 +410,7 @@ Contains
     ierr = cusparseZgtsvInterleavedBatch_bufferSizeExt( cusparse_h, CUSPARSE_ALG1, gtsv_m, &
                  gtsv_dl, gtsv_d, gtsv_du, gtsv_x, gtsv_batch, bufsize )
     !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cusparseZgtsvInterleavedBatch_bufferSizeExt failed'
+    If ( ierr /= 0 ) Call gpu_abort('ERROR: cusparseZgtsvInterleavedBatch_bufferSizeExt failed')
 
     Allocate( gtsv_buf(bufsize) )
     !$acc enter data create(gtsv_buf)
@@ -456,7 +465,7 @@ Contains
     ierr = cusparseZgtsvInterleavedBatch( cusparse_h, CUSPARSE_ALG1, gtsv_m, &
                  gtsv_dl, gtsv_d, gtsv_du, gtsv_x, gtsv_batch, gtsv_buf )
     !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cusparseZgtsvInterleavedBatch (pencil) failed'
+    If ( ierr /= 0 ) Call gpu_abort('ERROR: cusparseZgtsvInterleavedBatch (pencil) failed')
 
     !$acc parallel loop collapse(2) present(poisson_y_c,gtsv_x) private(b,ii,idx)
     Do k = 1, n3
@@ -536,7 +545,7 @@ Contains
     ierr = cusparseZgtsvInterleavedBatch( cusparse_h, CUSPARSE_ALG1, gtsv_m, &
                  gtsv_dl, gtsv_d, gtsv_du, gtsv_x, gtsv_batch, gtsv_buf )
     !$acc end host_data
-    If ( ierr /= 0 ) Stop 'ERROR: cusparseZgtsvInterleavedBatch (duct) failed'
+    If ( ierr /= 0 ) Call gpu_abort('ERROR: cusparseZgtsvInterleavedBatch (duct) failed')
 
     !$acc parallel loop collapse(2) private(b,ii,idx)
     Do m = 1, nz1

@@ -194,8 +194,8 @@ This combination requires `p_col = 1` (decompose only in $x$, via `p_row`), sinc
 coupled solve needs $z$ fully local to every rank — see [[Input Parameters §
 DOMAIN|Input-Parameters#domain]]. **GPU build**: supported, via a batched cuSPARSE
 eigenmode transform + tridiagonal solve (the device analogue of the host `Zgtsv`
-machinery above), but only combined with `x_bc_type = 0` (periodic streamwise) and
-`nprocs = 1`; the spanwise-wall-alone case (`y_bc_type = 0`) above is not yet ported to
+machinery above), but only combined with `x_bc_type = 0` (periodic streamwise; `p_col = 1` is
+forced and $x$ may be split over `p_row` ranks); the spanwise-wall-alone case (`y_bc_type = 0`) above is not yet ported to
 GPU and still needs the CPU build.
 
 ### 4.2 Solver validation — triply-periodic Taylor-Green vortex

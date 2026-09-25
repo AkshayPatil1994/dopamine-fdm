@@ -104,8 +104,8 @@ touched is still being generated for the GPU.
 
 1. Edit `input_parameters` to set domain size, grid type, physics, and IC options — see
    the [[Input Parameters Reference|Input-Parameters]] for every field. For the GPU
-   build, check the scope rules in "Building (GPU ...)" above (multi-GPU needs periodic
-   x and z).
+   build, check the scope rules in "Building (GPU ...)" above (multi-GPU supports the
+   combinations listed there; a spanwise wall alone, or a duct with `x_bc_type=1`, is CPU-only).
 2. Create the required output directories (adjust paths to match your `fileout` and
    `rsb_fileout` settings):
    ```bash

@@ -307,9 +307,9 @@ Contains
 		! Requires x_bc_type==0 and y_bc_type==0 (validated in initialization.f90).
 		If ( ic_type == 6 ) Then
 
-			kx_tgv = 2d0*pi / Lx_i
+			kx_tgv = 2d0*pi / Merge(Lx_i - dxmin, Lx_i, x_bc_type == 0)   ! periodic period is L - d (last point duplicates the first)
 			ky_tgv = 2d0*pi / Ly_i
-			kz_tgv = 2d0*pi / Lz_i
+			kz_tgv = 2d0*pi / Merge(Lz_i - dzmin, Lz_i, z_bc_type == 0)
 
 			If ( myid == 0 ) Write(*,'(A)') '   IC = Taylor-Green Vortex (ic_type=6), Utarget used as amplitude U0'
 
@@ -443,8 +443,8 @@ Contains
 		! ---- Reichardt profile parameters for channel_perturb IC --------
 		C_ch   = 5.17d0
 		k_ch   = 0.41d0
-		llx_ch = Lx_i
-		llz_ch = Lz_i
+		llx_ch = Merge(Lx_i - dxmin, Lx_i, x_bc_type == 0)   ! periodic period is L - dx
+		llz_ch = Merge(Lz_i - dzmin, Lz_i, z_bc_type == 0)
 		alpha_ls = 3.0d0  * 2.0d0*pi / llx_ch
 		beta_ls  = 4.0d0  * 2.0d0*pi / llz_ch
 		alpha_ss = 17.0d0 * 2.0d0*pi / llx_ch

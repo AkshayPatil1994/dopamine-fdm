@@ -52,7 +52,7 @@ Contains
     Integer(Int32) :: i, j, k
     Logical        :: is_first, is_last
     Integer(Int32) :: partner
-    Real   (Int64) :: xbuf(nyg,nzg), xbuf2(nyg,nzg)
+    Real   (Int64) :: xbuf2(nyg,nzg), xbuf3(nyg,nzg,2)
     Real   (Int64) :: dx_c, dy_c, dz_c          ! local filter widths (IBM pass only)
     Real   (Int64) :: dx2, dz2                  ! dx^2 (uniform) and dz_c^2 (per k, z may be stretched)
     Real   (Int64) :: inv_dx                    ! 1/dx
@@ -282,21 +282,28 @@ Contains
     !$acc update host(nu_t_)
 #endif
     Call x_periodic_partner(is_first, is_last, partner)
-    If ( is_first .And. is_last ) Then
-       nu_t_(1,  :,:) = nu_t_(nxg-1,:,:)
-       nu_t_(nxg,:,:) = nu_t_(2,    :,:)
-    Else If ( is_first ) Then
-       xbuf = nu_t_(2,:,:)
-       Call Mpi_sendrecv(xbuf, nyg*nzg, Mpi_real8, partner, 13, xbuf2, nyg*nzg, Mpi_real8, partner, 14, &
-                         MPI_COMM_WORLD, istat, ierr)
-       nu_t_(1,:,:) = xbuf2
-    Else If ( is_last ) Then
-       xbuf = nu_t_(nxg-1,:,:)
-       Call Mpi_sendrecv(xbuf, nyg*nzg, Mpi_real8, partner, 14, xbuf2, nyg*nzg, Mpi_real8, partner, 13, &
-                         MPI_COMM_WORLD, istat, ierr)
-       nu_t_(nxg,:,:) = xbuf2
+    If ( x_bc_type == 0 ) Then
+       ! periodic: ghost 1 <- cell nxg-2, cells nxg-1,nxg <- 2,3 (cell nxg-1 duplicates cell 2), as apply_periodic_bc_x does for cell-centred fields
+       If ( is_first .And. is_last ) Then
+          nu_t_(1,    :,:) = nu_t_(nxg-2,:,:)
+          nu_t_(nxg-1,:,:) = nu_t_(2,    :,:)
+          nu_t_(nxg,  :,:) = nu_t_(3,    :,:)
+       Else If ( is_first ) Then
+          xbuf3(:,:,1) = nu_t_(2,:,:);  xbuf3(:,:,2) = nu_t_(3,:,:)
+          Call Mpi_sendrecv(xbuf3, 2*nyg*nzg, Mpi_real8, partner, 13, xbuf2, nyg*nzg, Mpi_real8, partner, 14, &
+                            MPI_COMM_WORLD, istat, ierr)
+          nu_t_(1,:,:) = xbuf2
+       Else If ( is_last ) Then
+          xbuf2 = nu_t_(nxg-2,:,:)
+          Call Mpi_sendrecv(xbuf2, nyg*nzg, Mpi_real8, partner, 14, xbuf3, 2*nyg*nzg, Mpi_real8, partner, 13, &
+                            MPI_COMM_WORLD, istat, ierr)
+          nu_t_(nxg-1,:,:) = xbuf3(:,:,1);  nu_t_(nxg,:,:) = xbuf3(:,:,2)
+       End If
+    Else
+       ! inflow/outflow: zero-gradient at the domain edges (interior-seam planes were filled by the exchange above)
+       If ( is_first ) nu_t_(1,  :,:) = nu_t_(2,    :,:)
+       If ( is_last  ) nu_t_(nxg,:,:) = nu_t_(nxg-1,:,:)
     End If
-
     ! Ring exchange for intermediate ranks (host-only); rank-0/rank-(nprocs-1) wrap handled below.
     Call update_ghost_interior_planes_nut(nu_t_)
 
@@ -352,13 +359,21 @@ Contains
     ! x seam planes from the x-neighbour, then the periodic wrap (single-plane, cell-centred)
     Call update_ghost_interior_planes_x(nu_t_, 2)
     Call x_periodic_partner(is_first, is_last, partner)
-    If ( is_first .And. is_last ) Then
-       !$acc kernels present(nu_t_)
-       nu_t_(1,  :,:) = nu_t_(nxg-1,:,:)
-       nu_t_(nxg,:,:) = nu_t_(2,    :,:)
-       !$acc end kernels
+    If ( x_bc_type == 0 ) Then
+       If ( is_first .And. is_last ) Then
+          !$acc kernels present(nu_t_)
+          nu_t_(1,    :,:) = nu_t_(nxg-2,:,:)
+          nu_t_(nxg-1,:,:) = nu_t_(2,    :,:)
+          nu_t_(nxg,  :,:) = nu_t_(3,    :,:)
+          !$acc end kernels
+       Else
+          Call gpu_periodic_wrap(nu_t_, .True., 2, nxg, is_first, is_last, partner, 13)
+       End If
     Else
-       Call gpu_periodic_wrap(nu_t_, .True., 1, nxg, is_first, is_last, partner, 13)
+       !$acc kernels present(nu_t_)
+       If ( is_first ) nu_t_(1,  :,:) = nu_t_(2,    :,:)
+       If ( is_last  ) nu_t_(nxg,:,:) = nu_t_(nxg-1,:,:)
+       !$acc end kernels
     End If
 
     ! z seam planes, then z periodic wrap or wall zeroing

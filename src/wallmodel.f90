@@ -407,6 +407,9 @@ Contains
     End Do
     !$acc end parallel loop
 
+    ! the EQWM values just written into ghost cells next to a rank seam are stale in the neighbour's halo copy until refreshed
+    If ( nprocs > 1 ) Call exchange_velocity_halos
+
   End Subroutine compute_ibm_wall_model
 
   !  Flat-wall equilibrium wall model — local per-point EQWM

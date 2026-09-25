@@ -170,6 +170,13 @@ Module synthetic_eddy_method
 
 Contains
 
+  !> Abort all ranks on a fatal input error (a bare Stop on a rank subset hangs the others and exits with status 0)
+  Subroutine sem_abort(msg)
+    Character(*), Intent(In) :: msg
+    Write(*,'(A)') Trim(msg)
+    Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+  End Subroutine sem_abort
+
   !> Minimum grid spacing over the whole domain (x,y,z faces); resolvability floor for the SEM/TI-rescale auto-tuning heuristics
   Real(Int64) Function min_grid_spacing() Result(dmin)
 
@@ -502,11 +509,11 @@ Contains
     Character(8)   :: comps_str
 
     If ( Len_trim(inflow_recycle_file) == 0 ) &
-         Stop 'ERROR: inflow_type=2 (recycled inflow) requires inflow_recycle_file to be set'
+         Call sem_abort('ERROR: inflow_type=2 (recycled inflow) requires inflow_recycle_file to be set')
 
     Write(fname,'(A,A)') Trim(inflow_recycle_file), '_meta.txt'
     Open(newunit=u_meta, file=Trim(fname), form='formatted', status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file meta (expected <inflow_recycle_file>_meta.txt)'
+    If ( ios /= 0 ) Call sem_abort('ERROR: cannot open inflow_recycle_file meta (expected <inflow_recycle_file>_meta.txt)')
 
     ncomp = 0; n1 = 0; n1_v = 0; n2 = 0; nsnaps = 0; comps_str = ''
     v_native = .False.
@@ -526,14 +533,14 @@ Contains
        Case ('dir')
           line = Adjustl(line(eqpos+1:))
           If ( line(1:1) /= 'x' .And. line(1:1) /= 'X' ) &
-               Stop 'ERROR: inflow_recycle_file meta is not an x-normal slice (dir/=x)'
+               Call sem_abort('ERROR: inflow_recycle_file meta is not an x-normal slice (dir/=x)')
        End Select
     End Do
     Close(u_meta)
 
     If ( ncomp < 1 .Or. n1 < 1 .Or. n2 < 1 .Or. nsnaps < 1 ) &
-         Stop 'ERROR: inflow_recycle_file meta is incomplete or malformed (expected ncomp/n1/n2/comps/nsnaps, ' // &
-         'as written by probe_output.f90''s slice output or dopamine-ESEM)'
+         Call sem_abort('ERROR: inflow_recycle_file meta is incomplete or malformed (expected ncomp/n1/n2/comps/nsnaps, ' // &
+         'as written by probe_output.f90''s slice output or dopamine-ESEM)')
 
     If ( .Not. v_native ) Then
        n1_v = n1   ! legacy/generic donor: V shares U/W's cell-centre grid on disk
@@ -552,8 +559,8 @@ Contains
     colW = Merge(1,0, Index(comps_str,'W') > 0)
     colT = Merge(1,0, Index(comps_str,'T') > 0)
     colC = Merge(1,0, Index(comps_str,'C') > 0)
-    If ( colU == 0 .Or. colV == 0 .Or. colW == 0 ) Stop &
-         'ERROR: inflow_recycle_file must contain U,V,W (set slice_comps="UVW..." on the donor run)'
+    If ( colU == 0 .Or. colV == 0 .Or. colW == 0 ) Call sem_abort(&
+         'ERROR: inflow_recycle_file must contain U,V,W (set slice_comps="UVW..." on the donor run)')
 
   End Subroutine read_recycle_meta
 
@@ -567,8 +574,8 @@ Contains
 
     Call read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native)
 
-    If ( n1 /= nym_global ) Stop 'ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global'
-    If ( n2 /= nzm_global ) Stop 'ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global'
+    If ( n1 /= nym_global ) Call sem_abort('ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global')
+    If ( n2 /= nzm_global ) Call sem_abort('ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global')
 
     n_profile = n1
     Allocate( prof_y(n_profile), prof_U(n_profile) )
@@ -584,7 +591,7 @@ Contains
        Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
        Open(newunit=unit_in, file=Trim(fname), access='stream', form='unformatted', &
             status='old', action='read', iostat=ios)
-       If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)'
+       If ( ios /= 0 ) Call sem_abort('ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)')
        Read(unit_in) frame_U   ! U is always the first block of the first frame
        Close(unit_in)
        Do jy = 1, n1
@@ -617,23 +624,23 @@ Contains
     Call read_recycle_meta(rec_ncomp, rec_n1, rec_n1_v, rec_n2_global, rec_nsnaps, &
          rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_v_native)
 
-    If ( rec_n1 /= nym_global ) Stop 'ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global'
+    If ( rec_n1 /= nym_global ) Call sem_abort('ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global')
     If ( rec_v_native ) Then
        If ( rec_n1_v /= ny_global ) &
-            Stop 'ERROR: inflow_recycle_file n1_V (V''s own y-face count) does not match this run''s ny_global'
+            Call sem_abort('ERROR: inflow_recycle_file n1_V (V''s own y-face count) does not match this run''s ny_global')
     End If
-    If ( rec_n2_global /= nzm_global ) Stop 'ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global'
-    If ( rec_nsnaps < 2 ) Stop 'ERROR: inflow_recycle_file must contain at least 2 snapshots to interpolate in time'
-    If ( boussinesq_flag >= 1 .And. rec_col_T == 0 ) Stop 'ERROR: boussinesq_flag>=1 with ' // &
-         'inflow_type=2 requires T in the donor slice (donor slice_comps must include ''T'')'
-    If ( sediment_flag >= 1 .And. rec_col_C == 0 ) Stop 'ERROR: sediment_flag>=1 with ' // &
-         'inflow_type=2 requires C in the donor slice (donor slice_comps must include ''C'')'
+    If ( rec_n2_global /= nzm_global ) Call sem_abort('ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global')
+    If ( rec_nsnaps < 2 ) Call sem_abort('ERROR: inflow_recycle_file must contain at least 2 snapshots to interpolate in time')
+    If ( boussinesq_flag >= 1 .And. rec_col_T == 0 ) Call sem_abort('ERROR: boussinesq_flag>=1 with ' // &
+         'inflow_type=2 requires T in the donor slice (donor slice_comps must include ''T'')')
+    If ( sediment_flag >= 1 .And. rec_col_C == 0 ) Call sem_abort('ERROR: sediment_flag>=1 with ' // &
+         'inflow_type=2 requires C in the donor slice (donor slice_comps must include ''C'')')
 
     Allocate( rec_times(rec_nsnaps) )
     Write(fname,'(A,A)') Trim(inflow_recycle_file), '_times.bin'
     Open(newunit=u_times, file=Trim(fname), access='stream', form='unformatted', &
          status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file times (expected <inflow_recycle_file>_times.bin)'
+    If ( ios /= 0 ) Call sem_abort('ERROR: cannot open inflow_recycle_file times (expected <inflow_recycle_file>_times.bin)')
     Read(u_times) rec_times
     Close(u_times)
 
@@ -655,7 +662,7 @@ Contains
     Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
     Open(newunit=rec_unit, file=Trim(fname), access='stream', form='unformatted', &
          status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)'
+    If ( ios /= 0 ) Call sem_abort('ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)')
     rec_active = .True.
 
     Allocate( rec_lo_U(rec_n1,   rec_k2-rec_k1+1) );  Allocate( rec_hi_U(rec_n1,   rec_k2-rec_k1+1) )

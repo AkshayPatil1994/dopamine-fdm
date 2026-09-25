@@ -6,7 +6,7 @@ Module scalar_transport
   Use mpi
   Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner, z_periodic_partner
   Use boundary_conditions, Only : apply_periodic_bc_z, apply_periodic_bc_x, update_ghost_interior_planes_x, &
-                                  apply_inflow_bc_scalar_x_C, outflow_convection_velocity
+                                  apply_inflow_bc_scalar_x_C, outflow_convection_velocity, outflow_stage_dt
 
   Implicit None
 
@@ -438,7 +438,7 @@ Contains
        Call x_periodic_partner(is_first_x, is_last_x, partner_x)
        Call apply_inflow_bc_scalar_x_C(C_)
        Uc = outflow_convection_velocity()
-       courant = Min(Max(Uc,0d0)*dt/dx, 1d0)
+       courant = Min(Max(Uc,0d0)*outflow_stage_dt()/dx, 1d0)
        If ( is_last_x ) C_(nxg,:,:) = C_(nxg,:,:) - courant*( C_(nxg,:,:) - C_(nxg-1,:,:) )
     End If
 

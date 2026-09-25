@@ -124,13 +124,18 @@ Contains
   Subroutine seed_particles_fresh
 
     Integer(Int32) :: i
-    Real   (Int64) :: xp, yp, zp, rx, ry, rz
+    Real   (Int64) :: xp, yp, zp, rx, ry, rz, xmax_s, zmax_s
+
+    ! a periodic direction has period Lxp = Lx - dx: seeding into the duplicate last cell would double its weight
+    xmax_s = particle_seed_xmax;  zmax_s = particle_seed_zmax
+    If ( bcx_resolved == 0 ) xmax_s = Min( xmax_s, x_global(1) + Lxp )
+    If ( bcz_resolved == 0 ) zmax_s = Min( zmax_s, z_global(1) + Lzp )
 
     Do i = 1, n_particles_init
        Call id_uniform(i - 1, particle_seed_seed, rx, ry, rz)
-       xp = particle_seed_xmin + rx*(particle_seed_xmax - particle_seed_xmin)
+       xp = particle_seed_xmin + rx*(xmax_s - particle_seed_xmin)
        yp = particle_seed_ymin + ry*(particle_seed_ymax - particle_seed_ymin)
-       zp = particle_seed_zmin + rz*(particle_seed_zmax - particle_seed_zmin)
+       zp = particle_seed_zmin + rz*(zmax_s - particle_seed_zmin)
        If ( owns_particle(xp, zp) ) Then
           Call ensure_capacity(n_particles_local + 1)
           n_particles_local = n_particles_local + 1
@@ -759,12 +764,12 @@ Contains
        Call x_halo_neighbors(up, down)
        is_first_m = is_first_x_m;  is_last_m = is_last_x_m;  partner = partner_x_m
        periodic = ( bcx_resolved == 0 )
-       domain_len = x_global(nx_global) - x_global(1)
+       domain_len = Lxp   ! periodic period (the last cell duplicates the first): Lx - dx
     Else
        Call z_halo_neighbors(up, down)
        is_first_m = is_first_z_m;  is_last_m = is_last_z_m;  partner = partner_z_m
        periodic = ( bcz_resolved == 0 )
-       domain_len = z_global(nz_global) - z_global(1)
+       domain_len = Lzp   ! periodic period: Lz - dz
     End If
     If ( is_last_m  .And. periodic ) up   = partner
     If ( is_first_m .And. periodic ) down = partner
@@ -782,7 +787,7 @@ Contains
        End If
 
        If ( is_last_m ) Then
-          goes_up = ( periodic .And. pos >= x_edge_hi(dir) )
+          goes_up = ( periodic .And. pos >= x_edge_lo(dir) + domain_len )
        Else
           goes_up = ( pos >= xg_edge_hi(dir) )
        End If
@@ -981,7 +986,7 @@ Contains
        new_id = next_particle_id + i - 1
        Call id_uniform(new_id, 1, r1, r2)
        yp = particle_seed_ymin + r1*(particle_seed_ymax - particle_seed_ymin)
-       zp = z_global(1) + r2*(z_global(nz_global) - z_global(1))
+       zp = z_global(1) + r2*Merge(Lzp, z_global(nz_global) - z_global(1), bcz_resolved == 0)
        If ( owns_particle(xp, zp) ) Then
           Call ensure_capacity(n_particles_local + 1)
           n_particles_local = n_particles_local + 1

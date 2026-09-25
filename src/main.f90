@@ -43,6 +43,7 @@ Program dopamine
   ! uninterrupted one.
   If ( restart == 0 ) Call apply_boundary_conditions(after_projection=.True.)
   If ( sediment_flag >= 1 .And. ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
+  If ( boussinesq_flag >= 1 .And. ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
 
   ! temporal loop: nsteps>0 runs a fixed step count, nsteps<0 runs until t >= sim_end_time
   istep = 0

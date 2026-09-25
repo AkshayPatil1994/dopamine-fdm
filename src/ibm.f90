@@ -1217,6 +1217,8 @@ Contains
        End If
     End Do
     !$acc end parallel loop
+    ! host consumers (snapshots, restart, probes, particles) read the host copy
+    !$acc update host(T_)
 
   End Subroutine apply_ghost_cell_ibm_scalar
 
@@ -1235,6 +1237,7 @@ Contains
        C_(i,j,k) = trilinear_interp_p(Cext, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ee)
     End Do
     !$acc end parallel loop
+    !$acc update host(C_)
 
   End Subroutine apply_ghost_cell_ibm_scalar_noflux
 
@@ -1248,6 +1251,18 @@ Contains
     ibm_Fz_acc = 0d0
   End Subroutine zero_ibm_stage_accumulators
 
+  !> Flags for the periodic duplicate cell (cell nxg-1 / nzg-1 on the last rank repeats the first cell): force sums skip it so
+  !  the wrapped image of a boundary cell is not counted twice
+  Subroutine dup_cell_flags(skip_x, skip_z)
+    Logical, Intent(Out) :: skip_x, skip_z
+    Logical        :: is_first, is_last
+    Integer(Int32) :: partner
+    Call x_periodic_partner(is_first, is_last, partner)
+    skip_x = ( x_bc_type == 0 .And. is_last )
+    Call z_periodic_partner(is_first, is_last, partner)
+    skip_z = ( z_bc_type == 0 .And. is_last )
+  End Subroutine dup_cell_flags
+
   !> Accumulate IBM momentum exchange from one IBM application (pre/post state)
   Subroutine accumulate_ibm_stage_impulse(U_pre_, V_pre_, W_pre_, U_, V_, W_)
 
@@ -1257,21 +1272,28 @@ Contains
 
     Integer(Int32) :: n, i, j, k
     Real   (Int64) :: dV
+    Logical        :: skip_x, skip_z
+
+    Call dup_cell_flags(skip_x, skip_z)
 
     Do n = 1, n_ghost_u
        i = ghost_u_idx(1,n);  j = ghost_u_idx(2,n);  k = ghost_u_idx(3,n)
+       If ( skip_z .And. k == nzg-1 ) Cycle
        dV = (x(i+1)-x(i-1))*0.5d0 * (y(j)-y(j-1)) * (z(k)-z(k-1))
        ibm_Fx_acc = ibm_Fx_acc - (U_(i,j,k) - U_pre_(i,j,k)) * dV
     End Do
 
     Do n = 1, n_ghost_v
        i = ghost_v_idx(1,n);  j = ghost_v_idx(2,n);  k = ghost_v_idx(3,n)
+       If ( skip_x .And. i == nxg-1 ) Cycle
+       If ( skip_z .And. k == nzg-1 ) Cycle
        dV = (xg(i+1)-xg(i)) * (y(j+1)-y(j-1))*0.5d0 * (z(k)-z(k-1))
        ibm_Fy_acc = ibm_Fy_acc - (V_(i,j,k) - V_pre_(i,j,k)) * dV
     End Do
 
     Do n = 1, n_ghost_w
        i = ghost_w_idx(1,n);  j = ghost_w_idx(2,n);  k = ghost_w_idx(3,n)
+       If ( skip_x .And. i == nxg-1 ) Cycle
        dV = (xg(i+1)-xg(i)) * (y(j)-y(j-1)) * (z(k+1)-z(k-1))*0.5d0
        ibm_Fz_acc = ibm_Fz_acc - (W_(i,j,k) - W_pre_(i,j,k)) * dV
     End Do
@@ -1519,6 +1541,8 @@ Contains
     ! depth: image distance ~ max(2 dGB, n_image_layers*dymin) plus the trilinear corner and one cell of margin
     dmin_h = Min( x_global(2)-x_global(1), z_global(2)-z_global(1) )
     Eloc   = 2 + Ceiling( Real(n_image_layers,8)*dymin / dmin_h )
+    If ( Eloc > 8 .And. myid == 0 ) Write(*,'(A,I0,A)') ' WARNING: IBM image-point halo depth ', Eloc, &
+         ' exceeds the cap of 8 cells; farther image points will be dropped (reduce n_image_layers)'
     Eloc   = Min( Max(Eloc,2), 8 )
     Call MPI_Allreduce(Eloc, Emax, 1, MPI_INTEGER, MPI_MAX, MPI_COMM_WORLD, ierr)
     ibm_E = Emax
@@ -1529,6 +1553,8 @@ Contains
             'for its image-point stencils, but the thinnest slab has ', wmin_g, '. Use fewer ranks (or a different p_row/p_col).'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
+    If ( nprocs == 1 .And. wmin_g < ibm_E .And. myid == 0 ) Write(*,'(A,I0,A,I0,A)') &
+         ' WARNING: IBM halo depth ', ibm_E, ' exceeds the domain interior (', wmin_g, ' cells)'
 
     Call x_halo_neighbors(up, down)
     Call x_periodic_partner(is_first, is_last, partner)
@@ -1819,6 +1845,7 @@ Contains
     Real   (Int64) :: dV, dA, U_I, p_I, nu_t_B, dGB, dIB
     Real   (Int64) :: lFx_pres, lFy_pres, lFz_pres
     Real   (Int64) :: lFx_visc, lFy_visc, lFz_visc
+    Logical        :: skip_x, skip_z
 
     Real   (Int64), Allocatable :: Ue(:,:,:), Ve(:,:,:), We(:,:,:), Pe(:,:,:)
 
@@ -1830,6 +1857,7 @@ Contains
     Call pad_field( W_, nxg, nyg, nz,  .False., .True.,  ibm_E, We )
     Call pad_field( P,  nxg, nyg, nzg, .False., .False., ibm_E, Pe )
 
+    Call dup_cell_flags(skip_x, skip_z)
     lFx_pres=0d0; lFy_pres=0d0; lFz_pres=0d0
     lFx_visc=0d0; lFy_visc=0d0; lFz_visc=0d0
 
@@ -1842,6 +1870,8 @@ Contains
     !--- Method 2 pressure: cell-centre ghost list (one sample per interface cell) ---
     Do n = 1, n_ghost_cc
        i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)
+       If ( skip_x .And. i == nxg-1 ) Cycle
+       If ( skip_z .And. k == nzg-1 ) Cycle
        dGB = ghost_cc_dGB(n)
        dV  = (xg(i+1)-xg(i-1))*0.5d0 * (yg(j+1)-yg(j-1))*0.5d0 * (zg(k+1)-zg(k-1))*0.5d0
        dA  = dV / Max(dGB, 1d-14)
@@ -1857,6 +1887,7 @@ Contains
     ! unclamped mirror 2*dGB; the gradient must divide by the real B-to-I distance (see ghost_*_dGI)
     Do n = 1, n_ghost_u
        i = ghost_u_idx(1,n);  j = ghost_u_idx(2,n);  k = ghost_u_idx(3,n)
+       If ( skip_z .And. k == nzg-1 ) Cycle
        dGB = ghost_u_dGB(n)
        dIB = ghost_u_dGI(n) - dGB
        dA  = (y(j)-y(j-1)) * (z(k)-z(k-1))             ! y-z face area
@@ -1867,6 +1898,8 @@ Contains
 
     Do n = 1, n_ghost_v
        i = ghost_v_idx(1,n);  j = ghost_v_idx(2,n);  k = ghost_v_idx(3,n)
+       If ( skip_x .And. i == nxg-1 ) Cycle
+       If ( skip_z .And. k == nzg-1 ) Cycle
        dGB = ghost_v_dGB(n)
        dIB = ghost_v_dGI(n) - dGB
        dA  = (xg(i+1)-xg(i)) * (z(k)-z(k-1))           ! x-z face area
@@ -1877,6 +1910,7 @@ Contains
 
     Do n = 1, n_ghost_w
        i = ghost_w_idx(1,n);  j = ghost_w_idx(2,n);  k = ghost_w_idx(3,n)
+       If ( skip_x .And. i == nxg-1 ) Cycle
        dGB = ghost_w_dGB(n)
        dIB = ghost_w_dGI(n) - dGB
        dA  = (xg(i+1)-xg(i)) * (y(j)-y(j-1))           ! x-y face area

@@ -1,6 +1,6 @@
 # dopamine-fdm
 
-A finite-difference Navier–Stokes solver for turbulent channel and open-channel flows, with immersed-boundary (IBM) rough walls, wall models, SGS modelling, an exact Reynolds-stress budget module, and a UAV actuator-disk rotor model. MPI-parallel (2decomp&fft pencils), with an optional single-GPU OpenACC build.
+A finite-difference Navier–Stokes solver for turbulent channel and open-channel flows, with immersed-boundary (IBM) rough walls, wall models, SGS modelling, an exact Reynolds-stress budget module, and a UAV actuator-disk rotor model. MPI-parallel (2decomp&fft pencils), with an optional single- or multi-GPU OpenACC build.
 
 |  |  |
 |:--:|:--:|

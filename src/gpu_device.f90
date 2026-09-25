@@ -48,7 +48,9 @@ Contains
   !> poisson_gpu.f90) -- no separate cudaSetDevice call is needed.
   Subroutine assign_gpu_device
 
-    Integer :: local_comm, local_rank, local_nprocs, ndevices, device_id, ierr_local
+    Integer :: local_comm, local_rank, local_nprocs, ndevices, device_id, ierr_local, nprocs_w
+    Character(16) :: cuda_env
+    Integer :: env_len, env_stat
 
     Call MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, &
                               MPI_INFO_NULL, local_comm, ierr_local)
@@ -56,8 +58,10 @@ Contains
     Call MPI_Comm_size(local_comm, local_nprocs, ierr_local)
 
     ndevices = acc_get_num_devices(acc_device_nvidia)
-    If ( ndevices < 1 ) Stop 'ERROR: ENABLE_GPU build found no NVIDIA GPU visible to this rank ' // &
-                             '(check CUDA_VISIBLE_DEVICES and that the node has a working driver)'
+    If ( ndevices < 1 ) Then
+       Write(*,'(A)') 'ERROR: ENABLE_GPU build found no NVIDIA GPU visible to this rank (check CUDA_VISIBLE_DEVICES and driver)'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr_local)
+    End If
 
     device_id = Mod(local_rank, ndevices)
     ! (re)binding after MPI_Init is only needed when the launcher gave no local-rank variable; when
@@ -74,6 +78,19 @@ Contains
          ' of ', local_nprocs, ') -> device ', device_id
 
     Call MPI_Comm_free(local_comm, ierr_local)
+
+    ! device pointers are handed to MPI (host_data use_device in the halo/transposes): without CUDA-aware MPI this crashes or
+    ! silently corrupts. No portable Fortran query exists, so warn when no launcher/MCA hint of CUDA support is visible.
+    Call MPI_Comm_size(MPI_COMM_WORLD, nprocs_w, ierr_local)
+    If ( nprocs_w > 1 .And. myid == 0 ) Then
+       cuda_env = ''
+       Call Get_environment_variable('OMPI_MCA_opal_cuda_support', cuda_env, env_len, env_stat)
+       If ( env_stat /= 0 ) Call Get_environment_variable('MV2_USE_CUDA', cuda_env, env_len, env_stat)
+       If ( env_stat /= 0 ) Call Get_environment_variable('MPICH_GPU_SUPPORT_ENABLED', cuda_env, env_len, env_stat)
+       If ( env_stat /= 0 ) Call Get_environment_variable('UCX_TLS', cuda_env, env_len, env_stat)
+       If ( env_stat /= 0 ) Write(*,'(A)') ' NOTE: multi-rank GPU run; make sure MPI is CUDA-aware (e.g. Open MPI built with ' // &
+            'CUDA, or OMPI_MCA_opal_cuda_support=true), since device buffers are passed to MPI directly'
+    End If
 
   End Subroutine assign_gpu_device
 

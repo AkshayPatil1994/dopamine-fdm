@@ -400,6 +400,7 @@ add_test(NAME verify_inflow_opt
 #   uav_small      chan_les_small + static UAV actuator disk on the np=2 rank seam (radial loading + swirl)
 #   uavpath_small  same, disk following a path across the seam with the tilt filter
 #   ibm_small      LES channel + ghost-cell IBM sphere (synthetic SDF_in, 34x17x34) straddling the rank seam
+#   ibm_wm_small   ibm_small with the IBM wall model on (ibm_wall_model_flag=1)
 #   rsb_small      chan_les_small + Reynolds-stress-budget statistics (stats/rsb_*.bin compared too)
 # The tests also compare the final snapshot field-by-field, ghost layers excluded (compare_monitor.py --fields),
 # and restart == uninterrupted (restart_check.py), not just the monitor columns. nsave=nsteps in every case.
@@ -412,7 +413,7 @@ set(CPU_REFERENCE_MPIRUN "" CACHE FILEPATH "mpirun matching CPU_REFERENCE_EXE (d
 set(TEST_LD_LIBRARY_PATH "" CACHE STRING "LD_LIBRARY_PATH prepended for parity tests (e.g. a matching user-space libcuda)")
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small rsb_small)
+    foreach(case tgv_small chan_small chan_les_small duct_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small rsb_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE} --fields --field-tol 1e-8)

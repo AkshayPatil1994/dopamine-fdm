@@ -5,7 +5,8 @@ Module thermal_transport
   Use global
   Use mpi
   Use decomp, Only : x_periodic_partner
-  Use boundary_conditions, Only : update_ghost_interior_planes_x, apply_inflow_bc_scalar_x, outflow_convection_velocity, &
+  Use boundary_conditions, Only : update_ghost_interior_planes_x, apply_inflow_bc_scalar_x, &
+                                  outflow_convection_velocity, outflow_stage_dt, &
                                   apply_Robin_bc_y_scalar_lo, apply_Robin_bc_y_scalar_hi
   Use scalar_transport,    Only : compute_rhs_scalar_core, finish_scalar_halos
 
@@ -45,7 +46,7 @@ Contains
        Call x_periodic_partner(is_first_x, is_last_x, partner_x)
        Call apply_inflow_bc_scalar_x(T_)
        Uc = outflow_convection_velocity()   ! scalar-only, safe to call from host code (see boundary_conditions.f90)
-       courant = Min(Max(Uc,0d0)*dt/dx, 1d0)
+       courant = Min(Max(Uc,0d0)*outflow_stage_dt()/dx, 1d0)
        If ( is_last_x ) T_(nxg,:,:) = T_(nxg,:,:) - courant*( T_(nxg,:,:) - T_(nxg-1,:,:) )
     End If
 
