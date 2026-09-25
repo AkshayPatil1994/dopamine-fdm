@@ -17,6 +17,10 @@ Module ibm
   ! Minimum number of fluid-side cells to look ahead for image point
   Integer(Int32), Parameter :: n_image_layers = 2
 
+  ! Ghost cells whose image stencil is not usable, counted while building the lists (1=U, 2=V, 3=W, 4=cell-centre):
+  ! stencil clipping solid (concave corner) vs image outside this rank's local array (domain edge, or across a rank seam)
+  Integer(Int32) :: ibm_drop_solid(4) = 0, ibm_drop_outside(4) = 0
+
   ! Accumulators for Method 1 IBM force (summed over 6 IBM applications/step)
   Real(Int64) :: ibm_Fx_acc = 0d0
   Real(Int64) :: ibm_Fy_acc = 0d0
@@ -48,6 +52,19 @@ Contains
        Write(*,*) 'IBM: ghost cells (rank 0) — U:', n_ghost_u, ' V:', n_ghost_v, ' W:', n_ghost_w, &
                   ' CC:', n_ghost_cc
     End If
+
+    ! Dropped ghost cells (no boundary condition applied there), summed over ranks; 'outside' > 0 for np>1 beyond what np=1 shows is a rank-seam loss
+    Block
+      Integer(Int32) :: ds(4), dout(4)
+      Call MPI_Reduce(ibm_drop_solid,   ds,   4, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+      Call MPI_Reduce(ibm_drop_outside, dout, 4, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+      If ( myid==0 ) Then
+         Write(*,'(A,4(I0,1X))') ' IBM: dropped ghost cells (GLOBAL) U,V,W,CC, image clips solid: ', ds
+         Write(*,'(A,4(I0,1X))') ' IBM: dropped ghost cells (GLOBAL) U,V,W,CC, image outside local array: ', dout
+      End If
+    End Block
+
+    Call trace_ghost_lists
 
     ! Global sum across all ranks for diagnostic
     Call MPI_Reduce(n_ghost_u, n_ghost_u_global, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
@@ -321,9 +338,11 @@ Contains
                          ng = ng + 1
                       Else
                          nd = nd + 1   ! image stencil clips solid — concave corner
+                         ibm_drop_solid(1) = ibm_drop_solid(1) + 1
                       End If
                    Else
                       nd = nd + 1      ! image outside domain bounds
+                      ibm_drop_outside(1) = ibm_drop_outside(1) + 1
                    End If
                 End If
              End If
@@ -475,9 +494,11 @@ Contains
                          ng = ng + 1
                       Else
                          nd = nd + 1   ! image stencil clips solid — concave corner
+                         ibm_drop_solid(2) = ibm_drop_solid(2) + 1
                       End If
                    Else
                       nd = nd + 1      ! image outside domain bounds
+                      ibm_drop_outside(2) = ibm_drop_outside(2) + 1
                    End If
                 End If
              End If
@@ -607,9 +628,11 @@ Contains
                          ng = ng + 1
                       Else
                          nd = nd + 1   ! image stencil clips solid — concave corner
+                         ibm_drop_solid(3) = ibm_drop_solid(3) + 1
                       End If
                    Else
                       nd = nd + 1      ! image outside domain bounds
+                      ibm_drop_outside(3) = ibm_drop_outside(3) + 1
                    End If
                 End If
              End If
@@ -702,6 +725,35 @@ Contains
     End Do
 
   End Subroutine build_ghost_list_w
+
+  !> Debug (DOPAMINE_TRACE_DIR set, see debug_trace.f90): write each rank's ghost-cell lists as global (i,j,k) so that
+  !  layouts can be compared cell by cell (tests/regression/ibm_ghost_diff.py)
+  Subroutine trace_ghost_lists
+
+    Character(Len=1024) :: dir, fname
+    Integer(Int32)      :: length, stat, n, u
+    Integer(Int32)      :: gi, gk
+
+    Call Get_Environment_Variable('DOPAMINE_TRACE_DIR', dir, length, stat)
+    If ( stat /= 0 .Or. length == 0 ) Return
+
+    Write(fname,'(A,A,I4.4)') dir(1:length), '/ibm_ghosts.rank', myid
+    Open(newunit=u, file=Trim(fname), status='replace', action='write')
+    Do n = 1, n_ghost_u
+       gi = i1_global(myid) + ghost_u_idx(1,n) - 1;  gk = kg1_global(myid) + ghost_u_idx(3,n) - 1
+       Write(u,'(A,3(1X,I0))') 'U', gi, ghost_u_idx(2,n), gk
+    End Do
+    Do n = 1, n_ghost_v
+       gi = ig1_global(myid) + ghost_v_idx(1,n) - 1;  gk = kg1_global(myid) + ghost_v_idx(3,n) - 1
+       Write(u,'(A,3(1X,I0))') 'V', gi, ghost_v_idx(2,n), gk
+    End Do
+    Do n = 1, n_ghost_w
+       gi = ig1_global(myid) + ghost_w_idx(1,n) - 1;  gk = k1_global(myid) + ghost_w_idx(3,n) - 1
+       Write(u,'(A,3(1X,I0))') 'W', gi, ghost_w_idx(2,n), gk
+    End Do
+    Close(u)
+
+  End Subroutine trace_ghost_lists
 
   !> Apply ghost-cell IBM every RK sub-step in place of volume-penalisation
   Subroutine apply_ghost_cell_ibm(U_,V_,W_)
@@ -889,9 +941,11 @@ Contains
                          ng = ng + 1
                       Else
                          nd = nd + 1   ! image in solid — concave corner
+                         ibm_drop_solid(4) = ibm_drop_solid(4) + 1
                       End If
                    Else
                       nd = nd + 1      ! image outside domain bounds
+                      ibm_drop_outside(4) = ibm_drop_outside(4) + 1
                    End If
                 End If
              End If

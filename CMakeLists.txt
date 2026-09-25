@@ -510,6 +510,25 @@ if(Python3_Interpreter_FOUND)
             endforeach()
         endif()
     endforeach()
+
+    # IBM ghost-cell bookkeeping must not depend on the decomposition (tests/regression/ibm_ghost_counts.py). The 2-rank
+    # z split matches np=1; the layouts below currently do not (KNOWN ISSUE, CPU build too): with a 1-cell halo the image
+    # stencils of ghost cells near a rank seam are dropped (z/1x4) or spurious ghost cells appear on the last face of an
+    # x-split rank (2x2, 4x1). WILL_FAIL marks them as expected failures until the IBM stencil gather is reworked;
+    # remove the property when it is fixed. Use tests/regression/ibm_ghost_diff.py on a DOPAMINE_TRACE_DIR run to list cells.
+    foreach(_lay 2 1x4 2x2 4x1)
+        add_test(NAME ibm_small_ghost_counts_np1_vs_${_lay}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_ghost_counts.py
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_small
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --layout-a 1 --layout-b ${_lay})
+        if(NOT _lay STREQUAL "2")
+            set_tests_properties(ibm_small_ghost_counts_np1_vs_${_lay} PROPERTIES WILL_FAIL TRUE)
+        endif()
+        if(TEST_LD_LIBRARY_PATH)
+            set_tests_properties(ibm_small_ghost_counts_np1_vs_${_lay} PROPERTIES
+                ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
+        endif()
+    endforeach()
 endif()
 
 #------------------------------------------------------------------------------
