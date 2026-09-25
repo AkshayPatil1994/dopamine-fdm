@@ -17,6 +17,14 @@ and exist in the CPU build too.
 `compare_monitor.py --field-tol` scales by the field maximum, which hides differences in a fluctuation on a large
 offset (Boussinesq `T` around `T_ref`).
 
+## GPU check
+
+Repeated on the GPU build (2x RTX A6000, nvfortran, CUDA 12.2; run with the matching user-space libcuda on
+`LD_LIBRARY_PATH`): the trace tools work unchanged, GPU np=1 vs np=2 shows the same Boussinesq divergence
+(same stage, same cell, 1.45e-5), and the GPU np=2 trace equals the CPU np=2 trace to 1e-11 over 210 dumps
+(bouss_small). So the layout dependence below is a property of the algorithm, not of the GPU port. Note: 4-rank tests
+on 2 GPUs can fail spuriously when several GPU tests run concurrently (`ctest -j`); they pass when run alone.
+
 ## Findings (2-step traces, np=1 vs np=2 / 2x2 / 4x1, all regression cases)
 
 | Case | Result |
