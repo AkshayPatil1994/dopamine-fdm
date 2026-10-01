@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dopamine-fdm-post"
+version = "0.1.0"
+description = "Post-processing library for the dopamine-fdm CFD solver"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+sdf = ["scikit-image"]
+uav = ["trimesh"]
+
+[project.scripts]
+dopamine-post = "dopamine_post.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dopamine_post*"]

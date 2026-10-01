@@ -53,243 +53,157 @@ in `parameters.in`, face-staggered SDFs (`sdfu`, `sdfv`, `sdfw`) are written alo
 > **Reference (fast-sweep):** Zhao, H., Osher, S. & Fedkiw, R. (2001/2005); Tsai, Y.-H.R.
 > (2002) — see [[Numerics § IBM|Numerics#6-immersed-boundary-method-ibm]].
 
-## `postProcessing/` scripts
+## `postProcessing/` — the `dopamine_post` library
 
-All scripts are run with `python3 <script>.py [args]`, typically from the case directory
-(the one containing `input_parameters` and `fields/`). Most that read binary snapshots
-build on `snapshot_io.py`.
+`postProcessing/` is a pip-installable package, `dopamine-fdm-post` (importable as
+`dopamine_post`), rather than a set of independent scripts. Install it once:
 
-### `snapshot_io.py`
+```bash
+pip install -e postProcessing/
+```
 
-Reader **library** (not a standalone tool) for the solver's binary field-snapshot
-format — parses `input_parameters`, lists available snapshots, and reads a snapshot into
-NumPy arrays with ghost layers stripped. Imported by `plot_snapshot.py`, `plot_sdf.py`,
-`analyse_channel.py`, etc.:
+then, from anywhere, either script against it directly:
 
 ```python
-from snapshot_io import parse_input_parameters, list_snapshots, read_snapshot
+import dopamine_post as dp
+
+pdat = dp.particles.ParticleData.from_case(".")
+x, p = pdat.pdf("ax", bins=100, log=True)          # solver-computed acceleration PDF
+
+series = dp.fields.FieldSeries(".")
+snap = series.latest()
+dp.fields.plot_profile(snap, save="profile.png")
 ```
 
-See the binary layout in [[Installation § Output files|Installation#output-files]].
-
-### `generateXMF.py`
-
-Writes XDMF metadata (`paraview/channel_test.xmf`) so ParaView can open the raw binary
-snapshots directly via byte-seek HyperSlab selections — no field data is duplicated.
-Auto-detects the snapshot filename prefix and available steps from `fields/`. Run it
-**from the case directory** with no arguments:
+or use the console script it installs, `dopamine-post`, which mirrors every module as a
+subcommand group (`dopamine-post <module> <command> [args]`; `--help` at any level lists
+what's available):
 
 ```bash
-python3 postProcessing/generateXMF.py
+dopamine-post particles animate --last 40 --n 10 --view 3d --out tracks3d.gif
+dopamine-post fields stats --start 60000 --end 120000 --interval 500
+dopamine-post uav disk-animate uav_path_file.dat --radius 0.15
 ```
 
-> The `--case`/`--nx`/`--ny`/`--nz` flags shown in the top-level README are stale — the
-> current script takes no CLI arguments and auto-detects everything from `fields/`.
+`postProcessing/examples/` has one short, argparse-free script per module
+(`particles_example.py`, `fields_example.py`, ...) demonstrating the library calls
+directly — read those instead of `--help` output to see idiomatic library usage.
 
-### `generate_particles_xmf.py`
+### Modules
 
-Writes XDMF metadata (`paraview/particles.xmf`) for the point-particle snapshots written
-by `src/particles.f90` (`fields/<fileout>_particles.<step>`, active whenever
-`particles_active=1` in `&PARTICLES`), and its `<Time Value=...>` uses the step number
-rather than physical time for the same reason `generateXMF.py`'s does (`DT=1`): opened
-alongside `channel_test.xmf`, ParaView's shared time toolbar then scrubs the point cloud
-and the flow fields together, frame for frame. Each snapshot's particle count varies
-(particles exit/deposit/reinject); by default the script pads every timestep up to the
-run's own maximum particle count (writing one small auxiliary `..._particles_padded.
-<step>.bin` file per timestep into `paraview/`, with `id=-1`/`active=0` on padding
-rows) so every `<Grid>` shares one fixed-size Topology/Geometry — vtkXdmfReader
-otherwise treats a variable-size series as a `vtkMultiBlockDataSet` rather than a
-homogeneous time-varying dataset, which ParaView warns about and can animate
-incorrectly. Pass `--no-pad` for the original zero-duplication, byte-seek-only,
-variable-size-per-timestep behaviour if you don't hit that warning. Exposes `id`,
-`age`, `Velocity`, and (padded mode only) `active` as point-cloud Attributes for
-colouring — Threshold on `active > 0.5` to hide padding rows. Run it the same way as
-`generateXMF.py`, from the case directory:
+| Module | Covers | Key classes/functions |
+|---|---|---|
+| `dopamine_post.fields` | Binary field snapshots, time-averaged statistics, DNS comparison, XDMF export | `FieldSnapshot`, `FieldSeries`, `FieldStats`, `plot_profile`, `plot_stats`, `write_field_xmf` |
+| `dopamine_post.particles` | Lagrangian point particles (`src/particles.f90`), including the solver-computed per-step acceleration (`ax`/`ay`/`az`, added alongside position/velocity/age) | `ParticleData`, `Geometry`, `plot_tracks`, `animate_tracks`, `animate_cloud`, `write_particles_xmf` |
+| `dopamine_post.probes` | Line and slice probe output, XDMF export for slices | `LineProbe`, `SliceProbe` |
+| `dopamine_post.ibm_surface` | Per-point IBM surface samples (pressure/viscous force) | `IBMSurface` |
+| `dopamine_post.sdf` | Signed-distance-field reading and slice plotting | `SDF` |
+| `dopamine_post.uav` | UAV actuator-disk path + scaled quadcopter body animation | `UAVPath` |
+| `dopamine_post.rsb` | Reynolds-stress budget statistics | `RSBStats` |
+| `dopamine_post.inflow` | SEM/ESEM inflow tooling: half-channel mirroring, donor-plane verification, inflow-optimization state | `mirror_half_channel`, `InflowDonor`/`check_donor`, `InflowOptState`/`read_inflow_opt` |
+| `dopamine_post.runlog` | Solver diagnostics parsed from a run's stdout log | `RunLog` |
 
-```bash
-python3 postProcessing/generate_particles_xmf.py            # padded (default)
-python3 postProcessing/generate_particles_xmf.py --no-pad    # original byte-seek-only
-```
+A shared internal module, `dopamine_post._core`, holds the low-level helpers every other
+module builds on (Fortran-namelist parsing, `<prefix>.<step>` snapshot globbing, the
+big-endian binary reader, ffmpeg movie encoding, percentile colour clipping, the cubic-
+Hermite interpolation that matches `uav_actuator.f90`'s `uav_current_center`, and the
+ParaView `.pvd` writer) — not part of the public API, but worth knowing about if you're
+extending the library rather than just using it.
 
-Per-monitor-interval particle event counts (exited/deposited/reinjected/active,
-`src/particles.f90`'s `report_particle_counts`) are no longer printed to stdout — they're
-appended as CSV rows to `fields/particle_count.dat` (`istep,t,exited,deposited,
-reinjected,active`, one row every `nmonitor` steps) instead.
+### `dopamine_post.particles`
 
-### `generate_slice_xmf.py`
+Reads `fields/<fileout>_particles.<step>` (written by `src/particles.f90`, active
+whenever `particles_active=1` in `&PARTICLES`). `ParticleData.from_case(case_dir)` loads
+every snapshot into id-indexed `(Nt, Np, 3)` arrays (`pos`, `vel`, and `acc` — NaN where a
+particle is absent that step). `acc` is the solver's own per-step acceleration when the
+snapshot was written by a build with that feature (10-column binary layout: x,y,z,u,v,w,
+ax,ay,az,age); for older 7-column snapshots (x,y,z,u,v,w,age, from before this feature
+existed) it falls back to a finite difference of the stored velocity between snapshots —
+only as good as the snapshot write cadence, so prefer a fresh run when trajectory
+acceleration statistics matter.
 
-XDMF time-series generator for 2-D slice-probe output (`<base>.bin` +
-`<base>_meta.txt`, written by the solver's slice-probe module). Writes little-endian
-coordinate arrays and a `.xmf` readable by ParaView ≥ 5 / VisIt ≥ 3:
+`ParticleData.write_xmf()` (or the module function `write_particles_xmf`) writes
+`paraview/particles.xmf`, pointing directly at the raw binary snapshots via byte-seek
+HyperSlabs (no data duplication) — open it alongside `dopamine_post.fields.write_field_xmf`'s
+output and use ParaView's shared time toolbar to scrub fields and particles together (both
+use the solver step number, not physical time, as the XDMF `Time Value`). Exposes `id`,
+`age`, `Velocity`, and (10-column snapshots only) `Acceleration` as point-cloud Attributes.
 
-```bash
-python3 postProcessing/generate_slice_xmf.py <base>_meta.txt [<base2>_meta.txt ...] [--dt DT] [--t0 T0]
-```
+`Geometry` draws the solid a particle case is seeded over for track/cloud plots: an
+analytic wavy wall (`Geometry.analytic`), nothing (`Geometry.flat`), or the `phi=0`
+iso-surface of a solver SDF (`Geometry.from_sdf`, needs `scikit-image`).
 
-Each `<base>_meta.txt` records a `times = <base>_times.bin` key pointing at the exact
-simulation time of every snapshot (written by the solver, big-endian float64 — see
-`probe_output.f90`); the `.xmf`'s per-frame `<Time Value=...>` is read from that file
-when present, so it reflects the true (possibly adaptive-`dt`) write times rather than a
-uniform `t0 + s*dt` grid. `--dt`/`--t0` are only a fallback for when `<base>_times.bin`
-is missing. Point `generate_UAVpath.py --times-from <base>_times.bin` at the same file
-to get a UAV-disk animation whose frames land on exactly the same simulation times as
-this slice — with both loaded in ParaView, the shared time toolbar then keeps the disk
-and the wake co-located frame-for-frame.
+### `dopamine_post.uav`
 
-### `generate_UAVpath.py`
-
-Renders a `uav_path_file` (see `&UAV`'s `uav_path_file` in
-[[Input Parameters|Input-Parameters#uav-optional]]) as a moving-disk `.vtp`/`.pvd`
+`UAVPath.read(uav_path_file)` then `.disk_animation(...)` (a moving-disk `.vtp`/`.pvd`
 animation, using the same cubic-Hermite interpolation as the solver's own
-`uav_current_center` (`uav_actuator.f90`) so the rendered disk sits exactly where the
-actuator-disk force was applied:
+`uav_current_center` in `uav_actuator.f90`, so the rendered disk sits exactly where the
+actuator-disk force was applied) or `.drone_animation(...)` (a scaled quadcopter body,
+`--stl-out`-style, with motion carried by a small `(time, position, rotation)` transform
+table applied on the fly by a generated ParaView Programmable Source script — no per-frame
+mesh duplication; needs `trimesh`, `manifold3d` optional for a proper boolean union). Both
+accept `times_from=` a slice probe's `<base>_times.bin` (exact simulation write times) or
+a line probe's plain-text time list, so the rendered path lands on the same frames as a
+field/slice/particle series opened alongside it. `drone_animation(tilt=True)` additionally
+replays `uav_disk_state`'s auto-tilt low-pass filter (only meaningful with
+`uav_tilt_active=1`).
 
-```bash
-python3 postProcessing/generate_UAVpath.py uav_path_file.dat --radius 0.15
-python3 postProcessing/generate_UAVpath.py uav_path_file.dat --input-parameters input_parameters \
-    --times-from slices/y015_times.bin   # sync frames to a slice probe's exact write times
-```
+> **Reference (fast-sweep / cubic Hermite):** see [[Numerics|Numerics]] for the UAV
+> actuator-disk model.
 
-`--times-from` accepts a slice probe's `<base>_times.bin` (line probes don't write one)
-or any plain-text file with one time per line, in place of the default uniform grid
-spanning the path file's own time range. Open the resulting `uav_path.pvd` in ParaView
-alongside the flow-field `.pvd`/`.xmf` and use the shared time toolbar to animate both
-together.
+### `dopamine_post.fields`
 
-### `generate_UAVdrone.py`
+`FieldSeries(case_dir).latest()` / `.read(step)` returns a `FieldSnapshot` (cell-centred
+U,V,W,P and, when active, C/nu_t/T, ghost layers stripped) for wall-normal profile plots
+(`plot_profile`) or arbitrary planes (`FieldSnapshot.plane`). `FieldSeries.time_average(
+step_range, interval)` reproduces the former `compute_stats.py` (mean profiles, resolved
+Reynolds stresses, resolved+SGS dissipation, centreline symmetry fold) as a `FieldStats`
+you can `.save(stats_dir)` or hand to `plot_stats` (with an optional DNS/MKM overlay).
+`FieldSeries.profile_vs_dns(dns_dir, x_stations)` reproduces the former
+`analyse_channel.py` (multi-station spanwise+temporal-averaged profiles against
+Moser–Kim–Mansour DNS and/or a measured wind-tunnel inflow — resolved stresses only; a
+wall-modelled/coarse LES carries part of the stress in the SGS model, so a near-wall
+deficit vs. DNS is expected). `FieldSeries.write_xmf()` writes `paraview/channel_test.xmf`
+via the same zero-copy byte-seek approach as `dopamine_post.particles`.
 
-Builds a scaled quadcopter body (not just the actuator disk) and a per-snapshot
-rigid-body transform table for the same `uav_path_file`. Geometry is written to disk
-exactly once (`--stl-out`, default `uav_drone.stl`, scaled so its propeller radius
-matches this case's `uav_disk_radius`); motion is carried entirely by a small
-`(time, position, 3x3 rotation)` table (`uav_transforms.npz`/`.csv`) applied on the fly
-by a generated ParaView Programmable Source script (`--pv-source-out`) -- no per-frame
-mesh duplication. Position reuses `hermite_eval`; `--tilt` additionally replays
-`uav_disk_state`'s auto-tilt low-pass filter (`uav_actuator.f90`, only meaningful with
-`uav_tilt_active=1`) over a dense `&NUMERICS dt` grid. Requires `trimesh` (`manifold3d`
-optional, for a proper boolean union):
+### `dopamine_post.probes`
 
-```bash
-python3 postProcessing/generate_UAVdrone.py uav_path_file.dat \
-    --input-parameters input_parameters --times-from slices/y015_times.bin --tilt
-```
+`LineProbe`/`SliceProbe` load 1-D line-probe and 2-D slice-probe output (`<base>.bin` +
+`<base>_meta.txt`, written by the solver's probe module — see
+[[Input Parameters § STATISTICS|Input-Parameters#statistics-optional--omit-to-disable]]);
+`SliceProbe.write_xmf(...)` is the former `generate_slice_xmf.py`, reading exact write
+times from `<base>_times.bin` when present (`--dt`/`--t0` remain a fallback for when it's
+missing — line probes don't write one).
 
-Paste the two scripts written to `uav_drone_paraview_source.py` into ParaView's
-Sources > Programmable Source (Output Type: `vtkPolyData`, main script + "Script
-(RequestInformation)"), Apply, then open the flow-field `.pvd`/`.xmf` alongside it and
-use the shared time toolbar.
+### `dopamine_post.rsb`
 
-### `plot_snapshot.py`
+`RSBStats.read(case_dir).plot(last=None)` is the former `read_RSBstats.py`: production,
+pressure-strain, viscous/turbulent/pressure diffusion, resolved/SGS dissipation, residual,
+optionally averaging only the last `N` accumulated samples.
 
-Wall-normal profile plots (x-z averaged) from one or more field snapshots. Reads
-`input_parameters` to determine active physics (`sgs_model`, `sediment_flag`):
+### `dopamine_post.sdf`
 
-```bash
-python postProcessing/plot_snapshot.py             # latest snapshot
-python postProcessing/plot_snapshot.py --step 500  # a specific step
-python postProcessing/plot_snapshot.py --all       # time-averaged over all snapshots
-python postProcessing/plot_snapshot.py --fields run2/fields --params run2/input_parameters
-```
+`SDF.read(case_dir)` plots the two orthogonal slices (`plot_xz`/`plot_xy`) of a
+cell-centre SDF (`SDF_in`) for sanity-checking a `GenSDF` output before a run.
 
-### `compute_stats.py`
+### `dopamine_post.inflow`
 
-Time- and plane-averaged channel-flow statistics (mean profiles, Reynolds stresses)
-computed by averaging a window of field snapshots:
+`mirror_half_channel` mirrors a half-channel SEM inflow profile into a full-channel one
+(handling the sign flip of $V$ and any $v$-linear correlations under the reflection);
+`InflowDonor`/`check_donor` verifies a SEM/ESEM inflow donor plane against a reference
+profile; `InflowOptState`/`read_inflow_opt` reads/summarizes a SEM inflow-optimization
+restart file.
 
-```bash
-python postProcessing/compute_stats.py --avg_start START --avg_end END --interval N --prefix NAME \
-    [--fields_dir fields] [--stats_dir stats] [--nu NU] [--no_sgs] [--out_fig plots/stats.png]
-```
+### `dopamine_post.runlog`
 
-### `analyse_channel.py`
+`RunLog.read(path).plot(variables=...)` extracts and plots solver diagnostics (mean/max
+velocity, divergence, convective/viscous CFL, `dt`) from a run's stdout log.
 
-Wall-normal profiles from a channel run compared against Moser–Kim–Mansour DNS
-reference data and/or a measured wind-tunnel inflow profile. Supports multiple
-streamwise stations (spanwise+temporal averaging only, never streamwise), useful for
-watching an SEM inflow develop with fetch:
+### `dopamine_post.ibm_surface`
 
-```bash
-python3 postProcessing/analyse_channel.py --x 2 4 6 8 \
-    --dns-dir /path/to/validation/semChannel \
-    --step-start 900 --re-tau 392.24 --output profiles.png
-```
-
-> Reported stresses are *resolved* only — a wall-modelled/coarse LES carries part of the
-> stress in the SGS model, so a near-wall deficit vs. DNS is expected.
-
-### `read_RSBstats.py`
-
-Reads and plots the Reynolds stress budget (RSB) output described in
-[[Input Parameters § STATISTICS|Input-Parameters#statistics-optional--omit-to-disable]]
-(production, pressure-strain, viscous/turbulent/pressure diffusion, resolved/SGS
-dissipation, residual). Run from the case directory:
-
-```bash
-python3 postProcessing/read_RSBstats.py [--last N]
-```
-
-`--last N` averages only the last `N` accumulated samples (default: all).
-
-### `plot_log.py`
-
-Extracts and plots solver diagnostics (mean/max velocity, divergence, convective/viscous
-CFL, `dt`) from a run's stdout log:
-
-```bash
-python postProcessing/plot_log.py [run.log] [-v Umean,Umax,CFLc,CFLv,dt]
-```
-
-### `plot_sdf.py`
-
-Loads and plots two orthogonal slices (an x-z plane and an x-y plane) of a cell-centre
-SDF (`SDF_in`), useful for sanity-checking a `GenSDF` output before a run:
-
-```bash
-python postProcessing/plot_sdf.py [--sdf SDF_in] [--params input_parameters] [--y-slice Y] [--z-slice Z]
-```
-
-### `load_ibm_surface.py`
-
-Reader/converter for the per-point IBM surface samples written to
-`ibm_surface/surface.<step>.bin` (see
+`IBMSurface.read(path)` loads per-point IBM surface samples
+(`ibm_surface/surface.<step>.bin`, see
 [[Input Parameters § IBM|Input-Parameters#ibm-optional]], `ibm_surface_nsampling`):
-surface position, normal, pressure, and pressure/viscous force per point (summing these
-reproduces the drag reported in `ibm_forces.csv`).
-
-```python
-from load_ibm_surface import read_ibm_surface
-d = read_ibm_surface('ibm_surface/surface.00010000.bin')
-```
-
-```bash
-python load_ibm_surface.py ibm_surface/surface.00010000.bin        # convert one file
-python load_ibm_surface.py 'ibm_surface/surface.*.bin'             # convert a whole glob to ParaView .vtp
-```
-
-### `load_line_probes.py`
-
-Loads 1-D line-probe output (`<base>.bin` + `<base>_meta.txt`) into a `(nsnaps, ncomp,
-npts)` array:
-
-```python
-from load_line_probes import load_probe
-probe = load_probe('mysim_line_meta.txt')
-u = probe['data'][:, probe['comps'].index('U'), :]
-```
-
-```bash
-python3 postProcessing/load_line_probes.py <meta.txt> [<meta2.txt> ...] [--snap S]
-```
-
-### `mirror_half_channel.py`
-
-Mirrors a half-channel SEM inflow profile (one no-slip wall + symmetry plane at the
-centreline, `y ∈ [0,h]`) into a full-channel profile (`y ∈ [0,2h]`, no-slip both walls),
-for use as `inflow_profile_file` (see
-[[Input Parameters § INFLOW|Input-Parameters#inflow-optional--used-only-when-x_bc_type--1]]).
-Handles the sign flip of $V$ (and any $v$-linear correlation, `uv`/`vw`) under the
-reflection:
-
-```bash
-python3 postProcessing/mirror_half_channel.py half_channel.csv full_channel.csv [--h H]
-```
+position, normal, pressure, and pressure/viscous force per point (summing these
+reproduces the drag reported in `ibm_forces.csv`); `.to_vtp(out)` / `IBMSurface.to_pvd(
+glob_pattern, out)` convert one file or a whole time series for ParaView.

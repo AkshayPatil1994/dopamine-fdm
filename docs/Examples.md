@@ -20,9 +20,9 @@ A canonical **wall-resolved LES channel flow** at $Re_\tau \approx 395$.
 - Periodic in $x$ and $z$ (`x_bc_type = 0`, default)
 
 This is the reference case to validate a fresh build against — compare resulting
-mean-velocity and Reynolds-stress profiles against Moser–Kim–Mansour DNS data (see
-`postProcessing/analyse_channel.py` in
-[[Pre- and Post-Processing Tools|Tools#analyse_channelpy]]).
+mean-velocity and Reynolds-stress profiles against Moser–Kim–Mansour DNS data via
+`dopamine_post.fields.FieldSeries.profile_vs_dns(...)`, see
+[[Pre- and Post-Processing Tools|Tools#dopamine_postfields]].
 
 ## `dns_ibm_wavyWall`
 
@@ -115,6 +115,6 @@ small `nx,ny,nz = 66,(65 or 129),66`, `Lx,Ly,Lz = 1.0,(1.0 or 2.0),1.0` box, `sg
   the noise floor (`~1e-3`) for the whole run with `uav_tilt_active = 0,
   uav_swirl_frac = 0.0` as a control.
 
-`postProcessing/generate_UAVpath.py` renders any of these cases' path file as a
-moving-disk ParaView animation (see
-[[Pre- and Post-Processing Tools § generate_UAVpath.py|Tools#generate_uavpathpy]]).
+`dopamine_post.uav.UAVPath.disk_animation(...)` (or `dopamine-post uav disk-animate`)
+renders any of these cases' path file as a moving-disk ParaView animation (see
+[[Pre- and Post-Processing Tools § dopamine_post.uav|Tools#dopamine_postuav]]).

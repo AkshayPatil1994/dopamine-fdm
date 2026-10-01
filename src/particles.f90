@@ -27,6 +27,14 @@ Module particles
   Integer(Int32), Allocatable :: p_id(:)
   Real   (Int64), Allocatable :: p_x(:), p_y(:), p_z(:)
   Real   (Int64), Allocatable :: p_u(:), p_v(:), p_w(:)
+  ! Per-step acceleration: inertial mode (advance_particle_inertial) stores the exact total
+  ! (drag+gravity+added-mass) acceleration fed into its exponential integrator; tracer mode
+  ! (advance_particles) stores (k3-k1)/dt, the central difference of the RK3 sub-stage fluid-
+  ! velocity samples at t0 and t0+dt -- 2nd-order accurate in dt, not 3rd, since it is a
+  ! derivative reconstructed from 3 function samples rather than the integral those samples
+  ! give the position update. The persistent SGS fluctuation (p_sgs_u/v/w below), when active,
+  ! is added identically to all 3 RK stages, so it cancels exactly in this difference.
+  Real   (Int64), Allocatable :: p_ax(:), p_ay(:), p_az(:)
   Real   (Int64), Allocatable :: p_age(:)
   ! Phase 5 (sgs_particle_model==1 only): persistent SGS velocity fluctuation state, evolved
   ! by the simplified Langevin model (advance_sgs_velocity) and added to the resolved fluid
@@ -146,6 +154,9 @@ Contains
           p_u  (n_particles_local) = 0d0
           p_v  (n_particles_local) = 0d0
           p_w  (n_particles_local) = 0d0
+          p_ax (n_particles_local) = 0d0
+          p_ay (n_particles_local) = 0d0
+          p_az (n_particles_local) = 0d0
           p_age(n_particles_local) = 0d0
           If ( sgs_particle_model == 1 ) Then
              p_sgs_u(n_particles_local) = 0d0
@@ -325,6 +336,14 @@ Contains
        az = az + 0.5d0*(particle_rho_f/particle_rho) * (wf-wf_o)/Max(dt,1d-14)
     End If
 
+    ! Total instantaneous acceleration at the start of the step: drag, (uf-v0)/tau_eff, plus
+    ! the gravity/added-mass forcing 'a' above -- both frozen over the step, so this is the
+    ! exact dv/dt at t0 from the ODE dv/dt=(u-v)/tau+a (the exp_integrate calls below solve
+    ! it exactly, but overwrite p_u/p_v/p_w in place, so this must be computed first).
+    p_ax(i) = (uf-p_u(i))/tau_eff + ax
+    p_ay(i) = (vf-p_v(i))/tau_eff + ay
+    p_az(i) = (wf-p_w(i))/tau_eff + az
+
     Call exp_integrate(p_x(i), p_u(i), uf, ax, tau_eff, dt)
     Call exp_integrate(p_y(i), p_v(i), vf, ay, tau_eff, dt)
     Call exp_integrate(p_z(i), p_w(i), wf, az, tau_eff, dt)
@@ -448,6 +467,9 @@ Contains
     Call grow_real(p_u,   new_cap)
     Call grow_real(p_v,   new_cap)
     Call grow_real(p_w,   new_cap)
+    Call grow_real(p_ax,  new_cap)
+    Call grow_real(p_ay,  new_cap)
+    Call grow_real(p_az,  new_cap)
     Call grow_real(p_age, new_cap)
     If ( sgs_particle_model == 1 ) Then
        Call grow_real(p_sgs_u, new_cap)
@@ -494,6 +516,9 @@ Contains
        p_u  (i) = p_u  (n)
        p_v  (i) = p_v  (n)
        p_w  (i) = p_w  (n)
+       p_ax (i) = p_ax (n)
+       p_ay (i) = p_ay (n)
+       p_az (i) = p_az (n)
        p_age(i) = p_age(n)
        If ( sgs_particle_model == 1 ) Then
           p_sgs_u(i) = p_sgs_u(n)
@@ -706,6 +731,10 @@ Contains
           p_y(i) = y0 + dt/6d0*(k1v + 4d0*k2v + k3v)
           p_z(i) = z0 + dt/6d0*(k1w + 4d0*k2w + k3w)
           p_u(i) = k1u;  p_v(i) = k1v;  p_w(i) = k1w
+          ! Convective acceleration along the trajectory over this step, central difference of
+          ! the RK3 sub-stage velocities at t0 and t0+dt (2nd-order accurate -- see the p_ax
+          ! declaration comment). The identical SGS term added to k1/k3 above cancels here.
+          p_ax(i) = (k3u-k1u)/dt;  p_ay(i) = (k3v-k1v)/dt;  p_az(i) = (k3w-k1w)/dt
        End If
        p_age(i) = p_age(i) + dt
 
@@ -775,7 +804,7 @@ Contains
     If ( is_first_m .And. periodic ) down = partner
 
     Allocate ( id_up(Max(n_particles_local,1)), id_down(Max(n_particles_local,1)) )
-    Allocate ( dat_up(7,Max(n_particles_local,1)), dat_down(7,Max(n_particles_local,1)) )
+    Allocate ( dat_up(10,Max(n_particles_local,1)), dat_down(10,Max(n_particles_local,1)) )
     n_up = 0;  n_down = 0
 
     i = 1
@@ -816,18 +845,18 @@ Contains
 
     n_recv_down = 0
     Call Mpi_sendrecv(n_up,   1, MPI_INTEGER, up,   200, n_recv_down, 1, MPI_INTEGER, down, 200, MPI_COMM_WORLD, istat, ierr)
-    Allocate ( id_rd(Max(n_recv_down,1)), dat_rd(7,Max(n_recv_down,1)) )
+    Allocate ( id_rd(Max(n_recv_down,1)), dat_rd(10,Max(n_recv_down,1)) )
     Call Mpi_sendrecv(id_up,  n_up,   MPI_INTEGER, up, 201, id_rd,  n_recv_down,   MPI_INTEGER, down, 201, &
          MPI_COMM_WORLD, istat, ierr)
-    Call Mpi_sendrecv(dat_up, 7*n_up, Mpi_real8,   up, 202, dat_rd, 7*n_recv_down, Mpi_real8,   down, 202, &
+    Call Mpi_sendrecv(dat_up, 10*n_up, Mpi_real8,   up, 202, dat_rd, 10*n_recv_down, Mpi_real8,   down, 202, &
          MPI_COMM_WORLD, istat, ierr)
 
     n_recv_up = 0
     Call Mpi_sendrecv(n_down,   1, MPI_INTEGER, down, 203, n_recv_up, 1, MPI_INTEGER, up, 203, MPI_COMM_WORLD, istat, ierr)
-    Allocate ( id_ru(Max(n_recv_up,1)), dat_ru(7,Max(n_recv_up,1)) )
+    Allocate ( id_ru(Max(n_recv_up,1)), dat_ru(10,Max(n_recv_up,1)) )
     Call Mpi_sendrecv(id_down,  n_down,   MPI_INTEGER, down, 204, id_ru,  n_recv_up,   MPI_INTEGER, up, 204, &
          MPI_COMM_WORLD, istat, ierr)
-    Call Mpi_sendrecv(dat_down, 7*n_down, Mpi_real8,   down, 205, dat_ru, 7*n_recv_up, Mpi_real8,   up, 205, &
+    Call Mpi_sendrecv(dat_down, 10*n_down, Mpi_real8,   down, 205, dat_ru, 10*n_recv_up, Mpi_real8,   up, 205, &
          MPI_COMM_WORLD, istat, ierr)
 
     Do i = 1, n_recv_down
@@ -868,11 +897,12 @@ Contains
     Integer(Int32), Intent(In)  :: i, dir
     Real   (Int64), Intent(In)  :: pos_send
     Integer(Int32), Intent(Out) :: id_out
-    Real   (Int64), Intent(Out) :: dat_out(7)
+    Real   (Int64), Intent(Out) :: dat_out(10)
     id_out = p_id(i)
     dat_out(1) = p_x(i);  dat_out(2) = p_y(i);  dat_out(3) = p_z(i)
     dat_out(4) = p_u(i);  dat_out(5) = p_v(i);  dat_out(6) = p_w(i)
     dat_out(7) = p_age(i)
+    dat_out(8) = p_ax(i);  dat_out(9) = p_ay(i);  dat_out(10) = p_az(i)
     If ( dir == 1 ) Then
        dat_out(1) = pos_send
     Else
@@ -882,7 +912,7 @@ Contains
 
   Subroutine unpack_particle(id_in, dat_in)
     Integer(Int32), Intent(In) :: id_in
-    Real   (Int64), Intent(In) :: dat_in(7)
+    Real   (Int64), Intent(In) :: dat_in(10)
     Call ensure_capacity(n_particles_local + 1)
     n_particles_local = n_particles_local + 1
     p_id (n_particles_local) = id_in
@@ -893,6 +923,9 @@ Contains
     p_v  (n_particles_local) = dat_in(5)
     p_w  (n_particles_local) = dat_in(6)
     p_age(n_particles_local) = dat_in(7)
+    p_ax (n_particles_local) = dat_in(8)
+    p_ay (n_particles_local) = dat_in(9)
+    p_az (n_particles_local) = dat_in(10)
     ! SGS fluctuation state is not carried across migration (documented simplification --
     ! the well-mixed model's timescale T_L is normally short compared to a full-domain
     ! transit, so restarting it at 0 on migration has limited practical impact)
@@ -997,6 +1030,9 @@ Contains
           p_u  (n_particles_local) = 0d0
           p_v  (n_particles_local) = 0d0
           p_w  (n_particles_local) = 0d0
+          p_ax (n_particles_local) = 0d0
+          p_ay (n_particles_local) = 0d0
+          p_az (n_particles_local) = 0d0
           p_age(n_particles_local) = 0d0
           If ( sgs_particle_model == 1 ) Then
              p_sgs_u(n_particles_local) = 0d0
@@ -1071,7 +1107,7 @@ Contains
 
   End Subroutine write_deposit_profile
 
-  !> Rank-0 gather of every particle's (id) and (x,y,z,u,v,w,age) into flat arrays,
+  !> Rank-0 gather of every particle's (id) and (x,y,z,u,v,w,ax,ay,az,age) into flat arrays,
   !  shared by write_particle_restart and write_particle_snapshot. On return, id_all/
   !  dat_all are allocated and populated on EVERY rank the same way write_particle_restart
   !  always did (harmless on non-root ranks: Mpi_gatherv only reads counts/displs at the
@@ -1095,20 +1131,21 @@ Contains
           displs(r) = displs(r-1) + counts(r-1)
        End Do
        total = Sum(counts)
-       rcounts = counts * 7
-       rdispls = displs * 7
+       rcounts = counts * 10
+       rdispls = displs * 10
     End If
-    Allocate ( id_all(Max(total,1)), dat_all(Max(total*7,1)) )
+    Allocate ( id_all(Max(total,1)), dat_all(Max(total*10,1)) )
 
-    Allocate ( dat_local(7*Max(n_particles_local,1)) )
+    Allocate ( dat_local(10*Max(n_particles_local,1)) )
     Do i = 1, n_particles_local
-       dat_local(7*(i-1)+1) = p_x(i);   dat_local(7*(i-1)+2) = p_y(i);   dat_local(7*(i-1)+3) = p_z(i)
-       dat_local(7*(i-1)+4) = p_u(i);   dat_local(7*(i-1)+5) = p_v(i);   dat_local(7*(i-1)+6) = p_w(i)
-       dat_local(7*(i-1)+7) = p_age(i)
+       dat_local(10*(i-1)+1) = p_x(i);   dat_local(10*(i-1)+2) = p_y(i);   dat_local(10*(i-1)+3) = p_z(i)
+       dat_local(10*(i-1)+4) = p_u(i);   dat_local(10*(i-1)+5) = p_v(i);   dat_local(10*(i-1)+6) = p_w(i)
+       dat_local(10*(i-1)+7) = p_ax(i);  dat_local(10*(i-1)+8) = p_ay(i);  dat_local(10*(i-1)+9) = p_az(i)
+       dat_local(10*(i-1)+10) = p_age(i)
     End Do
 
-    Call Mpi_gatherv(p_id,      n_particles_local,   MPI_INTEGER, id_all,  counts,  displs,  MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
-    Call Mpi_gatherv(dat_local, 7*n_particles_local, Mpi_real8,   dat_all, rcounts, rdispls, Mpi_real8,   0, MPI_COMM_WORLD, ierr)
+    Call Mpi_gatherv(p_id,      n_particles_local,    MPI_INTEGER, id_all,  counts,  displs,  MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+    Call Mpi_gatherv(dat_local, 10*n_particles_local, Mpi_real8,   dat_all, rcounts, rdispls, Mpi_real8,   0, MPI_COMM_WORLD, ierr)
 
     Deallocate ( dat_local )
 
@@ -1116,9 +1153,10 @@ Contains
 
   !> Write a flat particle-restart file (rank-0 gather, per the repo's own rank-0-centric
   !  restart I/O convention, input_output.f90): a global count header, then that many
-  !  (id, x,y,z,u,v,w,age) records. Overwrites particle_restart_file every call (a single
-  !  latest-state snapshot for hot-restart, NOT a time series -- see write_particle_snapshot
-  !  for the visualization time series). Called from output_data at the field-snapshot cadence.
+  !  (id, x,y,z,u,v,w,ax,ay,az,age) records. Overwrites particle_restart_file every call (a
+  !  single latest-state snapshot for hot-restart, NOT a time series -- see
+  !  write_particle_snapshot for the visualization time series). Called from output_data at
+  !  the field-snapshot cadence.
   Subroutine write_particle_restart
 
     Integer(Int32) :: total, funit
@@ -1134,7 +1172,7 @@ Contains
        Write(funit) total
        If ( total > 0 ) Then
           Write(funit) id_all(1:total)
-          Write(funit) dat_all(1:7*total)
+          Write(funit) dat_all(1:10*total)
        End If
        Close(funit)
     End If
@@ -1143,8 +1181,8 @@ Contains
 
   End Subroutine write_particle_restart
 
-  !> Write a timestamped particle snapshot for visualization (same (id,x,y,z,u,v,w,age)
-  !  binary layout as write_particle_restart, but to fname -- normally 'fields/<fileout>
+  !> Write a timestamped particle snapshot for visualization (same (id,x,y,z,u,v,w,ax,ay,az,
+  !  age) binary layout as write_particle_restart, but to fname -- normally 'fields/<fileout>
   !  _particles.<istep>', one file per saved step, called from output_data alongside the
   !  main field snapshot so postProcessing/generate_particles_xmf.py can build a ParaView
   !  time series that scrubs together with the field snapshots' own XDMF timeline).
@@ -1165,7 +1203,7 @@ Contains
        Write(funit) total
        If ( total > 0 ) Then
           Write(funit) id_all(1:total)
-          Write(funit) dat_all(1:7*total)
+          Write(funit) dat_all(1:10*total)
        End If
        Close(funit)
     End If
@@ -1204,31 +1242,34 @@ Contains
     End If
     Call Mpi_bcast(total, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
 
-    Allocate ( id_all(Max(total,1)), dat_all(Max(total*7,1)) )
+    Allocate ( id_all(Max(total,1)), dat_all(Max(total*10,1)) )
     If ( myid == 0 .And. total > 0 ) Then
        Read(funit) id_all(1:total)
-       Read(funit) dat_all(1:7*total)
+       Read(funit) dat_all(1:10*total)
     End If
     If ( myid == 0 ) Close(funit)
 
     If ( total > 0 ) Then
-       Call Mpi_bcast(id_all,  total,   MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
-       Call Mpi_bcast(dat_all, 7*total, Mpi_real8,   0, MPI_COMM_WORLD, ierr)
+       Call Mpi_bcast(id_all,  total,    MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+       Call Mpi_bcast(dat_all, 10*total, Mpi_real8,   0, MPI_COMM_WORLD, ierr)
     End If
 
     Do i = 1, total
-       xp = dat_all(7*(i-1)+1);  zp = dat_all(7*(i-1)+3)
+       xp = dat_all(10*(i-1)+1);  zp = dat_all(10*(i-1)+3)
        If ( owns_particle(xp, zp) ) Then
           Call ensure_capacity(n_particles_local + 1)
           n_particles_local = n_particles_local + 1
           p_id (n_particles_local) = id_all(i)
-          p_x  (n_particles_local) = dat_all(7*(i-1)+1)
-          p_y  (n_particles_local) = dat_all(7*(i-1)+2)
-          p_z  (n_particles_local) = dat_all(7*(i-1)+3)
-          p_u  (n_particles_local) = dat_all(7*(i-1)+4)
-          p_v  (n_particles_local) = dat_all(7*(i-1)+5)
-          p_w  (n_particles_local) = dat_all(7*(i-1)+6)
-          p_age(n_particles_local) = dat_all(7*(i-1)+7)
+          p_x  (n_particles_local) = dat_all(10*(i-1)+1)
+          p_y  (n_particles_local) = dat_all(10*(i-1)+2)
+          p_z  (n_particles_local) = dat_all(10*(i-1)+3)
+          p_u  (n_particles_local) = dat_all(10*(i-1)+4)
+          p_v  (n_particles_local) = dat_all(10*(i-1)+5)
+          p_w  (n_particles_local) = dat_all(10*(i-1)+6)
+          p_ax (n_particles_local) = dat_all(10*(i-1)+7)
+          p_ay (n_particles_local) = dat_all(10*(i-1)+8)
+          p_az (n_particles_local) = dat_all(10*(i-1)+9)
+          p_age(n_particles_local) = dat_all(10*(i-1)+10)
           If ( sgs_particle_model == 1 ) Then
              p_sgs_u(n_particles_local) = 0d0
              p_sgs_v(n_particles_local) = 0d0

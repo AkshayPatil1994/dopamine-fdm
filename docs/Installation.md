@@ -43,7 +43,7 @@ The executable `dopamine` is placed in `build/`.
 > **Note**: The solver uses `-fconvert=big-endian` globally so that field snapshots are
 > big-endian. Reynolds stress budget output uses `CONVERT='little_endian'` on the file
 > `OPEN` to produce little-endian float64 (consistent with the coordinate `.bin` files
-> used by `generateXMF.py`).
+> used by `dopamine_post.fields.write_field_xmf`).
 
 ## Building (GPU: OpenACC + cuFFT + cuSPARSE, single- or multi-GPU)
 
@@ -179,18 +179,19 @@ import numpy as np
 data = np.fromfile("fields/channel_test.1", dtype=">f8")
 ```
 
-The reader library `postProcessing/snapshot_io.py` handles this layout (grid parsing,
-ghost-cell stripping) automatically — see
-[[Pre- and Post-Processing Tools|Tools#snapshot_iopy]].
+`dopamine_post.fields.FieldSnapshot.read(...)` (`pip install -e postProcessing/` once,
+then `import dopamine_post as dp`) handles this layout (grid parsing, ghost-cell
+stripping) automatically — see [[Pre- and Post-Processing Tools|Tools#dopamine_postfields]].
 
 ### XDMF / ParaView post-processing
 
-`postProcessing/generateXMF.py` generates XDMF metadata files that let ParaView open the
-binary snapshots directly. It produces a single `Velocity` vector attribute using the
-XDMF `JOIN` function rather than three separate scalars:
+`dopamine_post.fields.write_field_xmf(...)` (or `dopamine-post fields xmf` from the
+shell) writes XDMF metadata that lets ParaView open the binary snapshots directly, via
+byte-seek HyperSlabs with no data duplication:
 
 ```bash
-python postProcessing/generateXMF.py --case channel_test --nx 513 --ny 128 --nz 257
+pip install -e postProcessing/
+dopamine-post fields xmf --case-dir .
 ```
 
-See [[Pre- and Post-Processing Tools|Tools]] for the full script reference.
+See [[Pre- and Post-Processing Tools|Tools]] for the full library reference.

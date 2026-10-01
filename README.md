@@ -32,7 +32,7 @@ mpirun -np 4 ./build/dopamine        # reads ./input_parameters
 | [Input Parameters](docs/Input-Parameters.md) | every namelist variable |
 | [Numerics](docs/Numerics.md) | governing equations and discretisation |
 | [Examples](docs/Examples.md) | bundled example cases |
-| [Tools](docs/Tools.md) | GenSDF and post-processing scripts |
+| [Tools](docs/Tools.md) | GenSDF and the `dopamine_post` post-processing library |
 | [Showcase Animations](docs/Animations.md) | how the animations above are made |
 | [Code Structure](docs/Code-Structure.md) | repository layout |
 | [References](docs/References.md) | methods implemented |

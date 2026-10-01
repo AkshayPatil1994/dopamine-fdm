@@ -52,6 +52,7 @@ decomp_2d_setup.log
 *.vtp
 *.pvd
 __pycache__/
+*.egg-info/
 scripts/
 
 # Editor / IDE

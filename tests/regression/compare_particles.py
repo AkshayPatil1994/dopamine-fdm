@@ -3,7 +3,7 @@
 GPU) and compare the final particle state by particle ID.
 
 The run writes `particles_restart` at the last step (nsave == nsteps in the regression cases): int32 count, int32 ids[count],
-float64 (x, y, z, u, v, w, age) per particle. Particles are matched by ID (their order depends on the decomposition).
+float64 (x, y, z, u, v, w, ax, ay, az, age) per particle. Particles are matched by ID (their order depends on the decomposition).
 The two runs must hold the same set of IDs (particles removed or reinjected identically) and agree in every column to --tol.
 
 Exit code 0 = agree, 1 = mismatch or a run failure.
@@ -18,7 +18,8 @@ import subprocess
 import sys
 import tempfile
 
-COLS = ['x', 'y', 'z', 'u', 'v', 'w', 'age']
+COLS = ['x', 'y', 'z', 'u', 'v', 'w', 'ax', 'ay', 'az', 'age']
+NCOL = len(COLS)
 
 
 def read_particles(path):
@@ -26,7 +27,7 @@ def read_particles(path):
         raw = f.read()
     for order in ('<', '>'):
         (n,) = struct.unpack(order + 'i', raw[:4])
-        if 0 <= n < 10**8 and 4 + 4 * n + 56 * n == len(raw):
+        if 0 <= n < 10**8 and 4 + 4 * n + 8 * NCOL * n == len(raw):
             break
     else:
         sys.exit(f'ERROR: {path}: cannot parse particle file ({len(raw)} bytes)')
@@ -35,7 +36,7 @@ def read_particles(path):
     dat.frombytes(raw[4 + 4 * n:])
     if (order == '>') == (sys.byteorder == 'little'):
         dat.byteswap()
-    return {ids[i]: dat[7 * i:7 * i + 7].tolist() for i in range(n)}
+    return {ids[i]: dat[NCOL * i:NCOL * i + NCOL].tolist() for i in range(n)}
 
 
 def run(mpirun, exe, np_, case_dir, grid, env_extra, nsteps=None):

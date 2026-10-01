@@ -38,8 +38,9 @@ fdm-dopamine/
 │   ├── finalization.f90
 │   └── main.f90             # Entry point
 ├── postProcessing/
-│   ├── generateXMF.py       # Write XDMF metadata for ParaView
-│   ├── generate_UAVpath.py  # Render a uav_path_file as a moving-disk ParaView animation (see Tools page for the rest)
+│   ├── pyproject.toml       # dopamine-fdm-post: pip install -e postProcessing/
+│   ├── dopamine_post/       # Post-processing library (see Tools page) + `dopamine-post` CLI
+│   ├── examples/            # Short demonstration scripts, one per dopamine_post module
 │   └── animations/          # Showcase GIF scripts (see Animations page)
 ├── preProcessing/
 │   └── GenSDF/              # Signed-distance field generator for IBM

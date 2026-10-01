@@ -244,8 +244,9 @@ See `examples/uav_hover_disk` (static), `examples/uav_ground_effect`
 (static, IGE/OGE comparison), `examples/uav_path_takeoff` (path-following),
 `examples/uav_path_cross_rank` (path crossing an MPI rank boundary), and
 `examples/uav_wind_takeoff` (path-following under a mean crosswind) for
-working cases. `postProcessing/generate_UAVpath.py` renders a `uav_path_file`
-as a moving-disk ParaView animation.
+working cases. `dopamine_post.uav.UAVPath.disk_animation(...)` (or
+`dopamine-post uav disk-animate`) renders a `uav_path_file` as a moving-disk
+ParaView animation.
 
 ## `&STATISTICS` *(optional — omit to disable)*
 
@@ -308,7 +309,7 @@ Rij = load_rsb("stats/rsb", "Rij", 6, 1, 128, 1)
 # Rij[0, 0, :, 0, -1] → final-sample R_11 profile
 ```
 
-Or use `postProcessing/read_RSBstats.py` — see
-[[Pre- and Post-Processing Tools|Tools#read_rsbstatspy]].
+Or use `dopamine_post.rsb.RSBStats` (or `dopamine-post rsb plot`) — see
+[[Pre- and Post-Processing Tools § dopamine_post.rsb|Tools#dopamine_postrsb]].
 
 See [[Numerics § Reynolds stress budget|Numerics#9-reynolds-stress-budget]].
