@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 sdf = ["scikit-image"]
 uav = ["trimesh"]
+vortex = ["vtk"]
 
 [project.scripts]
 dopamine-post = "dopamine_post.cli:main"

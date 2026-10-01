@@ -102,6 +102,7 @@ directly — read those instead of `--help` output to see idiomatic library usag
 | `dopamine_post.rsb` | Reynolds-stress budget statistics | `RSBStats` |
 | `dopamine_post.inflow` | SEM/ESEM inflow tooling: half-channel mirroring, donor-plane verification, inflow-optimization state | `mirror_half_channel`, `InflowDonor`/`check_donor`, `InflowOptState`/`read_inflow_opt` |
 | `dopamine_post.runlog` | Solver diagnostics parsed from a run's stdout log | `RunLog` |
+| `dopamine_post.vortex` | Q-criterion vortex identification and iso-surface movies | `q_criterion`, `q_volume_fraction`, `animate_q_isosurface` |
 
 A shared internal module, `dopamine_post._core`, holds the low-level helpers every other
 module builds on (Fortran-namelist parsing, `<prefix>.<step>` snapshot globbing, the
@@ -198,6 +199,15 @@ restart file.
 
 `RunLog.read(path).plot(variables=...)` extracts and plots solver diagnostics (mean/max
 velocity, divergence, convective/viscous CFL, `dt`) from a run's stdout log.
+
+### `dopamine_post.vortex`
+
+`q_criterion(snap)` returns $Q = \tfrac12(|\Omega|^2-|S|^2)$ on the cell centres of a
+`FieldSnapshot` (central differences on the stretched grid); `q_volume_fraction(snap, qval)`
+gives the volume fraction with $Q>$ `qval`. `animate_q_isosurface(series, "q.mp4", qval=5)`
+(CLI: `dopamine-post vortex animate`) renders the $Q$ iso-surface coloured by $|u|$ beside
+mid-span and cross-section $|u|$ slices. The movie needs VTK (`pip install dopamine-fdm-post[vortex]`),
+ffmpeg, and an X display (wrap in `xvfb-run` on a headless node).
 
 ### `dopamine_post.ibm_surface`
 

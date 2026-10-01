@@ -9,7 +9,7 @@ operations driven by `import dopamine_post as dp` instead.
 import argparse
 import sys
 
-from . import fields, ibm_surface, inflow, particles, probes, rsb, runlog, sdf, uav
+from . import fields, ibm_surface, inflow, particles, probes, rsb, runlog, sdf, uav, vortex
 
 
 def _slice_arg(last):
@@ -135,6 +135,44 @@ def _add_fields(sub):
     p.add_argument("--prefix", default=None)
     p.add_argument("--out", default=None)
     p.set_defaults(func=_fields_xmf)
+
+
+# ── vortex ─────────────────────────────────────────────────────────────────
+
+def _vortex_animate(a):
+    vortex.animate_q_isosurface(
+        fields.FieldSeries(a.case_dir), a.out, start=a.start, end=a.end, stride=a.stride,
+        max_frames=a.max_frames, qval=a.qval, vmax=a.vmax, cmap=a.cmap, fps=a.fps,
+        width=a.width, height=a.height, plot=a.plot, view=a.view, cam_pos=a.cam_pos,
+        azimuth=a.azimuth, elevation=a.elevation, roll=a.roll, zoom=a.zoom,
+        zoom_slice=a.zoom_slice, slice_x=a.slice_x, parallel=a.parallel)
+
+
+def _add_vortex(sub):
+    p = sub.add_parser("animate", help="Q-criterion iso-surface movie (needs VTK + an X display)")
+    p.add_argument("--case-dir", default=".")
+    p.add_argument("--out", default="q.mp4", help=".mp4 or .gif")
+    p.add_argument("--start", type=int, default=None, help="first step to include")
+    p.add_argument("--end", type=int, default=None, help="last step to include")
+    p.add_argument("--stride", type=int, default=1, help="use every Nth snapshot")
+    p.add_argument("--max-frames", type=int, default=None)
+    p.add_argument("--qval", type=float, default=5.0, help="Q iso-value")
+    p.add_argument("--vmax", type=float, default=None, help="top of the |u| colour range (default 1.7*Ub_target)")
+    p.add_argument("--cmap", default="RdYlBu_r")
+    p.add_argument("--fps", type=int, default=10)
+    p.add_argument("--width", type=int, default=None)
+    p.add_argument("--height", type=int, default=600)
+    p.add_argument("--plot", choices=["both", "q", "slice"], default="both")
+    p.add_argument("--view", choices=list(vortex.VIEWS), default="iso")
+    p.add_argument("--cam-pos", type=float, nargs=3, metavar=("DX", "DY", "DZ"))
+    p.add_argument("--azimuth", type=float, default=0.0)
+    p.add_argument("--elevation", type=float, default=0.0)
+    p.add_argument("--roll", type=float, default=0.0)
+    p.add_argument("--zoom", type=float, default=1.3, help="zoom of the Q panel")
+    p.add_argument("--zoom-slice", type=float, default=1.0)
+    p.add_argument("--slice-x", type=float, default=0.5, help="x-normal slice location as a fraction of Lx")
+    p.add_argument("--parallel", action="store_true", help="orthographic projection")
+    p.set_defaults(func=_vortex_animate)
 
 
 # ── probes ─────────────────────────────────────────────────────────────────
@@ -298,6 +336,7 @@ _GROUPS = {
     "rsb": _add_rsb,
     "inflow": _add_inflow,
     "runlog": _add_runlog,
+    "vortex": _add_vortex,
 }
 
 
