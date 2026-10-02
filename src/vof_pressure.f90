@@ -257,6 +257,9 @@ Contains
     Real(Int64), Intent(InOut) :: a(nxg,nyg,nzg)
     Real(Int64) :: sl, s
 
+    ! the pressure is pinned by the Dirichlet outlet when x is not periodic, so the operator is not singular: a mean removal
+    ! would perturb the system and stall the PCG at a finite residual
+    If ( x_bc_type == 1 ) Return
     sl = Sum( vp_w*a )
     Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     a = a - s/vp_wsum
