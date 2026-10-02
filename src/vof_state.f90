@@ -87,6 +87,7 @@ Contains
     Allocate( Cvof_io(nxg,nyg,nzg), vof_rho_ref(nyg) )
     If ( vof_flow >= 1 ) Then
        Call vp_init
+       Call vof_fill_pad(Cv, nxg, nyg, nzg)
        Call vp_set_density(Cv)
        Call row_reference_density
        If ( vof_selftest == 1 ) Call vp_selftest

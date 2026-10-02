@@ -17,7 +17,21 @@ Module projection
   ! prevent implicit typing
   Implicit None
 
+  ! Layered variable-coefficient mode of solve_poisson_equation (used as the VOF PCG preconditioner): solves
+  ! d/dy(pois_bf d p/dy) + pois_bh (d2/dx2 + d2/dz2) p = rhs with row-wise coefficients (horizontal-mean 1/rho) instead of the
+  ! constant-coefficient Laplacian. Only the z-periodic, y-wall CPU path supports it.
+  Logical :: pois_layered = .False.
+  Real(Int64), Allocatable, Dimension(:) :: pois_bf, pois_bh
+
 Contains
+
+  Logical Function poisson_layered_supported()
+#ifdef GPU_POISSON
+    poisson_layered_supported = .False.
+#else
+    poisson_layered_supported = ( z_bc_type == 0 .And. y_bc_type == 1 )
+#endif
+  End Function poisson_layered_supported
 
   ! Compute incompressible velocity with fractional step method
   Subroutine compute_projection_step
@@ -260,6 +274,17 @@ Contains
              Do j = 2, nyg-1
                 D(j) = Dyy(j,j) + wavenum_sum
              End Do
+             If ( pois_layered ) Then
+                Do j = 2, nyg-2
+                   DL(j) = Dyy(j+1,j)*pois_bf(j)
+                   DU(j) = Dyy(j,j+1)*pois_bf(j)
+                End Do
+                Do j = 2, nyg-1
+                   D(j) = pois_bh(j)*wavenum_sum
+                   If ( j < nyg-1 ) D(j) = D(j) - Dyy(j,j+1)*pois_bf(j)
+                   If ( j > 2 )     D(j) = D(j) - Dyy(j,j-1)*pois_bf(j-1)
+                End Do
+             End If
              ! Remove singularity 00 mode
              If ( x_bc_type==0 .And. i_global==0 .And. k_global==0 ) D(2) = 3d0/2d0*D(2)
              ! solve M*u = rhs; poisson_y_c(i,:,k) is a length-nym vector like D/DL/DU (Zgtsv only cares about sequence position, not the declared bounds), written in-place

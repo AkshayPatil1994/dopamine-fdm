@@ -100,6 +100,7 @@ Contains
     Real(Int64), Allocatable :: gz(:,:,:), zu(:,:,:), zw(:,:,:)
     Integer(Int32) :: i, j, k
 
+    Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     Allocate( gz(nxg,ny,nzg), zu(nx,nyg,nzg), zw(nxg,nyg,nz) )
     zu = 0d0;  zw = 0d0
@@ -155,7 +156,7 @@ Contains
     Call make_transport_velocity
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
-    qu = vp_rfu*U;  qv = vp_rfv*V;  qw = vp_rfw*W
+    qu = vp_rau*U;  qv = vp_rav*V;  qw = vp_raw*W
     vof_cc = Merge(1d0, 0d0, Cv(1:nxg,1:nyg,1:nzg) > 0.5d0)
     rt = vof_rho_g + (vof_rho_l - vof_rho_g)*vof_cc
     co = 0d0;  cl = 0d0
@@ -171,7 +172,7 @@ Contains
        Call vof_fill_pad(Cv, nxg, nyg, nzg)
        Call vof_reconstruct(Cv, nxg, nyg, nzg, vof_normal_scheme)
        Call vp_set_density(Cv)
-       uqu = qu/vp_rfu;  uqv = qv/vp_rfv;  uqw = qw/vp_rfw
+       uqu = qu/vp_rau;  uqv = qv/vp_rav;  uqw = qw/vp_raw
        If ( d == 1 ) Then
           Call vof_sweep(1, Cv, nxg, nyg, nzg, Ut, hx, hy, hz, tau, co, cl)
        Else If ( d == 2 ) Then
@@ -195,21 +196,21 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
-             U(i,j,k) = qu(i,j,k)/vp_rfu(i,j,k)
+             U(i,j,k) = qu(i,j,k)/vp_rau(i,j,k)
           End Do
        End Do
     End Do
     Do k = 2, nzg-1
        Do j = 2, ny-1
           Do i = 2, nxg-1
-             V(i,j,k) = qv(i,j,k)/vp_rfv(i,j,k)
+             V(i,j,k) = qv(i,j,k)/vp_rav(i,j,k)
           End Do
        End Do
     End Do
     Do k = 2, nz-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             W(i,j,k) = qw(i,j,k)/vp_rfw(i,j,k)
+             W(i,j,k) = qw(i,j,k)/vp_raw(i,j,k)
           End Do
        End Do
     End Do
@@ -402,6 +403,7 @@ Contains
     Integer(Int32) :: partner_x
 
     Allocate( gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
+    Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     Call vp_div(U, V, W, fdiv)
     Call vp_pcg(fdiv, maxit, tol, dphi)
@@ -544,6 +546,7 @@ Contains
     Real(Int64), Allocatable :: bu(:,:,:), bv(:,:,:), bw(:,:,:), gu(:,:,:), gv(:,:,:), gw(:,:,:)
 
     Allocate( bu(nx,nyg,nzg), bv(nxg,ny,nzg), bw(nxg,nyg,nz), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
+    Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
 
     Do s = 1, 3

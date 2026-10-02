@@ -14,11 +14,13 @@ Module vof_pressure
   Use decomp, Only : x_periodic_partner, z_periodic_partner
   Use boundary_conditions, Only : update_ghost_interior_planes_x
   Use scalar_transport, Only : finish_scalar_halos
-  Use projection, Only : solve_poisson_equation
+  Use projection, Only : solve_poisson_equation, pois_layered, pois_bf, pois_bh, poisson_layered_supported
+  Use vof_plic
+  Use vof_advect, Only : vof_reconstruct, vof_mx, vof_my, vof_mz, vof_al
 
   Implicit None
 
-  Real(Int64), Allocatable, Dimension(:,:,:) :: vp_rho, vp_bu, vp_bv, vp_bw, vp_w, vp_rfu, vp_rfv, vp_rfw
+  Real(Int64), Allocatable, Dimension(:,:,:) :: vp_rho, vp_bu, vp_bv, vp_bw, vp_w, vp_rfu, vp_rfv, vp_rfw, vp_rau, vp_rav, vp_raw
   Real(Int64), Allocatable, Dimension(:) :: vp_hy
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_r, vp_z, vp_d, vp_ap
   Real(Int64) :: vp_beta0 = 1d0, vp_wsum = 1d0
@@ -37,7 +39,11 @@ Contains
     Allocate( vp_rho(nxg,nyg,nzg), vp_bu(nx,nyg,nzg), vp_bv(nxg,ny,nzg), vp_bw(nxg,nyg,nz), vp_w(nxg,nyg,nzg) )
     Allocate( vp_r(nxg,nyg,nzg), vp_z(nxg,nyg,nzg), vp_d(nxg,nyg,nzg), vp_ap(nxg,nyg,nzg) )
     Allocate( vp_rfu(nx,nyg,nzg), vp_rfv(nxg,ny,nzg), vp_rfw(nxg,nyg,nz), vp_hy(nyg) )
+    Allocate( vp_rau(nx,nyg,nzg), vp_rav(nxg,ny,nzg), vp_raw(nxg,nyg,nz) )
+    vp_rau = vof_rho_g;  vp_rav = vof_rho_g;  vp_raw = vof_rho_g
     vp_rfu = vof_rho_g;  vp_rfv = vof_rho_g;  vp_rfw = vof_rho_g
+    Allocate( pois_bf(nyg), pois_bh(nyg) )
+    pois_bf = 1d0/vof_rho_g;  pois_bh = 1d0/vof_rho_g
     Do j = 2, nyg-1
        vp_hy(j) = y(j) - y(j-1)
     End Do
@@ -78,6 +84,7 @@ Contains
 
     Real(Int64), Intent(In) :: Cp(0:nxg+1,0:nyg+1,0:nzg+1)
     Integer(Int32) :: i, j, k
+    Real(Int64) :: dr, hl, hu
 
     Do k = 1, nzg
        Do j = 1, nyg
@@ -89,27 +96,114 @@ Contains
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nx
-             vp_rfu(i,j,k) = 0.5d0*( vp_rho(i,j,k) + vp_rho(i+1,j,k) )
+             vp_rau(i,j,k) = 0.5d0*( vp_rho(i,j,k) + vp_rho(i+1,j,k) )
           End Do
        End Do
     End Do
     Do k = 1, nzg
        Do j = 1, ny
           Do i = 1, nxg
-             vp_rfv(i,j,k) = ( vp_rho(i,j,k)*vp_hy(j) + vp_rho(i,j+1,k)*vp_hy(j+1) )/( vp_hy(j) + vp_hy(j+1) )
+             vp_rav(i,j,k) = ( vp_rho(i,j,k)*vp_hy(j) + vp_rho(i,j+1,k)*vp_hy(j+1) )/( vp_hy(j) + vp_hy(j+1) )
           End Do
        End Do
     End Do
     Do k = 1, nz
        Do j = 1, nyg
           Do i = 1, nxg
-             vp_rfw(i,j,k) = 0.5d0*( vp_rho(i,j,k) + vp_rho(i,j,Min(k+1,nzg)) )
+             vp_raw(i,j,k) = 0.5d0*( vp_rho(i,j,k) + vp_rho(i,j,Min(k+1,nzg)) )
           End Do
        End Do
     End Do
+    If ( vof_geo_density >= 1 ) Then
+       ! geometric staggered-cell density (Fuster/Arrufat): the liquid in the half cells that make up the control volume of the
+       ! face is taken from each cell's reconstructed plane, so that a flat interface is hydrostatically exact whatever C is
+       Call vof_reconstruct(Cp, nxg, nyg, nzg, vof_normal_scheme)
+       dr = vof_rho_l - vof_rho_g
+       Do k = 1, nzg
+          Do j = 1, nyg
+             Do i = 1, nx
+                vp_rfu(i,j,k) = vof_rho_g + dr*0.5d0*( half_frac(Cp(i,j,k), i,j,k, 1, .True.) &
+                                                     + half_frac(Cp(i+1,j,k), i+1,j,k, 1, .False.) )
+             End Do
+          End Do
+       End Do
+       Do k = 1, nzg
+          Do j = 1, ny
+             hl = vp_hy(j);  hu = vp_hy(j+1)
+             Do i = 1, nxg
+                vp_rfv(i,j,k) = vof_rho_g + dr*( hl*half_frac(Cp(i,j,k), i,j,k, 2, .True.) &
+                                               + hu*half_frac(Cp(i,j+1,k), i,j+1,k, 2, .False.) )/( hl + hu )
+             End Do
+          End Do
+       End Do
+       Do k = 1, nz
+          Do j = 1, nyg
+             Do i = 1, nxg
+                vp_rfw(i,j,k) = vof_rho_g + dr*0.5d0*( half_frac(Cp(i,j,k), i,j,k, 3, .True.) &
+                                                     + half_frac(Cp(i,j,Min(k+1,nzg)), i,j,Min(k+1,nzg), 3, .False.) )
+             End Do
+          End Do
+       End Do
+    Else
+       vp_rfu = vp_rau;  vp_rfv = vp_rav;  vp_rfw = vp_raw
+    End If
     vp_bu = 1d0/vp_rfu;  vp_bv = 1d0/vp_rfv;  vp_bw = 1d0/vp_rfw
+    If ( vof_layered_precond >= 1 .And. poisson_layered_supported() ) Call layer_coefficients
 
   End Subroutine vp_set_density
+
+
+  !> Row-wise effective coefficients of the layered preconditioner: arithmetic horizontal-mean beta in the plane (parallel
+  !  conduction), harmonic mean of beta across the rows (series), weighted by the cell volumes
+  Subroutine layer_coefficients
+
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: acc(3,nyg), glb(3,nyg), wk
+
+    acc = 0d0
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             wk = vp_w(i,j,k)
+             If ( wk == 0d0 ) Cycle
+             acc(1,j) = acc(1,j) + wk
+             acc(2,j) = acc(2,j) + wk*0.5d0*( vp_bu(Min(i,nx),j,k) + vp_bw(i,j,Min(k,nz)) )
+             If ( j <= ny ) acc(3,j) = acc(3,j) + wk*vp_rfv(i,j,k)
+          End Do
+       End Do
+    End Do
+    Call MPI_Allreduce(acc, glb, 3*nyg, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Do j = 1, nyg
+       If ( glb(1,j) > 0d0 ) Then
+          pois_bh(j) = glb(2,j)/glb(1,j)
+          If ( j <= ny ) pois_bf(j) = glb(1,j)/glb(3,j)
+       End If
+    End Do
+
+  End Subroutine layer_coefficients
+
+
+  !> Liquid fraction of the upper (upper=.True.) or lower half of the cell (i,j,k) along direction dir, from its plane
+  Function half_frac(c, i, j, k, dir, upper) Result(f)
+
+    Real(Int64),    Intent(In) :: c
+    Integer(Int32), Intent(In) :: i, j, k, dir
+    Logical,        Intent(In) :: upper
+    Real(Int64) :: f, xlo(3), w(3)
+
+    If ( c <= vof_eps ) Then
+       f = 0d0
+    Else If ( c >= 1d0 - vof_eps ) Then
+       f = 1d0
+    Else
+       xlo = -0.5d0;  w = 1d0
+       w(dir) = 0.5d0
+       If ( upper ) xlo(dir) = 0d0
+       f = plic_subbox_fraction( vof_mx(i,j,k), vof_my(i,j,k), vof_mz(i,j,k), vof_al(i,j,k), &
+                                 xlo(1), xlo(2), xlo(3), w(1), w(2), w(3) )
+    End If
+
+  End Function half_frac
 
 
   !> Ghost layers of a cell-centred field: rank seams and periodic wraps, zero gradient at y walls (periodic wrap for y_bc_type=0),
@@ -274,8 +368,15 @@ Contains
     Real(Int64), Intent(Out) :: z(nxg,nyg,nzg)
 
     z = 0d0
-    rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)/vp_beta0
-    Call solve_poisson_equation(skip_p_save=.True.)
+    If ( vof_layered_precond >= 1 .And. poisson_layered_supported() ) Then
+       rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)
+       pois_layered = .True.
+       Call solve_poisson_equation(skip_p_save=.True.)
+       pois_layered = .False.
+    Else
+       rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)/vp_beta0
+       Call solve_poisson_equation(skip_p_save=.True.)
+    End If
     z(2:nxg,2:nyg-1,2:nzg) = rhs_p(2:nxg,2:nyg-1,2:nzg)
     Call vp_remove_mean(z)
 

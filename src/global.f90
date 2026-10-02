@@ -724,6 +724,10 @@ Module global
   ! vof_method: 1 = PLIC face fluxes (sharp), 2 = THINC tanh-profile fluxes (diffuse over ~2-3 cells, vof_beta = sharpness)
   Integer(Int32) :: vof_method        = 1
   Real   (Int64) :: vof_beta          = 2d0
+  ! vof_geo_density 1 (experimental): face densities from the reconstructed planes in the half cells of each staggered control volume (0: arithmetic)
+  Integer(Int32) :: vof_geo_density   = 0
+  ! vof_layered_precond 1 (experimental, CPU y-wall only): PCG preconditioner uses the row-wise (horizontal-mean) density instead of one constant coefficient
+  Integer(Int32) :: vof_layered_precond = 0
   ! Two-fluid coupling (vof_flow = 0: C is only transported by the flow; 1: C sets density/viscosity and the momentum is advected
   ! conservatively with the VOF mass fluxes). vof_rho_*: densities; vof_nu_*: kinematic viscosities (mu = rho nu); vof_grav: gravity
   ! magnitude along -y; vof_pcg_iters: PCG iterations on the pressure increment per RK stage (0 = single constant-coefficient solve);
