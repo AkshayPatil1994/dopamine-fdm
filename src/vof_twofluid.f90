@@ -601,6 +601,7 @@ Contains
        Call vp_halo(ppre, .True.)
        Call vp_grad(ppre, bu, bv, bw)
        Call apply_face_gradient(bu, bv, bw, dta)
+       Call face_halo(U, V, W)
        Call vp_div(U, V, W, fdiv)
        fdiv = fdiv/dta
        Call vp_pcg(fdiv, Max(vof_pcg_iters, 1), 0d0, dphi)

@@ -458,6 +458,9 @@ Contains
        Call vp_pcg(f, 200, tol_list(it), x)
        If ( myid == 0 ) Write(*,'(A,ES9.1,A,I4,A,ES10.2)') '   vp_selftest PCG tol', tol_list(it), ' iterations', &
             vp_iters_last, ' final residual', vp_res_last
+       Call vp_remove_mean(x)
+       sab = vp_dot(x, x)
+       If ( myid == 0 ) Write(*,'(A,2ES20.12)') '   vp_selftest solution norm^2, f.x = ', sab, vp_dot(f, x)
     End Do
     Deallocate( f, x, a, b, Aa, Ab )
 
