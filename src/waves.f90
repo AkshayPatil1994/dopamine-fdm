@@ -355,9 +355,10 @@ Contains
 
     Real(Int64), Intent(In)  :: x, t
     Real(Int64), Intent(Out) :: eta, uc(nyg), vf(ny)
-    Integer(Int32), Parameter :: nq = 400
+    Integer(Int32), Parameter :: nq = 80
     Integer(Int32) :: j, m
-    Real(Int64) :: q, ys, u, v, hs, dys, ua
+    Real(Int64) :: q, ys, u, v, hs, dys, ua, cf
+    Integer(Int32) :: jj
 
     eta = wave_eta(x, t)
     hs = wv_d + eta
@@ -370,13 +371,13 @@ Contains
        q = q + Merge(0.5d0, 1d0, m == 0 .Or. m == nq)*u*dys
     End Do
     ua = -q/Max(Ly_i - hs, 1d-12)
+    ! cell-averaged inlet velocity: the water part of each cell moves with the wave, the air part with the return flow, so that
+    ! the face velocities integrate to the same zero net flux as the analytic profile (no flux mismatch in the surface cell)
     Do j = 1, nyg
-       If ( yg(j) <= hs ) Then
-          Call wave_vel(x, Max(yg(j), 0d0), t, u, v)
-          uc(j) = u
-       Else
-          uc(j) = ua
-       End If
+       jj = Min(Max(j, 2), nyg-1)
+       cf = Min(1d0, Max(0d0, (hs - y(jj-1))/(y(jj) - y(jj-1))))
+       Call wave_vel(x, Max(Min(yg(jj), hs), 0d0), t, u, v)
+       uc(j) = cf*u + (1d0 - cf)*ua
     End Do
     Do j = 1, ny
        If ( y(j) <= hs ) Then
