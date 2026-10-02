@@ -1,6 +1,6 @@
 ! Two-fluid sloshing wave, density ratio 1000: standing wave of wavelength 1 (amplitude 0.02, depth 0.5 each fluid, closed free-slip lids).
 ! Run until t=1.7, then `python3 analyze.py vof_diag.dat 1000 1`: half-period error against the two-layer linear dispersion relation
-! is +0.56 % (spike C: +0.5 %). Also check: still water (vof_wave_amp=0) stays at rest to round-off.
+! is +0.35 % with the default settings (spike C: +0.5 %). Also check: still water (vof_wave_amp=0) stays at rest to round-off.
 &DOMAIN
   nx = 66, ny = 65, nz = 6,
   Lx = 1.015625, Ly = 1.0, Lz = 0.078125,

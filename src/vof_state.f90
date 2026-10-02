@@ -21,7 +21,8 @@ Module vof_state
   Use vof_plic
   Use vof_normals
   Use vof_advect
-  Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest
+  Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last
+  Use input_output, Only : read_vof_restart
 
   Implicit None
 
@@ -32,6 +33,7 @@ Module vof_state
   Real(Int64), Allocatable, Dimension(:,:,:) :: Us1, Vs1, Ws1, Us2, Vs2, Ws2, Ue, Ve, We
 
   Integer(Int32) :: vof_unit = -1
+  Real(Int64), Allocatable, Dimension(:) :: vof_rho_ref   ! still-water row densities of the initial state (hydrostatic reference)
   Logical        :: vof_have_prev = .False.
   Real(Int64)    :: vof_dt_prev = 0d0, vof_vol0 = 0d0, vof_clip_total = 0d0, vof_co_max = 0d0
   Integer(Int32) :: vof_nadv = 0
@@ -76,11 +78,20 @@ Contains
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: the VOF field supports periodic z only (z_bc_type=0)'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
+    Allocate( Cvof_io(nxg,nyg,nzg), vof_rho_ref(nyg) )
     If ( vof_flow >= 1 ) Then
        Call vp_init
        Call vp_set_density(Cv)
+       Call row_reference_density
        If ( vof_selftest == 1 ) Call vp_selftest
     End If
+
+    If ( restart == 1 ) Then
+       Call read_vof_restart
+       Cv(1:nxg,1:nyg,1:nzg) = Cvof_io
+       Call vof_fill_pad(Cv, nxg, nyg, nzg)
+    End If
+    Cvof_io = Cv(1:nxg,1:nyg,1:nzg)
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     vof_vol0 = vliq
@@ -88,6 +99,34 @@ Contains
          '   VOF initial liquid volume = ', vliq, '  C range ', cmin, ' ..', cmax
 
   End Subroutine vof_init
+
+
+  !> x-z mean density of every row of the initial state (volume weighted, periodic duplicate cells excluded)
+  Subroutine row_reference_density
+
+    Integer(Int32) :: i, j, k
+    Real(Int64), Allocatable :: s1(:), s2(:), g1(:), g2(:)
+
+    Allocate( s1(nyg), s2(nyg), g1(nyg), g2(nyg) )
+    s1 = 0d0;  s2 = 0d0
+    Do k = 2, nzg-1
+       Do j = 2, nyg-1
+          Do i = 2, nxg-1
+             s1(j) = s1(j) + vp_w(i,j,k)*vp_rho(i,j,k)
+             s2(j) = s2(j) + vp_w(i,j,k)
+          End Do
+       End Do
+    End Do
+    Call MPI_Allreduce(s1, g1, nyg, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Call MPI_Allreduce(s2, g2, nyg, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    vof_rho_ref = vof_rho_g
+    Do j = 2, nyg-1
+       If ( g2(j) > 0d0 ) vof_rho_ref(j) = g1(j)/g2(j)
+    End Do
+    vof_rho_ref(1) = vof_rho_ref(2);  vof_rho_ref(nyg) = vof_rho_ref(nyg-1)
+    Deallocate( s1, s2, g1, g2 )
+
+  End Subroutine row_reference_density
 
 
   !> Liquid fraction of the box [x0,x1]x[y0,y1]x[z0,z1] for the configured initial shape
@@ -242,6 +281,7 @@ Contains
   !> End of step: remember stage 2 as the previous-step velocity for the next step's first sub-step
   Subroutine vof_end_step
 
+    Cvof_io = Cv(1:nxg,1:nyg,1:nzg)
     vof_dt_prev = dt
     vof_have_prev = .True.
 
@@ -264,11 +304,11 @@ Contains
        If ( vof_unit < 0 ) Then
           Open(newunit=vof_unit, file='vof_diag.dat', status='unknown', position='append', action='write')
           Write(vof_unit,'(A)') '# step t Vliq (Vliq-V0)/V0 Cmin Cmax n_interface clip_loss Co_max xc yc zc ' // &
-               ' int C(1-C) cos-moment -Umin |V|max |W|max'
+               ' int C(1-C) cos-moment -Umin |V|max |W|max last-PCG-its last-PCG-res'
        End If
-       Write(vof_unit,'(I10,ES18.10,ES22.14,3ES14.5,I10,2ES14.5,3ES20.12,ES16.8,ES20.12,3ES14.5)') istep, t, vliq, &
+       Write(vof_unit,'(I10,ES18.10,ES22.14,3ES14.5,I10,2ES14.5,3ES20.12,ES16.8,ES20.12,3ES14.5,I6,ES11.3)') istep, t, vliq, &
             (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
-            mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb
+            mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, vp_iters_last, vp_res_last
        Flush(vof_unit)
     End If
     vof_co_max = 0d0

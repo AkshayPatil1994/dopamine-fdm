@@ -737,6 +737,9 @@ Module global
   Integer(Int32) :: vof_selftest      = 0
   Real   (Int64) :: vof_wave_amp      = 0d0   ! vof_ic_type=4: cosine wave amplitude and wavelength along x
   Real   (Int64) :: vof_wave_lambda   = 0d0
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Cvof_io   ! C without the second ghost layer, for snapshots and restart
+  Integer(Int32) :: vof_adv_iters     = 3       ! PCG iterations of the projection after each half advection
+  Real   (Int64) :: vof_adv_tol       = 1d-8    ! and its relative residual target
   Real   (Int64) :: vof_u0            = 0d0   ! uniform streamwise velocity imposed at start-up (vof_flow, fresh start only)
 
   ! 1-D line probes: config and output file layout

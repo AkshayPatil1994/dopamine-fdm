@@ -26,25 +26,25 @@ Module vof_twofluid
   Use vof_advect
   Use vof_state
   Use vof_pressure
+  Use projection, Only : compute_pseudo_pressure_rhs, solve_poisson_equation, project_velocity
 
   Implicit None
 
   ! transported momentum density and its face velocity, mass flux of the current sweep, c-tilde density, volume-flux divergence
   Real(Int64), Allocatable, Dimension(:,:,:) :: qu, qv, qw, uqu, uqv, uqw, Md, rt, Dd
+  ! transporting velocity (exactly divergence-free) and a scratch copy of the velocity
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Ut, Vt, Wt, Utmp, Vtmp, Wtmp
   ! RK3: start-of-step velocity is Uo/Vo/Wo (global); stage force combinations H = F_explicit - beta grad p of stages 1 and 2
   Real(Int64), Allocatable, Dimension(:,:,:) :: Hu1, Hv1, Hw1, Hu2, Hv2, Hw2, Fu_, Fv_, Fw_, Gu_, Gv_, Gw_
   Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
-  Real(Int64) :: vf_tol_adv = 1d-8
-  Integer(Int32) :: vf_maxit_adv = 60
-  Integer(Int32) :: vf_proj_its_last = 0
+  Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
 
 Contains
 
   Subroutine vof_flow_init
 
     Integer(Int32) :: i, j, k
-    Real(Int64), Allocatable :: s1(:), s2(:), g1(:), g2(:)
 
     If ( ibm_input_mode >= 1 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
          .Or. uav_active >= 1 .Or. flat_wall_model_flag /= 0 .Or. rotation_active >= 1 ) Then
@@ -55,6 +55,7 @@ Contains
 
     Allocate( qu(nx,nyg,nzg), qv(nxg,ny,nzg), qw(nxg,nyg,nz), uqu(nx,nyg,nzg), uqv(nxg,ny,nzg), uqw(nxg,nyg,nz) )
     Allocate( Md(nxg,nyg,nzg), rt(nxg,nyg,nzg), Dd(nxg,nyg,nzg) )
+    Allocate( Ut(nx,nyg,nzg), Vt(nxg,ny,nzg), Wt(nxg,nyg,nz), Utmp(nx,nyg,nzg), Vtmp(nxg,ny,nzg), Wtmp(nxg,nyg,nz) )
     Allocate( Hu1(nx,nyg,nzg), Hv1(nxg,ny,nzg), Hw1(nxg,nyg,nz), Hu2(nx,nyg,nzg), Hv2(nxg,ny,nzg), Hw2(nxg,nyg,nz) )
     Allocate( Fu_(nx,nyg,nzg), Fv_(nxg,ny,nzg), Fw_(nxg,nyg,nz), Gu_(nx,nyg,nzg), Gv_(nxg,ny,nzg), Gw_(nxg,nyg,nz) )
     Allocate( ppre(nxg,nyg,nzg), dphi(nxg,nyg,nzg), fdiv(nxg,nyg,nzg), mu_c(nxg,nyg,nzg) )
@@ -69,29 +70,11 @@ Contains
     End Do
     cw1 = 1d0 - cw0
 
-    ! still-water reference density per row from the initial C (the hydrostatic part removed from gravity)
-    Allocate( s1(nyg), s2(nyg), g1(nyg), g2(nyg) )
-    s1 = 0d0;  s2 = 0d0
-    Do k = 2, nzg-1
-       Do j = 2, nyg-1
-          Do i = 2, nxg-1
-             s1(j) = s1(j) + vp_w(i,j,k)*vp_rho(i,j,k)
-             s2(j) = s2(j) + vp_w(i,j,k)
-          End Do
-       End Do
-    End Do
-    Call MPI_Allreduce(s1, g1, nyg, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Call MPI_Allreduce(s2, g2, nyg, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    rhos = vof_rho_g
-    Do j = 2, nyg-1
-       If ( g2(j) > 0d0 ) rhos(j) = g1(j)/g2(j)
-    End Do
-    rhos(1) = rhos(2);  rhos(nyg) = rhos(nyg-1)
+    ! still-water reference density per row of the initial state (hydrostatic part removed from gravity)
+    rhos = vof_rho_ref
     Do j = 1, ny
        rsf(j) = ( rhos(j)*vp_hy(j) + rhos(j+1)*vp_hy(j+1) )/( vp_hy(j) + vp_hy(j+1) )
     End Do
-    Deallocate( s1, s2, g1, g2 )
-
     If ( restart == 0 .And. vof_u0 /= 0d0 ) Then
        U = vof_u0;  V = 0d0;  W = 0d0
     End If
@@ -99,7 +82,12 @@ Contains
     ! the viscous time-step limit sees the largest kinematic viscosity of the two fluids
     nu = Max(vof_nu_l, vof_nu_g)
 
-    Call vof_initial_pressure
+    If ( restart == 1 ) Then
+       ppre = P
+       Call vp_halo(ppre, .True.)
+    Else
+       Call vof_initial_pressure
+    End If
 
   End Subroutine vof_flow_init
 
@@ -162,6 +150,7 @@ Contains
     Integer(Int32) :: isw, d, order(3), i, j, k
     Real(Int64) :: co, cl
 
+    Call make_transport_velocity
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     qu = vp_rfu*U;  qv = vp_rfv*V;  qw = vp_rfw*W
@@ -182,11 +171,11 @@ Contains
        Call vp_set_density(Cv)
        uqu = qu/vp_rfu;  uqv = qv/vp_rfv;  uqw = qw/vp_rfw
        If ( d == 1 ) Then
-          Call vof_sweep(1, Cv, nxg, nyg, nzg, U, hx, hy, hz, tau, co, cl)
+          Call vof_sweep(1, Cv, nxg, nyg, nzg, Ut, hx, hy, hz, tau, co, cl)
        Else If ( d == 2 ) Then
-          Call vof_sweep(2, Cv, nxg, nyg, nzg, V, hx, hy, hz, tau, co, cl)
+          Call vof_sweep(2, Cv, nxg, nyg, nzg, Vt, hx, hy, hz, tau, co, cl)
        Else
-          Call vof_sweep(3, Cv, nxg, nyg, nzg, W, hx, hy, hz, tau, co, cl)
+          Call vof_sweep(3, Cv, nxg, nyg, nzg, Wt, hx, hy, hz, tau, co, cl)
        End If
        Call sweep_mass_flux(d, tau)
        Call vp_halo(Md, .False.)
@@ -225,6 +214,21 @@ Contains
   End Subroutine vof_advect_half
 
 
+  !> Transporting velocity: the current velocity made exactly divergence-free by one constant-coefficient fast solve, so the
+  !  volume of liquid is conserved to round-off whatever residual the variable-density PCG leaves
+  Subroutine make_transport_velocity
+
+    Utmp = U;  Vtmp = V;  Wtmp = W
+    Call compute_pseudo_pressure_rhs
+    Call solve_poisson_equation(skip_p_save=.True.)
+    Call project_velocity
+    Ut = U;  Vt = V;  Wt = W
+    Call face_halo(Ut, Vt, Wt)
+    U = Utmp;  V = Vtmp;  W = Wtmp
+
+  End Subroutine make_transport_velocity
+
+
   !> Mass crossing each face of the sweep direction d in this sweep, and the volume-flux divergence Dd of the sweep
   Subroutine sweep_mass_flux(d, tau)
 
@@ -241,10 +245,10 @@ Contains
        Do k = 2, nzg-1
           Do j = 2, nyg-1
              Do i = 1, nx
-                Md(i,j,k) = vof_rho_g*U(i,j,k)*tau*hy(j)*hz(k) + drho*vof_flux(i,j,k)
+                Md(i,j,k) = vof_rho_g*Ut(i,j,k)*tau*hy(j)*hz(k) + drho*vof_flux(i,j,k)
              End Do
              Do i = 2, nx
-                Dd(i,j,k) = tau*hy(j)*hz(k)*( U(i,j,k) - U(i-1,j,k) )
+                Dd(i,j,k) = tau*hy(j)*hz(k)*( Ut(i,j,k) - Ut(i-1,j,k) )
              End Do
           End Do
        End Do
@@ -252,12 +256,12 @@ Contains
        Do k = 2, nzg-1
           Do j = 1, ny
              Do i = 2, nxg-1
-                Md(i,j,k) = vof_rho_g*V(i,j,k)*tau*dx*hz(k) + drho*vof_flux(i,j,k)
+                Md(i,j,k) = vof_rho_g*Vt(i,j,k)*tau*dx*hz(k) + drho*vof_flux(i,j,k)
              End Do
           End Do
           Do j = 2, ny
              Do i = 2, nxg-1
-                Dd(i,j,k) = tau*dx*hz(k)*( V(i,j,k) - V(i,j-1,k) )
+                Dd(i,j,k) = tau*dx*hz(k)*( Vt(i,j,k) - Vt(i,j-1,k) )
              End Do
           End Do
        End Do
@@ -265,14 +269,14 @@ Contains
        Do k = 1, Min(nz, nzg-1)
           Do j = 2, nyg-1
              Do i = 2, nxg-1
-                Md(i,j,k) = vof_rho_g*W(i,j,k)*tau*dx*hy(j) + drho*vof_flux(i,j,k)
+                Md(i,j,k) = vof_rho_g*Wt(i,j,k)*tau*dx*hy(j) + drho*vof_flux(i,j,k)
              End Do
           End Do
        End Do
        Do k = 2, nz
           Do j = 2, nyg-1
              Do i = 2, nxg-1
-                Dd(i,j,k) = tau*dx*hy(j)*( W(i,j,k) - W(i,j,k-1) )
+                Dd(i,j,k) = tau*dx*hy(j)*( Wt(i,j,k) - Wt(i,j,k-1) )
              End Do
           End Do
        End Do
@@ -381,6 +385,7 @@ Contains
     Call vp_div(U, V, W, fdiv)
     Call vp_pcg(fdiv, maxit, tol, dphi)
     vf_proj_its_last = vp_iters_last
+    vf_proj_its_sum = vf_proj_its_sum + vp_iters_last
     Call vp_halo(dphi, .True.)
     Call vp_grad(dphi, gu, gv, gw)
     Call apply_face_gradient(gu, gv, gw, 1d0)
@@ -615,7 +620,7 @@ Contains
 
     Call vof_advect_half(0.5d0*dt)
     Call apply_boundary_conditions
-    Call vof_project(vf_tol_adv, vf_maxit_adv)
+    Call vof_project(vof_adv_tol, vof_adv_iters)
     Call apply_boundary_conditions(after_projection=.True.)
 
     Uo = U;  Vo = V;  Wo = W
@@ -623,12 +628,13 @@ Contains
 
     Call vof_advect_half(0.5d0*dt)
     Call apply_boundary_conditions
-    Call vof_project(vf_tol_adv, vf_maxit_adv)
+    Call vof_project(vof_adv_tol, vof_adv_iters)
     Call apply_boundary_conditions(after_projection=.True.)
 
     t = to + dt
     P(2:nxg-1,2:nyg-1,2:nzg-1) = ppre(2:nxg-1,2:nyg-1,2:nzg-1)
     P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)
+    Call vof_end_step
     If ( Mod(istep, nmonitor) == 0 ) Call vof_output_monitor
     dt_step = dt
     dt = dt_presnap

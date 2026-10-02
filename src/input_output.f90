@@ -95,7 +95,7 @@ Contains
 
     Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, &
                    vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_pcg_iters, vof_mom_scheme, &
-                   vof_cfl_max, vof_selftest, vof_u0, vof_wave_amp, vof_wave_lambda
+                   vof_cfl_max, vof_selftest, vof_u0, vof_wave_amp, vof_wave_lambda, vof_adv_iters, vof_adv_tol
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -725,6 +725,8 @@ Contains
     Call Mpi_bcast ( vof_cfl_max,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_selftest,          1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_u0,                1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_adv_iters,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_adv_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_wave_amp,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_wave_lambda,       1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
 
@@ -1147,6 +1149,11 @@ Contains
           Call write_distributed_field_block(1, Tscal, nxg_global, nyg_global, nzg_global, .False., .False.)
        End If
 
+       ! VOF liquid fraction (cell-centred), always the last field block
+       If ( vof_active >= 1 ) Then
+          Call write_distributed_field_block(1, Cvof_io, nxg_global, nyg_global, nzg_global, .False., .False.)
+       End If
+
        ! Particle positions/state (src/particles.f90): separate restart file (latest state
        ! only, gather/scatter I/O), plus a timestamped snapshot for ParaView visualization
        ! (postProcessing/generate_particles_xmf.py) alongside the field snapshot above.
@@ -1209,6 +1216,41 @@ Contains
     Cscal_o = Cscal
 
   End Subroutine read_scalar_restart
+
+
+  ! Read the VOF fraction into Cvof_io and the pressure history into P from a restart file; skips U,V,W and the C/nu_t/T blocks of the other features
+  Subroutine read_vof_restart
+
+    If ( myid == 0 ) Then
+       Open(2, file=Trim(Adjustl(filein)), access='stream', &
+            form='unformatted', action='read')
+       Block
+          Integer(Int32) :: n1, n2, n3, n4, n5, n6
+          Real   (Int64), Allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), &
+                                         tmp5(:), tmp6(:)
+          Allocate(tmp1(nx_global)); Read(2) n1; Read(2) tmp1
+          Allocate(tmp2(ny_global)); Read(2) n2; Read(2) tmp2
+          Allocate(tmp3(nz_global)); Read(2) n3; Read(2) tmp3
+          Allocate(tmp4(nxm_global)); Read(2) n4; Read(2) tmp4
+          Allocate(tmp5(nym_global)); Read(2) n5; Read(2) tmp5
+          Allocate(tmp6(nzm_global)); Read(2) n6; Read(2) tmp6
+          Deallocate(tmp1,tmp2,tmp3,tmp4,tmp5,tmp6)
+       End Block
+    End If
+
+    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
+    Call skip_distributed_field_block(2, ny,  .False., .False.)
+    Call skip_distributed_field_block(2, nyg, .False., .True.)
+    ! P holds the pressure history of the two-fluid step (the plain solver does not read it back)
+    Call read_distributed_field_block(2, P, .False., .False.)
+    If ( sediment_flag >= 1 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
+    If ( sgs_model /= 0 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
+    If ( boussinesq_flag >= 1 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
+    Call read_distributed_field_block(2, Cvof_io, .False., .False.)
+
+    If ( myid == 0 ) Close(2)
+
+  End Subroutine read_vof_restart
 
 
   ! Read temperature T from a restart file; skips U,V,W,P and any C/nu_t blocks ahead of it
