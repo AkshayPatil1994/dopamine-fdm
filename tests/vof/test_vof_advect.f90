@@ -14,6 +14,7 @@ Program test_vof_advect
   Integer(Int32) :: n, iscm, ic, nlev
   Real(Int64) :: max_drift = 0d0, max_excess = 0d0, min_order = 1d3
   Real(Int64) :: e_prev, e_now, rate
+  Real(Int64), Parameter :: cos_list(5) = (/ 0.05d0, 0.2d0, 0.5d0, 0.8d0, 0.95d0 /)
   Logical :: ok
 
   ok = .True.
@@ -58,6 +59,14 @@ Program test_vof_advect
         Call run_vortex(n, iscm, 2d0)
         Call run_vortex(n, iscm, 8d0)
      End Do
+  End Do
+
+  Write(*,'(a)') '--- Case 4: disk translation, grid-orientation sensitivity (N=64, Co=0.4) and CFL sensitivity (45 deg)'
+  Do ic = 0, 4
+     Call run_disk_translate(64, 1, Real(ic,Int64)*11.25d0, 0.4d0, e_now)
+  End Do
+  Do ic = 1, 5
+     Call run_disk_translate(64, 1, 45d0, cos_list(ic), e_now)
   End Do
 
   If ( max_drift > 1d-12 .Or. max_excess > 1d-12 .Or. min_order < 1.8d0 ) ok = .False.
@@ -344,6 +353,67 @@ Contains
     p = Sin(pi*x)**2*Sin(pi*y)**2/pi
 
   End Function vpsi
+
+
+  !> Disk of radius 0.15 translated at speed 1 along angle theta (deg) for t=0.5, compared with the sub-sampled disk at its exact
+  !  final position; co is the target Courant number of the largest velocity component
+  Subroutine run_disk_translate(n, scheme, theta, co, err)
+
+    Integer(Int32), Intent(In)  :: n, scheme
+    Real(Int64),    Intent(In)  :: theta, co
+    Real(Int64),    Intent(Out) :: err
+
+    Integer(Int32) :: n1, n2, n3, i, j, k, istep, nsteps
+    Real(Int64) :: h, dt, uu, vv, cobs, cl, cltot, cotot, v0, v1, cmin, cmax, tend, cx, cy
+    Real(Int64), Allocatable :: Cp(:,:,:), U(:,:,:), V(:,:,:), W(:,:,:), hh(:)
+    Integer(Int64) :: nint
+    Integer(Int32) :: mx, my
+    Real(Int64) :: cref
+
+    n1 = n + 2;  n2 = n + 2;  n3 = 5
+    h = 1d0/n
+    Allocate( Cp(0:n1+1,0:n2+1,0:n3+1), U(n1-1,n2,n3), V(n1,n2-1,n3), W(n1,n2,n3-1), hh(Max(n1,n3)) )
+    hh = h
+    uu = Cos(theta*pi/180d0);  vv = Sin(theta*pi/180d0)
+    U = uu;  V = vv;  W = 0d0
+    tend = 0.5d0
+    dt = co*h/Max(Abs(uu), Abs(vv))
+    nsteps = Ceiling(tend/dt)
+    dt = tend/nsteps
+    Do k = 1, n3
+       Do j = 1, n2
+          Do i = 1, n1
+             Cp(i,j,k) = disk_fraction((i-2)*h, (j-2)*h, h)
+          End Do
+       End Do
+    End Do
+    Call fill_pad_periodic(Cp, n1, n2, n3)
+    Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v0, cmin, cmax, nint)
+    cotot = 0d0;  cltot = 0d0
+    Do istep = 0, nsteps-1
+       Call vof_advect_step(Cp, n1, n2, n3, U, V, W, hh(1:n1), hh(1:n2), hh(1:n3), dt, istep, scheme, fill_pad_periodic, cobs, cl)
+       cotot = Max(cotot, cobs);  cltot = cltot + cl
+    End Do
+    Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v1, cmin, cmax, nint)
+    cx = uu*tend;  cy = vv*tend
+    err = 0d0
+    Do k = 2, n3-1
+       Do j = 2, n2-1
+          Do i = 2, n1-1
+             cref = 0d0
+             Do mx = -1, 1
+                Do my = -1, 1
+                   cref = cref + disk_fraction((i-2)*h - cx + mx, (j-2)*h - cy + my, h)
+                End Do
+             End Do
+             err = err + Abs( Cp(i,j,k) - cref )*h**3
+          End Do
+       End Do
+    End Do
+    max_drift = Max(max_drift, Abs((v1-v0)/v0));  max_excess = Max(max_excess, -cmin, cmax-1d0)
+    Write(*,'(a,f6.2,a,f5.2,a,es10.3,a,es9.2)') '  theta=', theta, ' Co=', cotot, '  L1 err=', err, '  vol drift=', (v1-v0)/v0
+
+  End Subroutine run_disk_translate
 
 
   Function disk_fraction(x0, y0, h) Result(f)
