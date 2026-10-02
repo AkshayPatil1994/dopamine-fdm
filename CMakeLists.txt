@@ -378,6 +378,12 @@ target_link_libraries(dopamine-ESEM
 )
 
 #------------------------------------------------------------------------------
+# Standalone verification driver for the VOF/PLIC geometry (src/vof_plic.f90); serial, no solver dependencies
+#------------------------------------------------------------------------------
+add_executable(test_plic_geometry src/vof_plic.f90 tests/vof/test_plic_geometry.f90)
+set_target_properties(test_plic_geometry PROPERTIES Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mod/test_plic_geometry")
+
+#------------------------------------------------------------------------------
 # Tests
 #------------------------------------------------------------------------------
 add_test(NAME verify_sem_divergence_free
@@ -386,6 +392,7 @@ add_test(NAME verify_ti_profile
     COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 $<TARGET_FILE:verify_ti_profile>)
 add_test(NAME verify_inflow_opt
     COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 $<TARGET_FILE:verify_inflow_opt>)
+add_test(NAME vof_plic_geometry COMMAND $<TARGET_FILE:test_plic_geometry>)
 
 # Parity regressions (tests/regression/<case>): deterministic small cases whose output_monitor
 # diagnostics (src/monitor.f90:61) must agree within tolerance across rank counts and, in
