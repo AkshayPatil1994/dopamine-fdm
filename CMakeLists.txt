@@ -175,6 +175,10 @@ set(SRCS
     src/ibm.f90
     src/scalar_transport.f90
     src/thermal_transport.f90
+    src/vof_plic.f90
+    src/vof_normals.f90
+    src/vof_advect.f90
+    src/vof_state.f90
     src/genGridandIC.f90
     src/input_output.f90
     src/debug_trace.f90

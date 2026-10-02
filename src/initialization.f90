@@ -18,6 +18,7 @@ Module initialization
   Use input_output
   Use ibmSetup
   Use scalar_transport, Only : compute_settling_velocity
+  Use vof_state, Only : vof_init
   Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
   Use uav_actuator, Only : setup_uav
 #ifdef GPU_POISSON
@@ -872,6 +873,8 @@ Contains
           Call apply_periodic_bc_z(W,3)
        End If
     End If
+
+    If ( vof_active >= 1 ) Call vof_init
 
     ! Done
     Call Mpi_barrier(MPI_COMM_WORLD,ierr)

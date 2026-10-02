@@ -93,6 +93,8 @@ Contains
                          particle_boussinesq_coupling, particle_deposit_file, particle_deposit_freq, &
                          sgs_particle_model, particle_langevin_C0
 
+    Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme
+
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
     Lx = 1d0; Ly = 1d0; Lz = 1d0
@@ -233,6 +235,14 @@ Contains
           End If
        Else
           Write(*,'(A)') ' INFO: no &PARTICLES found, point-particle tracking disabled'
+       End If
+
+       If ( namelist_group_present(unit_in, 'VOF') ) Then
+          Rewind(unit_in)
+          Read(unit_in, nml=VOF,                 iostat=ios)
+          If (ios /= 0) Call abort_input( 'ERROR: &VOF present but failed to parse (check variable names)' )
+       Else
+          Write(*,'(A)') ' INFO: no &VOF found, free-surface VOF disabled'
        End If
 
        Close(unit_in)
@@ -463,6 +473,11 @@ Contains
              Write(*,'(A,I2)')    '   particle_brownian            = ', particle_brownian
           End If
        End If
+       If ( vof_active >= 1 ) Then
+          Write(*,'(A,I2)')    '   vof_active                  = ', vof_active
+          Write(*,'(A,I2)')    '   vof_ic_type (1=plane,2=drop,3=bubble) = ', vof_ic_type
+          Write(*,'(A,I2)')    '   vof_normal_scheme (1=Youngs,2=height function) = ', vof_normal_scheme
+       End If
     End If
 
     ! ---- Broadcast everything to all ranks ---------------------------
@@ -682,6 +697,13 @@ Contains
     Call Mpi_bcast ( particle_deposit_freq, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( sgs_particle_model,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_langevin_C0,  1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+
+    Call Mpi_bcast ( vof_active,            1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_ic_type,           1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_level,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_center,            3, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_radius,            1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_normal_scheme,     1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 

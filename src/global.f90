@@ -712,6 +712,16 @@ Module global
   Integer(Int32) :: sgs_particle_model  = 0
   Real   (Int64) :: particle_langevin_C0 = 2.1d0   ! Kolmogorov constant
 
+  ! Geometric PLIC VOF free surface (src/vof_state.f90): vof_active 0=off,1=on.
+  ! vof_ic_type: 1=planar interface (liquid below y=vof_level), 2=sphere (centre vof_center, radius vof_radius), 3=sphere of
+  ! gas inside liquid (liquid outside). vof_normal_scheme: 1=Youngs, 2=centred-column height function with Youngs fallback.
+  Integer(Int32) :: vof_active        = 0
+  Integer(Int32) :: vof_ic_type       = 1
+  Real   (Int64) :: vof_level         = 0d0
+  Real   (Int64) :: vof_center(3)     = 0d0
+  Real   (Int64) :: vof_radius        = 0d0
+  Integer(Int32) :: vof_normal_scheme = 1
+
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
   Integer(Int32) :: line_freq = 100

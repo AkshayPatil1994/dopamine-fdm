@@ -15,6 +15,7 @@ Module time_integration
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
   Use monitor,          Only : compute_cfl, write_force_csv, compute_bulk_velocity
   Use particles,        Only : advance_particles
+  Use vof_state,        Only : vof_advance_substep, vof_save_stage, vof_end_step, vof_output_monitor
   Use profiler
   Use debug_trace,      Only : trace_stage, trace_interior, trace_active
 
@@ -220,6 +221,8 @@ Contains
 
     t = to + rk_t(rk_step)*dt
 
+    If ( vof_active >= 1 ) Call vof_advance_substep(1)
+
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions
     Call trace_stage('s1_bc_pre')
@@ -252,6 +255,8 @@ Contains
        !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)
     End If
+
+    If ( vof_active >= 1 ) Call vof_save_stage(1)
 
     ! Scalar step 1
     If ( sediment_flag >= 1 ) Then
@@ -346,6 +351,8 @@ Contains
 
     t = to + rk_t(rk_step)*dt
 
+    If ( vof_active >= 1 ) Call vof_advance_substep(2)
+
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions
     Call trace_stage('s2_bc_pre')
@@ -378,6 +385,8 @@ Contains
        !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)
     End If
+
+    If ( vof_active >= 1 ) Call vof_save_stage(2)
 
     ! Scalar step 2
     If ( sediment_flag >= 1 ) Then
@@ -476,6 +485,8 @@ Contains
     End If
 
     t = to + rk_t(rk_step)*dt
+
+    If ( vof_active >= 1 ) Call vof_advance_substep(3)
 
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions
@@ -598,6 +609,11 @@ Contains
        Call profiler_start(PROF_IBM)
        Call sample_ibm_surface(U, V, W)
        Call profiler_stop(PROF_IBM)
+    End If
+
+    If ( vof_active >= 1 ) Then
+       Call vof_end_step
+       If ( Mod(istep, nmonitor) == 0 ) Call vof_output_monitor
     End If
 
     Call trace_stage('step_end')
