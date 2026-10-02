@@ -42,7 +42,7 @@ Contains
   Subroutine vof_init
 
     Integer(Int32) :: i, j, k
-    Real(Int64) :: vliq, cmin, cmax, mom(4)
+    Real(Int64) :: vliq, cmin, cmax, mom(5)
     Integer(Int64) :: nint
 
     Allocate( Cv(0:nxg+1,0:nyg+1,0:nzg+1), Cw(nxg,nyg,nzg), Pw(0:nxg+1,nyg,0:nzg+1) )
@@ -99,9 +99,20 @@ Contains
     Integer(Int32), Parameter :: ns = 10
     Integer(Int32) :: a, b, d, cnt
     Real(Int64) :: px, py, pz, r2, dmin2, dmax2, qx, qy, qz
+    Real(Int64), Parameter :: pi_ = 3.14159265358979323846d0
 
     If ( vof_ic_type == 1 ) Then
        c = Min(1d0, Max(0d0, (vof_level - y0)/(y1 - y0)))
+       Return
+    End If
+    If ( vof_ic_type == 4 ) Then
+       ! standing/sloshing wave: liquid below y = level + amp cos(2 pi x/lambda), column average over 32 sub-columns
+       c = 0d0
+       Do a = 1, 32
+          px = x0 + (x1 - x0)*(Real(a,Int64) - 0.5d0)/32d0
+          c = c + Min(1d0, Max(0d0, (vof_level + vof_wave_amp*Cos(2d0*pi_*px/vof_wave_lambda) - y0)/(y1 - y0)))
+       End Do
+       c = c/32d0
        Return
     End If
 
@@ -241,19 +252,23 @@ Contains
   !  cells, cumulative clip loss, largest sub-step Courant number seen since the last row
   Subroutine vof_output_monitor
 
-    Real(Int64) :: vliq, cmin, cmax, mom(4), vv
+    Real(Int64) :: vliq, cmin, cmax, mom(5), vv, vel_loc(3), vel_glb(3)
     Integer(Int64) :: nint
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     vv = Max(vliq, 1d-300)
+    vel_loc = (/ -MinVal(U(2:nx-1,2:nyg-1,2:nzg-1)), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
+                 MaxVal(Abs(W(2:nxg-1,2:nyg-1,2:nz-1))) /)
+    Call MPI_Allreduce(vel_loc, vel_glb, 3, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     If ( myid == 0 ) Then
        If ( vof_unit < 0 ) Then
           Open(newunit=vof_unit, file='vof_diag.dat', status='unknown', position='append', action='write')
-          Write(vof_unit,'(A)') '# step t Vliq (Vliq-V0)/V0 Cmin Cmax n_interface clip_loss Co_max xc yc zc  int C(1-C)'
+          Write(vof_unit,'(A)') '# step t Vliq (Vliq-V0)/V0 Cmin Cmax n_interface clip_loss Co_max xc yc zc ' // &
+               ' int C(1-C) cos-moment -Umin |V|max |W|max'
        End If
-       Write(vof_unit,'(I10,ES18.10,ES22.14,3ES14.5,I10,2ES14.5,3ES20.12,ES16.8)') istep, t, vliq, &
+       Write(vof_unit,'(I10,ES18.10,ES22.14,3ES14.5,I10,2ES14.5,3ES20.12,ES16.8,ES20.12,3ES14.5)') istep, t, vliq, &
             (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
-            mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4)
+            mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb
        Flush(vof_unit)
     End If
     vof_co_max = 0d0
@@ -265,13 +280,13 @@ Contains
   !  mom = (first moments of the liquid in x, y, z, integral of C(1-C) as a smearing measure)
   Subroutine vof_diagnostics(vliq, cmin, cmax, nint, mom)
 
-    Real(Int64),    Intent(Out) :: vliq, cmin, cmax, mom(4)
+    Real(Int64),    Intent(Out) :: vliq, cmin, cmax, mom(5)
     Integer(Int64), Intent(Out) :: nint
 
     Integer(Int32) :: i, j, k, ihi, jhi, khi
     Logical :: is_first, is_last
     Integer(Int32) :: partner
-    Real(Int64) :: c, vc, buf(5), gbuf(5), mn, mx
+    Real(Int64) :: c, vc, buf(6), gbuf(6), mn, mx, kd
     Integer(Int64) :: ni, gni
 
     ihi = nxg-1;  jhi = nyg-1;  khi = nzg-1
@@ -286,6 +301,8 @@ Contains
     If ( y_bc_type == 0 ) jhi = nyg-2
 
     buf = 0d0;  mn = 1d300;  mx = -1d300;  ni = 0
+    kd = 0d0
+    If ( vof_wave_lambda > 0d0 ) kd = 8d0*Atan(1d0)/vof_wave_lambda
     Do k = 2, khi
        Do j = 2, jhi
           Do i = 2, ihi
@@ -296,17 +313,18 @@ Contains
              buf(3) = buf(3) + c*vc*yg(j)
              buf(4) = buf(4) + c*vc*zg(k)
              buf(5) = buf(5) + c*(1d0 - c)*vc
+             buf(6) = buf(6) + c*vc*Cos(kd*xg(i))
              mn = Min(mn, c);  mx = Max(mx, c)
              If ( c > vof_eps .And. c < 1d0 - vof_eps ) ni = ni + 1
           End Do
        End Do
     End Do
 
-    Call MPI_Allreduce(buf, gbuf, 5, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Call MPI_Allreduce(buf, gbuf, 6, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(mn, cmin, 1, MPI_real8, MPI_MIN, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(mx, cmax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(ni, gni, 1, MPI_integer8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    vliq = gbuf(1);  mom = gbuf(2:5);  nint = gni
+    vliq = gbuf(1);  mom = gbuf(2:6);  nint = gni
 
   End Subroutine vof_diagnostics
 

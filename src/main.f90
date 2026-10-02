@@ -12,6 +12,7 @@ Program dopamine
   Use finalization
   Use reynolds_stress_budget
   Use probe_output
+  Use vof_twofluid, Only : vof_flow_init, compute_time_step_vof
   Use synthetic_eddy_method, Only : accumulate_inflow_opt, advance_inflow_opt
   
   ! prevent implicit typing
@@ -34,6 +35,9 @@ Program dopamine
   ! initialise slice/line probe output (resolve grid indices, open files)
   Call init_probes
 
+  ! two-fluid VOF state (density, pressure predictor, hydrostatic reference) from the initialised C and U,V,W
+  If ( vof_flow >= 1 ) Call vof_flow_init
+
   ! small summary of input parameters
   Call summary
      
@@ -52,7 +56,11 @@ Program dopamine
      istep = istep + 1
 
      ! time step (pressure forcing update handled inside )
-     Call compute_time_step_RK3
+     If ( vof_flow >= 1 ) Then
+        Call compute_time_step_vof
+     Else
+        Call compute_time_step_RK3
+     End If
 
      ! accumulate Reynolds stress statistics (no-op when rsb_active==0)
      Call accumulate_rsb

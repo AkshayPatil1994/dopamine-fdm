@@ -95,7 +95,7 @@ Contains
 
     Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, &
                    vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_pcg_iters, vof_mom_scheme, &
-                   vof_cfl_max, vof_selftest
+                   vof_cfl_max, vof_selftest, vof_u0, vof_wave_amp, vof_wave_lambda
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -724,6 +724,9 @@ Contains
     Call Mpi_bcast ( vof_mom_scheme,        1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_cfl_max,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_selftest,          1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_u0,                1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_wave_amp,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_wave_lambda,       1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 

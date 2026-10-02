@@ -206,8 +206,9 @@ list(APPEND SRCS
     src/projection.f90
     src/vof_pressure.f90
     src/vof_state.f90
-    src/time_integration.f90
     src/monitor.f90
+    src/vof_twofluid.f90
+    src/time_integration.f90
     src/reynolds_stress_budget.f90
     src/probe_output.f90
     src/main.f90

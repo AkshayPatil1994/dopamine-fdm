@@ -18,7 +18,8 @@ Module vof_pressure
 
   Implicit None
 
-  Real(Int64), Allocatable, Dimension(:,:,:) :: vp_rho, vp_bu, vp_bv, vp_bw, vp_w
+  Real(Int64), Allocatable, Dimension(:,:,:) :: vp_rho, vp_bu, vp_bv, vp_bw, vp_w, vp_rfu, vp_rfv, vp_rfw
+  Real(Int64), Allocatable, Dimension(:) :: vp_hy
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_r, vp_z, vp_d, vp_ap
   Real(Int64) :: vp_beta0 = 1d0, vp_wsum = 1d0
   Integer(Int32) :: vp_iters_last = 0
@@ -35,6 +36,12 @@ Contains
 
     Allocate( vp_rho(nxg,nyg,nzg), vp_bu(nx,nyg,nzg), vp_bv(nxg,ny,nzg), vp_bw(nxg,nyg,nz), vp_w(nxg,nyg,nzg) )
     Allocate( vp_r(nxg,nyg,nzg), vp_z(nxg,nyg,nzg), vp_d(nxg,nyg,nzg), vp_ap(nxg,nyg,nzg) )
+    Allocate( vp_rfu(nx,nyg,nzg), vp_rfv(nxg,ny,nzg), vp_rfw(nxg,nyg,nz), vp_hy(nyg) )
+    vp_rfu = vof_rho_g;  vp_rfv = vof_rho_g;  vp_rfw = vof_rho_g
+    Do j = 2, nyg-1
+       vp_hy(j) = y(j) - y(j-1)
+    End Do
+    vp_hy(1) = vp_hy(2);  vp_hy(nyg) = vp_hy(nyg-1)
     vp_rho = vof_rho_g;  vp_bu = 1d0/vof_rho_g;  vp_bv = 1d0/vof_rho_g;  vp_bw = 1d0/vof_rho_g
     vp_r = 0d0;  vp_z = 0d0;  vp_d = 0d0;  vp_ap = 0d0
     vp_beta0 = 1d0/Min(vof_rho_l, vof_rho_g)
@@ -65,7 +72,8 @@ Contains
   End Subroutine vp_init
 
 
-  !> Cell densities (ghosts included) and face coefficients beta = 2/(rho_i + rho_j) from the padded C (indices 0..n+1)
+  !> Cell densities (ghosts included), face densities (arithmetic in x and z, volume-weighted across the stretched y cells so
+  !  that rho_face * u is the mass-consistent momentum of the staggered control volume) and beta = 1/rho_face, from the padded C
   Subroutine vp_set_density(Cp)
 
     Real(Int64), Intent(In) :: Cp(0:nxg+1,0:nyg+1,0:nzg+1)
@@ -81,24 +89,25 @@ Contains
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nx
-             vp_bu(i,j,k) = 2d0/( vp_rho(i,j,k) + vp_rho(i+1,j,k) )
+             vp_rfu(i,j,k) = 0.5d0*( vp_rho(i,j,k) + vp_rho(i+1,j,k) )
           End Do
        End Do
     End Do
     Do k = 1, nzg
        Do j = 1, ny
           Do i = 1, nxg
-             vp_bv(i,j,k) = 2d0/( vp_rho(i,j,k) + vp_rho(i,j+1,k) )
+             vp_rfv(i,j,k) = ( vp_rho(i,j,k)*vp_hy(j) + vp_rho(i,j+1,k)*vp_hy(j+1) )/( vp_hy(j) + vp_hy(j+1) )
           End Do
        End Do
     End Do
     Do k = 1, nz
        Do j = 1, nyg
           Do i = 1, nxg
-             vp_bw(i,j,k) = 2d0/( vp_rho(i,j,k) + vp_rho(i,j,Min(k+1,nzg)) )
+             vp_rfw(i,j,k) = 0.5d0*( vp_rho(i,j,k) + vp_rho(i,j,Min(k+1,nzg)) )
           End Do
        End Do
     End Do
+    vp_bu = 1d0/vp_rfu;  vp_bv = 1d0/vp_rfv;  vp_bw = 1d0/vp_rfw
 
   End Subroutine vp_set_density
 

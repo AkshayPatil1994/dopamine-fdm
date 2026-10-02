@@ -735,6 +735,9 @@ Module global
   Integer(Int32) :: vof_mom_scheme    = 0
   Real   (Int64) :: vof_cfl_max       = 0.4d0
   Integer(Int32) :: vof_selftest      = 0
+  Real   (Int64) :: vof_wave_amp      = 0d0   ! vof_ic_type=4: cosine wave amplitude and wavelength along x
+  Real   (Int64) :: vof_wave_lambda   = 0d0
+  Real   (Int64) :: vof_u0            = 0d0   ! uniform streamwise velocity imposed at start-up (vof_flow, fresh start only)
 
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
