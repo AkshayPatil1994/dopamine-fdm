@@ -378,10 +378,14 @@ target_link_libraries(dopamine-ESEM
 )
 
 #------------------------------------------------------------------------------
-# Standalone verification driver for the VOF/PLIC geometry (src/vof_plic.f90); serial, no solver dependencies
+# Standalone verification drivers for the VOF/PLIC geometry and advection kernels
+# (src/vof_plic.f90, vof_normals.f90, vof_advect.f90); serial, no solver dependencies
 #------------------------------------------------------------------------------
+set(VOF_SRCS src/vof_plic.f90 src/vof_normals.f90 src/vof_advect.f90)
 add_executable(test_plic_geometry src/vof_plic.f90 tests/vof/test_plic_geometry.f90)
 set_target_properties(test_plic_geometry PROPERTIES Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mod/test_plic_geometry")
+add_executable(test_vof_advect ${VOF_SRCS} tests/vof/test_vof_advect.f90)
+set_target_properties(test_vof_advect PROPERTIES Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mod/test_vof_advect")
 
 #------------------------------------------------------------------------------
 # Tests
@@ -393,6 +397,7 @@ add_test(NAME verify_ti_profile
 add_test(NAME verify_inflow_opt
     COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 $<TARGET_FILE:verify_inflow_opt>)
 add_test(NAME vof_plic_geometry COMMAND $<TARGET_FILE:test_plic_geometry>)
+add_test(NAME vof_advect_prescribed COMMAND $<TARGET_FILE:test_vof_advect>)
 
 # Parity regressions (tests/regression/<case>): deterministic small cases whose output_monitor
 # diagnostics (src/monitor.f90:61) must agree within tolerance across rank counts and, in
