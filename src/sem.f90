@@ -1842,6 +1842,8 @@ Contains
 
     If ( inflow_type == 0 ) Then
        Uc = inflow_Uconst
+    Else If ( inflow_type == 3 ) Then
+       Uc = 0d0
     Else
        Uc = interp_profile(prof_U, yc)
     End If

@@ -738,6 +738,25 @@ Module global
   Real   (Int64) :: vof_wave_amp      = 0d0   ! vof_ic_type=4: cosine wave amplitude and wavelength along x
   Real   (Int64) :: vof_wave_lambda   = 0d0
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cvof_io   ! C without the second ghost layer, for snapshots and restart
+  ! Wave generation (src/waves.f90): wave_type 0=off, 1=linear, 2=stream function, 3=JONSWAP; the inlet needs inflow_type=3.
+  ! wave_current_mode: 1 zero mean volume flux (closed flume), 2 zero mean Eulerian velocity. Relaxation zones (waves2Foam style
+  ! weights): generation length from the inlet, absorption length at the outlet, relaxation rate [1/s] at full strength.
+  Integer(Int32) :: wave_type         = 0
+  Real   (Int64) :: wave_height       = 0d0
+  Real   (Int64) :: wave_period       = 1d0
+  Real   (Int64) :: wave_phase        = 0d0
+  Integer(Int32) :: wave_sf_n         = 16
+  Integer(Int32) :: wave_current_mode = 1
+  Real   (Int64) :: wave_Hs           = 0d0
+  Real   (Int64) :: wave_Tp           = 1d0
+  Real   (Int64) :: wave_gamma        = 3.3d0
+  Integer(Int32) :: wave_nfreq        = 200
+  Integer(Int32) :: wave_seed         = 12345
+  Real   (Int64) :: wave_gen_len      = 0d0
+  Real   (Int64) :: wave_abs_len      = 0d0
+  Real   (Int64) :: wave_relax_rate   = 20d0
+  Real   (Int64) :: wave_ramp_time    = 0d0    ! smooth start-up ramp of the wave amplitude [s] (0 = none)
+  Real   (Int64) :: wave_gauge_x(8)   = -1d0   ! x positions of surface-elevation gauges written to vof_gauges.dat (<0 unused)
   Integer(Int32) :: vof_adv_iters     = 3       ! PCG iterations of the projection after each half advection
   Real   (Int64) :: vof_adv_tol       = 1d-8    ! and its relative residual target
   Real   (Int64) :: vof_u0            = 0d0   ! uniform streamwise velocity imposed at start-up (vof_flow, fresh start only)

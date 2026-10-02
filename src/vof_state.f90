@@ -23,6 +23,7 @@ Module vof_state
   Use vof_advect
   Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last
   Use input_output, Only : read_vof_restart
+  Use waves, Only : wave_init, wave_eta
 
   Implicit None
 
@@ -32,9 +33,10 @@ Module vof_state
   ! transporting velocities: stage 1 and 2 of this step, stage 2 of the previous step, and the extrapolated midpoint field
   Real(Int64), Allocatable, Dimension(:,:,:) :: Us1, Vs1, Ws1, Us2, Vs2, Ws2, Ue, Ve, We
 
-  Integer(Int32) :: vof_unit = -1
+  Integer(Int32) :: vof_unit = -1, gauge_unit = -1
   Real(Int64), Allocatable, Dimension(:) :: vof_rho_ref   ! still-water row densities of the initial state (hydrostatic reference)
   Logical        :: vof_have_prev = .False.
+  Real(Int64)    :: vof_bnd_cum = 0d0, vof_relax_cum = 0d0   ! cumulative liquid volume through the x boundaries and from relaxation
   Real(Int64)    :: vof_dt_prev = 0d0, vof_vol0 = 0d0, vof_clip_total = 0d0, vof_co_max = 0d0
   Integer(Int32) :: vof_nadv = 0
 
@@ -78,6 +80,7 @@ Contains
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: the VOF field supports periodic z only (z_bc_type=0)'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
+    If ( wave_type > 0 ) Call wave_init
     Allocate( Cvof_io(nxg,nyg,nzg), vof_rho_ref(nyg) )
     If ( vof_flow >= 1 ) Then
        Call vp_init
@@ -202,7 +205,10 @@ Contains
     Call update_ghost_interior_planes_x(Cw, 4)
     If ( x_bc_type == 1 ) Then
        Call x_periodic_partner(is_first, is_last, partner)
-       If ( is_first ) Cw(1,:,:)  = Cw(2,:,:)
+       If ( is_first ) Then
+          Cw(1,:,:) = Cw(2,:,:)
+          If ( inflow_type == 3 .And. wave_type > 0 ) Call wave_inlet_fraction
+       End If
        If ( is_last  ) Cw(n1,:,:) = Cw(n1-1,:,:)
     End If
     Call finish_scalar_halos(Cw)
@@ -226,6 +232,20 @@ Contains
     End If
 
   End Subroutine vof_fill_pad
+
+
+  !> Inlet ghost cell of C: liquid below the target wave surface at the ghost-cell centre
+  Subroutine wave_inlet_fraction
+
+    Integer(Int32) :: j
+    Real(Int64) :: top
+
+    top = vof_level + wave_eta(xg(1), t)
+    Do j = 2, nyg-1
+       Cw(1,j,:) = Min(1d0, Max(0d0, (top - y(j-1))/(y(j) - y(j-1))))
+    End Do
+
+  End Subroutine wave_inlet_fraction
 
 
   !> Store the projected stage velocity (stage 1 or 2) used by the later sub-steps' midpoint extrapolation
@@ -292,7 +312,7 @@ Contains
   !  cells, cumulative clip loss, largest sub-step Courant number seen since the last row
   Subroutine vof_output_monitor
 
-    Real(Int64) :: vliq, cmin, cmax, mom(5), vv, vel_loc(3), vel_glb(3)
+    Real(Int64) :: vliq, cmin, cmax, mom(5), vv, vel_loc(3), vel_glb(3), xloc, yloc
     Integer(Int64) :: nint
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
@@ -300,20 +320,83 @@ Contains
     vel_loc = (/ -MinVal(U(2:nx-1,2:nyg-1,2:nzg-1)), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
                  MaxVal(Abs(W(2:nxg-1,2:nyg-1,2:nz-1))) /)
     Call MPI_Allreduce(vel_loc, vel_glb, 3, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
+    ! where the fastest |U| is (x, y of the face), reduced with MAXLOC
+    Block
+      Integer(Int32) :: ia(3)
+      Real(Int64) :: pin(2), pout(2)
+      ia = MaxLoc(Abs(U(2:nx-1,2:nyg-1,2:nzg-1)))
+      pin(1) = MaxVal(Abs(U(2:nx-1,2:nyg-1,2:nzg-1)))
+      pin(2) = Real(myid,Int64)
+      Call MPI_Allreduce(pin, pout, 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, MPI_COMM_WORLD, ierr)
+      xloc = 0d0;  yloc = 0d0
+      If ( Real(myid,Int64) == pout(2) ) Then
+         xloc = x(ia(1)+1);  yloc = yg(ia(2)+1)
+      End If
+      pin = (/ xloc, yloc /)
+      Call MPI_Allreduce(pin, pout, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+      xloc = pout(1);  yloc = pout(2)
+    End Block
     If ( myid == 0 ) Then
        If ( vof_unit < 0 ) Then
           Open(newunit=vof_unit, file='vof_diag.dat', status='unknown', position='append', action='write')
           Write(vof_unit,'(A)') '# step t Vliq (Vliq-V0)/V0 Cmin Cmax n_interface clip_loss Co_max xc yc zc ' // &
-               ' int C(1-C) cos-moment -Umin |V|max |W|max last-PCG-its last-PCG-res'
+               ' int C(1-C) cos-moment -Umin |V|max |W|max last-PCG-its last-PCG-res bnd_cum relax_cum x_Umax y_Umax'
        End If
-       Write(vof_unit,'(I10,ES18.10,ES22.14,3ES14.5,I10,2ES14.5,3ES20.12,ES16.8,ES20.12,3ES14.5,I6,ES11.3)') istep, t, vliq, &
+       Write(vof_unit,'(I10,ES18.10,ES22.14,3ES14.5,I10,2ES14.5,3ES20.12,ES16.8,ES20.12,3ES14.5,I6,ES11.3,2ES16.8,2ES11.3)') &
+            istep, t, vliq, &
             (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
-            mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, vp_iters_last, vp_res_last
+            mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, vp_iters_last, vp_res_last, &
+            vof_bnd_cum, vof_relax_cum, xloc, yloc
        Flush(vof_unit)
     End If
     vof_co_max = 0d0
 
   End Subroutine vof_output_monitor
+
+
+  !> Surface elevation at the wave gauges (column liquid height, mean over z), appended to vof_gauges.dat
+  Subroutine vof_write_gauges
+
+    Integer(Int32) :: ig, i, j, k, ng, ihi, khi
+    Real(Int64) :: loc(8), glb(8), cnt_loc(8), cnt(8), col
+    Logical :: is_first, is_last
+    Integer(Int32) :: partner
+
+    ng = Count(wave_gauge_x >= 0d0)
+    If ( ng == 0 ) Return
+    ihi = nxg-1;  khi = nzg-1
+    If ( z_bc_type == 0 ) Then
+       Call z_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) khi = nzg-2
+    End If
+    loc = 0d0;  cnt_loc = 0d0
+    Do ig = 1, ng
+       Do i = 2, ihi
+          ! owner of the gauge: the cell whose faces bracket it (cells are [x(i-1), x(i)])
+          If ( wave_gauge_x(ig) >= x(i-1) .And. wave_gauge_x(ig) < x(i) ) Then
+             Do k = 2, khi
+                col = 0d0
+                Do j = 2, nyg-1
+                   col = col + Cv(i,j,k)*hy(j)
+                End Do
+                loc(ig) = loc(ig) + col - vof_level
+                cnt_loc(ig) = cnt_loc(ig) + 1d0
+             End Do
+          End If
+       End Do
+    End Do
+    Call MPI_Allreduce(loc, glb, 8, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Call MPI_Allreduce(cnt_loc, cnt, 8, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    If ( myid == 0 ) Then
+       If ( gauge_unit < 0 ) Then
+          Open(newunit=gauge_unit, file='vof_gauges.dat', status='unknown', position='append', action='write')
+          Write(gauge_unit,'(A,8ES12.4)') '# t eta(x_g) at x =', wave_gauge_x(1:ng)
+       End If
+       Write(gauge_unit,'(ES16.8,8ES14.6)') t, (glb(ig)/Max(cnt(ig), 1d0), ig = 1, ng)
+       Flush(gauge_unit)
+    End If
+
+  End Subroutine vof_write_gauges
 
 
   !> Global liquid volume, extremes of C and interface-cell count over the owned cells (periodic duplicate cells left out), plus

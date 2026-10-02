@@ -164,6 +164,7 @@ set(SRCS
     src/global.f90
     src/decomp.f90
     src/halo_pad.f90
+    src/waves.f90
     src/uav_actuator.f90
     src/interpolation.f90
     src/sem.f90
@@ -284,6 +285,21 @@ target_link_libraries(verify_sem_divergence_free
     LAPACK::LAPACK
     BLAS::BLAS
 )
+
+#------------------------------------------------------------------------------
+# Standalone check of the wave generators (src/waves.f90): dispersion, stream-function surface conditions, JONSWAP Hs
+#------------------------------------------------------------------------------
+add_executable(verify_waves
+    src/mpi.f90
+    src/global.f90
+    src/waves.f90
+    tests/verify_waves.f90
+)
+set_target_properties(verify_waves PROPERTIES Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/mod/verify_waves")
+target_include_directories(verify_waves PRIVATE ${FFTW_INCLUDE_DIRS})
+target_include_directories(verify_waves BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/mod/verify_waves")
+target_link_libraries(verify_waves MPI::MPI_Fortran ${FFTW_LIBRARIES} LAPACK::LAPACK BLAS::BLAS)
+add_test(NAME waves_generators COMMAND $<TARGET_FILE:verify_waves>)
 
 #------------------------------------------------------------------------------
 # Standalone verification driver for the wind-tunnel TI inflow profile parser

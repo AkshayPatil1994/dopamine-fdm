@@ -20,6 +20,7 @@ Module vof_twofluid
                                   apply_periodic_bc_x, apply_periodic_bc_z
   Use sgs_models, Only : compute_sgs_model
   Use wallmodel, Only : compute_wall_model
+  Use waves, Only : wave_eta, wave_profile_at
   Use monitor, Only : compute_cfl
   Use vof_plic
   Use vof_normals
@@ -39,6 +40,7 @@ Module vof_twofluid
   Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
+  Real(Int64) :: vf_bnd_loc = 0d0, vf_relax_loc = 0d0   ! rank-local liquid volume through the x boundaries / added by relaxation this step
 
 Contains
 
@@ -177,6 +179,7 @@ Contains
        Else
           Call vof_sweep(3, Cv, nxg, nyg, nzg, Wt, hx, hy, hz, tau, co, cl)
        End If
+       If ( d == 1 .And. x_bc_type == 1 ) Call tally_x_boundary_flux
        Call sweep_mass_flux(d, tau)
        Call vp_halo(Md, .False.)
        Md(:,1,:) = 0d0;  Md(:,nyg,:) = 0d0
@@ -227,6 +230,24 @@ Contains
     U = Utmp;  V = Vtmp;  W = Wtmp
 
   End Subroutine make_transport_velocity
+
+
+  !> Liquid volume that crossed the inlet (positive in) and outlet (positive out) faces in the x-sweep just done
+  Subroutine tally_x_boundary_flux
+
+    Logical :: is_first_x, is_last_x, is_first_z, is_last_z
+    Integer(Int32) :: partner, khi
+
+    khi = nzg-1
+    If ( z_bc_type == 0 ) Then
+       Call z_periodic_partner(is_first_z, is_last_z, partner)
+       If ( is_last_z ) khi = nzg-2
+    End If
+    Call x_periodic_partner(is_first_x, is_last_x, partner)
+    If ( is_first_x ) vf_bnd_loc = vf_bnd_loc + Sum( vof_flux(1,2:nyg-1,2:khi) )
+    If ( is_last_x )  vf_bnd_loc = vf_bnd_loc - Sum( vof_flux(nx,2:nyg-1,2:khi) )
+
+  End Subroutine tally_x_boundary_flux
 
 
   !> Mass crossing each face of the sweep direction d in this sweep, and the volume-flux divergence Dd of the sweep
@@ -597,6 +618,126 @@ Contains
   End Subroutine vof_forces_rk3
 
 
+
+  !> waves2Foam-style strength of a relaxation zone, r = 1 at the zone's outer boundary, 0 at its inner edge
+  Function relax_strength(r) Result(f)
+
+    Real(Int64), Intent(In) :: r
+    Real(Int64) :: f
+
+    f = ( Exp(Min(Max(r, 0d0), 1d0)**3.5d0) - 1d0 )/( Exp(1d0) - 1d0 )
+
+  End Function relax_strength
+
+
+  !> Zone strength at the streamwise position xs and whether it is the generation zone (target: the wave) or the absorption zone
+  Subroutine zone_at(xs, strength, generation)
+
+    Real(Int64), Intent(In)  :: xs
+    Real(Int64), Intent(Out) :: strength
+    Logical,     Intent(Out) :: generation
+
+    strength = 0d0
+    generation = .False.
+    If ( wave_gen_len > 0d0 .And. xs < wave_gen_len ) Then
+       strength = relax_strength(1d0 - xs/wave_gen_len)
+       generation = .True.
+    Else If ( wave_abs_len > 0d0 .And. xs > Lx_i - wave_abs_len ) Then
+       strength = relax_strength((xs - (Lx_i - wave_abs_len))/wave_abs_len)
+    End If
+
+  End Subroutine zone_at
+
+
+  !> Relax C and the velocity toward the target (wave in the generation zone, still water at rest in the absorption zone) over dts;
+  !  the liquid volume added to C is tallied for the ledger
+  Subroutine vof_relax(dts)
+
+    Real(Int64), Intent(In) :: dts
+
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: strength, fr, top, ct, eta, vol
+    Real(Int64), Allocatable :: uc(:), vf(:)
+    Logical :: gen
+    Logical :: is_first_z, is_last_z
+    Integer(Int32) :: partner, khi
+
+    If ( wave_gen_len <= 0d0 .And. wave_abs_len <= 0d0 ) Return
+    Allocate( uc(nyg), vf(ny) )
+    khi = nzg-1
+    If ( z_bc_type == 0 ) Then
+       Call z_periodic_partner(is_first_z, is_last_z, partner)
+       If ( is_last_z ) khi = nzg-2
+    End If
+
+    Do i = 2, nxg-1
+       Call zone_at(xg(i), strength, gen)
+       If ( strength <= 0d0 ) Cycle
+       fr = 1d0 - Exp(-wave_relax_rate*strength*dts)
+       If ( gen .And. wave_type > 0 ) Then
+          top = vof_level + wave_eta(xg(i), t)
+       Else
+          top = vof_level
+       End If
+       Do j = 2, nyg-1
+          ct = Min(1d0, Max(0d0, (top - y(j-1))/(y(j) - y(j-1))))
+          Do k = 2, nzg-1
+             vol = Cv(i,j,k)
+             Cv(i,j,k) = Cv(i,j,k) + fr*(ct - Cv(i,j,k))
+             If ( k <= khi ) vf_relax_loc = vf_relax_loc + (Cv(i,j,k) - vol)*dx*hy(j)*hz(k)
+          End Do
+       End Do
+       If ( gen .And. wave_type > 0 ) Then
+          Call wave_profile_at(xg(i), t, eta, uc, vf)
+       Else
+          vf = 0d0
+       End If
+       Do k = 2, nzg-1
+          Do j = 2, ny-1
+             V(i,j,k) = V(i,j,k) + fr*(vf(j) - V(i,j,k))
+          End Do
+       End Do
+       Do k = 2, nz-1
+          Do j = 2, nyg-1
+             W(i,j,k) = W(i,j,k)*(1d0 - fr)
+          End Do
+       End Do
+    End Do
+
+    Do i = 2, nx-1
+       Call zone_at(x(i), strength, gen)
+       If ( strength <= 0d0 ) Cycle
+       fr = 1d0 - Exp(-wave_relax_rate*strength*dts)
+       If ( gen .And. wave_type > 0 ) Then
+          Call wave_profile_at(x(i), t, eta, uc, vf)
+       Else
+          uc = 0d0
+       End If
+       Do k = 2, nzg-1
+          Do j = 2, nyg-1
+             U(i,j,k) = U(i,j,k) + fr*(uc(j) - U(i,j,k))
+          End Do
+       End Do
+    End Do
+    Deallocate( uc, vf )
+
+  End Subroutine vof_relax
+
+
+  !> Fold this step's rank-local boundary-flux and relaxation tallies into the global cumulative ledger
+  Subroutine tally_ledger
+
+    Real(Int64) :: loc(2), glb(2)
+
+    loc = (/ vf_bnd_loc, vf_relax_loc /)
+    Call MPI_Allreduce(loc, glb, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    vof_bnd_cum = vof_bnd_cum + glb(1)
+    vof_relax_cum = vof_relax_cum + glb(2)
+    vf_bnd_loc = 0d0;  vf_relax_loc = 0d0
+
+  End Subroutine tally_ledger
+
+
   !> One two-fluid time step: dt from the CFL (the Courant limit sees the gas currents too), then the Strang sequence
   Subroutine compute_time_step_vof
 
@@ -627,15 +768,18 @@ Contains
     Call vof_forces_rk3(to)
 
     Call vof_advect_half(0.5d0*dt)
+    t = to + dt
+    Call vof_relax(dt)
     Call apply_boundary_conditions
     Call vof_project(vof_adv_tol, vof_adv_iters)
     Call apply_boundary_conditions(after_projection=.True.)
-
-    t = to + dt
+    Call vof_fill_pad(Cv, nxg, nyg, nzg)
+    Call tally_ledger
     P(2:nxg-1,2:nyg-1,2:nzg-1) = ppre(2:nxg-1,2:nyg-1,2:nzg-1)
     P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)
     Call vof_end_step
     If ( Mod(istep, nmonitor) == 0 ) Call vof_output_monitor
+    Call vof_write_gauges
     dt_step = dt
     dt = dt_presnap
 

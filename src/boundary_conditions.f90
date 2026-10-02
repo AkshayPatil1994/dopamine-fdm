@@ -7,6 +7,7 @@ Module boundary_conditions
   Use mpi
   Use decomp, Only : z_halo_neighbors, x_halo_neighbors, z_periodic_partner, x_periodic_partner, comm_outflow_x
   Use synthetic_eddy_method
+  Use waves, Only : wave_inlet_profile, wv_in_u, wv_in_v
 
   ! prevent implicit typing
   Implicit None
@@ -352,6 +353,23 @@ Contains
 
     n2 = Size(F,2)
     n3 = Size(F,3)
+
+    ! wave inlet (inflow_type==3): water follows the wave target, the air returns its flux; V mirrors about the target, W target is 0
+    If ( inflow_type == 3 ) Then
+       Call wave_inlet_profile(t)
+       Do k = 1, n3
+          Do j = 1, n2
+             If ( comp == 1 ) Then
+                F(1,j,k) = wv_in_u(j)
+             Else If ( comp == 2 ) Then
+                F(1,j,k) = 2d0*wv_in_v(j) - F(2,j,k)
+             Else
+                F(1,j,k) = -F(2,j,k)
+             End If
+          End Do
+       End Do
+       Return
+    End If
 
     ! F's y/z coords depend on staggered-grid placement: U=(yc,zc), V=(yf,zc), W=(yc,zf); every (j,k) is independent -- sem_fluctuation/mean_profile_U/recycle_value are !$acc routine seq
     !$acc parallel loop collapse(2) present(F,y,yg,z,zg) private(up,vp,wp,target_val)

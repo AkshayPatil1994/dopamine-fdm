@@ -93,6 +93,9 @@ Contains
                          particle_boussinesq_coupling, particle_deposit_file, particle_deposit_freq, &
                          sgs_particle_model, particle_langevin_C0
 
+    Namelist /WAVES/ wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, wave_Hs, wave_Tp, &
+                     wave_gamma, wave_nfreq, wave_seed, wave_gen_len, wave_abs_len, wave_relax_rate, wave_gauge_x, wave_ramp_time
+
     Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, &
                    vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_pcg_iters, vof_mom_scheme, &
                    vof_cfl_max, vof_selftest, vof_u0, vof_wave_amp, vof_wave_lambda, vof_adv_iters, vof_adv_tol
@@ -237,6 +240,12 @@ Contains
           End If
        Else
           Write(*,'(A)') ' INFO: no &PARTICLES found, point-particle tracking disabled'
+       End If
+
+       If ( namelist_group_present(unit_in, 'WAVES') ) Then
+          Rewind(unit_in)
+          Read(unit_in, nml=WAVES,               iostat=ios)
+          If (ios /= 0) Call abort_input( 'ERROR: &WAVES present but failed to parse (check variable names)' )
        End If
 
        If ( namelist_group_present(unit_in, 'VOF') ) Then
@@ -708,6 +717,22 @@ Contains
     Call Mpi_bcast ( sgs_particle_model,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_langevin_C0,  1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
 
+    Call Mpi_bcast ( wave_type,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_height,       1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_period,       1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_phase,        1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_sf_n,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_current_mode, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_Hs,           1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_Tp,           1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_gamma,        1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_nfreq,        1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_seed,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_gen_len,      1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_abs_len,      1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_relax_rate,   1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_gauge_x,      8, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_ramp_time,    1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_active,            1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_ic_type,           1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_level,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
