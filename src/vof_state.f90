@@ -33,7 +33,8 @@ Module vof_state
   ! transporting velocities: stage 1 and 2 of this step, stage 2 of the previous step, and the extrapolated midpoint field
   Real(Int64), Allocatable, Dimension(:,:,:) :: Us1, Vs1, Ws1, Us2, Vs2, Ws2, Ue, Ve, We
 
-  Integer(Int32) :: vof_unit = -1, gauge_unit = -1
+  Integer(Int32) :: vof_unit = 0, gauge_unit = 0
+  Logical :: vof_unit_open = .False., gauge_unit_open = .False.   ! newunit numbers are negative, so they cannot flag 'not opened'
   Real(Int64), Allocatable, Dimension(:) :: vof_rho_ref   ! still-water row densities of the initial state (hydrostatic reference)
   Logical        :: vof_have_prev = .False.
   Real(Int64)    :: vof_bnd_cum = 0d0, vof_relax_cum = 0d0   ! cumulative liquid volume through the x boundaries and from relaxation
@@ -337,7 +338,8 @@ Contains
       xloc = pout(1);  yloc = pout(2)
     End Block
     If ( myid == 0 ) Then
-       If ( vof_unit < 0 ) Then
+       If ( .Not. vof_unit_open ) Then
+          vof_unit_open = .True.
           Open(newunit=vof_unit, file='vof_diag.dat', status='unknown', position='append', action='write')
           Write(vof_unit,'(A)') '# step t Vliq (Vliq-V0)/V0 Cmin Cmax n_interface clip_loss Co_max xc yc zc ' // &
                ' int C(1-C) cos-moment -Umin |V|max |W|max last-PCG-its last-PCG-res bnd_cum relax_cum x_Umax y_Umax'
@@ -388,7 +390,8 @@ Contains
     Call MPI_Allreduce(loc, glb, 8, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(cnt_loc, cnt, 8, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     If ( myid == 0 ) Then
-       If ( gauge_unit < 0 ) Then
+       If ( .Not. gauge_unit_open ) Then
+          gauge_unit_open = .True.
           Open(newunit=gauge_unit, file='vof_gauges.dat', status='unknown', position='append', action='write')
           Write(gauge_unit,'(A,8ES12.4)') '# t eta(x_g) at x =', wave_gauge_x(1:ng)
        End If
