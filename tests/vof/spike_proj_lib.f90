@@ -1,4 +1,5 @@
-!> Shared helpers for the pressure spikes: serial 2-D, Neumann walls, cell-centred p and face velocities on an n x n grid of the unit
+!> Shared helpers for the pressure spikes: serial 2-D, Neumann walls, cell-centred p and face velocities on an n x n grid of
+!  the unit
 !  square. Constant-coefficient fast solve (cosine-transform basis, the structure of the production FFT chain) and an exact
 !  variable-coefficient solve D(beta G p) = f by CG preconditioned with the fast solve.
 Module spike_proj_lib

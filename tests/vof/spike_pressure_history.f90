@@ -4,14 +4,17 @@
 !
 !  Stage s of the low-storage scheme:  u^s = u^o + dt * sum_{j<=s} a(s,j) (F_j - G_j),  G_j = applied pressure force at stage j.
 !  Reference: G_s = beta grad p_s with D(beta G p_s) solved exactly. V2: p_s = ptilde_s + delta_s, G_s = beta grad ptilde_s +
-!  beta0 grad delta_s, where ptilde_s is a Lagrange extrapolation (order K) of the stored stage pressures to the stage time and delta_s
+!  beta0 grad delta_s, where ptilde_s is a Lagrange extrapolation (order K) of the stored stage pressures to the stage time and
+!  delta_s
 !  comes from the fast constant-coefficient solve, so u^s is divergence-free to round-off. Two stage-time conventions for the
 !  stored pressures are compared (A: the time of u^s, rk_t; B: the time at which F_s is evaluated).
 !
-!  Results (N=48, ratio 10 and 1000, w*dt = 0.05..0.4, liquid-forced frozen two-fluid field, errors vs exact projection at every stage):
+!  Results (N=48, ratio 10 and 1000, w*dt = 0.05..0.4, liquid-forced frozen two-fluid field, errors vs exact projection at
+!  every stage):
 !   - No pressure predictor (the existing projection used as is): 42-49 % velocity error in both phases at every dt.
 !   - beta0 must be the largest 1/rho (rho0 = lighter fluid); beta0 = 1/rho_l or the mean makes the pressure history diverge,
-!     because the stored pressure receives only beta/beta0 of the true correction (contraction 1 - beta/beta0 ~ 0.999 in the liquid).
+!     because the stored pressure receives only beta/beta0 of the true correction (contraction 1 - beta/beta0 ~ 0.999 in the
+!     liquid).
 !   - Stage-pressure time stamps: convention B (the time at which F_s is evaluated) is exact: p_s = p*(tau_B) to round-off for this
 !     linear problem, so a-priori extrapolation errors are 2e-4 (K=1) and 1e-5 (K=2) at w*dt = 0.05. Convention A is wrong.
 !   - Closed loop, single fast solve (V2): K=0 gives 2.6 % (w*dt = 0.1) and K=1 1.1 %; first order in dt, independent of the density
@@ -131,7 +134,8 @@ Contains
   End Subroutine build_density
 
 
-  !> Acceleration beta_f * S with the solenoidal per-volume force S = liquid fraction * (psi_y, -psi_x), psi = sin(pi x) sin(pi y): a force per unit
+  !> Acceleration beta_f * S with the solenoidal per-volume force S = liquid fraction * (psi_y, -psi_x), psi = sin(pi x) sin(pi
+  !  y): a force per unit
   !  volume acting on a density jump is not a gradient per unit mass, so a pressure (baroclinic-like) is genuinely required
   Subroutine make_force(rho, fx, fy)
 
@@ -180,7 +184,8 @@ Contains
   End Function stage_time
 
 
-  !> Lagrange extrapolation of order K to time tt from the (up to K+1) stored pressures preceding entry idx (idx counts steps*3+stage)
+  !> Lagrange extrapolation of order K to time tt from the (up to K+1) stored pressures preceding entry idx (idx counts
+  !  steps*3+stage)
   Subroutine extrapolate(hist, idx, dt, K, optA, tt, pt)
 
     Real(Int64), Intent(In)  :: hist(n,n,*), dt, tt

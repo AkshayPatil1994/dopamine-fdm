@@ -1,10 +1,12 @@
-!> Spike A': single-solve pressure splitting versus the exact variable-density projection (serial 2-D, Neumann walls, cell-centred p,
+!> Spike A': single-solve pressure splitting versus the exact variable-density projection (serial 2-D, Neumann walls,
+!  cell-centred p,
 !  face velocities; the constant-coefficient solve is a cosine-transform solver, the same structure as the production FFT chain).
 !
 !  Exact problem: D(beta G p) = D u*/dt with beta = 1/rho (arithmetic-rho face average), u = u* - dt beta G p. The exact p is found
 !  by preconditioned CG to round-off and then perturbed to ptilde = p + delta to mimic an extrapolated-pressure error. Variants:
 !    V1 (Dodd-Ferrante): beta0 L p1 = D u*/dt + D((beta0-beta) G ptilde), u = u* - dt beta G p1       -> residual divergence
-!    V2 (incremental)  : u** = u* - dt beta G ptilde, beta0 L dp = D u**/dt, u = u** - dt beta0 G dp  -> exactly div-free, force error
+!    V2 (incremental)  : u** = u* - dt beta G ptilde, beta0 L dp = D u**/dt, u = u** - dt beta0 G dp  -> exactly div-free,
+!    force error
 !  Errors are reported per phase (liquid / gas / mixed faces) relative to the largest exact pressure force in that class, and the
 !  divergence relative to the largest exact pressure force: both are the fraction of the pressure force that is wrong.
 !

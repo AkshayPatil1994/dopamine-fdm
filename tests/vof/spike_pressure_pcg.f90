@@ -2,7 +2,8 @@
 !  FFT/tridiagonal chain) precondition the variable-density pressure equation div( (1/rho) grad p ) = f across a sharp interface?
 !  Serial 2-D, Neumann walls; reports preconditioned-CG iteration counts versus density ratio. The constant coefficient of the
 !  preconditioner is irrelevant to CG (a scalar multiple of M gives identical iterates), so only the ratio matters.
-!  Result (white-noise rhs, cold start): iterations to 1e-6 are 17 / 28 / 37-39 at ratio 10 / 100 / 1000, independent of N (64, 128).
+!  Result (white-noise rhs, cold start): iterations to 1e-6 are 17 / 28 / 37-39 at ratio 10 / 100 / 1000, independent of N (64,
+!  128).
 !  The fast solver therefore works as a preconditioner but costs ~30-60 solves per projection at ratio 1e3 -- 3x that per RK step.
 Program spike_pressure_pcg
 
@@ -14,8 +15,6 @@ Program spike_pressure_pcg
   Real(Int64) :: ratio, rho_l, rho_g, beta0
   Real(Int64), Allocatable :: rho(:,:), qx(:,:), lam(:)
   Real(Int64) :: ratios(4) = (/ 1d0, 10d0, 100d0, 1000d0 /)
-  Character(len=24) :: names(4) = (/ Character(len=24) :: 'beta0 = 1/rho_l (min)', 'beta0 = 1/rho_g (max)', &
-                                      'beta0 = vol-mean beta', 'beta0 = 1/mean(rho)' /)
 
   nratio = 4
   Do n = 64, 128, 64

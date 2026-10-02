@@ -1,17 +1,22 @@
 !> Spike B: temporal treatment of the VOF advance inside the solver's RK3 (Wray) step, for a prescribed, discretely divergence-free,
 !  time-dependent progressive-wave velocity field (streamfunction psi = A cos(kx - w t) sin(pi y), closed top/bottom, periodic in x)
 !  with a flat interface that is displaced by a few cells -- the regime wave simulations sit in (Co <= 0.5 gives w*dt ~ 0.05-0.3).
-!  Each strategy is compared with a converged reference of the same spatial scheme (dt/8, exact midpoint velocity), which isolates the
+!  Each strategy is compared with a converged reference of the same spatial scheme (dt/8, exact midpoint velocity), which
+!  isolates the
 !  temporal error. Strategies (stage velocities are taken exact, i.e. the best case for the stage-based ones):
 !    S1 one step, exact midpoint velocity (unreachable upper bound)     S4 one step, AB2-extrapolated midpoint 1.5u^n - 0.5u^(n-1)
-!    S2 one step, start-of-step velocity u^n                            S5 three sub-steps (8/15, 2/15, 1/3 dt) with u^n, u^(1), u^(2)
-!    S3 one step, stage-1 velocity u^(1) (t + 8/15 dt)                  S6 three sub-steps with the exact velocity at each sub-interval midpoint
+!    S2 one step, start-of-step velocity u^n                            S5 three sub-steps (8/15, 2/15, 1/3 dt) with u^n,
+!    u^(1), u^(2)
+!    S3 one step, stage-1 velocity u^(1) (t + 8/15 dt)                  S6 three sub-steps with the exact velocity at each
+!    sub-interval midpoint
 !    S7 three sub-steps with linearly extrapolated midpoint velocities built only from stage velocities already available when the
-!       sub-step is needed (u^n and the previous step's u^(2); u^n, u^(1); u^(1), u^(2)) -- the variant a stage-consistent solver can run
+!       sub-step is needed (u^n and the previous step's u^(2); u^n, u^(1); u^(1), u^(2)) -- the variant a stage-consistent
+!       solver can run
 !
 !  Result (N=64, 5 periods, displacement amplitude 3 cells, w*dt = 0.3/0.15/0.075; L1 vs converged reference at w*dt = 0.15):
 !    S2 u^n 3.5e-5 (1st order) | S5 stage-left-point sub-steps 1.4e-5 (1st order, 3x cost) | S4 AB2 9e-6 (2nd) | S3 u^(1) 2.9e-6
-!    S7 stage-consistent sub-steps with extrapolated midpoint velocities 1.5e-6 (2nd order, observed 1.97) | S1 exact midpoint 1.2e-6.
+!    S7 stage-consistent sub-steps with extrapolated midpoint velocities 1.5e-6 (2nd order, observed 1.97) | S1 exact midpoint
+!    1.2e-6.
 !  S7 also yields C at every stage time t_s, which a mass-consistent momentum update needs for rho^(s); S3 only gives C^(n+1).
 Program spike_c_timeint
 
