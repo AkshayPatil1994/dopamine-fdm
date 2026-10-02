@@ -69,6 +69,12 @@ Program test_vof_advect
      Call run_disk_translate(64, 1, 45d0, cos_list(ic), e_now)
   End Do
 
+  Write(*,'(a)') '--- Case 5: THINC (diffuse-interface) fluxes, vortex reversal and disk translation: conservation and boundedness'
+  vof_flux_scheme = 1
+  Call run_vortex(64, 1, 2d0)
+  Call run_disk_translate(64, 1, 22.5d0, 0.4d0, e_now)
+  vof_flux_scheme = 0
+
   If ( max_drift > 1d-12 .Or. max_excess > 1d-12 .Or. min_order < 1.8d0 ) ok = .False.
   Write(*,'(a,es9.2,a,es9.2,a,f5.2)') 'max |volume drift|=', max_drift, '  max C excess=', max_excess, '  min order=', min_order
   If ( ok ) Then

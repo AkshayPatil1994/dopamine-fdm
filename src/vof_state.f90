@@ -76,6 +76,8 @@ Contains
     End Do
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vof_advect_init(nxg, nyg, nzg)
+    vof_flux_scheme = vof_method - 1
+    vof_thinc_beta = vof_beta
 
     If ( z_bc_type == 1 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: the VOF field supports periodic z only (z_bc_type=0)'

@@ -721,6 +721,9 @@ Module global
   Real   (Int64) :: vof_center(3)     = 0d0
   Real   (Int64) :: vof_radius        = 0d0
   Integer(Int32) :: vof_normal_scheme = 1
+  ! vof_method: 1 = PLIC face fluxes (sharp), 2 = THINC tanh-profile fluxes (diffuse over ~2-3 cells, vof_beta = sharpness)
+  Integer(Int32) :: vof_method        = 1
+  Real   (Int64) :: vof_beta          = 2d0
   ! Two-fluid coupling (vof_flow = 0: C is only transported by the flow; 1: C sets density/viscosity and the momentum is advected
   ! conservatively with the VOF mass fluxes). vof_rho_*: densities; vof_nu_*: kinematic viscosities (mu = rho nu); vof_grav: gravity
   ! magnitude along -y; vof_pcg_iters: PCG iterations on the pressure increment per RK stage (0 = single constant-coefficient solve);

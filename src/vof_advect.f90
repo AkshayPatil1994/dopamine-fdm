@@ -15,6 +15,9 @@ Module vof_advect
   Implicit None
 
   Real(Int64), Allocatable, Dimension(:,:,:) :: vof_mx, vof_my, vof_mz, vof_al, vof_flux, vof_cc
+  ! face-flux model: 0 = geometric PLIC, 1 = THINC (tanh profile, diffuse interface over ~2-3 cells; beta sets the sharpness)
+  Integer(Int32) :: vof_flux_scheme = 0
+  Real(Int64)    :: vof_thinc_beta = 2d0
 
   Abstract Interface
      Subroutine fill_pad_iface(Cp, n1, n2, n3)
@@ -80,6 +83,15 @@ Contains
   End Subroutine vof_reconstruct
 
 
+  Pure Function lncosh(x) Result(r)
+    !$acc routine seq
+    Real(Int64), Intent(In) :: x
+    Real(Int64) :: r, a
+    a = Abs(x)
+    r = a + Log(1d0 + Exp(-2d0*a)) - 0.6931471805599453d0
+  End Function lncosh
+
+
   !> One directional sweep (dir = 1,2,3): face volume fluxes from the reconstructed planes, then the conservative update with the
   !  c-tilde * div(u) correction. co_max = max donor-cell Courant number seen, clip_loss = liquid volume removed by clamping C to [0,1]
   Subroutine vof_sweep(dir, Cp, n1, n2, n3, uf, h1, h2, h3, dt, co_max, clip_loss)
@@ -91,7 +103,7 @@ Contains
     Real(Int64),    Intent(InOut) :: co_max, clip_loss
 
     Integer(Int32) :: i, j, k, di, dj, dk, id, jd, kd, i0, i1, j0, j1, k0, k1
-    Real(Int64) :: u, hd, vol, s, c, frac, fl, xlo(3), w(3), cn, cnc, vc, area, comax, closs
+    Real(Int64) :: u, hd, vol, s, c, frac, fl, xlo(3), w(3), cn, cnc, vc, area, comax, closs, mdir, mn, gam, beta, x0, xa, xb
 
     di = 0;  dj = 0;  dk = 0
     i0 = 2;  i1 = n1-1;  j0 = 2;  j1 = n2-1;  k0 = 2;  k1 = n3-1
@@ -131,6 +143,30 @@ Contains
                 frac = 0d0
              Else If ( c >= 1d0 - vof_eps ) Then
                 frac = 1d0
+             Else If ( vof_flux_scheme == 1 ) Then
+                If ( dir == 1 ) Then
+                   mdir = vof_mx(id,jd,kd)
+                Else If ( dir == 2 ) Then
+                   mdir = vof_my(id,jd,kd)
+                Else
+                   mdir = vof_mz(id,jd,kd)
+                End If
+                mn = Sqrt( vof_mx(id,jd,kd)**2 + vof_my(id,jd,kd)**2 + vof_mz(id,jd,kd)**2 )
+                ! the profile steepens only across the interface: beta scales with the normal's component along the sweep
+                beta = vof_thinc_beta*Abs(mdir)/Max(mn, 1d-300)
+                If ( beta < 1d-3 .Or. s < 1d-14 ) Then
+                   frac = c
+                Else
+                   gam = Merge(1d0, -1d0, mdir < 0d0)
+                   x0 = Atanh( -Tanh(beta*gam*(c - 0.5d0))/Tanh(0.5d0*beta) )/beta
+                   If ( u >= 0d0 ) Then
+                      xa = 0.5d0 - s;  xb = 0.5d0
+                   Else
+                      xa = -0.5d0;  xb = -0.5d0 + s
+                   End If
+                   frac = 0.5d0 + gam/(2d0*beta*s)*( lncosh(beta*(xb - x0)) - lncosh(beta*(xa - x0)) )
+                   frac = Min(1d0, Max(0d0, frac))
+                End If
              Else
                 xlo = -0.5d0
                 w   = 1d0

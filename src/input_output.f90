@@ -96,7 +96,7 @@ Contains
     Namelist /WAVES/ wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, wave_Hs, wave_Tp, &
                      wave_gamma, wave_nfreq, wave_seed, wave_gen_len, wave_abs_len, wave_relax_rate, wave_gauge_x, wave_ramp_time
 
-    Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, &
+    Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, vof_method, vof_beta, &
                    vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_pcg_iters, vof_mom_scheme, &
                    vof_cfl_max, vof_selftest, vof_u0, vof_wave_amp, vof_wave_lambda, vof_adv_iters, vof_adv_tol
 
@@ -488,6 +488,7 @@ Contains
           Write(*,'(A,I2)')    '   vof_active                  = ', vof_active
           Write(*,'(A,I2)')    '   vof_ic_type (1=plane,2=drop,3=bubble) = ', vof_ic_type
           Write(*,'(A,I2)')    '   vof_normal_scheme (1=Youngs,2=height function) = ', vof_normal_scheme
+          Write(*,'(A,I2,A,F6.2)') '   vof_method (1=PLIC,2=THINC) = ', vof_method, '  vof_beta = ', vof_beta
           Write(*,'(A,I2)')    '   vof_flow (0=passive,1=two-fluid)       = ', vof_flow
           If ( vof_flow >= 1 ) Then
              Write(*,'(A,2E12.4)') '   vof_rho_l, vof_rho_g        = ', vof_rho_l, vof_rho_g
@@ -739,6 +740,8 @@ Contains
     Call Mpi_bcast ( vof_center,            3, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_radius,            1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_normal_scheme,     1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_method,            1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_beta,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_flow,              1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_rho_l,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_rho_g,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
