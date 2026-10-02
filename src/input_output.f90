@@ -93,7 +93,9 @@ Contains
                          particle_boussinesq_coupling, particle_deposit_file, particle_deposit_freq, &
                          sgs_particle_model, particle_langevin_C0
 
-    Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme
+    Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, &
+                   vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_pcg_iters, vof_mom_scheme, &
+                   vof_cfl_max, vof_selftest
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -477,6 +479,14 @@ Contains
           Write(*,'(A,I2)')    '   vof_active                  = ', vof_active
           Write(*,'(A,I2)')    '   vof_ic_type (1=plane,2=drop,3=bubble) = ', vof_ic_type
           Write(*,'(A,I2)')    '   vof_normal_scheme (1=Youngs,2=height function) = ', vof_normal_scheme
+          Write(*,'(A,I2)')    '   vof_flow (0=passive,1=two-fluid)       = ', vof_flow
+          If ( vof_flow >= 1 ) Then
+             Write(*,'(A,2E12.4)') '   vof_rho_l, vof_rho_g        = ', vof_rho_l, vof_rho_g
+             Write(*,'(A,2E12.4)') '   vof_nu_l,  vof_nu_g         = ', vof_nu_l, vof_nu_g
+             Write(*,'(A,E12.4)')  '   vof_grav                    = ', vof_grav
+             Write(*,'(A,I3)')     '   vof_pcg_iters               = ', vof_pcg_iters
+             Write(*,'(A,I2)')     '   vof_mom_scheme (0=central,2=van Leer) = ', vof_mom_scheme
+          End If
        End If
     End If
 
@@ -704,6 +714,16 @@ Contains
     Call Mpi_bcast ( vof_center,            3, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_radius,            1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_normal_scheme,     1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_flow,              1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_rho_l,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_rho_g,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_nu_l,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_nu_g,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_grav,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_pcg_iters,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_mom_scheme,        1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_cfl_max,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_selftest,          1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 

@@ -178,7 +178,6 @@ set(SRCS
     src/vof_plic.f90
     src/vof_normals.f90
     src/vof_advect.f90
-    src/vof_state.f90
     src/genGridandIC.f90
     src/input_output.f90
     src/debug_trace.f90
@@ -205,6 +204,8 @@ endif()
 
 list(APPEND SRCS
     src/projection.f90
+    src/vof_pressure.f90
+    src/vof_state.f90
     src/time_integration.f90
     src/monitor.f90
     src/reynolds_stress_budget.f90

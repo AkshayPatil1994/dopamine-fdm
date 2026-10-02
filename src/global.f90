@@ -721,6 +721,20 @@ Module global
   Real   (Int64) :: vof_center(3)     = 0d0
   Real   (Int64) :: vof_radius        = 0d0
   Integer(Int32) :: vof_normal_scheme = 1
+  ! Two-fluid coupling (vof_flow = 0: C is only transported by the flow; 1: C sets density/viscosity and the momentum is advected
+  ! conservatively with the VOF mass fluxes). vof_rho_*: densities; vof_nu_*: kinematic viscosities (mu = rho nu); vof_grav: gravity
+  ! magnitude along -y; vof_pcg_iters: PCG iterations on the pressure increment per RK stage (0 = single constant-coefficient solve);
+  ! vof_mom_scheme: 0 central, 2 van Leer limited momentum face interpolation; vof_cfl_max: Courant limit enforced on dt.
+  Integer(Int32) :: vof_flow          = 0
+  Real   (Int64) :: vof_rho_l         = 1000d0
+  Real   (Int64) :: vof_rho_g         = 1d0
+  Real   (Int64) :: vof_nu_l          = 1d-6
+  Real   (Int64) :: vof_nu_g          = 1.5d-5
+  Real   (Int64) :: vof_grav          = 9.81d0
+  Integer(Int32) :: vof_pcg_iters     = 3
+  Integer(Int32) :: vof_mom_scheme    = 0
+  Real   (Int64) :: vof_cfl_max       = 0.4d0
+  Integer(Int32) :: vof_selftest      = 0
 
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0

@@ -1,0 +1,353 @@
+!> Variable-density pressure operator of the two-fluid solver: face coefficients beta = 1/rho_face from the VOF field, the
+!  operator A phi = div(beta grad phi) matching the discrete Laplacian of the fast Poisson solver when beta is constant, and a
+!  preconditioned CG whose preconditioner is that fast solver (solve_poisson_equation) with the lightest-fluid coefficient
+!  (tests/vof/spike_pressure_pcg.f90: 17/28/39 iterations to 1e-6 at density ratios 10/100/1000, independent of the grid).
+!
+!  Conventions follow the solver: cell-centred vectors have the shape (nxg,nyg,nzg) with ghost layers 1 and n; face coefficients
+!  bu(1:nx,:,:), bv(:,1:ny,:), bw(:,:,1:nz) sit on the same faces as U, V, W. The periodic duplicate cell of the last rank and the
+!  ghost cells carry zero weight in the inner products, so the CG sees exactly the distinct unknowns of the Poisson problem.
+Module vof_pressure
+
+  Use iso_fortran_env, Only : Int32, Int64
+  Use global
+  Use mpi
+  Use decomp, Only : x_periodic_partner, z_periodic_partner
+  Use boundary_conditions, Only : update_ghost_interior_planes_x
+  Use scalar_transport, Only : finish_scalar_halos
+  Use projection, Only : solve_poisson_equation
+
+  Implicit None
+
+  Real(Int64), Allocatable, Dimension(:,:,:) :: vp_rho, vp_bu, vp_bv, vp_bw, vp_w
+  Real(Int64), Allocatable, Dimension(:,:,:) :: vp_r, vp_z, vp_d, vp_ap
+  Real(Int64) :: vp_beta0 = 1d0, vp_wsum = 1d0
+  Integer(Int32) :: vp_iters_last = 0
+  Real(Int64) :: vp_res_last = 0d0
+
+Contains
+
+  Subroutine vp_init
+
+    Integer(Int32) :: i, j, k, ihi, jhi, khi
+    Logical :: is_first, is_last
+    Integer(Int32) :: partner
+    Real(Int64) :: wl
+
+    Allocate( vp_rho(nxg,nyg,nzg), vp_bu(nx,nyg,nzg), vp_bv(nxg,ny,nzg), vp_bw(nxg,nyg,nz), vp_w(nxg,nyg,nzg) )
+    Allocate( vp_r(nxg,nyg,nzg), vp_z(nxg,nyg,nzg), vp_d(nxg,nyg,nzg), vp_ap(nxg,nyg,nzg) )
+    vp_rho = vof_rho_g;  vp_bu = 1d0/vof_rho_g;  vp_bv = 1d0/vof_rho_g;  vp_bw = 1d0/vof_rho_g
+    vp_r = 0d0;  vp_z = 0d0;  vp_d = 0d0;  vp_ap = 0d0
+    vp_beta0 = 1d0/Min(vof_rho_l, vof_rho_g)
+
+    ihi = nxg-1;  jhi = nyg-1;  khi = nzg-1
+    If ( x_bc_type == 0 ) Then
+       Call x_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) ihi = nxg-2
+    End If
+    If ( z_bc_type == 0 ) Then
+       Call z_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) khi = nzg-2
+    End If
+    If ( y_bc_type == 0 ) jhi = nyg-2
+
+    vp_w = 0d0
+    wl = 0d0
+    Do k = 2, khi
+       Do j = 2, jhi
+          Do i = 2, ihi
+             vp_w(i,j,k) = dx*(y(j) - y(j-1))*(z(k) - z(k-1))
+             wl = wl + vp_w(i,j,k)
+          End Do
+       End Do
+    End Do
+    Call MPI_Allreduce(wl, vp_wsum, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+  End Subroutine vp_init
+
+
+  !> Cell densities (ghosts included) and face coefficients beta = 2/(rho_i + rho_j) from the padded C (indices 0..n+1)
+  Subroutine vp_set_density(Cp)
+
+    Real(Int64), Intent(In) :: Cp(0:nxg+1,0:nyg+1,0:nzg+1)
+    Integer(Int32) :: i, j, k
+
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             vp_rho(i,j,k) = vof_rho_g + (vof_rho_l - vof_rho_g)*Cp(i,j,k)
+          End Do
+       End Do
+    End Do
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nx
+             vp_bu(i,j,k) = 2d0/( vp_rho(i,j,k) + vp_rho(i+1,j,k) )
+          End Do
+       End Do
+    End Do
+    Do k = 1, nzg
+       Do j = 1, ny
+          Do i = 1, nxg
+             vp_bv(i,j,k) = 2d0/( vp_rho(i,j,k) + vp_rho(i,j+1,k) )
+          End Do
+       End Do
+    End Do
+    Do k = 1, nz
+       Do j = 1, nyg
+          Do i = 1, nxg
+             vp_bw(i,j,k) = 2d0/( vp_rho(i,j,k) + vp_rho(i,j,Min(k+1,nzg)) )
+          End Do
+       End Do
+    End Do
+
+  End Subroutine vp_set_density
+
+
+  !> Ghost layers of a cell-centred field: rank seams and periodic wraps, zero gradient at y walls (periodic wrap for y_bc_type=0),
+  !  zero gradient at the x inlet and, at the x outlet, mirror (antisym=.False.) or the Dirichlet-zero reflection of the pressure
+  !  problem (antisym=.True.)
+  Subroutine vp_halo(F, antisym)
+
+    Real(Int64), Intent(InOut) :: F(nxg,nyg,nzg)
+    Logical,     Intent(In)    :: antisym
+
+    Logical :: is_first, is_last
+    Integer(Int32) :: partner
+
+    Call update_ghost_interior_planes_x(F, 4)
+    If ( x_bc_type == 1 ) Then
+       Call x_periodic_partner(is_first, is_last, partner)
+       If ( is_first ) F(1,:,:) = F(2,:,:)
+       If ( is_last ) Then
+          If ( antisym ) Then
+             F(nxg,:,:) = -F(nxg-1,:,:)
+          Else
+             F(nxg,:,:) = F(nxg-1,:,:)
+          End If
+       End If
+    End If
+    Call finish_scalar_halos(F)
+    If ( y_bc_type == 0 ) Then
+       F(:,1,:)       = F(:,nyg-2,:)
+       F(:,nyg-1,:)   = F(:,2,:)
+       F(:,nyg,:)     = F(:,3,:)
+    Else
+       F(:,1,:)   = F(:,2,:)
+       F(:,nyg,:) = F(:,nyg-1,:)
+    End If
+
+  End Subroutine vp_halo
+
+
+  !> out = div(beta grad phi) at the interior cells; phi needs valid ghost layers (vp_halo with antisym=.True.)
+  Subroutine vp_apply_A(phi, out)
+
+    Real(Int64), Intent(In)  :: phi(nxg,nyg,nzg)
+    Real(Int64), Intent(Out) :: out(nxg,nyg,nzg)
+
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: inv_dx2, hy, hz, ihy_hi, ihy_lo, ihz_hi, ihz_lo, fxh, fxl, fyh, fyl, fzh, fzl
+
+    inv_dx2 = 1d0/(dx*dx)
+    out = 0d0
+    Do k = 2, nzg-1
+       hz = z(k) - z(k-1)
+       ihz_hi = 1d0/(zg(k+1) - zg(k));  ihz_lo = 1d0/(zg(k) - zg(k-1))
+       Do j = 2, nyg-1
+          hy = y(j) - y(j-1)
+          ihy_hi = 1d0/(yg(j+1) - yg(j));  ihy_lo = 1d0/(yg(j) - yg(j-1))
+          Do i = 2, nxg-1
+             fxh = vp_bu(i,j,k)*( phi(i+1,j,k) - phi(i,j,k) )
+             fxl = vp_bu(i-1,j,k)*( phi(i,j,k) - phi(i-1,j,k) )
+             fyh = vp_bv(i,j,k)*( phi(i,j+1,k) - phi(i,j,k) )*ihy_hi
+             fyl = vp_bv(i,j-1,k)*( phi(i,j,k) - phi(i,j-1,k) )*ihy_lo
+             fzh = vp_bw(i,j,k)*( phi(i,j,k+1) - phi(i,j,k) )*ihz_hi
+             fzl = vp_bw(i,j,k-1)*( phi(i,j,k) - phi(i,j,k-1) )*ihz_lo
+             out(i,j,k) = (fxh - fxl)*inv_dx2 + (fyh - fyl)/hy + (fzh - fzl)/hz
+          End Do
+       End Do
+    End Do
+
+  End Subroutine vp_apply_A
+
+
+  !> Face fields beta grad(phi): gu(1:nx), gv(1:ny), gw(1:nz) (ghost layers of phi must be valid)
+  Subroutine vp_grad(phi, gu, gv, gw)
+
+    Real(Int64), Intent(In)  :: phi(nxg,nyg,nzg)
+    Real(Int64), Intent(Out) :: gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz)
+
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: inv_dx
+
+    inv_dx = 1d0/dx
+    gu = 0d0;  gv = 0d0;  gw = 0d0
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nx
+             gu(i,j,k) = vp_bu(i,j,k)*( phi(i+1,j,k) - phi(i,j,k) )*inv_dx
+          End Do
+       End Do
+    End Do
+    Do k = 1, nzg
+       Do j = 1, ny
+          Do i = 1, nxg
+             gv(i,j,k) = vp_bv(i,j,k)*( phi(i,j+1,k) - phi(i,j,k) )/( yg(j+1) - yg(j) )
+          End Do
+       End Do
+    End Do
+    Do k = 1, Min(nz, nzg-1)
+       Do j = 1, nyg
+          Do i = 1, nxg
+             gw(i,j,k) = vp_bw(i,j,k)*( phi(i,j,k+1) - phi(i,j,k) )/( zg(k+1) - zg(k) )
+          End Do
+       End Do
+    End Do
+
+  End Subroutine vp_grad
+
+
+  !> d = div(F) at the interior cells for face fields with the shapes of U, V, W
+  Subroutine vp_div(Fu, Fv, Fw, d)
+
+    Real(Int64), Intent(In)  :: Fu(nx,nyg,nzg), Fv(nxg,ny,nzg), Fw(nxg,nyg,nz)
+    Real(Int64), Intent(Out) :: d(nxg,nyg,nzg)
+
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: inv_dx, inv_hy, inv_hz
+
+    inv_dx = 1d0/dx
+    d = 0d0
+    Do k = 2, nzg-1
+       inv_hz = 1d0/(z(k) - z(k-1))
+       Do j = 2, nyg-1
+          inv_hy = 1d0/(y(j) - y(j-1))
+          Do i = 2, nxg-1
+             d(i,j,k) = ( Fu(i,j,k) - Fu(i-1,j,k) )*inv_dx + ( Fv(i,j,k) - Fv(i,j-1,k) )*inv_hy &
+                      + ( Fw(i,j,k) - Fw(i,j,k-1) )*inv_hz
+          End Do
+       End Do
+    End Do
+
+  End Subroutine vp_div
+
+
+  Function vp_dot(a, b) Result(s)
+
+    Real(Int64), Intent(In) :: a(nxg,nyg,nzg), b(nxg,nyg,nzg)
+    Real(Int64) :: s, sl
+
+    sl = Sum( vp_w*a*b )
+    Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+  End Function vp_dot
+
+
+  Subroutine vp_remove_mean(a)
+
+    Real(Int64), Intent(InOut) :: a(nxg,nyg,nzg)
+    Real(Int64) :: sl, s
+
+    sl = Sum( vp_w*a )
+    Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    a = a - s/vp_wsum
+
+  End Subroutine vp_remove_mean
+
+
+  !> z = M^-1 r: constant-coefficient fast solve with beta0, zero weighted mean (keeps the preconditioner symmetric)
+  Subroutine vp_precond(r, z)
+
+    Real(Int64), Intent(In)  :: r(nxg,nyg,nzg)
+    Real(Int64), Intent(Out) :: z(nxg,nyg,nzg)
+
+    z = 0d0
+    rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)/vp_beta0
+    Call solve_poisson_equation(skip_p_save=.True.)
+    z(2:nxg,2:nyg-1,2:nzg) = rhs_p(2:nxg,2:nyg-1,2:nzg)
+    Call vp_remove_mean(z)
+
+  End Subroutine vp_precond
+
+
+  !> Up to nit PCG iterations on A x = f from x = 0 (f need not have zero mean: it is removed), stopping early once the residual
+  !  falls below tol times its initial norm (tol = 0: always nit iterations). Sets vp_iters_last and the final relative residual.
+  Subroutine vp_pcg(f, nit, tol, x)
+
+    Real(Int64),    Intent(In)  :: f(nxg,nyg,nzg), tol
+    Integer(Int32), Intent(In)  :: nit
+    Real(Int64),    Intent(Out) :: x(nxg,nyg,nzg)
+
+    Integer(Int32) :: it
+    Real(Int64) :: rz, rzn, alpha, r0, rn
+
+    x = 0d0
+    vp_iters_last = 0
+    vp_res_last = 0d0
+    vp_r = f
+    Call vp_remove_mean(vp_r)
+    r0 = Sqrt(vp_dot(vp_r, vp_r))
+    If ( r0 == 0d0 ) Return
+    Call vp_precond(vp_r, vp_z)
+    vp_d = vp_z
+    rz = vp_dot(vp_r, vp_z)
+    Do it = 1, nit
+       Call vp_halo(vp_d, .True.)
+       Call vp_apply_A(vp_d, vp_ap)
+       alpha = rz/vp_dot(vp_d, vp_ap)
+       x = x + alpha*vp_d
+       vp_r = vp_r - alpha*vp_ap
+       Call vp_remove_mean(vp_r)
+       vp_iters_last = it
+       rn = Sqrt(vp_dot(vp_r, vp_r))
+       vp_res_last = rn/r0
+       If ( it == nit .Or. rn < tol*r0 ) Exit
+       Call vp_precond(vp_r, vp_z)
+       rzn = vp_dot(vp_r, vp_z)
+       vp_d = vp_z + (rzn/rz)*vp_d
+       rz = rzn
+    End Do
+
+  End Subroutine vp_pcg
+
+
+  !> Development check, run from vof_init when vof_selftest=1: PCG iteration counts to 1e-6 and 1e-10 for a rough zero-mean right-hand
+  !  side on the current density field, and the symmetry of A (a.Ab - b.Aa)
+  Subroutine vp_selftest
+
+    Real(Int64), Allocatable :: f(:,:,:), x(:,:,:), a(:,:,:), b(:,:,:), Aa(:,:,:), Ab(:,:,:)
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: sab, sba, tol_list(2)
+    Integer(Int32) :: it
+
+    Allocate( f(nxg,nyg,nzg), x(nxg,nyg,nzg), a(nxg,nyg,nzg), b(nxg,nyg,nzg), Aa(nxg,nyg,nzg), Ab(nxg,nyg,nzg) )
+    f = 0d0
+    Do k = 2, nzg-1
+       Do j = 2, nyg-1
+          Do i = 2, nxg-1
+             f(i,j,k) = Sin(6.283d0*xg(i) + 3.14d0*yg(j) + 4d0*zg(k)) + Cos(2d0*xg(i) - 9.42d0*yg(j) + 6d0*zg(k))
+             a(i,j,k) = Sin(3d0*xg(i) + 2d0*yg(j)) + Cos(5d0*zg(k))
+             b(i,j,k) = Cos(2d0*xg(i) - 3d0*yg(j) + zg(k))
+          End Do
+       End Do
+    End Do
+    f = f*vp_w/Max(vp_w, 1d-300)
+    a = a*vp_w/Max(vp_w, 1d-300)
+    b = b*vp_w/Max(vp_w, 1d-300)
+    Call vp_halo(a, .True.);  Call vp_halo(b, .True.)
+    Call vp_apply_A(a, Aa);  Call vp_apply_A(b, Ab)
+    sab = vp_dot(a, Ab);  sba = vp_dot(b, Aa)
+    If ( myid == 0 ) Write(*,'(A,3ES14.5)') '   vp_selftest symmetry a.Ab, b.Aa, rel diff = ', sab, sba, &
+         Abs(sab - sba)/Max(Abs(sab), 1d-300)
+
+    tol_list = (/ 1d-6, 1d-10 /)
+    Do it = 1, 2
+       Call vp_pcg(f, 200, tol_list(it), x)
+       If ( myid == 0 ) Write(*,'(A,ES9.1,A,I4,A,ES10.2)') '   vp_selftest PCG tol', tol_list(it), ' iterations', &
+            vp_iters_last, ' final residual', vp_res_last
+    End Do
+    Deallocate( f, x, a, b, Aa, Ab )
+
+  End Subroutine vp_selftest
+
+End Module vof_pressure

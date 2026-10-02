@@ -64,12 +64,18 @@ Contains
   End Subroutine compute_pseudo_pressure_rhs
 
   !> Solve pseudo-pressure equation (fast Poisson solver)
-  Subroutine solve_poisson_equation
+  !  skip_p_save: leave P untouched (the two-fluid pressure solver calls this as a preconditioner several times per stage)
+  Subroutine solve_poisson_equation(skip_p_save)
+
+    Logical, Intent(In), Optional :: skip_p_save
 
     Integer(Int32) :: i, j, k, k_global, i_global, j_global, info, nyp
     Real   (Int64) :: dum, dumref, maxerr, wavenum_sum, inv_pdt
-    Logical        :: is_first_p, is_last_p
+    Logical        :: is_first_p, is_last_p, save_p
     Integer(Int32) :: partner_p
+
+    save_p = .True.
+    If ( Present(skip_p_save) ) save_p = .Not. skip_p_save
 
     Call profiler_start(PROF_POISSON_FFT)
 #ifdef GPU_POISSON
@@ -324,7 +330,7 @@ Contains
     Call profiler_stop(PROF_POISSON_FFT)
 
     ! Save physical pressure at the end of the full time step
-    If ( rk_step == 3 ) Then
+    If ( rk_step == 3 .And. save_p ) Then
 #ifdef GPU_POISSON
        ! P is device-resident like rhs_p: computed and ghost-filled entirely on the device (no host round
        ! trips); the host copy is refreshed only when a host consumer needs it (see time_integration.f90)

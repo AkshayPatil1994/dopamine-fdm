@@ -21,6 +21,7 @@ Module vof_state
   Use vof_plic
   Use vof_normals
   Use vof_advect
+  Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest
 
   Implicit None
 
@@ -70,6 +71,16 @@ Contains
     End Do
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vof_advect_init(nxg, nyg, nzg)
+
+    If ( z_bc_type == 1 ) Then
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: the VOF field supports periodic z only (z_bc_type=0)'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
+    If ( vof_flow >= 1 ) Then
+       Call vp_init
+       Call vp_set_density(Cv)
+       If ( vof_selftest == 1 ) Call vp_selftest
+    End If
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     vof_vol0 = vliq
