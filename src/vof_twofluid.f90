@@ -66,6 +66,10 @@ Contains
             'Boussinesq, particles, UAV, flat wall models or rotation'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
+    If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) Then
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not apply dPdx, dPdz or mass-flux forcing (set them to zero)'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
 
     Allocate( qu(nx,nyg,nzg), qv(nxg,ny,nzg), qw(nxg,nyg,nz), uqu(nx,nyg,nzg), uqv(nxg,ny,nzg), uqw(nxg,nyg,nz) )
     Allocate( Md(nxg,nyg,nzg), rt(nxg,nyg,nzg), Dd(nxg,nyg,nzg) )

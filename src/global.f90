@@ -712,67 +712,73 @@ Module global
   Integer(Int32) :: sgs_particle_model  = 0
   Real   (Int64) :: particle_langevin_C0 = 2.1d0   ! Kolmogorov constant
 
-  ! Geometric PLIC VOF free surface (src/vof_state.f90): vof_active 0=off,1=on.
-  ! vof_ic_type 5: liquid box x < vof_center(1), y < vof_center(2); 6: disk in the x-y plane (vof_center(1:2), vof_radius)
-  ! vof_ic_type: 1=planar interface (liquid below y=vof_level), 2=sphere (centre vof_center, radius vof_radius), 3=sphere of
-  ! gas inside liquid (liquid outside). vof_normal_scheme: 1=Youngs, 2=centred-column height function with Youngs fallback.
+  ! ---- Geometric PLIC VOF liquid fraction and two-fluid solver (src/vof_*.f90, docs/Two-Phase-VOF.md) ----
+  ! vof_active 0 = off (the solver runs exactly as before), 1 = C is transported; vof_flow 0 = C is only advected by the flow,
+  ! 1 = two-fluid Navier-Stokes (density/viscosity from C, conservative momentum transport with the VOF mass fluxes).
   Integer(Int32) :: vof_active        = 0
+  Integer(Int32) :: vof_flow          = 0
+  ! initial interface: 1 plane (liquid below y = vof_level), 2 sphere (vof_center, vof_radius), 3 gas bubble in liquid, 4 standing
+  ! wave (vof_level, vof_wave_amp, vof_wave_lambda), 5 box x < vof_center(1), y < vof_center(2) (vof_radius > 0: also the
+  ! periodic mirror image), 6 disk in the x-y plane (vof_center(1:2), vof_radius)
   Integer(Int32) :: vof_ic_type       = 1
   Real   (Int64) :: vof_level         = 0d0
   Real   (Int64) :: vof_center(3)     = 0d0
   Real   (Int64) :: vof_radius        = 0d0
+  Real   (Int64) :: vof_wave_amp      = 0d0
+  Real   (Int64) :: vof_wave_lambda   = 0d0
+  Integer(Int32) :: vof_wave_stokes   = 0     ! 1: second-order Stokes surface and deep-water velocities of a +x travelling wave
+  ! interface transport: vof_normal_scheme 1 Youngs, 2 centred-column height function with Youngs fallback; vof_method 1 PLIC
+  ! fluxes (sharp), 2 THINC (diffuse over 2-3 cells, vof_beta = sharpness)
   Integer(Int32) :: vof_normal_scheme = 1
-  ! vof_method: 1 = PLIC face fluxes (sharp), 2 = THINC tanh-profile fluxes (diffuse over ~2-3 cells, vof_beta = sharpness)
   Integer(Int32) :: vof_method        = 1
   Real   (Int64) :: vof_beta          = 2d0
-  ! vof_geo_density 1 (default): face densities from the reconstructed planes in the half cells of each staggered control volume (0: arithmetic, the old behaviour; hydrostatically wrong at 1000:1)
-  Integer(Int32) :: vof_geo_density   = 1
-  ! vof_layered_precond 1 (experimental, CPU y-wall only): PCG preconditioner uses the row-wise (horizontal-mean) density instead of one constant coefficient
-  Integer(Int32) :: vof_layered_precond = 0
-  ! Two-fluid coupling (vof_flow = 0: C is only transported by the flow; 1: C sets density/viscosity and the momentum is advected
-  ! conservatively with the VOF mass fluxes). vof_rho_*: densities; vof_nu_*: kinematic viscosities (mu = rho nu); vof_grav: gravity
-  ! magnitude along -y; vof_pcg_iters: PCG iterations on the pressure increment per RK stage (0 = single constant-coefficient solve);
-  ! vof_mom_scheme: 0 central, 2 van Leer limited momentum face interpolation; vof_cfl_max: Courant limit enforced on dt.
-  Integer(Int32) :: vof_flow          = 0
+  ! fluids: densities, kinematic viscosities (mu = rho nu), gravity magnitude along -y, surface tension (0 = off)
   Real   (Int64) :: vof_rho_l         = 1000d0
   Real   (Int64) :: vof_rho_g         = 1d0
   Real   (Int64) :: vof_nu_l          = 1d-6
   Real   (Int64) :: vof_nu_g          = 1.5d-5
   Real   (Int64) :: vof_grav          = 9.81d0
-  Integer(Int32) :: vof_pcg_iters     = 30
-  Real   (Int64) :: vof_pcg_tol       = 2d-1    ! relative residual that ends the force-stage PCG early (0 = always vof_pcg_iters)
+  Real   (Int64) :: vof_sigma         = 0d0
+  Real   (Int64) :: vof_u0            = 0d0   ! uniform streamwise velocity imposed at start-up (fresh start only)
+  ! momentum: vof_mom_scheme 0 central, 1 upwind, 2 Koren, 4 QUICK, 5 central 4th order, 6 WENO5-Z (default); the face value is
+  ! blended to upwind where the staggered control-volume mass turns over: smoothstep over refill numbers vof_mom_cm0..cm1
   Integer(Int32) :: vof_mom_scheme    = 6
-  Real   (Int64) :: vof_cfl_max       = 0.4d0
-  Integer(Int32) :: vof_selftest      = 0
-  ! refill-Courant number (see fmom) below which the high-order face value is used unblended
   Real   (Int64) :: vof_mom_cm0       = 2d-3
-  Real   (Int64) :: vof_mom_cm1       = 1d-2  ! and above which the face value is first-order upwind
-  Integer(Int32) :: vof_hsplit        = 0     ! experiment: 1 = well-balanced split p = p' - rho g (y-vof_level)
-  Real(Int64)    :: vof_co_sub        = 1.2d-1 ! advection sub-step Courant target when vof_nsub = 0
-  Integer(Int32) :: vof_freeze_ut      = 1     ! 1 = transporting velocity projected once per advection half-step
-  ! 1 = gas above y = vof_level starts with the uniform velocity vof_u0 (impulsive-start shear layer)
-  Integer(Int32) :: vof_shear         = 0
-  ! 1 = Taylor-Green vortex initial velocity (amplitude vof_u0), periodic in x,z and mirrored at the y walls
-  Integer(Int32) :: vof_tgv           = 0
-  Real   (Int64) :: vof_sigma         = 0d0   ! surface tension coefficient (0 = off: no curvature is computed)
-  ! vof_wave_stokes 1: the vof_ic_type=4 surface gets the second-order Stokes harmonic and the water the deep-water velocity of a
-  ! wave travelling in +x (u = w a e^{k y} cos(kx), v = w a e^{k y} sin(kx), w = sqrt(g k)): an initial state of a breaking wave
-  Integer(Int32) :: vof_wave_stokes   = 0
-  Real   (Int64) :: vof_snap_dt       = 0d0   ! vof_debug=1, one rank: dump a vof_snap_NNNN.dat (x y C u v of the mid z plane) every vof_snap_dt
-  Integer(Int32) :: vof_rk_nth        = 0     ! pseudo-time segments of the momentum RK3 per sweep (0 = 1)
-  ! vof_prescribed: C is advected by an analytic divergence-free field instead of the flow velocity (passive mode, vof_flow=0):
-  ! 1 = LeVeque vortex reversal in x-y, 2 = Enright 3-D deformation field; both reverse at t = vof_presc_T/2 and return to the
-  ! initial shape at t = vof_presc_T (the domain is the unit box, periodic length 1 in x and z)
+  Real   (Int64) :: vof_mom_cm1       = 1d-2
+  ! vof_geo_density 1: face densities from the reconstructed planes in the half cells of each staggered control volume (default;
+  ! 0 = arithmetic mean, hydrostatically wrong at 1000:1)
+  Integer(Int32) :: vof_geo_density   = 1
+  ! time integration of the momentum in each geometric sweep: 1 pseudo-time SSP-RK3 with frozen exact mass fluxes (stable to a
+  ! full-step Courant number of about 0.3; switched to 0 above density ratio 2e3), 0 forward Euler; vof_rk_nth pseudo-time
+  ! segments (0 = 1); the advection half-step is split into vof_nsub sub-steps (0 = so that the sub-step Courant number is
+  ! below vof_co_sub); vof_freeze_ut 1 projects the transporting velocity once per half-step
+  Integer(Int32) :: vof_rk_mom        = 1
+  Integer(Int32) :: vof_rk_nth        = 0
+  Integer(Int32) :: vof_nsub          = 0
+  Real   (Int64) :: vof_co_sub        = 1.2d-1
+  Integer(Int32) :: vof_freeze_ut     = 1
+  ! pressure: PCG on the force-stage pressure increment to relative residual vof_pcg_tol (at most vof_pcg_iters iterations,
+  ! 0 = always vof_pcg_iters); projection after each advection half-step: vof_adv_iters iterations, relative residual vof_adv_tol
+  Integer(Int32) :: vof_pcg_iters     = 30
+  Real   (Int64) :: vof_pcg_tol       = 2d-1
+  Integer(Int32) :: vof_adv_iters     = 3
+  Real   (Int64) :: vof_adv_tol       = 1d-8
+  Integer(Int32) :: vof_layered_precond = 0   ! 1 (CPU, y walls): PCG preconditioner with the row-wise mean density
+  Real   (Int64) :: vof_cfl_max       = 0.4d0
+  ! passive tests: vof_prescribed 1 LeVeque vortex reversal, 2 Enright deformation (C advected by an analytic divergence-free
+  ! field, reversing at t = vof_presc_T/2); vof_tgv 1 Taylor-Green initial velocity (amplitude vof_u0); vof_shear 1 gas above
+  ! y = vof_level starts at vof_u0
   Integer(Int32) :: vof_prescribed    = 0
   Real   (Int64) :: vof_presc_T       = 8d0
-  Integer(Int32) :: vof_debug         = 0     ! 1 = write the vof_dev.dat / vof_prof.dat experiment diagnostics
-  ! momentum update per sweep: 0 forward Euler, 1 pseudo-time SSP-RK3 (switched to 0 above density ratio 2e3)
-  Integer(Int32) :: vof_rk_mom        = 1
-  Integer(Int32) :: vof_nsub          = 0     ! experiment: advection half-step sub-cycles
-  Integer(Int32) :: vof_frozen        = 0     ! experiment: 1 = density field held fixed (no interface transport)
-  Real   (Int64) :: vof_smooth_w     = 0d0   ! experiment: vof_ic_type=4 wave initialised with a smoothed Heaviside of this half-width in cells
-  Real   (Int64) :: vof_wave_amp      = 0d0   ! vof_ic_type=4: cosine wave amplitude and wavelength along x
-  Real   (Int64) :: vof_wave_lambda   = 0d0
+  Integer(Int32) :: vof_tgv           = 0
+  Integer(Int32) :: vof_shear         = 0
+  ! diagnostics and development switches
+  Integer(Int32) :: vof_debug         = 0     ! 1: vof_dev.dat / vof_prof.dat / vof_front.dat / vof_vmax.dat and, with vof_snap_dt, slices
+  Real   (Int64) :: vof_snap_dt       = 0d0   ! (vof_debug = 1, one rank) dump a vof_snap_NNNN.dat every vof_snap_dt
+  Integer(Int32) :: vof_selftest      = 0
+  Integer(Int32) :: vof_frozen        = 0     ! 1: density held fixed (no interface transport)
+  Integer(Int32) :: vof_hsplit        = 0     ! 1: well-balanced split p = p' - rho g (y - vof_level)
+  Real   (Int64) :: vof_smooth_w      = 0d0   ! vof_ic_type 4: smoothed Heaviside of this half-width (cells)
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cvof_io   ! C without the second ghost layer, for snapshots and restart
   ! Wave generation (src/waves.f90): wave_type 0=off, 1=linear, 2=stream function, 3=JONSWAP; the inlet needs inflow_type=3.
   ! wave_current_mode: 1 zero mean volume flux (closed flume), 2 zero mean Eulerian velocity. Relaxation zones (waves2Foam style
@@ -793,9 +799,6 @@ Module global
   Real   (Int64) :: wave_relax_rate   = 20d0
   Real   (Int64) :: wave_ramp_time    = 0d0    ! smooth start-up ramp of the wave amplitude [s] (0 = none)
   Real   (Int64) :: wave_gauge_x(8)   = -1d0   ! x positions of surface-elevation gauges written to vof_gauges.dat (<0 unused)
-  Integer(Int32) :: vof_adv_iters     = 3       ! PCG iterations of the projection after each half advection
-  Real   (Int64) :: vof_adv_tol       = 1d-8    ! and its relative residual target
-  Real   (Int64) :: vof_u0            = 0d0   ! uniform streamwise velocity imposed at start-up (vof_flow, fresh start only)
 
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
