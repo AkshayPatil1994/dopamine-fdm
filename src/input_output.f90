@@ -98,8 +98,10 @@ Contains
 
     Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, vof_method, vof_beta, &
                    vof_geo_density, vof_layered_precond, &
-                   vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_pcg_iters, vof_mom_scheme, &
-                   vof_cfl_max, vof_selftest, vof_u0, vof_wave_amp, vof_wave_lambda, vof_adv_iters, vof_adv_tol
+                   vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_pcg_iters, vof_pcg_tol, vof_mom_scheme, &
+                   vof_cfl_max, vof_selftest, vof_u0, vof_wave_amp, vof_wave_lambda, vof_adv_iters, vof_adv_tol, &
+                   vof_frozen, vof_nsub, vof_rk_mom, vof_rk_nth, vof_debug, vof_tgv, vof_shear, vof_co_sub, &
+                   vof_freeze_ut, vof_smooth_w, vof_hsplit, vof_mom_cm0, vof_mom_cm1
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -496,7 +498,7 @@ Contains
              Write(*,'(A,2E12.4)') '   vof_nu_l,  vof_nu_g         = ', vof_nu_l, vof_nu_g
              Write(*,'(A,E12.4)')  '   vof_grav                    = ', vof_grav
              Write(*,'(A,I3)')     '   vof_pcg_iters               = ', vof_pcg_iters
-             Write(*,'(A,I2)')     '   vof_mom_scheme (0=central,2=van Leer) = ', vof_mom_scheme
+             Write(*,'(A,I2)')     '   vof_mom_scheme (0 central,1 upwind,2 Koren,4 QUICK,6 WENO5-Z) = ', vof_mom_scheme
           End If
        End If
     End If
@@ -752,6 +754,7 @@ Contains
     Call Mpi_bcast ( vof_nu_g,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_grav,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_pcg_iters,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_pcg_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_mom_scheme,        1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_cfl_max,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_selftest,          1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
@@ -760,6 +763,19 @@ Contains
     Call Mpi_bcast ( vof_adv_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_wave_amp,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_wave_lambda,       1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_frozen,           1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_nsub,             1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_rk_mom,           1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_rk_nth,           1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_debug,            1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_tgv,              1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_shear,            1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_freeze_ut,        1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_hsplit,           1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_co_sub,           1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_mom_cm0,          1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_mom_cm1,          1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_smooth_w,         1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
 

@@ -27,17 +27,26 @@ Module vof_twofluid
   Use vof_advect
   Use vof_state
   Use vof_pressure
+  Use mom_recon
+  Use halo_pad, Only : pad_field
   Use projection, Only : compute_pseudo_pressure_rhs, solve_poisson_equation, project_velocity
 
   Implicit None
 
   ! transported momentum density and its face velocity, mass flux of the current sweep, c-tilde density, volume-flux divergence
   Real(Int64), Allocatable, Dimension(:,:,:) :: qu, qv, qw, uqu, uqv, uqw, Md, rt, Dd
+  ! pseudo-time RK3 of the momentum update: start-of-sweep momentum and the stage tendency
+  Real(Int64), Allocatable, Dimension(:,:,:) :: q0u, q0v, q0w, dqu, dqv, dqw, Fl
+  ! padded copies (E=3 planes each side) of the transported velocity for the wide momentum-reconstruction stencils
+  Integer(Int32), Parameter :: EP = 3
+  Real(Int64), Allocatable, Dimension(:,:,:) :: PadU, PadV, PadW
+  ! staggered densities before the sweep and the smaller of before/after (mass of a control volume that empties or fills in the sweep)
+  Real(Int64), Allocatable, Dimension(:,:,:) :: rou, rov, row, rmu, rmv, rmw
   ! transporting velocity (exactly divergence-free) and a scratch copy of the velocity
   Real(Int64), Allocatable, Dimension(:,:,:) :: Ut, Vt, Wt, Utmp, Vtmp, Wtmp
   ! RK3: start-of-step velocity is Uo/Vo/Wo (global); stage force combinations H = F_explicit - beta grad p of stages 1 and 2
   Real(Int64), Allocatable, Dimension(:,:,:) :: Hu1, Hv1, Hw1, Hu2, Hv2, Hw2, Fu_, Fv_, Fw_, Gu_, Gv_, Gw_
-  Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c
+  Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c, mr_c
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
   Real(Int64) :: vf_bnd_loc = 0d0, vf_relax_loc = 0d0   ! rank-local liquid volume through the x boundaries / added by relaxation this step
@@ -47,6 +56,7 @@ Contains
   Subroutine vof_flow_init
 
     Integer(Int32) :: i, j, k
+    Real(Int64) :: kt(3)
 
     If ( ibm_input_mode >= 1 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
          .Or. uav_active >= 1 .Or. flat_wall_model_flag /= 0 .Or. rotation_active >= 1 ) Then
@@ -60,9 +70,17 @@ Contains
     Allocate( Ut(nx,nyg,nzg), Vt(nxg,ny,nzg), Wt(nxg,nyg,nz), Utmp(nx,nyg,nzg), Vtmp(nxg,ny,nzg), Wtmp(nxg,nyg,nz) )
     Allocate( Hu1(nx,nyg,nzg), Hv1(nxg,ny,nzg), Hw1(nxg,nyg,nz), Hu2(nx,nyg,nzg), Hv2(nxg,ny,nzg), Hw2(nxg,nyg,nz) )
     Allocate( Fu_(nx,nyg,nzg), Fv_(nxg,ny,nzg), Fw_(nxg,nyg,nz), Gu_(nx,nyg,nzg), Gv_(nxg,ny,nzg), Gw_(nxg,nyg,nz) )
-    Allocate( ppre(nxg,nyg,nzg), dphi(nxg,nyg,nzg), fdiv(nxg,nyg,nzg), mu_c(nxg,nyg,nzg) )
+    Allocate( ppre(nxg,nyg,nzg), dphi(nxg,nyg,nzg), fdiv(nxg,nyg,nzg), mu_c(nxg,nyg,nzg), mr_c(nxg,nyg,nzg) )
     Allocate( rhos(nyg), rsf(ny), cw0(nyg), cw1(nyg) )
+    Allocate( PadU(1-EP:nx+EP,1-EP:nyg+EP,1-EP:nzg+EP), PadV(1-EP:nxg+EP,1-EP:ny+EP,1-EP:nzg+EP), &
+              PadW(1-EP:nxg+EP,1-EP:nyg+EP,1-EP:nz+EP) )
+    PadU = 0d0;  PadV = 0d0;  PadW = 0d0
+    Allocate( rou(nx,nyg,nzg), rov(nxg,ny,nzg), row(nxg,nyg,nz), rmu(nx,nyg,nzg), rmv(nxg,ny,nzg), rmw(nxg,nyg,nz) )
+    rou = 1d0;  rov = 1d0;  row = 1d0;  rmu = 1d0;  rmv = 1d0;  rmw = 1d0
+    Allocate( q0u(nx,nyg,nzg), q0v(nxg,ny,nzg), q0w(nxg,nyg,nz), dqu(nx,nyg,nzg), dqv(nxg,ny,nzg), dqw(nxg,nyg,nz) )
     qu = 0d0;  qv = 0d0;  qw = 0d0;  Md = 0d0;  rt = 0d0;  Dd = 0d0
+    Allocate( Fl(0:nxg+1,0:nyg+1,0:nzg+1) )
+    q0u = 0d0;  q0v = 0d0;  q0w = 0d0;  dqu = 0d0;  dqv = 0d0;  dqw = 0d0;  Fl = 0d0
     ppre = 0d0;  dphi = 0d0
 
     ! cell-centre weights of the y-face quantities (v) of the stretched grid
@@ -77,8 +95,37 @@ Contains
     Do j = 1, ny
        rsf(j) = ( rhos(j)*vp_hy(j) + rhos(j+1)*vp_hy(j+1) )/( vp_hy(j) + vp_hy(j+1) )
     End Do
-    If ( restart == 0 .And. vof_u0 /= 0d0 ) Then
+    If ( restart == 0 .And. vof_tgv == 1 ) Then
+       kt(1) = 8d0*Atan(1d0)/(Lx - dx);  kt(2) = 8d0*Atan(1d0)/Ly;  kt(3) = 8d0*Atan(1d0)/(Lz - hz(2))
+       Do k = 1, nzg
+          Do j = 1, nyg
+             Do i = 1, nx
+                U(i,j,k) = vof_u0*Sin(kt(1)*x(i))*Cos(kt(2)*yg(j))*Cos(kt(3)*zg(k))
+             End Do
+          End Do
+       End Do
+       Do k = 1, nzg
+          Do j = 1, ny
+             Do i = 1, nxg
+                V(i,j,k) = -vof_u0*Cos(kt(1)*xg(i))*Sin(kt(2)*y(j))*Cos(kt(3)*zg(k))
+             End Do
+          End Do
+       End Do
+       W = 0d0
+    Else If ( restart == 0 .And. vof_shear == 1 ) Then
+       V = 0d0;  W = 0d0
+       Do j = 1, nyg
+          U(:,j,:) = Merge(vof_u0, 0d0, yg(j) > vof_level)
+       End Do
+    Else If ( restart == 0 .And. vof_u0 /= 0d0 ) Then
        U = vof_u0;  V = 0d0;  W = 0d0
+    End If
+
+    ! pseudo-time RK3 of the momentum needs less than half of a control volume's mass to leave in one sweep, which fails for
+    ! density ratios above a few thousand (drop in a uniform stream, 1e4 .. 1e6): forward Euler with small sub-steps there
+    If ( vof_rk_nth <= 0 ) vof_rk_nth = 1
+    If ( vof_rho_l/vof_rho_g >= 2d3 .And. vof_rk_mom == 1 ) Then
+       vof_rk_mom = 0;  vof_co_sub = Min(vof_co_sub, 3d-2)
     End If
 
     ! the viscous time-step limit sees the largest kinematic viscosity of the two fluids
@@ -111,6 +158,7 @@ Contains
           End Do
        End Do
     End Do
+    If ( vof_hsplit /= 0 ) gz = 0d0
     Call vp_div(zu, gz, zw, fdiv)
     Call vp_pcg(fdiv, 400, 1d-12, ppre)
     Call vp_halo(ppre, .True.)
@@ -146,14 +194,19 @@ Contains
 
 
   !> Advance C and the momentum rho*u by tau with the current velocity U, V, W as the (divergence-free) transporting field
-  Subroutine vof_advect_half(tau)
+  Subroutine vof_advect_half(tau, keep_transport)
 
     Real(Int64), Intent(In) :: tau
+    Logical, Intent(In), Optional :: keep_transport
 
     Integer(Int32) :: isw, d, order(3), i, j, k
     Real(Int64) :: co, cl
 
-    Call make_transport_velocity
+    If ( .Not. Present(keep_transport) ) Then
+       Call make_transport_velocity
+    Else If ( .Not. keep_transport ) Then
+       Call make_transport_velocity
+    End If
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     qu = vp_rau*U;  qv = vp_rav*V;  qw = vp_raw*W
@@ -173,6 +226,7 @@ Contains
        Call vof_reconstruct(Cv, nxg, nyg, nzg, vof_normal_scheme)
        Call vp_set_density(Cv)
        uqu = qu/vp_rau;  uqv = qv/vp_rav;  uqw = qw/vp_raw
+       rou = vp_rau;  rov = vp_rav;  row = vp_raw
        If ( d == 1 ) Then
           Call vof_sweep(1, Cv, nxg, nyg, nzg, Ut, hx, hy, hz, tau, co, cl)
        Else If ( d == 2 ) Then
@@ -307,88 +361,204 @@ Contains
   End Subroutine sweep_mass_flux
 
 
-  !> Conservative update of the three momentum components for the sweep along d: flux of q through the faces of each staggered
-  !  control volume (mass flux averaged onto the CV face, central velocity) plus the rho-tilde * volume-flux-divergence correction
+  !> Momentum update of the sweep along d with the exact mass fluxes Md of the geometric sweep. The staggered density moves
+  !  linearly from rou (before) to vp_rau (after) along the sweep pseudo-time theta, so the momentum ODE
+  !  dq/dtheta = tendency(q/rho(theta)) is integrated by forward Euler (vof_rk_mom = 0) or SSP-RK3 (1; theta = 0, 1, 1/2)
+  !  with the same fluxes at every stage; vof_rk_nth > 1 splits the pseudo-time into equal segments (a stage may step
+  !  past the end of the density path, which needs less than half of a control volume's mass to leave in one segment)
   Subroutine momentum_update(d)
 
     Integer(Int32), Intent(In) :: d
-    Integer(Int32) :: i, j, k
-    Real(Int64) :: hi, lo, corr, vcv
+    Integer(Int32) :: stage, nst, seg
+    Real(Int64) :: a0, a1, th
 
-    ! ---- u faces (i,j,k): i = 2..nx-1
-    Do k = 2, nzg-1
-       Do j = 2, nyg-1
-          Do i = 2, nx-1
-             vcv = dx*hy(j)*hz(k)
-             Select Case(d)
-             Case(1)
-                hi = 0.5d0*( Md(i,j,k) + Md(i+1,j,k) )*0.5d0*( uqu(i,j,k) + uqu(i+1,j,k) )
-                lo = 0.5d0*( Md(i-1,j,k) + Md(i,j,k) )*0.5d0*( uqu(i-1,j,k) + uqu(i,j,k) )
-                corr = uqu(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i+1,j,k)*Dd(i+1,j,k) )
-             Case(2)
-                hi = 0.5d0*( Md(i,j,k) + Md(i+1,j,k) )*( weight_y_0(j)*uqu(i,j,k) + weight_y_1(j)*uqu(i,j+1,k) )
-                lo = 0.5d0*( Md(i,j-1,k) + Md(i+1,j-1,k) )*( weight_y_0(j-1)*uqu(i,j-1,k) + weight_y_1(j-1)*uqu(i,j,k) )
-                corr = uqu(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i+1,j,k)*Dd(i+1,j,k) )
-             Case Default
-                hi = 0.5d0*( Md(i,j,k) + Md(i+1,j,k) )*0.5d0*( uqu(i,j,k) + uqu(i,j,k+1) )
-                lo = 0.5d0*( Md(i,j,k-1) + Md(i+1,j,k-1) )*0.5d0*( uqu(i,j,k-1) + uqu(i,j,k) )
-                corr = uqu(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i+1,j,k)*Dd(i+1,j,k) )
-             End Select
-             qu(i,j,k) = qu(i,j,k) + ( corr - (hi - lo) )/vcv
-          End Do
-       End Do
-    End Do
-
-    ! ---- v faces (i,j,k): j = 2..ny-1
-    Do k = 2, nzg-1
-       Do j = 2, ny-1
-          Do i = 2, nxg-1
-             vcv = dx*( yg(j+1) - yg(j) )*hz(k)
-             Select Case(d)
-             Case(1)
-                hi = 0.5d0*( Md(i,j,k) + Md(i,j+1,k) )*0.5d0*( uqv(i,j,k) + uqv(i+1,j,k) )
-                lo = 0.5d0*( Md(i-1,j,k) + Md(i-1,j+1,k) )*0.5d0*( uqv(i-1,j,k) + uqv(i,j,k) )
-                corr = uqv(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i,j+1,k)*Dd(i,j+1,k) )
-             Case(2)
-                ! Md(j) is the face flux above cell j; the centre-plane flux of cell m is the mean of its two face fluxes
-                hi = 0.5d0*( Md(i,j,k) + Md(i,j+1,k) )*( cw0(j+1)*uqv(i,j,k) + cw1(j+1)*uqv(i,j+1,k) )
-                lo = 0.5d0*( Md(i,j-1,k) + Md(i,j,k) )*( cw0(j)*uqv(i,j-1,k) + cw1(j)*uqv(i,j,k) )
-                corr = uqv(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i,j+1,k)*Dd(i,j+1,k) )
-             Case Default
-                hi = 0.5d0*( Md(i,j,k) + Md(i,j+1,k) )*0.5d0*( uqv(i,j,k) + uqv(i,j,k+1) )
-                lo = 0.5d0*( Md(i,j,k-1) + Md(i,j+1,k-1) )*0.5d0*( uqv(i,j,k-1) + uqv(i,j,k) )
-                corr = uqv(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i,j+1,k)*Dd(i,j+1,k) )
-             End Select
-             qv(i,j,k) = qv(i,j,k) + ( corr - (hi - lo) )/vcv
-          End Do
-       End Do
-    End Do
-
-    ! ---- w faces (i,j,k): k = 2..nz-1
-    Do k = 2, nz-1
-       Do j = 2, nyg-1
-          Do i = 2, nxg-1
-             vcv = dx*hy(j)*( zg(k+1) - zg(k) )
-             Select Case(d)
-             Case(1)
-                hi = 0.5d0*( Md(i,j,k) + Md(i,j,k+1) )*0.5d0*( uqw(i,j,k) + uqw(i+1,j,k) )
-                lo = 0.5d0*( Md(i-1,j,k) + Md(i-1,j,k+1) )*0.5d0*( uqw(i-1,j,k) + uqw(i,j,k) )
-                corr = uqw(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i,j,k+1)*Dd(i,j,k+1) )
-             Case(2)
-                hi = 0.5d0*( Md(i,j,k) + Md(i,j,k+1) )*( weight_y_0(j)*uqw(i,j,k) + weight_y_1(j)*uqw(i,j+1,k) )
-                lo = 0.5d0*( Md(i,j-1,k) + Md(i,j-1,k+1) )*( weight_y_0(j-1)*uqw(i,j-1,k) + weight_y_1(j-1)*uqw(i,j,k) )
-                corr = uqw(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i,j,k+1)*Dd(i,j,k+1) )
-             Case Default
-                hi = 0.5d0*( Md(i,j,k) + Md(i,j,k+1) )*0.5d0*( uqw(i,j,k) + uqw(i,j,k+1) )
-                lo = 0.5d0*( Md(i,j,k-1) + Md(i,j,k) )*0.5d0*( uqw(i,j,k-1) + uqw(i,j,k) )
-                corr = uqw(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i,j,k+1)*Dd(i,j,k+1) )
-             End Select
-             qw(i,j,k) = qw(i,j,k) + ( corr - (hi - lo) )/vcv
-          End Do
+    Call vof_fill_pad(Cv, nxg, nyg, nzg)
+    Call vp_set_density(Cv)
+    rmu = Min(rou, vp_rau);  rmv = Min(rov, vp_rav);  rmw = Min(row, vp_raw)
+    nst = Merge(3, 1, vof_rk_mom == 1)
+    Do seg = 1, vof_rk_nth
+       q0u = qu;  q0v = qv;  q0w = qw
+       Do stage = 1, nst
+          If ( stage > 1 .Or. seg > 1 ) Then
+             Call face_halo(qu, qv, qw)
+             th = ( Real(seg - 1, Int64) + Merge(0d0, Merge(1d0, 0.5d0, stage == 2), stage == 1) )/vof_rk_nth
+             uqu = qu/( rou + th*(vp_rau - rou) );  uqv = qv/( rov + th*(vp_rav - rov) );  uqw = qw/( row + th*(vp_raw - row) )
+          End If
+          Call pad_transported
+          Call momentum_tendency(d)
+          a0 = Merge(0d0, Merge(0.75d0, 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
+          qu = a0*q0u + a1*( qu + dqu/vof_rk_nth );  qv = a0*q0v + a1*( qv + dqv/vof_rk_nth )
+          qw = a0*q0w + a1*( qw + dqw/vof_rk_nth )
        End Do
     End Do
 
   End Subroutine momentum_update
+
+
+  !> Flux of q through the faces of each staggered control volume (mass flux averaged onto the CV face, face value of the
+  !  transported velocity uq) plus the rho-tilde * volume-flux-divergence correction, divided by the control volume
+  Subroutine momentum_tendency(d)
+
+    Integer(Int32), Intent(In) :: d
+
+    Call tend_comp(1, d, dqu, uqu, 2, nx-1,  2, nyg-1, 2, nzg-1)
+    Call tend_comp(2, d, dqv, uqv, 2, nxg-1, 2, ny-1,  2, nzg-1)
+    Call tend_comp(3, d, dqw, uqw, 2, nxg-1, 2, nyg-1, 2, nz-1)
+
+  End Subroutine momentum_tendency
+
+
+  !> Tendency of component c (1 u, 2 v, 3 w) for the sweep along d: each control-volume face flux is evaluated once and used
+  !  by the two control volumes that share it
+  Subroutine tend_comp(c, d, dq, uc, i0, i1, j0, j1, k0, k1)
+
+    Integer(Int32), Intent(In)    :: c, d, i0, i1, j0, j1, k0, k1
+    Real(Int64),    Intent(InOut) :: dq(:,:,:)
+    Real(Int64),    Intent(In)    :: uc(:,:,:)
+    Integer(Int32) :: i, j, k, ec(3), ed(3)
+    Real(Int64) :: corr, vcv
+
+    ec = (/ Merge(1,0,c==1), Merge(1,0,c==2), Merge(1,0,c==3) /)
+    ed = (/ Merge(1,0,d==1), Merge(1,0,d==2), Merge(1,0,d==3) /)
+    Do k = k0-ed(3), k1
+       Do j = j0-ed(2), j1
+          Do i = i0-ed(1), i1
+             Fl(i,j,k) = face_flux(c, d, i, j, k)
+          End Do
+       End Do
+    End Do
+    Do k = k0, k1
+       Do j = j0, j1
+          Do i = i0, i1
+             vcv = dx*Merge(yg(j+1) - yg(j), hy(j), c==2)*Merge(zg(k+1) - zg(k), hz(k), c==3)
+             corr = uc(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i+ec(1),j+ec(2),k+ec(3))*Dd(i+ec(1),j+ec(2),k+ec(3)) )
+             dq(i,j,k) = ( corr - ( Fl(i,j,k) - Fl(i-ed(1),j-ed(2),k-ed(3)) ) )/vcv
+          End Do
+       End Do
+    End Do
+
+  End Subroutine tend_comp
+
+
+  !> Momentum flux of component c through the face of its control volume on the high side in direction d (the flux through the
+  !  low face of the next control volume): centre-plane mass flux of the two cells the CV spans, blended face value
+  Function face_flux(c, d, i, j, k) Result(f)
+
+    Integer(Int32), Intent(In) :: c, d, i, j, k
+    Real(Int64) :: f, mfc, wa, wb, vcv, r1, r2, s(-2:3)
+    Integer(Int32) :: ii, jj, kk
+
+    ii = i + Merge(1,0,d==1);  jj = j + Merge(1,0,d==2);  kk = k + Merge(1,0,d==3)
+    wa = 0.5d0;  wb = 0.5d0
+    Select Case(c)
+    Case(1)
+       mfc = 0.5d0*( Md(i,j,k) + Md(i+1,j,k) )
+       s = gatu(i,j,k, d);  r1 = rmu(i,j,k);  r2 = rmu(ii,jj,kk)
+       vcv = dx*hy(j)*hz(k)
+       If ( d == 2 ) Then;  wa = weight_y_0(j);  wb = weight_y_1(j);  End If
+    Case(2)
+       mfc = 0.5d0*( Md(i,j,k) + Md(i,j+1,k) )
+       s = gatv(i,j,k, d);  r1 = rmv(i,j,k);  r2 = rmv(ii,jj,kk)
+       vcv = dx*( yg(j+1) - yg(j) )*hz(k)
+       If ( d == 2 ) Then;  wa = cw0(j+1);  wb = cw1(j+1);  End If
+    Case Default
+       mfc = 0.5d0*( Md(i,j,k) + Md(i,j,k+1) )
+       s = gatw(i,j,k, d);  r1 = rmw(i,j,k);  r2 = rmw(ii,jj,kk)
+       vcv = dx*hy(j)*( zg(k+1) - zg(k) )
+       If ( d == 2 ) Then;  wa = weight_y_0(j);  wb = weight_y_1(j);  End If
+    End Select
+    f = mfc*fmom( mfc, s, wa, wb, cmcv(mfc, r1, r2, vcv) )
+
+  End Function face_flux
+
+
+  !> Face value of the transported velocity for the momentum flux from the six-point stencil s(-2:3) around the face:
+  !  vof_mom_scheme 0 weighted central (stretched-grid weights wa, wb), others from mom_recon (index-space formulas). cm is the
+  !  face mass flux over the volume times the jump of 1/rho between the adjacent control volumes: the Courant number of the
+  !  single-fluid scheme is excluded, so only control volumes that are refilled within a step (update weights must stay
+  !  positive there) get the face value blended to first-order upwind
+  Pure Function fmom(mf, s, wa, wb, cm) Result(r)
+
+    Real(Int64), Intent(In) :: mf, s(-2:3), wa, wb, cm
+    Real(Int64) :: r, up, t
+
+    up = Merge(s(0), s(1), mf >= 0d0)
+    If ( vof_mom_scheme == 0 ) Then
+       r = wa*s(0) + wb*s(1)
+    Else
+       r = mom_face(s, mf, vof_mom_scheme)
+    End If
+    t = Min(1d0, Max(0d0, (cm - vof_mom_cm0)/(vof_mom_cm1 - vof_mom_cm0)))
+    r = up + (1d0 - t*t*(3d0 - 2d0*t))*(r - up)
+
+  End Function fmom
+
+
+  Pure Function cmcv(mf, r1, r2, vcv) Result(c)
+
+    Real(Int64), Intent(In) :: mf, r1, r2, vcv
+    Real(Int64) :: c
+
+    c = Abs(mf)*Abs(1d0/r1 - 1d0/r2)/vcv
+
+  End Function cmcv
+
+
+  Pure Function gatu(i, j, k, dir) Result(s)
+    Integer(Int32), Intent(In) :: i, j, k, dir
+    Real(Int64) :: s(-2:3)
+    Integer(Int32) :: m
+    Do m = -2, 3
+       s(m) = PadU( i + m*Merge(1,0,dir==1), j + m*Merge(1,0,dir==2), k + m*Merge(1,0,dir==3) )
+    End Do
+  End Function gatu
+
+  Pure Function gatv(i, j, k, dir) Result(s)
+    Integer(Int32), Intent(In) :: i, j, k, dir
+    Real(Int64) :: s(-2:3)
+    Integer(Int32) :: m
+    Do m = -2, 3
+       s(m) = PadV( i + m*Merge(1,0,dir==1), j + m*Merge(1,0,dir==2), k + m*Merge(1,0,dir==3) )
+    End Do
+  End Function gatv
+
+  Pure Function gatw(i, j, k, dir) Result(s)
+    Integer(Int32), Intent(In) :: i, j, k, dir
+    Real(Int64) :: s(-2:3)
+    Integer(Int32) :: m
+    Do m = -2, 3
+       s(m) = PadW( i + m*Merge(1,0,dir==1), j + m*Merge(1,0,dir==2), k + m*Merge(1,0,dir==3) )
+    End Do
+  End Function gatw
+
+
+  !> Padded copies of uqu, uqv, uqw: EP planes beyond the ghost plane in x and z (neighbour rank / periodic partner via pad_field),
+  !  EP rows beyond the wall ghost row in y by reflection (tangential: odd for no-slip, even for free-slip; normal: odd about the wall face)
+  Subroutine pad_transported
+    Real(Int64), Allocatable :: tmp(:,:,:)
+    Real(Int64) :: s_lo, s_hi
+    Integer(Int32) :: m
+
+    s_lo = Merge(-1d0, 1d0, bc_face_ylo == 1);  s_hi = Merge(-1d0, 1d0, bc_face_yhi == 1)
+    Allocate( tmp(1-EP:nx+EP,nyg,1-EP:nzg+EP) )
+    Call pad_field(uqu, nx, nyg, nzg, .True., .False., EP, tmp)
+    PadU(:,1:nyg,:) = tmp
+    Deallocate( tmp )
+    Allocate( tmp(1-EP:nxg+EP,ny,1-EP:nzg+EP) )
+    Call pad_field(uqv, nxg, ny, nzg, .False., .False., EP, tmp)
+    PadV(:,1:ny,:) = tmp
+    Deallocate( tmp )
+    Allocate( tmp(1-EP:nxg+EP,nyg,1-EP:nz+EP) )
+    Call pad_field(uqw, nxg, nyg, nz, .False., .True., EP, tmp)
+    PadW(:,1:nyg,:) = tmp
+    Deallocate( tmp )
+    Do m = 1, EP
+       PadU(:,1-m,:)     = s_lo*PadU(:,2+m,:);        PadU(:,nyg+m,:) = s_hi*PadU(:,nyg-1-m,:)
+       PadW(:,1-m,:)     = s_lo*PadW(:,2+m,:);        PadW(:,nyg+m,:) = s_hi*PadW(:,nyg-1-m,:)
+       PadV(:,1-m,:)     = -PadV(:,1+m+1,:);          PadV(:,ny+m,:)  = -PadV(:,ny-m,:)
+    End Do
+
+  End Subroutine pad_transported
 
 
   !> Project U, V, W onto the divergence-free space of the current density: solve div(beta grad phi) = div u by PCG (at most
@@ -447,6 +617,7 @@ Contains
        Do j = 1, nyg
           Do i = 1, nxg
              mu_c(i,j,k) = mug + (mul - mug)*Cv(i,j,k) + vp_rho(i,j,k)*nu_t(i,j,k)
+             mr_c(i,j,k) = 1d0/mu_c(i,j,k)
           End Do
        End Do
     End Do
@@ -456,6 +627,8 @@ Contains
 
   !> Acceleration from the viscous stress, (1/rho_face) div( mu (grad u + grad u^T) ), at the interior faces
   Subroutine viscous_accel(Fu, Fv, Fw)
+  ! shear stresses at the edges use the weighted harmonic mean of mu (series layers carry a continuous shear stress), the
+  ! arithmetic mean over-weights the dense fluid next to an interface by the viscosity ratio
 
     Real(Int64), Intent(Out) :: Fu(nx,nyg,nzg), Fv(nxg,ny,nzg), Fw(nxg,nyg,nz)
 
@@ -474,10 +647,14 @@ Contains
           hyj = y(j) - y(j-1);  ihy = 1d0/hyj
           Do i = 2, nx-1
              mx1 = mu_c(i,j,k);  mx2 = mu_c(i+1,j,k)
-             my1 = 0.5d0*( weight_y_0(j-1)*( mu_c(i,j-1,k) + mu_c(i+1,j-1,k) ) + weight_y_1(j-1)*( mu_c(i,j,k) + mu_c(i+1,j,k) ) )
-             my2 = 0.5d0*( weight_y_0(j)*( mu_c(i,j,k) + mu_c(i+1,j,k) ) + weight_y_1(j)*( mu_c(i,j+1,k) + mu_c(i+1,j+1,k) ) )
-             mz1 = 0.5d0*( weight_z_0(k-1)*( mu_c(i,j,k-1) + mu_c(i+1,j,k-1) ) + weight_z_1(k-1)*( mu_c(i,j,k) + mu_c(i+1,j,k) ) )
-             mz2 = 0.5d0*( weight_z_0(k)*( mu_c(i,j,k) + mu_c(i+1,j,k) ) + weight_z_1(k)*( mu_c(i,j,k+1) + mu_c(i+1,j,k+1) ) )
+             my1 = 1d0/( 0.5d0*( weight_y_0(j-1)*( mr_c(i,j-1,k) + mr_c(i+1,j-1,k) ) + weight_y_1(j-1)*( mr_c(i,j,k) &
+                   + mr_c(i+1,j,k) ) ) )
+             my2 = 1d0/( 0.5d0*( weight_y_0(j)*( mr_c(i,j,k) + mr_c(i+1,j,k) ) + weight_y_1(j)*( mr_c(i,j+1,k) &
+                   + mr_c(i+1,j+1,k) ) ) )
+             mz1 = 1d0/( 0.5d0*( weight_z_0(k-1)*( mr_c(i,j,k-1) + mr_c(i+1,j,k-1) ) + weight_z_1(k-1)*( mr_c(i,j,k) &
+                   + mr_c(i+1,j,k) ) ) )
+             mz2 = 1d0/( 0.5d0*( weight_z_0(k)*( mr_c(i,j,k) + mr_c(i+1,j,k) ) + weight_z_1(k)*( mr_c(i,j,k+1) &
+                   + mr_c(i+1,j,k+1) ) ) )
              Fu(i,j,k) = ( 2d0*inv_dx2*( mx2*( U(i+1,j,k) - U(i,j,k) ) - mx1*( U(i,j,k) - U(i-1,j,k) ) )              &
                   + ihy*( my2*( ( U(i,j+1,k) - U(i,j,k) )/( yg(j+1) - yg(j) ) + ( V(i+1,j,k) - V(i,j,k) )*inv_dx )   &
                         - my1*( ( U(i,j,k) - U(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i+1,j-1,k) - V(i,j-1,k) )*inv_dx ) ) &
@@ -494,13 +671,15 @@ Contains
        Do j = 2, ny-1
           dy1 = y(j) - y(j-1);  dy2 = y(j+1) - y(j);  dyc = yg(j+1) - yg(j)
           Do i = 2, nxg-1
-             mx1 = 0.5d0*( weight_y_0(j)*( mu_c(i-1,j,k) + mu_c(i,j,k) ) + weight_y_1(j)*( mu_c(i-1,j+1,k) + mu_c(i,j+1,k) ) )
-             mx2 = 0.5d0*( weight_y_0(j)*( mu_c(i,j,k) + mu_c(i+1,j,k) ) + weight_y_1(j)*( mu_c(i,j+1,k) + mu_c(i+1,j+1,k) ) )
+             mx1 = 1d0/( 0.5d0*( weight_y_0(j)*( mr_c(i-1,j,k) + mr_c(i,j,k) ) + weight_y_1(j)*( mr_c(i-1,j+1,k) &
+                   + mr_c(i,j+1,k) ) ) )
+             mx2 = 1d0/( 0.5d0*( weight_y_0(j)*( mr_c(i,j,k) + mr_c(i+1,j,k) ) + weight_y_1(j)*( mr_c(i,j+1,k) &
+                   + mr_c(i+1,j+1,k) ) ) )
              my1 = mu_c(i,j,k);  my2 = mu_c(i,j+1,k)
-             mz1 = weight_z_0(k-1)*( weight_y_0(j)*mu_c(i,j,k-1) + weight_y_1(j)*mu_c(i,j+1,k-1) ) &
-                 + weight_z_1(k-1)*( weight_y_0(j)*mu_c(i,j,k) + weight_y_1(j)*mu_c(i,j+1,k) )
-             mz2 = weight_z_0(k)*( weight_y_0(j)*mu_c(i,j,k) + weight_y_1(j)*mu_c(i,j+1,k) ) &
-                 + weight_z_1(k)*( weight_y_0(j)*mu_c(i,j,k+1) + weight_y_1(j)*mu_c(i,j+1,k+1) )
+             mz1 = 1d0/( weight_z_0(k-1)*( weight_y_0(j)*mr_c(i,j,k-1) + weight_y_1(j)*mr_c(i,j+1,k-1) ) &
+                   + weight_z_1(k-1)*( weight_y_0(j)*mr_c(i,j,k) + weight_y_1(j)*mr_c(i,j+1,k) ) )
+             mz2 = 1d0/( weight_z_0(k)*( weight_y_0(j)*mr_c(i,j,k) + weight_y_1(j)*mr_c(i,j+1,k) ) &
+                   + weight_z_1(k)*( weight_y_0(j)*mr_c(i,j,k+1) + weight_y_1(j)*mr_c(i,j+1,k+1) ) )
              Fv(i,j,k) = ( inv_dx*( mx2*( ( V(i+1,j,k) - V(i,j,k) )*inv_dx + ( U(i,j+1,k) - U(i,j,k) )/dyc )          &
                                   - mx1*( ( V(i,j,k) - V(i-1,j,k) )*inv_dx + ( U(i-1,j+1,k) - U(i-1,j,k) )/dyc ) )      &
                   + 2d0/dyc*( my2*( V(i,j+1,k) - V(i,j,k) )/dy2 - my1*( V(i,j,k) - V(i,j-1,k) )/dy1 )                 &
@@ -517,12 +696,14 @@ Contains
        Do j = 2, nyg-1
           hyj = y(j) - y(j-1);  ihy = 1d0/hyj
           Do i = 2, nxg-1
-             mx1 = 0.5d0*( weight_z_0(k)*( mu_c(i-1,j,k) + mu_c(i,j,k) ) + weight_z_1(k)*( mu_c(i-1,j,k+1) + mu_c(i,j,k+1) ) )
-             mx2 = 0.5d0*( weight_z_0(k)*( mu_c(i,j,k) + mu_c(i+1,j,k) ) + weight_z_1(k)*( mu_c(i,j,k+1) + mu_c(i+1,j,k+1) ) )
-             my1 = weight_z_0(k)*( weight_y_0(j-1)*mu_c(i,j-1,k) + weight_y_1(j-1)*mu_c(i,j,k) ) &
-                 + weight_z_1(k)*( weight_y_0(j-1)*mu_c(i,j-1,k+1) + weight_y_1(j-1)*mu_c(i,j,k+1) )
-             my2 = weight_z_0(k)*( weight_y_0(j)*mu_c(i,j,k) + weight_y_1(j)*mu_c(i,j+1,k) ) &
-                 + weight_z_1(k)*( weight_y_0(j)*mu_c(i,j,k+1) + weight_y_1(j)*mu_c(i,j+1,k+1) )
+             mx1 = 1d0/( 0.5d0*( weight_z_0(k)*( mr_c(i-1,j,k) + mr_c(i,j,k) ) + weight_z_1(k)*( mr_c(i-1,j,k+1) &
+                   + mr_c(i,j,k+1) ) ) )
+             mx2 = 1d0/( 0.5d0*( weight_z_0(k)*( mr_c(i,j,k) + mr_c(i+1,j,k) ) + weight_z_1(k)*( mr_c(i,j,k+1) &
+                   + mr_c(i+1,j,k+1) ) ) )
+             my1 = 1d0/( weight_z_0(k)*( weight_y_0(j-1)*mr_c(i,j-1,k) + weight_y_1(j-1)*mr_c(i,j,k) ) &
+                   + weight_z_1(k)*( weight_y_0(j-1)*mr_c(i,j-1,k+1) + weight_y_1(j-1)*mr_c(i,j,k+1) ) )
+             my2 = 1d0/( weight_z_0(k)*( weight_y_0(j)*mr_c(i,j,k) + weight_y_1(j)*mr_c(i,j+1,k) ) &
+                   + weight_z_1(k)*( weight_y_0(j)*mr_c(i,j,k+1) + weight_y_1(j)*mr_c(i,j+1,k+1) ) )
              mz1 = mu_c(i,j,k);  mz2 = mu_c(i,j,k+1)
              Fw(i,j,k) = ( inv_dx*( mx2*( ( W(i+1,j,k) - W(i,j,k) )*inv_dx + ( U(i,j,k+1) - U(i,j,k) )/dzc )          &
                                   - mx1*( ( W(i,j,k) - W(i-1,j,k) )*inv_dx + ( U(i-1,j,k+1) - U(i-1,j,k) )/dzc ) )      &
@@ -555,13 +736,39 @@ Contains
        Call compute_wall_model(U, V, W, nu_t)
        Call set_viscosity
        Call viscous_accel(Fu_, Fv_, Fw_)
-       Do k = 2, nzg-1
-          Do j = 2, ny-1
-             Do i = 2, nxg-1
-                Fv_(i,j,k) = Fv_(i,j,k) - vof_grav*( vp_rfv(i,j,k) - rsf(j) )/vp_rfv(i,j,k)
+       If ( vof_hsplit == 0 ) Then
+          Do k = 2, nzg-1
+             Do j = 2, ny-1
+                Do i = 2, nxg-1
+                   Fv_(i,j,k) = Fv_(i,j,k) - vof_grav*( vp_rfv(i,j,k) - rsf(j) )/vp_rfv(i,j,k)
+                End Do
              End Do
           End Do
-       End Do
+       Else
+          Do k = 2, nzg-1
+             Do j = 2, nyg-1
+                Do i = 2, nx-1
+                   Fu_(i,j,k) = Fu_(i,j,k) + vof_grav*( yg(j) - vof_level )*( vp_rho(i+1,j,k) - vp_rho(i,j,k) )/( dx*vp_rfu(i,j,k) )
+                End Do
+             End Do
+          End Do
+          Do k = 2, nzg-1
+             Do j = 2, ny-1
+                Do i = 2, nxg-1
+                   Fv_(i,j,k) = Fv_(i,j,k) + vof_grav*( y(j) - vof_level )*( vp_rho(i,j+1,k) - vp_rho(i,j,k) ) &
+                                /( ( yg(j+1) - yg(j) )*vp_rfv(i,j,k) )
+                End Do
+             End Do
+          End Do
+          Do k = 2, nz-1
+             Do j = 2, nyg-1
+                Do i = 2, nxg-1
+                   Fw_(i,j,k) = Fw_(i,j,k) + vof_grav*( yg(j) - vof_level )*( vp_rho(i,j,k+1) - vp_rho(i,j,k) ) &
+                                /( ( zg(k+1) - zg(k) )*vp_rfw(i,j,k) )
+                End Do
+             End Do
+          End Do
+       End If
 
        ass = rk_coef(s,s)
        dta = dt*ass
@@ -604,7 +811,7 @@ Contains
        Call face_halo(U, V, W)
        Call vp_div(U, V, W, fdiv)
        fdiv = fdiv/dta
-       Call vp_pcg(fdiv, Max(vof_pcg_iters, 1), 0d0, dphi)
+       Call vp_pcg(fdiv, Max(vof_pcg_iters, 1), vof_pcg_tol, dphi)
        Call vp_halo(dphi, .True.)
        Call vp_grad(dphi, gu, gv, gw)
        Call apply_face_gradient(gu, gv, gw, dta)
@@ -745,7 +952,8 @@ Contains
   !> One two-fluid time step: dt from the CFL (the Courant limit sees the gas currents too), then the Strang sequence
   Subroutine compute_time_step_vof
 
-    Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap
+    Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap, dt_in
+    Integer(Int32) :: isub, nsub
 
     Call compute_sgs_model(U, V, W, nu_t)
     Call compute_wall_model(U, V, W, nu_t)
@@ -754,6 +962,7 @@ Contains
     cfl_visc_last  = cfl_visc
     cfl_accel_last = cfl_accel
     cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
+    dt_in = dt
     If ( cfl_adaptive == 1 .And. cfl_current > 0d0 ) Then
        dt_new = dt * cfl_target / cfl_current * cfl_safety
        dt = Max(dt_min, Min(dt_max, dt_new))
@@ -763,7 +972,14 @@ Contains
     If ( nsteps < 0 .And. t + dt > sim_end_time ) dt = sim_end_time - t
     to = t
 
-    Call vof_advect_half(0.5d0*dt)
+    If ( vof_frozen == 0 ) Then
+       nsub = vof_nsub
+       If ( nsub <= 0 ) nsub = Max(1, Ceiling( 0.5d0*cfl_conv*dt/dt_in/vof_co_sub ))
+       vof_nsub_last = nsub
+       Do isub = 1, nsub
+          Call vof_advect_half(0.5d0*dt/nsub, keep_transport=( isub > 1 .And. vof_freeze_ut == 1 ))
+       End Do
+    End If
     Call apply_boundary_conditions
     Call vof_project(vof_adv_tol, vof_adv_iters)
     Call apply_boundary_conditions(after_projection=.True.)
@@ -771,7 +987,13 @@ Contains
     Uo = U;  Vo = V;  Wo = W
     Call vof_forces_rk3(to)
 
-    Call vof_advect_half(0.5d0*dt)
+    If ( vof_frozen == 0 ) Then
+       nsub = vof_nsub
+       If ( nsub <= 0 ) nsub = Max(1, Ceiling( 0.5d0*cfl_conv*dt/dt_in/vof_co_sub ))
+       Do isub = 1, nsub
+          Call vof_advect_half(0.5d0*dt/nsub, keep_transport=( isub > 1 .And. vof_freeze_ut == 1 ))
+       End Do
+    End If
     t = to + dt
     Call vof_relax(dt)
     Call apply_boundary_conditions

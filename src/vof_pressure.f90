@@ -25,6 +25,7 @@ Module vof_pressure
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_r, vp_z, vp_d, vp_ap
   Real(Int64) :: vp_beta0 = 1d0, vp_wsum = 1d0
   Integer(Int32) :: vp_iters_last = 0
+  Integer(Int64) :: vp_its_total = 0   ! PCG iterations since the start of the run
   Real(Int64) :: vp_res_last = 0d0
 
 Contains
@@ -412,6 +413,7 @@ Contains
        vp_r = vp_r - alpha*vp_ap
        Call vp_remove_mean(vp_r)
        vp_iters_last = it
+       vp_its_total = vp_its_total + 1
        rn = Sqrt(vp_dot(vp_r, vp_r))
        vp_res_last = rn/r0
        If ( it == nit .Or. rn < tol*r0 ) Exit

@@ -21,7 +21,7 @@ Module vof_state
   Use vof_plic
   Use vof_normals
   Use vof_advect
-  Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last
+  Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last, vp_its_total
   Use input_output, Only : read_vof_restart
   Use waves, Only : wave_init, wave_eta
 
@@ -38,6 +38,8 @@ Module vof_state
   Real(Int64), Allocatable, Dimension(:) :: vof_rho_ref   ! still-water row densities of the initial state (hydrostatic reference)
   Logical        :: vof_have_prev = .False.
   Real(Int64)    :: vof_bnd_cum = 0d0, vof_relax_cum = 0d0   ! cumulative liquid volume through the x boundaries and from relaxation
+  Integer(Int32) :: vof_nsub_last = 1
+  Integer(Int64) :: vof_its_prev = 0
   Real(Int64)    :: vof_dt_prev = 0d0, vof_vol0 = 0d0, vof_clip_total = 0d0, vof_co_max = 0d0
   Integer(Int32) :: vof_nadv = 0
 
@@ -47,7 +49,7 @@ Contains
   Subroutine vof_init
 
     Integer(Int32) :: i, j, k
-    Real(Int64) :: vliq, cmin, cmax, mom(5)
+    Real(Int64) :: vliq, cmin, cmax, mom(7)
     Integer(Int64) :: nint
 
     Allocate( Cv(0:nxg+1,0:nyg+1,0:nzg+1), Cw(nxg,nyg,nzg), Pw(0:nxg+1,nyg,0:nzg+1) )
@@ -153,12 +155,36 @@ Contains
     End If
     If ( vof_ic_type == 4 ) Then
        ! standing/sloshing wave: liquid below y = level + amp cos(2 pi x/lambda), column average over 32 sub-columns
+       If ( vof_smooth_w > 0d0 ) Then
+          ! smoothed Heaviside of the signed vertical distance (interface normal distance ~ dy/sqrt(1+eta_x^2)), width vof_smooth_w cells
+          px = 0.5d0*(x0 + x1);  py = 0.5d0*(y0 + y1);  pz = y1 - y0
+          qx = vof_level + vof_wave_amp*Cos(2d0*pi_*px/vof_wave_lambda)
+          qy = -vof_wave_amp*(2d0*pi_/vof_wave_lambda)*Sin(2d0*pi_*px/vof_wave_lambda)
+          qz = (qx - py)/Sqrt(1d0 + qy*qy)/(vof_smooth_w*pz)
+          If ( qz <= -1d0 ) Then
+             c = 0d0
+          Else If ( qz >= 1d0 ) Then
+             c = 1d0
+          Else
+             c = 0.5d0*( 1d0 + qz + Sin(pi_*qz)/pi_ )
+          End If
+          Return
+       End If
        c = 0d0
        Do a = 1, 32
           px = x0 + (x1 - x0)*(Real(a,Int64) - 0.5d0)/32d0
           c = c + Min(1d0, Max(0d0, (vof_level + vof_wave_amp*Cos(2d0*pi_*px/vof_wave_lambda) - y0)/(y1 - y0)))
        End Do
        c = c/32d0
+       Return
+    End If
+
+    If ( vof_ic_type == 5 ) Then
+       ! liquid box x < vof_center(1), y < vof_center(2) (dam-break column): exact overlap fraction
+       c = Min(1d0, Max(0d0, (vof_center(1) - x0)/(x1 - x0)))
+       ! vof_radius > 0: mirror image against the periodic wrap (a column of twice the width centred on the x = 0 plane)
+       If ( vof_radius > 0d0 ) c = Min(1d0, c + Min(1d0, Max(0d0, (x1 - (Lx - dx - vof_center(1)))/(x1 - x0))))
+       c = c*Min(1d0, Max(0d0, (vof_center(2) - y0)/(y1 - y0)))
        Return
     End If
 
@@ -316,12 +342,12 @@ Contains
   !  cells, cumulative clip loss, largest sub-step Courant number seen since the last row
   Subroutine vof_output_monitor
 
-    Real(Int64) :: vliq, cmin, cmax, mom(5), vv, vel_loc(3), vel_glb(3), xloc, yloc
+    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc
     Integer(Int64) :: nint
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     vv = Max(vliq, 1d-300)
-    vel_loc = (/ -MinVal(U(2:nx-1,2:nyg-1,2:nzg-1)), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
+    vel_loc = (/ MaxVal(Abs(U(2:nx-1,2:nyg-1,2:nzg-1))), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
                  MaxVal(Abs(W(2:nxg-1,2:nyg-1,2:nz-1))) /)
     Call MPI_Allreduce(vel_loc, vel_glb, 3, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     ! where the fastest |U| is (x, y of the face), reduced with MAXLOC
@@ -344,17 +370,106 @@ Contains
        If ( .Not. vof_unit_open ) Then
           vof_unit_open = .True.
           Open(newunit=vof_unit, file='vof_diag.dat', status='unknown', position='append', action='write')
-          Write(vof_unit,'(A)') '# step t Vliq (Vliq-V0)/V0 Cmin Cmax n_interface clip_loss Co_max xc yc zc ' // &
-               ' int C(1-C) cos-moment -Umin |V|max |W|max last-PCG-its last-PCG-res bnd_cum relax_cum x_Umax y_Umax'
+          Write(vof_unit,'(A)') '# 1 step  2 t  3 dt  4 Vliq  5 (Vliq-V0)/V0  6 Cmin  7 Cmax  8 n_interface  9 clip_loss_cum  ' // &
+               '10 Co_adv_max  11 xc  12 yc  13 zc  14 int C(1-C)  15 cos-moment  16 max|U|  17 max|V|  18 max|W|  ' // &
+               '19 PCG_its_step  20 last_PCG_res  21 n_sub  22 bnd_cum  23 relax_cum  24 x_of_max|U|  25 y_of_max|U|  ' // &
+               '26 KE_liquid  27 KE_gas'
        End If
-       Write(vof_unit,'(I10,ES18.10,ES22.14,3ES14.5,I10,2ES14.5,3ES20.12,ES16.8,ES20.12,3ES14.5,I6,ES11.3,2ES16.8,2ES11.3)') &
-            istep, t, vliq, &
-            (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
-            mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, vp_iters_last, vp_res_last, &
-            vof_bnd_cum, vof_relax_cum, xloc, yloc
+       Write(vof_unit,'(I9,2ES17.9,ES22.14,ES12.4,2ES11.3,I8,2ES11.3,3ES17.9,ES14.6,ES17.9,3ES13.5,I6,ES11.3,I4,*(ES15.7))') &
+            istep, t, dt, vliq, (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
+            mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, Int(vp_its_total - vof_its_prev), vp_res_last, &
+            vof_nsub_last, vof_bnd_cum, vof_relax_cum, xloc, yloc, mom(6), mom(7)
        Flush(vof_unit)
     End If
+    vof_its_prev = vp_its_total
     vof_co_max = 0d0
+    ! diagnostic (vof_debug = 1): deviation of the velocity from the uniform start-up stream vof_u0
+    If ( vof_debug == 1 ) Then
+    Block
+      Real(Int64) :: dl(3), dg(3)
+      Integer, Save :: udv = 0
+      Logical, Save :: udv_open = .False.
+      Integer(Int32) :: ia(3) = 0
+      dl = (/ MaxVal(Abs(U(2:nx-1,2:nyg-1,2:nzg-1) - vof_u0)), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
+              MaxVal(Abs(W(2:nxg-1,2:nyg-1,2:nz-1))) /)
+      Call MPI_Allreduce(dl, dg, 3, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
+      If ( nprocs == 1 ) Then
+         ia = MaxLoc(Abs(U(2:nx-1,2:nyg-1,2:nzg-1) - vof_u0))
+      End If
+      If ( myid == 0 ) Then
+         If ( .Not. udv_open ) Then
+            Open(newunit=udv, file='vof_dev.dat', status='unknown', action='write')
+            udv_open = .True.
+         End If
+         Write(udv,'(I8,4ES16.8,3I6)') istep, t, dg, ia(1)+1, ia(2)+1, ia(3)+1
+         Flush(udv)
+      End If
+    End Block
+    End If
+    ! diagnostic (vof_debug = 1, single rank): where the fastest |V| is and the phase fractions above and below that face
+    If ( vof_debug == 1 .And. nprocs == 1 ) Then
+       Block
+          Integer(Int32) :: ia(3)
+          Integer, Save :: uvm = 0
+          Logical, Save :: uvm_open = .False.
+          ia = MaxLoc(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))) + 1
+          If ( .Not. uvm_open ) Then
+             Open(newunit=uvm, file='vof_vmax.dat', status='unknown', action='write')
+             uvm_open = .True.
+             Write(uvm,'(A)') '# step t V(max|V|) i j k  x y  C_below C_above  V_neighbours(j-1,j+1) U_at_cell'
+          End If
+          Write(uvm,'(I8,ES14.6,ES14.6,3I6,2F9.4,2ES11.3,3ES13.5)') istep, t, V(ia(1),ia(2),ia(3)), ia, xg(ia(1)), y(ia(2)), &
+               Cv(ia(1),ia(2),ia(3)), Cv(ia(1),ia(2)+1,ia(3)), V(ia(1),ia(2)-1,ia(3)), V(ia(1),ia(2)+1,ia(3)), &
+               0.5d0*(U(ia(1),ia(2),ia(3)) + U(ia(1)-1,ia(2),ia(3)))
+          Flush(uvm)
+       End Block
+    End If
+    ! diagnostic (vof_debug = 1): leading edge of the liquid in the bottom cell row inside the first half period (dam break)
+    If ( vof_debug == 1 ) Then
+       Block
+          Real(Int64) :: xf, xfg
+          Integer, Save :: ufr = 0
+          Logical, Save :: ufr_open = .False.
+          Integer(Int32) :: i, k
+          xf = 0d0
+          Do k = 2, nzg-1
+             Do i = 2, nxg-1
+                If ( Cv(i,2,k) > 0.5d0 .And. xg(i) < 0.5d0*(Lx - dx) ) xf = Max(xf, xg(i) + 0.5d0*hx(i))
+             End Do
+          End Do
+          Call MPI_Allreduce(xf, xfg, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
+          If ( myid == 0 ) Then
+             If ( .Not. ufr_open ) Then
+                Open(newunit=ufr, file='vof_front.dat', status='unknown', action='write')
+                ufr_open = .True.
+                Write(ufr,'(A)') '# t  x_front (liquid edge in the bottom row, x < half period)'
+             End If
+             Write(ufr,'(2ES16.8)') t, xfg
+             Flush(ufr)
+          End If
+       End Block
+    End If
+    ! diagnostic (vof_debug = 1, single rank): u(y), C(y), v(y) through the column at x ~ Lx/4 every 5 steps
+    If ( vof_debug == 1 .And. nprocs == 1 .And. Mod(istep, 5) == 0 ) Then
+       Block
+          Integer(Int32) :: ic, jj
+          Integer, Save :: upr = 0
+          Logical, Save :: upr_open = .False.
+          ic = 2
+          Do jj = 2, nx-1
+             If ( Abs(x(jj) - 0.25d0) < Abs(x(ic) - 0.25d0) ) ic = jj
+          End Do
+          If ( .Not. upr_open ) Then
+             Open(newunit=upr, file='vof_prof.dat', status='unknown', action='write')
+             upr_open = .True.
+          End If
+          Write(upr,'(A,ES14.6,A,I6,A,F8.4)') '# t=', t, ' step=', istep, ' x=', x(ic)
+          Do jj = 2, nyg-1
+             Write(upr,'(F10.5,2ES16.8,ES16.8)') yg(jj), U(ic,jj,3), 0.5d0*(Cv(ic,jj,3)+Cv(ic+1,jj,3)), V(ic,Min(jj,ny),3)
+          End Do
+          Flush(upr)
+       End Block
+    End If
 
   End Subroutine vof_output_monitor
 
@@ -409,13 +524,13 @@ Contains
   !  mom = (first moments of the liquid in x, y, z, integral of C(1-C) as a smearing measure)
   Subroutine vof_diagnostics(vliq, cmin, cmax, nint, mom)
 
-    Real(Int64),    Intent(Out) :: vliq, cmin, cmax, mom(5)
+    Real(Int64),    Intent(Out) :: vliq, cmin, cmax, mom(7)
     Integer(Int64), Intent(Out) :: nint
 
     Integer(Int32) :: i, j, k, ihi, jhi, khi
     Logical :: is_first, is_last
     Integer(Int32) :: partner
-    Real(Int64) :: c, vc, buf(6), gbuf(6), mn, mx, kd
+    Real(Int64) :: c, vc, buf(8), gbuf(8), mn, mx, kd, ke
     Integer(Int64) :: ni, gni
 
     ihi = nxg-1;  jhi = nyg-1;  khi = nzg-1
@@ -443,17 +558,20 @@ Contains
              buf(4) = buf(4) + c*vc*zg(k)
              buf(5) = buf(5) + c*(1d0 - c)*vc
              buf(6) = buf(6) + c*vc*Cos(kd*xg(i))
+             ke = 0.125d0*( (U(i,j,k) + U(i-1,j,k))**2 + (V(i,j,k) + V(i,j-1,k))**2 + (W(i,j,k) + W(i,j,k-1))**2 )*vc
+             buf(7) = buf(7) + c*vof_rho_l*ke
+             buf(8) = buf(8) + (1d0 - c)*vof_rho_g*ke
              mn = Min(mn, c);  mx = Max(mx, c)
              If ( c > vof_eps .And. c < 1d0 - vof_eps ) ni = ni + 1
           End Do
        End Do
     End Do
 
-    Call MPI_Allreduce(buf, gbuf, 6, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Call MPI_Allreduce(buf, gbuf, 8, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(mn, cmin, 1, MPI_real8, MPI_MIN, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(mx, cmax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(ni, gni, 1, MPI_integer8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    vliq = gbuf(1);  mom = gbuf(2:6);  nint = gni
+    vliq = gbuf(1);  mom = gbuf(2:8);  nint = gni
 
   End Subroutine vof_diagnostics
 
