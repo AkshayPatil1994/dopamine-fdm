@@ -5,6 +5,8 @@ Checks on the last row of vof_diag.dat of every run: |relative liquid-volume dri
 and, when given, the L1 distance of C to its initial shape (column 'L1(C-C_init)') <= --max-l1. With --np-b the second run
 (optionally on --p-grid) must reproduce the first one: every column named in --same-cols agrees to --same-tol (relative).
 Column numbers are the 1-based numbers of the header line of vof_diag.dat.
+Further checks on the first run: --limit COL:MIN:MAX (last row), --rowmax COL:MAX (largest value over all rows),
+--freq COL:THEORY:TOL (mean half period from the zero crossings of the column against pi/THEORY, relative tolerance TOL).
 """
 import argparse, os, re, shutil, subprocess, sys, tempfile
 
@@ -25,8 +27,8 @@ def run(case_dir, exe, mpirun, np, pgrid, workdir):
     if r.returncode != 0:
         print(r.stdout[-2000:], r.stderr[-2000:])
         sys.exit('FAIL: run exited with %d (np=%d)' % (r.returncode, np))
-    rows = [l.split() for l in open(os.path.join(workdir, 'vof_diag.dat')) if not l.startswith('#')]
-    return [float(x) for x in rows[-1]]
+    rows = [[float(x) for x in l.split()] for l in open(os.path.join(workdir, 'vof_diag.dat')) if not l.startswith('#')]
+    return rows
 
 
 def main():
@@ -41,12 +43,17 @@ def main():
     ap.add_argument('--max-l1', type=float, default=-1)
     ap.add_argument('--same-cols', default='4,5,6,7,14,15,28')
     ap.add_argument('--same-tol', type=float, default=1e-9)
+    ap.add_argument('--limit', action='append', default=[])
+    ap.add_argument('--rowmax', action='append', default=[])
+    ap.add_argument('--freq', default='')
     a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix='vofchk_')
     try:
         runs = [run(a.case_dir, a.exe, a.mpirun, a.np_a, '', os.path.join(tmp, 'a'))]
         if a.np_b:
             runs.append(run(a.case_dir, a.exe, a.mpirun, a.np_b, a.p_grid, os.path.join(tmp, 'b')))
+        allrows = runs
+        runs = [r[-1] for r in allrows]
         for k, row in enumerate(runs):
             dvol, cmin, cmax = row[4], row[5], row[6]
             l1 = row[27] if len(row) > 27 else 0.0
@@ -57,6 +64,28 @@ def main():
                 sys.exit('FAIL: C outside [0,1]')
             if a.max_l1 > 0 and l1 > a.max_l1:
                 sys.exit('FAIL: L1(C-C_init) %.3e > %.3e' % (l1, a.max_l1))
+        for lim in a.limit:
+            c, lo, hi = lim.split(':')
+            v = runs[0][int(c)-1]
+            if not float(lo) <= v <= float(hi):
+                sys.exit('FAIL: column %s = %.6e outside [%s, %s]' % (c, v, lo, hi))
+        for lim in a.rowmax:
+            c, hi = lim.split(':')
+            v = max(abs(r[int(c)-1]) for r in allrows[0])
+            if v > float(hi):
+                sys.exit('FAIL: max |column %s| = %.6e > %s' % (c, v, hi))
+        if a.freq:
+            c, w, tol = a.freq.split(':')
+            t = [r[1] for r in allrows[0]]
+            f = [r[int(c)-1] for r in allrows[0]]
+            zc = [t[i] - f[i]*(t[i+1] - t[i])/(f[i+1] - f[i]) for i in range(len(t)-1) if f[i]*f[i+1] < 0]
+            if len(zc) < 2:
+                sys.exit('FAIL: fewer than two zero crossings of column %s' % c)
+            hp = (zc[-1] - zc[0])/(len(zc) - 1)
+            err = 3.141592653589793/hp/float(w) - 1
+            print('frequency error %.3f %%' % (100*err))
+            if abs(err) > float(tol):
+                sys.exit('FAIL: frequency error %.3f %% > %.3f %%' % (100*err, 100*float(tol)))
         if len(runs) == 2:
             for c in [int(x) for x in a.same_cols.split(',')]:
                 u, v = runs[0][c-1], runs[1][c-1]

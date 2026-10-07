@@ -27,6 +27,7 @@ Module vof_twofluid
   Use vof_advect
   Use vof_state
   Use vof_pressure
+  Use vof_curv, Only : vof_curvature
   Use mom_recon
   Use halo_pad, Only : pad_field
   Use projection, Only : compute_pseudo_pressure_rhs, solve_poisson_equation, project_velocity
@@ -46,7 +47,7 @@ Module vof_twofluid
   Real(Int64), Allocatable, Dimension(:,:,:) :: Ut, Vt, Wt, Utmp, Vtmp, Wtmp
   ! RK3: start-of-step velocity is Uo/Vo/Wo (global); stage force combinations H = F_explicit - beta grad p of stages 1 and 2
   Real(Int64), Allocatable, Dimension(:,:,:) :: Hu1, Hv1, Hw1, Hu2, Hv2, Hw2, Fu_, Fv_, Fw_, Gu_, Gv_, Gw_
-  Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c, mr_c
+  Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c, mr_c, kap_c
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
   Real(Int64) :: vf_bnd_loc = 0d0, vf_relax_loc = 0d0   ! rank-local liquid volume through the x boundaries / added by relaxation this step
@@ -70,7 +71,8 @@ Contains
     Allocate( Ut(nx,nyg,nzg), Vt(nxg,ny,nzg), Wt(nxg,nyg,nz), Utmp(nx,nyg,nzg), Vtmp(nxg,ny,nzg), Wtmp(nxg,nyg,nz) )
     Allocate( Hu1(nx,nyg,nzg), Hv1(nxg,ny,nzg), Hw1(nxg,nyg,nz), Hu2(nx,nyg,nzg), Hv2(nxg,ny,nzg), Hw2(nxg,nyg,nz) )
     Allocate( Fu_(nx,nyg,nzg), Fv_(nxg,ny,nzg), Fw_(nxg,nyg,nz), Gu_(nx,nyg,nzg), Gv_(nxg,ny,nzg), Gw_(nxg,nyg,nz) )
-    Allocate( ppre(nxg,nyg,nzg), dphi(nxg,nyg,nzg), fdiv(nxg,nyg,nzg), mu_c(nxg,nyg,nzg), mr_c(nxg,nyg,nzg) )
+    Allocate( ppre(nxg,nyg,nzg), dphi(nxg,nyg,nzg), fdiv(nxg,nyg,nzg), mu_c(nxg,nyg,nzg), mr_c(nxg,nyg,nzg), kap_c(nxg,nyg,nzg) )
+    kap_c = 0d0
     Allocate( rhos(nyg), rsf(ny), cw0(nyg), cw1(nyg) )
     Allocate( PadU(1-EP:nx+EP,1-EP:nyg+EP,1-EP:nzg+EP), PadV(1-EP:nxg+EP,1-EP:ny+EP,1-EP:nzg+EP), &
               PadW(1-EP:nxg+EP,1-EP:nyg+EP,1-EP:nz+EP) )
@@ -159,6 +161,10 @@ Contains
        End Do
     End Do
     If ( vof_hsplit /= 0 ) gz = 0d0
+    If ( vof_sigma > 0d0 ) Then
+       Call vof_curvature(kap_c)
+       Call add_surface_tension(zu, gz, zw)
+    End If
     Call vp_div(zu, gz, zw, fdiv)
     Call vp_pcg(fdiv, 400, 1d-12, ppre)
     Call vp_halo(ppre, .True.)
@@ -718,6 +724,53 @@ Contains
   End Subroutine viscous_accel
 
 
+  !> Balanced-force surface tension acceleration sigma kappa grad(C)/rho on the faces (the face gradient of C, the mean of the
+  !  curvatures of the interface cells next to the face, the same face density as the pressure gradient)
+  Subroutine add_surface_tension(Fx, Fy, Fz)
+
+    Real(Int64), Intent(InOut) :: Fx(nx,nyg,nzg), Fy(nxg,ny,nzg), Fz(nxg,nyg,nz)
+    Integer(Int32) :: i, j, k
+
+    Do k = 2, nzg-1
+       Do j = 2, nyg-1
+          Do i = 2, nx-1
+             Fx(i,j,k) = Fx(i,j,k) + vof_sigma*face_kappa(i,j,k, i+1,j,k)*( Cv(i+1,j,k) - Cv(i,j,k) )/( dx*vp_rfu(i,j,k) )
+          End Do
+       End Do
+    End Do
+    Do k = 2, nzg-1
+       Do j = 2, ny-1
+          Do i = 2, nxg-1
+             Fy(i,j,k) = Fy(i,j,k) + vof_sigma*face_kappa(i,j,k, i,j+1,k)*( Cv(i,j+1,k) - Cv(i,j,k) ) &
+                         /( ( yg(j+1) - yg(j) )*vp_rfv(i,j,k) )
+          End Do
+       End Do
+    End Do
+    Do k = 2, nz-1
+       Do j = 2, nyg-1
+          Do i = 2, nxg-1
+             Fz(i,j,k) = Fz(i,j,k) + vof_sigma*face_kappa(i,j,k, i,j,k+1)*( Cv(i,j,k+1) - Cv(i,j,k) ) &
+                         /( ( zg(k+1) - zg(k) )*vp_rfw(i,j,k) )
+          End Do
+       End Do
+    End Do
+
+  End Subroutine add_surface_tension
+
+
+  Function face_kappa(i1, j1, k1, i2, j2, k2) Result(kf)
+
+    Integer(Int32), Intent(In) :: i1, j1, k1, i2, j2, k2
+    Real(Int64) :: kf, a1, a2
+
+    a1 = Merge(1d0, 0d0, Cv(i1,j1,k1) > vof_eps .And. Cv(i1,j1,k1) < 1d0 - vof_eps)
+    a2 = Merge(1d0, 0d0, Cv(i2,j2,k2) > vof_eps .And. Cv(i2,j2,k2) < 1d0 - vof_eps)
+    kf = 0d0
+    If ( a1 + a2 > 0d0 ) kf = ( a1*kap_c(i1,j1,k1) + a2*kap_c(i2,j2,k2) )/( a1 + a2 )
+
+  End Function face_kappa
+
+
   !> Wray RK3 stages with frozen density: explicit viscous stress and hydrostatic-reduced gravity, pressure predictor + PCG increment
   Subroutine vof_forces_rk3(to)
 
@@ -729,6 +782,7 @@ Contains
     Allocate( bu(nx,nyg,nzg), bv(nxg,ny,nzg), bw(nxg,nyg,nz), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
+    If ( vof_sigma > 0d0 ) Call vof_curvature(kap_c)
 
     Do s = 1, 3
        rk_step = s
@@ -769,6 +823,8 @@ Contains
              End Do
           End Do
        End If
+
+       If ( vof_sigma > 0d0 ) Call add_surface_tension(Fu_, Fv_, Fw_)
 
        ass = rk_coef(s,s)
        dta = dt*ass
@@ -961,6 +1017,11 @@ Contains
     cfl_conv_last  = cfl_conv
     cfl_visc_last  = cfl_visc
     cfl_accel_last = cfl_accel
+    If ( vof_sigma > 0d0 ) Then
+       ! capillary wave limit of the explicit surface tension (Brackbill): dt < sqrt((rho_l + rho_g) h^3/(4 pi sigma))
+       cfl_accel = Max(cfl_accel, dt*Sqrt(16d0*Atan(1d0)*vof_sigma/((vof_rho_l + vof_rho_g)*Min(dx, dymin, dzmin)**3)))
+       cfl_accel_last = cfl_accel
+    End If
     cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
     dt_in = dt
     If ( cfl_adaptive == 1 .And. cfl_current > 0d0 ) Then

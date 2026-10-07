@@ -39,6 +39,7 @@ Module vof_state
   Logical        :: vof_have_prev = .False.
   Real(Int64)    :: vof_bnd_cum = 0d0, vof_relax_cum = 0d0   ! cumulative liquid volume through the x boundaries and from relaxation
   Integer(Int32) :: vof_nsub_last = 1
+  Integer(Int64) :: vof_hf_fail = 0   ! interface cells without a valid height function in the last curvature evaluation (this rank)
   Integer(Int64) :: vof_its_prev = 0
   Real(Int64)    :: vof_dt_prev = 0d0, vof_vol0 = 0d0, vof_clip_total = 0d0, vof_co_max = 0d0
   Integer(Int32) :: vof_nadv = 0
@@ -423,11 +424,14 @@ Contains
   !  cells, cumulative clip loss, largest sub-step Courant number seen since the last row
   Subroutine vof_output_monitor
 
-    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr
+    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr, pjump
+    Integer(Int64) :: nfail
     Integer(Int64) :: nint
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     serr = shape_error()
+    pjump = pressure_jump()
+    Call MPI_Allreduce(vof_hf_fail, nfail, 1, MPI_integer8, MPI_SUM, MPI_COMM_WORLD, ierr)
     vv = Max(vliq, 1d-300)
     vel_loc = (/ MaxVal(Abs(U(2:nx-1,2:nyg-1,2:nzg-1))), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
                  MaxVal(Abs(W(2:nxg-1,2:nyg-1,2:nz-1))) /)
@@ -455,12 +459,12 @@ Contains
           Write(vof_unit,'(A)') '# 1 step  2 t  3 dt  4 Vliq  5 (Vliq-V0)/V0  6 Cmin  7 Cmax  8 n_interface  9 clip_loss_cum  ' // &
                '10 Co_adv_max  11 xc  12 yc  13 zc  14 int C(1-C)  15 cos-moment  16 max|U|  17 max|V|  18 max|W|  ' // &
                '19 PCG_its_step  20 last_PCG_res  21 n_sub  22 bnd_cum  23 relax_cum  24 x_of_max|U|  25 y_of_max|U|  ' // &
-               '26 KE_liquid  27 KE_gas  28 L1(C-C_init)'
+               '26 KE_liquid  27 KE_gas  28 L1(C-C_init)  29 p_liquid-p_gas  30 HF_fallback_cells'
        End If
        Write(vof_unit,'(I9,2ES17.9,ES22.14,ES12.4,2ES11.3,I8,2ES11.3,3ES17.9,ES14.6,ES17.9,3ES13.5,I6,ES11.3,I4,*(ES15.7))') &
             istep, t, dt, vliq, (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
             mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, Int(vp_its_total - vof_its_prev), vp_res_last, &
-            vof_nsub_last, vof_bnd_cum, vof_relax_cum, xloc, yloc, mom(6), mom(7), serr
+            vof_nsub_last, vof_bnd_cum, vof_relax_cum, xloc, yloc, mom(6), mom(7), serr, pjump, Real(nfail, Int64)
        Flush(vof_unit)
     End If
     vof_its_prev = vp_its_total
@@ -586,6 +590,43 @@ Contains
     Call MPI_Allreduce(el, e, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
   End Function shape_error
+
+
+  !> Volume-mean pressure of the liquid cells (C > 0.99) minus that of the gas cells (C < 0.01): the Laplace jump of a static drop
+  Function pressure_jump() Result(pj)
+
+    Real(Int64) :: pj, loc(4), glb(4), vc
+    Integer(Int32) :: i, j, k, ihi, khi
+    Logical :: is_first, is_last
+    Integer(Int32) :: partner
+
+    ihi = nxg-1;  khi = nzg-1
+    If ( x_bc_type == 0 ) Then
+       Call x_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) ihi = nxg-2
+    End If
+    If ( z_bc_type == 0 ) Then
+       Call z_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) khi = nzg-2
+    End If
+    loc = 0d0
+    Do k = 2, khi
+       Do j = 2, nyg-1
+          Do i = 2, ihi
+             vc = hx(i)*hy(j)*hz(k)
+             If ( Cv(i,j,k) > 0.99d0 ) Then
+                loc(1) = loc(1) + vc*P(i,j,k);  loc(2) = loc(2) + vc
+             Else If ( Cv(i,j,k) < 0.01d0 ) Then
+                loc(3) = loc(3) + vc*P(i,j,k);  loc(4) = loc(4) + vc
+             End If
+          End Do
+       End Do
+    End Do
+    Call MPI_Allreduce(loc, glb, 4, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    pj = 0d0
+    If ( glb(2) > 0d0 .And. glb(4) > 0d0 ) pj = glb(1)/glb(2) - glb(3)/glb(4)
+
+  End Function pressure_jump
 
 
   !> Surface elevation at the wave gauges (column liquid height, mean over z), appended to vof_gauges.dat

@@ -208,6 +208,7 @@ list(APPEND SRCS
     src/mom_recon.f90
     src/vof_pressure.f90
     src/vof_state.f90
+    src/vof_curv.f90
     src/monitor.f90
     src/vof_twofluid.f90
     src/time_integration.f90
@@ -606,6 +607,21 @@ if(Python3_Interpreter_FOUND)
     # Two-fluid / VOF cases (tests/regression/vof_check.py): volume conservation, boundedness, shape error against the stored
     # bound and decomposition independence of vof_diag.dat. The reversal cases run the prescribed LeVeque/Enright fields through the
     # full solver; vof_translate_small must be identical to round-off for every layout.
+
+    # Single-run physics checks of the two-fluid solver (limits on vof_diag.dat, see tests/regression/vof_check.py): Laplace pressure
+    # jump and parasitic currents of a static cylinder, capillary-wave and gravity-wave frequencies against linear theory.
+    add_test(NAME vof_drop_small_laplace
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_drop_small --exe $<TARGET_FILE:dopamine>
+                --mpirun ${MPIEXEC_EXECUTABLE} --limit 29:3.96:4.04 --limit 16:0:3e-5)
+    add_test(NAME vof_capwave_small_frequency
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_capwave_small --exe $<TARGET_FILE:dopamine>
+                --mpirun ${MPIEXEC_EXECUTABLE} --freq 15:2.22206:0.01)
+    add_test(NAME vof_slosh_small_frequency
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_slosh_small --exe $<TARGET_FILE:dopamine>
+                --mpirun ${MPIEXEC_EXECUTABLE} --freq 15:7.8290:0.01 --rowmax 16:0.4)
     set(_vof_cases "vof_vortex_small|1.7e-4" "vof_deform_small|1.5e-2" "vof_translate_small|-1")
     foreach(_vc ${_vof_cases})
         string(REPLACE "|" ";" _vcl ${_vc})

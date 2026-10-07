@@ -754,6 +754,7 @@ Module global
   Integer(Int32) :: vof_shear         = 0
   ! 1 = Taylor-Green vortex initial velocity (amplitude vof_u0), periodic in x,z and mirrored at the y walls
   Integer(Int32) :: vof_tgv           = 0
+  Real   (Int64) :: vof_sigma         = 0d0   ! surface tension coefficient (0 = off: no curvature is computed)
   Integer(Int32) :: vof_rk_nth        = 0     ! pseudo-time segments of the momentum RK3 per sweep (0 = 1)
   ! vof_prescribed: C is advected by an analytic divergence-free field instead of the flow velocity (passive mode, vof_flow=0):
   ! 1 = LeVeque vortex reversal in x-y, 2 = Enright 3-D deformation field; both reverse at t = vof_presc_T/2 and return to the
