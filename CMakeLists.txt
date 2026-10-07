@@ -205,6 +205,7 @@ endif()
 
 list(APPEND SRCS
     src/projection.f90
+    src/mom_recon.f90
     src/vof_pressure.f90
     src/vof_state.f90
     src/monitor.f90
