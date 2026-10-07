@@ -96,11 +96,13 @@ Contains
     End Do
     Do k = 1, nzg
        Do j = 1, nyg
-          Do i = 1, nx
+          Do i = 1, Min(nx, nxg-1)
              vp_rau(i,j,k) = 0.5d0*( vp_rho(i,j,k) + vp_rho(i+1,j,k) )
           End Do
        End Do
     End Do
+    ! on a rank with a +x neighbour the last face is the duplicate of the neighbour's first one: its far cell is the pad layer
+    If ( nx == nxg ) vp_rau(nx,:,:) = 0.5d0*( vp_rho(nx,:,:) + vof_rho_g + (vof_rho_l - vof_rho_g)*Cp(nxg+1,1:nyg,1:nzg) )
     Do k = 1, nzg
        Do j = 1, ny
           Do i = 1, nxg
@@ -122,12 +124,13 @@ Contains
        dr = vof_rho_l - vof_rho_g
        Do k = 1, nzg
           Do j = 1, nyg
-             Do i = 1, nx
+             Do i = 1, Min(nx, nxg-1)
                 vp_rfu(i,j,k) = vof_rho_g + dr*0.5d0*( half_frac(Cp(i,j,k), i,j,k, 1, .True.) &
                                                      + half_frac(Cp(i+1,j,k), i+1,j,k, 1, .False.) )
              End Do
           End Do
        End Do
+       If ( nx == nxg ) vp_rfu(nx,:,:) = vp_rau(nx,:,:)
        Do k = 1, nzg
           Do j = 1, ny
              hl = vp_hy(j);  hu = vp_hy(j+1)
@@ -288,7 +291,7 @@ Contains
     gu = 0d0;  gv = 0d0;  gw = 0d0
     Do k = 1, nzg
        Do j = 1, nyg
-          Do i = 1, nx
+          Do i = 1, Min(nx, nxg-1)
              gu(i,j,k) = vp_bu(i,j,k)*( phi(i+1,j,k) - phi(i,j,k) )*inv_dx
           End Do
        End Do

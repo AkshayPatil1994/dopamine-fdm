@@ -622,6 +622,12 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_slosh_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${MPIEXEC_EXECUTABLE} --freq 15:7.8290:0.01 --rowmax 16:0.4)
+    # Variable-density steep wave: x rank seams cut the interface obliquely (np1 vs the x-split layout, tight PCG tolerance so only round-off remains)
+    add_test(NAME vof_break_small_np1_vs_np4_4x1
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_break_small --exe $<TARGET_FILE:dopamine>
+                --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 4,1 --same-tol 1e-9
+                --same-cols 4,5,6,7,11,12,13,16,26,27)
     set(_vof_cases "vof_vortex_small|1.7e-4" "vof_deform_small|1.5e-2" "vof_translate_small|-1" "vof_ibm_small|-1")
     foreach(_vc ${_vof_cases})
         string(REPLACE "|" ";" _vcl ${_vc})
