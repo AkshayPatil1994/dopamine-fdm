@@ -100,8 +100,8 @@ Contains
                    vof_geo_density, vof_layered_precond, &
                    vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_pcg_iters, vof_pcg_tol, vof_mom_scheme, &
                    vof_cfl_max, vof_selftest, vof_u0, vof_wave_amp, vof_wave_lambda, vof_adv_iters, vof_adv_tol, &
-                   vof_frozen, vof_nsub, vof_rk_mom, vof_rk_nth, vof_debug, vof_tgv, vof_shear, vof_co_sub, &
-                   vof_freeze_ut, vof_smooth_w, vof_hsplit, vof_mom_cm0, vof_mom_cm1
+                   vof_frozen, vof_nsub, vof_rk_mom, vof_rk_nth, vof_prescribed, vof_presc_T, vof_debug, vof_tgv, &
+                   vof_shear, vof_co_sub, vof_freeze_ut, vof_smooth_w, vof_hsplit, vof_mom_cm0, vof_mom_cm1
 
     ! ---- Defaults (variables not in the file keep these values) ------
     nx = 4; ny = 4; nz = 4
@@ -767,6 +767,8 @@ Contains
     Call Mpi_bcast ( vof_nsub,             1, MPI_integer,0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_rk_mom,           1, MPI_integer,0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_rk_nth,           1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_prescribed,       1, MPI_integer,0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_presc_T,          1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_debug,            1, MPI_integer,0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_tgv,              1, MPI_integer,0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_shear,            1, MPI_integer,0, MPI_COMM_WORLD, ierr )

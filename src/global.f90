@@ -713,7 +713,7 @@ Module global
   Real   (Int64) :: particle_langevin_C0 = 2.1d0   ! Kolmogorov constant
 
   ! Geometric PLIC VOF free surface (src/vof_state.f90): vof_active 0=off,1=on.
-  ! vof_ic_type 5: liquid box x < vof_center(1), y < vof_center(2)
+  ! vof_ic_type 5: liquid box x < vof_center(1), y < vof_center(2); 6: disk in the x-y plane (vof_center(1:2), vof_radius)
   ! vof_ic_type: 1=planar interface (liquid below y=vof_level), 2=sphere (centre vof_center, radius vof_radius), 3=sphere of
   ! gas inside liquid (liquid outside). vof_normal_scheme: 1=Youngs, 2=centred-column height function with Youngs fallback.
   Integer(Int32) :: vof_active        = 0
@@ -755,6 +755,11 @@ Module global
   ! 1 = Taylor-Green vortex initial velocity (amplitude vof_u0), periodic in x,z and mirrored at the y walls
   Integer(Int32) :: vof_tgv           = 0
   Integer(Int32) :: vof_rk_nth        = 0     ! pseudo-time segments of the momentum RK3 per sweep (0 = 1)
+  ! vof_prescribed: C is advected by an analytic divergence-free field instead of the flow velocity (passive mode, vof_flow=0):
+  ! 1 = LeVeque vortex reversal in x-y, 2 = Enright 3-D deformation field; both reverse at t = vof_presc_T/2 and return to the
+  ! initial shape at t = vof_presc_T (the domain is the unit box, periodic length 1 in x and z)
+  Integer(Int32) :: vof_prescribed    = 0
+  Real   (Int64) :: vof_presc_T       = 8d0
   Integer(Int32) :: vof_debug         = 0     ! 1 = write the vof_dev.dat / vof_prof.dat experiment diagnostics
   ! momentum update per sweep: 0 forward Euler, 1 pseudo-time SSP-RK3 (switched to 0 above density ratio 2e3)
   Integer(Int32) :: vof_rk_mom        = 1

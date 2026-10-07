@@ -28,7 +28,7 @@ Module vof_state
   Implicit None
 
   ! padded C: cell indices match the solver's (1:nxg,1:nyg,1:nzg), the extra layer 0 / n+1 is the second ghost layer
-  Real(Int64), Allocatable, Dimension(:,:,:) :: Cv, Cw, Pw
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Cv, Cw, Pw, Cinit
   Real(Int64), Allocatable, Dimension(:)     :: hx, hy, hz
   ! transporting velocities: stage 1 and 2 of this step, stage 2 of the previous step, and the extrapolated midpoint field
   Real(Int64), Allocatable, Dimension(:,:,:) :: Us1, Vs1, Ws1, Us2, Vs2, Ws2, Ue, Ve, We
@@ -101,6 +101,10 @@ Contains
        Call vof_fill_pad(Cv, nxg, nyg, nzg)
     End If
     Cvof_io = Cv(1:nxg,1:nyg,1:nzg)
+    If ( vof_prescribed > 0 ) Then
+       Allocate( Cinit(nxg,nyg,nzg) )
+       Cinit = Cv(1:nxg,1:nyg,1:nzg)
+    End If
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     vof_vol0 = vliq
@@ -185,6 +189,20 @@ Contains
        ! vof_radius > 0: mirror image against the periodic wrap (a column of twice the width centred on the x = 0 plane)
        If ( vof_radius > 0d0 ) c = Min(1d0, c + Min(1d0, Max(0d0, (x1 - (Lx - dx - vof_center(1)))/(x1 - x0))))
        c = c*Min(1d0, Max(0d0, (vof_center(2) - y0)/(y1 - y0)))
+       Return
+    End If
+
+    If ( vof_ic_type == 6 ) Then
+       ! disk in the x-y plane (uniform in z): vof_center(1:2), vof_radius; sampled 20 x 20 per cell
+       cnt = 0
+       Do b = 1, 20
+          py = y0 + (y1 - y0)*(Real(b,Int64) - 0.5d0)/20d0
+          Do a = 1, 20
+             px = x0 + (x1 - x0)*(Real(a,Int64) - 0.5d0)/20d0
+             If ( (px - vof_center(1))**2 + (py - vof_center(2))**2 <= vof_radius**2 ) cnt = cnt + 1
+          End Do
+       End Do
+       c = Real(cnt,Int64)/400d0
        Return
     End If
 
@@ -320,12 +338,75 @@ Contains
        Ue = Us2 + a*(Us2 - Us1);  Ve = Vs2 + a*(Vs2 - Vs1);  We = Ws2 + a*(Ws2 - Ws1)
     End Select
 
+    If ( vof_prescribed > 0 ) Call prescribed_velocity(t - 0.5d0*dts, Ue, Ve, We)
     Call vof_advect_step(Cv, nxg, nyg, nzg, Ue, Ve, We, hx, hy, hz, dts, vof_nadv, vof_normal_scheme, vof_fill_pad, co, cl)
     vof_nadv = vof_nadv + 1
     vof_co_max = Max(vof_co_max, co)
     vof_clip_total = vof_clip_total + cl
 
   End Subroutine vof_advance_substep
+
+
+  !> Analytic divergence-free test velocity at time tm on the staggered faces, evaluated as the discrete curl of a vector potential
+  !  at the cell edges so that the discrete divergence is zero to round-off: 1 LeVeque vortex reversal, 2 Enright deformation
+  Subroutine prescribed_velocity(tm, Uf, Vf, Wf)
+
+    Real(Int64), Intent(In)  :: tm
+    Real(Int64), Intent(Out) :: Uf(nx,nyg,nzg), Vf(nxg,ny,nzg), Wf(nxg,nyg,nz)
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: g
+
+    g = Cos(4d0*Atan(1d0)*tm/vof_presc_T)
+    Uf = 0d0;  Vf = 0d0;  Wf = 0d0
+    Do k = 2, nzg-1
+       Do j = 2, nyg-1
+          Do i = 1, nx
+             Uf(i,j,k) = g*( ( pot3(x(i), y(j), zg(k)) - pot3(x(i), y(j-1), zg(k)) )/hy(j) &
+                           - ( pot2(x(i), yg(j), z(k)) - pot2(x(i), yg(j), z(k-1)) )/hz(k) )
+          End Do
+       End Do
+    End Do
+    Do k = 2, nzg-1
+       Do j = 1, ny
+          Do i = 2, nxg-1
+             Vf(i,j,k) = -g*( pot3(x(i), y(j), zg(k)) - pot3(x(i-1), y(j), zg(k)) )/dx
+          End Do
+       End Do
+    End Do
+    If ( vof_prescribed == 2 ) Then
+       Do k = 1, nz
+          Do j = 2, nyg-1
+             Do i = 2, nxg-1
+                Wf(i,j,k) = g*( pot2(x(i), yg(j), z(k)) - pot2(x(i-1), yg(j), z(k)) )/dx
+             End Do
+          End Do
+       End Do
+    End If
+
+  End Subroutine prescribed_velocity
+
+
+  !> z-component of the vector potential: vortex-reversal stream function / Enright field
+  Pure Function pot3(xx, yy, zz) Result(a)
+    Real(Int64), Intent(In) :: xx, yy, zz
+    Real(Int64) :: a, pi
+    pi = 4d0*Atan(1d0)
+    If ( vof_prescribed == 1 ) Then
+       a = Sin(pi*xx)**2*Sin(pi*yy)**2/pi
+    Else
+       a = -Cos(2d0*pi*xx)/(2d0*pi)*Sin(pi*yy)**2*Sin(2d0*pi*zz)
+    End If
+  End Function pot3
+
+
+  !> y-component of the vector potential (Enright field only)
+  Pure Function pot2(xx, yy, zz) Result(a)
+    Real(Int64), Intent(In) :: xx, yy, zz
+    Real(Int64) :: a, pi
+    pi = 4d0*Atan(1d0)
+    a = 0d0
+    If ( vof_prescribed == 2 ) a = Cos(2d0*pi*xx)/(2d0*pi)*Sin(2d0*pi*yy)*Sin(pi*zz)**2 + Sin(2d0*pi*yy)*Cos(2d0*pi*zz)/(2d0*pi)
+  End Function pot2
 
 
   !> End of step: remember stage 2 as the previous-step velocity for the next step's first sub-step
@@ -342,10 +423,11 @@ Contains
   !  cells, cumulative clip loss, largest sub-step Courant number seen since the last row
   Subroutine vof_output_monitor
 
-    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc
+    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr
     Integer(Int64) :: nint
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
+    serr = shape_error()
     vv = Max(vliq, 1d-300)
     vel_loc = (/ MaxVal(Abs(U(2:nx-1,2:nyg-1,2:nzg-1))), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
                  MaxVal(Abs(W(2:nxg-1,2:nyg-1,2:nz-1))) /)
@@ -373,12 +455,12 @@ Contains
           Write(vof_unit,'(A)') '# 1 step  2 t  3 dt  4 Vliq  5 (Vliq-V0)/V0  6 Cmin  7 Cmax  8 n_interface  9 clip_loss_cum  ' // &
                '10 Co_adv_max  11 xc  12 yc  13 zc  14 int C(1-C)  15 cos-moment  16 max|U|  17 max|V|  18 max|W|  ' // &
                '19 PCG_its_step  20 last_PCG_res  21 n_sub  22 bnd_cum  23 relax_cum  24 x_of_max|U|  25 y_of_max|U|  ' // &
-               '26 KE_liquid  27 KE_gas'
+               '26 KE_liquid  27 KE_gas  28 L1(C-C_init)'
        End If
        Write(vof_unit,'(I9,2ES17.9,ES22.14,ES12.4,2ES11.3,I8,2ES11.3,3ES17.9,ES14.6,ES17.9,3ES13.5,I6,ES11.3,I4,*(ES15.7))') &
             istep, t, dt, vliq, (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
             mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, Int(vp_its_total - vof_its_prev), vp_res_last, &
-            vof_nsub_last, vof_bnd_cum, vof_relax_cum, xloc, yloc, mom(6), mom(7)
+            vof_nsub_last, vof_bnd_cum, vof_relax_cum, xloc, yloc, mom(6), mom(7), serr
        Flush(vof_unit)
     End If
     vof_its_prev = vp_its_total
@@ -472,6 +554,38 @@ Contains
     End If
 
   End Subroutine vof_output_monitor
+
+
+  !> Volume integral of |C - C_init| over the distinct cells (vof_prescribed runs: the reversal test returns to the initial shape)
+  Function shape_error() Result(e)
+
+    Real(Int64) :: e, el
+    Integer(Int32) :: i, j, k, ihi, khi
+    Logical :: is_first, is_last
+    Integer(Int32) :: partner
+
+    e = 0d0
+    If ( .Not. Allocated(Cinit) ) Return
+    ihi = nxg-1;  khi = nzg-1
+    If ( x_bc_type == 0 ) Then
+       Call x_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) ihi = nxg-2
+    End If
+    If ( z_bc_type == 0 ) Then
+       Call z_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) khi = nzg-2
+    End If
+    el = 0d0
+    Do k = 2, khi
+       Do j = 2, nyg-1
+          Do i = 2, ihi
+             el = el + Abs(Cv(i,j,k) - Cinit(i,j,k))*hx(i)*hy(j)*hz(k)
+          End Do
+       End Do
+    End Do
+    Call MPI_Allreduce(el, e, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+  End Function shape_error
 
 
   !> Surface elevation at the wave gauges (column liquid height, mean over z), appended to vof_gauges.dat

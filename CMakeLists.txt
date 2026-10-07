@@ -602,6 +602,24 @@ if(Python3_Interpreter_FOUND)
                 ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
         endif()
     endforeach()
+
+    # Two-fluid / VOF cases (tests/regression/vof_check.py): volume conservation, boundedness, shape error against the stored
+    # bound and decomposition independence of vof_diag.dat. The reversal cases run the prescribed LeVeque/Enright fields through the
+    # full solver; vof_translate_small must be identical to round-off for every layout.
+    set(_vof_cases "vof_vortex_small|1.7e-4" "vof_deform_small|1.5e-2" "vof_translate_small|-1")
+    foreach(_vc ${_vof_cases})
+        string(REPLACE "|" ";" _vcl ${_vc})
+        list(GET _vcl 0 _vname)
+        list(GET _vcl 1 _vl1)
+        foreach(_lay "2,2" "4,1")
+            string(REPLACE "," "x" _laytag ${_lay})
+            add_test(NAME ${_vname}_np1_vs_np4_${_laytag}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                        --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vname} --exe $<TARGET_FILE:dopamine>
+                        --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid ${_lay} --max-l1 ${_vl1}
+                        --same-cols 4,5,6,7,11,12,13,14,28)
+        endforeach()
+    endforeach()
 endif()
 
 #------------------------------------------------------------------------------
