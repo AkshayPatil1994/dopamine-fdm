@@ -1126,7 +1126,9 @@ Contains
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call tally_ledger
-    P(2:nxg-1,2:nyg-1,2:nzg-1) = ppre(2:nxg-1,2:nyg-1,2:nzg-1)
+    ! the whole array, ghost planes included: snapshots copy every rank's full local block, so a stale (zero) seam ghost plane would
+    ! overwrite the neighbour's last real plane in the file, and a restart reads that file back as the pressure predictor
+    P = ppre
     P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)
     Call vof_end_step
     If ( Mod(istep, nmonitor) == 0 ) Call vof_output_monitor
