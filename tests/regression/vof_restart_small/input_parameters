@@ -1,0 +1,25 @@
+! Restart parity of the two-fluid solver: a static drop with surface tension (fixed dt, nsteps = nsave = N); restart_check.py requires the
+! snapshot of 2N straight steps to equal N steps + a hot-start restart of N more (pressure history, liquid fraction, sweep order).
+&DOMAIN
+  nx = 34, ny = 33, nz = 18, Lx = 1.03125, Ly = 1.0, Lz = 0.53125, grid_type = 1, alpha_grid = 1.0, alpha_grid_z = 0.0, p_row = 0, p_col = 0,
+/
+&PHYSICS
+  nu = 1.0e-3, sgs_model = 0,
+/
+&NUMERICS
+  dt = 2.0e-3, nsteps = 10, nsave = 10, nmonitor = 5, cfl_adaptive = 0,
+  dt_max = 5.0e-2, 
+/
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 2, bc_face_yhi = 2, x_bc_type = 0, y_bc_type = 1, z_bc_type = 0,
+/
+&INITIAL_CONDITIONS
+  Utarget = 0.0, ic_type = 3, noise_percent = 0.0, restart = 0, nstep_init = 0,
+/
+&IO
+  filein = 'restart/vof_restart_small.1', fileout = 'vof_restart_small',
+/
+&VOF
+  vof_active = 1, vof_flow = 1, vof_ic_type = 6, vof_center = 0.5, 0.5, 0.0, vof_radius = 0.25,
+  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-3, vof_nu_g = 1.0e-3, vof_grav = 0.0, vof_sigma = 1.0,
+/

@@ -650,6 +650,18 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_buoy/check_buoyancy.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --np ${_np})
     endforeach()
+    # Hot-start restart of the two-fluid solver reproduces an uninterrupted run (pressure history, liquid fraction, time-dependent wave
+    # inlet and relaxation zones, LES): the static drop to round-off, the wave flume to the PCG tolerance
+    foreach(_np 1 4)
+        add_test(NAME vof_restart_small_np${_np}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_small --mpirun ${MPIEXEC_EXECUTABLE}
+                    --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-12)
+        add_test(NAME vof_restart_flume_np${_np}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_flume --mpirun ${MPIEXEC_EXECUTABLE}
+                    --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-7)
+    endforeach()
     # Unsupported feature combinations must abort at input
     add_test(NAME vof_input_aborts
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_input_checks/check_aborts.py
