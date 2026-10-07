@@ -65,6 +65,9 @@ only for `ν_eff = μ_l / (2ρ_g)` — it diverges at density ratio ≥ 1e5. An 
 `vof_sigma > 0` adds the balanced-force term `σ κ ∇C / ρ_f` on the faces with the curvature from **height functions** (9-cell
 columns in a 3×3 stencil, `vof_curv.f90`; cells whose columns do not end in a full and an empty cell take the mean of their
 neighbours' valid curvatures, else zero, and are counted in column 30 of `vof_diag.dat`). The explicit time-step limit `Δt < √((ρ_l + ρ_g) h³ / (4π σ))` is folded into the acceleration CFL.
+The same acceleration CFL carries the gravity-wave limit of the shortest resolvable wave (`k = π/h`, `ω² = g k + σ k³/(ρ_l + ρ_g)`,
+`Δt < (π/2)/ω`; it reduces to the capillary limit for `g = 0`): without it the step grows with the small velocities of a nearly still
+free surface and the explicit interface coupling goes unstable (seen at `vof_sigma = 0`, `Δt ≈ 0.1 s` at `h = 6 mm`).
 `vof_sigma = 0` skips the curvature evaluation entirely.
 
 ### 1.6 Immersed boundaries

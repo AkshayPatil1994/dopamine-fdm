@@ -1107,7 +1107,7 @@ Contains
   !> One two-fluid time step: dt from the CFL (the Courant limit sees the gas currents too), then the Strang sequence
   Subroutine compute_time_step_vof
 
-    Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap, dt_in
+    Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap, dt_in, hmin_w, om2
     Integer(Int32) :: isub, nsub
 
     ibm_sampling_now = ( ibm_input_mode >= 1 .And. nsampling > 0 )
@@ -1119,9 +1119,13 @@ Contains
     cfl_conv_last  = cfl_conv
     cfl_visc_last  = cfl_visc
     cfl_accel_last = cfl_accel
-    If ( vof_sigma > 0d0 ) Then
-       ! capillary wave limit of the explicit surface tension (Brackbill): dt < sqrt((rho_l + rho_g) h^3/(4 pi sigma))
-       cfl_accel = Max(cfl_accel, dt*Sqrt(16d0*Atan(1d0)*vof_sigma/((vof_rho_l + vof_rho_g)*Min(dx, dymin, dzmin)**3)))
+    ! shortest resolvable gravity-capillary wave (k = pi/h, omega^2 = g k + sigma k^3/(rho_l + rho_g)): dt stays below (pi/2)/omega,
+    ! the form of Brackbill's capillary limit sqrt((rho_l + rho_g) h^3/(4 pi sigma)) that this reduces to for g = 0. Without it the
+    ! step grows with the (small) flow velocities of a nearly still free surface until the explicit interface coupling goes unstable.
+    If ( vof_sigma > 0d0 .Or. vof_grav > 0d0 ) Then
+       hmin_w = Min(dx, dymin, dzmin)
+       om2 = vof_grav*4d0*Atan(1d0)/hmin_w + vof_sigma*(4d0*Atan(1d0))**3/((vof_rho_l + vof_rho_g)*hmin_w**3)
+       cfl_accel = Max(cfl_accel, dt*Sqrt(om2)/(2d0*Atan(1d0)))
        cfl_accel_last = cfl_accel
     End If
     cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
