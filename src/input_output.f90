@@ -821,8 +821,8 @@ Contains
             Call abort_input( 'ERROR: vof_flow=1 with an x inlet supports only inflow_type=3 (wave inlet) or 0 (uniform)' )
        If ( rsb_active == 1 .Or. inflow_opt_active == 1 ) &
             Call abort_input( 'ERROR: vof_flow=1 does not support the Reynolds-stress budget or the inflow optimisation' )
-       If ( ibm_input_mode >= 1 .And. nsampling > 0 ) &
-            Call abort_input( 'ERROR: IBM force output (nsampling>0) is not yet available with vof_flow=1 (set nsampling=0)' )
+       If ( ibm_input_mode >= 1 .And. ibm_surface_nsampling > 0 ) &
+            Call abort_input( 'ERROR: the IBM surface field dump (ibm_surface_nsampling>0) is not available with vof_flow=1' )
     End If
 
   End Subroutine check_vof_inputs

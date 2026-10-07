@@ -8,7 +8,7 @@ CASES = [
     ('wave inlet without wave', r'x_bc_type\s*=\s*0', 'x_bc_type = 1', None),
     ('wave_type without inflow', r'&VOF', '&WAVES\n  wave_type = 1, wave_height = 0.01, wave_period = 1.0,\n/\n&VOF', 'requires x_bc_type=1 and inflow_type=3'),
     ('y periodic', r'y_bc_type\s*=\s*1', 'y_bc_type = 0', 'wall-bounded y only'),
-    ('IBM force output', r'&VOF', '&IBM\n  ibm_input_mode = 1, ibm_sdf_file = \'none\', nsampling = 10,\n/\n&VOF', 'IBM force output'),
+    ('IBM surface dump', r'&VOF', '&IBM\n  ibm_input_mode = 1, ibm_sdf_file = \'none\', ibm_surface_nsampling = 10,\n/\n&VOF', 'IBM surface field dump'),
 ]
 
 ap = argparse.ArgumentParser()

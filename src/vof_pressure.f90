@@ -17,6 +17,7 @@ Module vof_pressure
   Use projection, Only : solve_poisson_equation, pois_layered, pois_bf, pois_bh, poisson_layered_supported
   Use vof_plic
   Use vof_advect, Only : vof_reconstruct, vof_mx, vof_my, vof_mz, vof_al
+  Use halo_pad, Only : pad_field
 
   Implicit None
 
@@ -27,6 +28,13 @@ Module vof_pressure
   Integer(Int32) :: vp_iters_last = 0
   Integer(Int64) :: vp_its_total = 0   ! PCG iterations since the start of the run
   Real(Int64) :: vp_res_last = 0d0
+  ! Ghost-cell IBM (ibm_input_mode>=1): faces the IBM treats as solid (face-averaged signed distance < 0, as in
+  ! apply_ghost_cell_ibm)
+  ! carry no flux in the pressure operator, the transporting velocity and the interface transport. vp_mu/mv/mw are the 1/0 face
+  ! masks (shaped like U, V, W), vp_act the 1/0 cell mask (0 = every face closed: solid cell), padded by one plane like C.
+  Logical :: vp_masked = .False.
+  Real(Int64), Allocatable, Dimension(:,:,:) :: vp_mu, vp_mv, vp_mw, vp_act
+  Logical :: vp_use_layered = .True.   ! .False.: the layered preconditioner is skipped (constant-coefficient solves)
 
 Contains
 
@@ -64,12 +72,17 @@ Contains
     End If
     If ( y_bc_type == 0 ) jhi = nyg-2
 
+    Allocate( vp_act(0:nxg+1,0:nyg+1,0:nzg+1) )
+    vp_act = 1d0
+    vp_masked = ( ibm_input_mode >= 1 )
+    If ( vp_masked ) Call vp_build_ibm_masks
+
     vp_w = 0d0
     wl = 0d0
     Do k = 2, khi
        Do j = 2, jhi
           Do i = 2, ihi
-             vp_w(i,j,k) = dx*(y(j) - y(j-1))*(z(k) - z(k-1))
+             vp_w(i,j,k) = dx*(y(j) - y(j-1))*(z(k) - z(k-1))*vp_act(i,j,k)
              wl = wl + vp_w(i,j,k)
           End Do
        End Do
@@ -77,6 +90,74 @@ Contains
     Call MPI_Allreduce(wl, vp_wsum, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
   End Subroutine vp_init
+
+
+  !> IBM face and cell masks from the signed distance (same face test as apply_ghost_cell_ibm: x/z by the plain mean, y by the
+  !  stretched-grid weights): a face is open if the face-averaged distance is >= 0; a cell is active if any of its faces is open.
+  Subroutine vp_build_ibm_masks
+
+    Real(Int64), Allocatable :: pp(:,:,:)
+    Integer(Int32) :: i, j, k
+    Logical :: ou1, ou2, ov1, ov2, ow1, ow2
+    Real(Int64) :: f
+
+    If ( .Not. Allocated(phi) ) Then
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: IBM active but the signed distance is not available for the VOF masks'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
+    ! phi padded by two planes in x and z: neighbour ranks / periodic partners supply the planes beyond the ghost plane
+    Allocate( pp(-1:nxg+2,nyg,-1:nzg+2) )
+    Call pad_field(phi, nxg, nyg, nzg, .False., .False., 2, pp)
+
+    Allocate( vp_mu(nx,nyg,nzg), vp_mv(nxg,ny,nzg), vp_mw(nxg,nyg,nz) )
+    vp_mu = 1d0;  vp_mv = 1d0;  vp_mw = 1d0
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nx
+             If ( 0.5d0*( pp(i,j,k) + pp(i+1,j,k) ) < 0d0 ) vp_mu(i,j,k) = 0d0
+          End Do
+       End Do
+    End Do
+    Do k = 1, nzg
+       Do j = 2, ny-1
+          Do i = 1, nxg
+             f = ( ( yg(j+1) - y(j) )*pp(i,j,k) + ( y(j) - yg(j) )*pp(i,j+1,k) )/( yg(j+1) - yg(j) )
+             If ( f < 0d0 ) vp_mv(i,j,k) = 0d0
+          End Do
+       End Do
+    End Do
+    Do k = 1, nz
+       Do j = 1, nyg
+          Do i = 1, nxg
+             If ( 0.5d0*( pp(i,j,k) + pp(i,j,k+1) ) < 0d0 ) vp_mw(i,j,k) = 0d0
+          End Do
+       End Do
+    End Do
+
+    ! cell activity on the padded range (0:n+1) so the ghost layers agree with the owning ranks; the wall rows (j = 1, nyg) stay active
+    vp_act = 1d0
+    Do k = 0, nzg+1
+       Do j = 2, nyg-1
+          Do i = 0, nxg+1
+             ou1 = ( 0.5d0*( pp(i-1,j,k) + pp(i,j,k) ) >= 0d0 );  ou2 = ( 0.5d0*( pp(i,j,k) + pp(i+1,j,k) ) >= 0d0 )
+             ! the wall faces (j = 1 and ny) carry no flux: they do not make a cell active
+             ov1 = .False.;  ov2 = .False.
+             If ( j-1 >= 2 ) Then
+                f = ( ( yg(j) - y(j-1) )*pp(i,j-1,k) + ( y(j-1) - yg(j-1) )*pp(i,j,k) )/( yg(j) - yg(j-1) )
+                ov1 = ( f >= 0d0 )
+             End If
+             If ( j <= ny-1 ) Then
+                f = ( ( yg(j+1) - y(j) )*pp(i,j,k) + ( y(j) - yg(j) )*pp(i,j+1,k) )/( yg(j+1) - yg(j) )
+                ov2 = ( f >= 0d0 )
+             End If
+             ow1 = ( 0.5d0*( pp(i,j,k-1) + pp(i,j,k) ) >= 0d0 );  ow2 = ( 0.5d0*( pp(i,j,k) + pp(i,j,k+1) ) >= 0d0 )
+             If ( .Not. ( ou1 .Or. ou2 .Or. ov1 .Or. ov2 .Or. ow1 .Or. ow2 ) ) vp_act(i,j,k) = 0d0
+          End Do
+       End Do
+    End Do
+    Deallocate( pp )
+
+  End Subroutine vp_build_ibm_masks
 
 
   !> Cell densities (ghosts included), face densities (arithmetic in x and z, volume-weighted across the stretched y cells so
@@ -152,7 +233,10 @@ Contains
        vp_rfu = vp_rau;  vp_rfv = vp_rav;  vp_rfw = vp_raw
     End If
     vp_bu = 1d0/vp_rfu;  vp_bv = 1d0/vp_rfv;  vp_bw = 1d0/vp_rfw
-    If ( vof_layered_precond >= 1 .And. poisson_layered_supported() ) Call layer_coefficients
+    If ( vp_masked ) Then
+       vp_bu = vp_bu*vp_mu;  vp_bv = vp_bv*vp_mv;  vp_bw = vp_bw*vp_mw
+    End If
+    If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Call layer_coefficients
 
   End Subroutine vp_set_density
 
@@ -335,6 +419,20 @@ Contains
           End Do
        End Do
     End Do
+    If ( vp_masked ) Then
+       ! blocked (IBM solid) faces carry no flux: every connected fluid region keeps a compatible right-hand side
+       Do k = 2, nzg-1
+          inv_hz = 1d0/(z(k) - z(k-1))
+          Do j = 2, nyg-1
+             inv_hy = 1d0/(y(j) - y(j-1))
+             Do i = 2, nxg-1
+                d(i,j,k) = ( Fu(i,j,k)*vp_mu(i,j,k) - Fu(i-1,j,k)*vp_mu(i-1,j,k) )*inv_dx &
+                         + ( Fv(i,j,k)*vp_mv(i,j,k) - Fv(i,j-1,k)*vp_mv(i,j-1,k) )*inv_hy &
+                         + ( Fw(i,j,k)*vp_mw(i,j,k) - Fw(i,j,k-1)*vp_mw(i,j,k-1) )*inv_hz
+             End Do
+          End Do
+       End Do
+    End If
 
   End Subroutine vp_div
 
@@ -384,7 +482,7 @@ Contains
     Real(Int64), Intent(Out) :: z(nxg,nyg,nzg)
 
     z = 0d0
-    If ( vof_layered_precond >= 1 .And. poisson_layered_supported() ) Then
+    If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Then
        rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)
        pois_layered = .True.
        Call solve_poisson_equation(skip_p_save=.True.)
@@ -394,6 +492,8 @@ Contains
        Call solve_poisson_equation(skip_p_save=.True.)
     End If
     z(2:nxg,2:nyg-1,2:nzg) = rhs_p(2:nxg,2:nyg-1,2:nzg)
+    ! the fast solver knows nothing of the body: keep the correction out of the solid cells (rows of the operator are empty there)
+    If ( vp_masked ) z = z*vp_act(1:nxg,1:nyg,1:nzg)
     Call vp_remove_mean(z)
 
   End Subroutine vp_precond
@@ -402,16 +502,18 @@ Contains
   !> Up to nit PCG iterations on A x = f from x = 0 (f need not have zero mean: it is removed), stopping early once the residual
   !  falls below tol times its initial norm (tol = 0: always nit iterations). With vof_div_tol > 0 and rscale given, the stop is
   !  instead rscale*max|r| < vof_div_tol: r is the divergence left after the correction, rscale the time scale of f.
+  !  rfloor (optional) is an absolute residual norm below which the solve stops whatever tol says: the round-off level of the
+  !  right-hand side, under which the iteration only amplifies noise. Breakdown (rz or the curvature no longer negative, both operators being negative definite) ends the loop.
   !  Sets vp_iters_last and the final relative residual.
-  Subroutine vp_pcg(f, nit, tol, x, rscale)
+  Subroutine vp_pcg(f, nit, tol, x, rscale, rfloor)
 
     Real(Int64),    Intent(In)  :: f(nxg,nyg,nzg), tol
     Integer(Int32), Intent(In)  :: nit
     Real(Int64),    Intent(Out) :: x(nxg,nyg,nzg)
-    Real(Int64),    Intent(In), Optional :: rscale
+    Real(Int64),    Intent(In), Optional :: rscale, rfloor
 
     Integer(Int32) :: it
-    Real(Int64) :: rz, rzn, alpha, r0, rn
+    Real(Int64) :: rz, rzn, alpha, r0, rn, den
     Logical :: abs_stop
 
     abs_stop = ( vof_div_tol > 0d0 .And. Present(rscale) )
@@ -428,10 +530,13 @@ Contains
     Call vp_precond(vp_r, vp_z)
     vp_d = vp_z
     rz = vp_dot(vp_r, vp_z)
+    If ( .Not. ( rz < 0d0 ) ) Return   ! the operator and the preconditioner are negative definite (Laplacians)
     Do it = 1, nit
        Call vp_halo(vp_d, .True.)
        Call vp_apply_A(vp_d, vp_ap)
-       alpha = rz/vp_dot(vp_d, vp_ap)
+       den = vp_dot(vp_d, vp_ap)
+       If ( .Not. ( den < 0d0 ) ) Exit
+       alpha = rz/den
        x = x + alpha*vp_d
        vp_r = vp_r - alpha*vp_ap
        Call vp_remove_mean(vp_r)
@@ -440,6 +545,9 @@ Contains
        rn = Sqrt(vp_dot(vp_r, vp_r))
        vp_res_last = rn/r0
        If ( it == nit ) Exit
+       If ( Present(rfloor) ) Then
+          If ( rn <= rfloor ) Exit
+       End If
        If ( abs_stop ) Then
           If ( rscale*vp_maxabs(vp_r) < vof_div_tol ) Exit
        Else If ( rn < tol*r0 ) Then
@@ -447,6 +555,7 @@ Contains
        End If
        Call vp_precond(vp_r, vp_z)
        rzn = vp_dot(vp_r, vp_z)
+       If ( .Not. ( rzn < 0d0 ) ) Exit
        vp_d = vp_z + (rzn/rz)*vp_d
        rz = rzn
     End Do

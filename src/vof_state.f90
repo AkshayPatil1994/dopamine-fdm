@@ -21,7 +21,8 @@ Module vof_state
   Use vof_plic
   Use vof_normals
   Use vof_advect
-  Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last, vp_its_total
+  Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last, vp_its_total, &
+                           vp_masked, vp_act
   Use input_output, Only : read_vof_restart
   Use waves, Only : wave_init, wave_eta
 
@@ -315,8 +316,55 @@ Contains
        Cp(:,0,:)    = Cp(:,3,:)
        Cp(:,n2+1,:) = Cp(:,n2-2,:)
     End If
+    If ( vp_masked ) Call fill_solid_fraction(Cp, n1, n2, n3)
 
   End Subroutine vof_fill_pad
+
+
+  !> Liquid fraction of the IBM solid cells (every face closed): the mean of the active cells among the 26 neighbours (zero where
+  !  there are none), i.e. a zero-gradient continuation into the body. The reconstruction, the densities of the faces next to the
+  !  body and the curvature read these cells; the transport never changes them (their faces carry no flux). Only active cells
+  !  contribute, so the result is independent of the rank layout.
+  Subroutine fill_solid_fraction(Cp, n1, n2, n3)
+
+    Integer(Int32), Intent(In)    :: n1, n2, n3
+    Real(Int64),    Intent(InOut) :: Cp(0:n1+1,0:n2+1,0:n3+1)
+
+    Integer(Int32) :: i, j, k, ii, jj, kk, cnt
+    Real(Int64) :: acc
+
+    Do k = 1, n3
+       Do j = 2, n2-1
+          Do i = 1, n1
+             If ( vp_act(i,j,k) > 0.5d0 ) Cycle
+             acc = 0d0;  cnt = 0
+             Do kk = k-1, k+1
+                Do jj = j-1, j+1
+                   Do ii = i-1, i+1
+                      If ( vp_act(ii,jj,kk) > 0.5d0 ) Then
+                         acc = acc + Cp(ii,jj,kk);  cnt = cnt + 1
+                      End If
+                   End Do
+                End Do
+             End Do
+             Cp(i,j,k) = Merge(acc/Max(cnt, 1), 0d0, cnt > 0)
+          End Do
+       End Do
+    End Do
+
+  End Subroutine fill_solid_fraction
+
+
+  !> Weight of a cell in the global diagnostics: 0 inside the IBM solid, 1 elsewhere
+  Pure Function fluid_weight(i, j, k) Result(w)
+
+    Integer(Int32), Intent(In) :: i, j, k
+    Real(Int64) :: w
+
+    w = 1d0
+    If ( vp_masked ) w = vp_act(i,j,k)
+
+  End Function fluid_weight
 
 
   !> Inlet ghost cell of C: liquid below the target wave surface at the inlet plane x = 0
@@ -651,7 +699,7 @@ Contains
     Do k = 2, khi
        Do j = 2, nyg-1
           Do i = 2, ihi
-             el = el + Abs(Cv(i,j,k) - Cinit(i,j,k))*hx(i)*hy(j)*hz(k)
+             el = el + Abs(Cv(i,j,k) - Cinit(i,j,k))*hx(i)*hy(j)*hz(k)*fluid_weight(i,j,k)
           End Do
        End Do
     End Do
@@ -681,7 +729,7 @@ Contains
     Do k = 2, khi
        Do j = 2, nyg-1
           Do i = 2, ihi
-             vc = hx(i)*hy(j)*hz(k)
+             vc = hx(i)*hy(j)*hz(k)*fluid_weight(i,j,k)
              If ( Cv(i,j,k) > 0.99d0 ) Then
                 loc(1) = loc(1) + vc*P(i,j,k);  loc(2) = loc(2) + vc
              Else If ( Cv(i,j,k) < 0.01d0 ) Then
@@ -718,7 +766,7 @@ Contains
     Do k = 2, khi
        Do j = 2, nyg-1
           Do i = 2, ihi
-             vc = hx(i)*hy(j)*hz(k)
+             vc = hx(i)*hy(j)*hz(k)*fluid_weight(i,j,k)
              loc(1) = loc(1) + vc*P(i,j,k);  loc(2) = loc(2) + vc*P(i,j,k)**2
           End Do
        End Do
@@ -806,7 +854,7 @@ Contains
        Do j = 2, jhi
           Do i = 2, ihi
              c = Cv(i,j,k)
-             vc = hx(i)*hy(j)*hz(k)
+             vc = hx(i)*hy(j)*hz(k)*fluid_weight(i,j,k)
              buf(1) = buf(1) + c*vc
              buf(2) = buf(2) + c*vc*xg(i)
              buf(3) = buf(3) + c*vc*yg(j)
@@ -817,7 +865,7 @@ Contains
              buf(7) = buf(7) + c*vof_rho_l*ke
              buf(8) = buf(8) + (1d0 - c)*vof_rho_g*ke
              mn = Min(mn, c);  mx = Max(mx, c)
-             If ( c > vof_eps .And. c < 1d0 - vof_eps ) ni = ni + 1
+             If ( c > vof_eps .And. c < 1d0 - vof_eps .And. fluid_weight(i,j,k) > 0.5d0 ) ni = ni + 1
           End Do
        End Do
     End Do

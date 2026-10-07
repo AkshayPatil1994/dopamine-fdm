@@ -70,7 +70,28 @@ neighbours' valid curvatures, else zero, and are counted in column 30 of `vof_di
 ### 1.6 Immersed boundaries
 
 The ghost-cell IBM (`ibm_input_mode = 1`) is re-applied after every velocity update (force stage, both projections, start of the
-step), so the body is respected by the transporting field and by the pressure solve.
+step). For the interface and the pressure the body is a **staircase**: a face is closed if the face-averaged signed distance is
+negative (the faces the IBM zeroes or overwrites), a cell is a solid cell if all its faces are closed.
+
+* the pressure operator, the pressure gradient and the divergence skip closed faces (Neumann condition at the body; the ghost-face
+  velocities of the IBM are not touched by the projection);
+* the **transporting velocity** is projected with a tight PCG on the same masked operator (the fast solver cannot honour the
+  mask), so no liquid or momentum crosses the body and the liquid volume of the fluid region is conserved to round-off;
+* the liquid fraction of the solid cells is a zero-gradient continuation (mean of the active 26 neighbours), so the reconstruction,
+  the face densities and the curvature next to the body see a wall-like state; the transport never changes it. There is **no
+  contact-angle model**;
+* the hydrostatic row-mean reference density and all global diagnostics (`vof_diag.dat` volume, interface cells, pressure jump,
+  shape error) exclude solid cells.
+
+The masked system converges more slowly than the free one (the preconditioner is the unmasked fast solver): expect a factor
+of 2-5 more PCG iterations, and use `vof_div_tol` rather than a tight relative tolerance. The staircase is first order in the
+geometry for the transport and pressure; the velocity condition at the body keeps its second-order IBM treatment.
+
+**Loads.** With `nsampling > 0` the two-fluid step writes `ibm_forces.csv` like the single-fluid solver: pressure (total pressure =
+dynamic part + the still-water hydrostatic reference, so a submerged body feels buoyancy) and viscous traction (mixture viscosity
+plus the SGS part) summed over the staircase faces, pressure linearly extrapolated to the face. The IBM-impulse columns
+(`Fx_ibm, ...`) are NaN: the pressure acts through the closed faces. Validation: a submerged sphere in still water
+(`vof_ibm_buoy`) gives the buoyancy within 3 %, identical on 1 and 4 ranks. `ibm_surface_nsampling` is not available.
 
 ### 1.7 Waves, inlet and relaxation zones
 
@@ -223,8 +244,9 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
 * **Thin sheets** (thinner than a cell): the geometric density and the PLIC reconstruction are not valid there (Enright test).
 * **Cost.** 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the
   WENO5-Z tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1).
-* **Not supported** with `vof_flow = 1` (the run aborts with a message): IBM wall model, flat wall models, sediment, Boussinesq
-  buoyancy, particles, UAV, rotation, `dPdx`/`dPdz`/mass-flux forcing, non-periodic z. **GPU builds abort in `vof_init`**
+* **Not supported** with `vof_flow = 1` (the run aborts at input with a message): IBM wall model and `ibm_surface_nsampling`, flat
+  wall models, sediment, Boussinesq buoyancy, particles, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
+  non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. **GPU builds abort in `vof_init`**
   (the solver is host-only; no GPU test was possible).
 * Wave flume (`vof_flume_small` geometry, 6 m, 4 ranks, t = 8 s): the stream-function wave (`wave_type = 2`, H = 0.04) reaches the
   gauges with amplitude 0.0195–0.021 (target 0.02) and the JONSWAP sea state (`wave_type = 3`, Hs = 0.03, 60 components) is

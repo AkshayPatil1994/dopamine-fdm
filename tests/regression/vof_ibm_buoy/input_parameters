@@ -1,0 +1,35 @@
+! Fully submerged sphere in still water (density ratio 1000): the load from the IBM force output (pressure + viscous, and the IBM impulse)
+! must be the buoyancy rho_l g V, upward (check_buoyancy.py).
+&DOMAIN
+  nx = 34, ny = 17, nz = 34, Lx = 6.0, Ly = 2.0, Lz = 3.0, grid_type = 1, alpha_grid = 2.0, p_row = 0, p_col = 0,
+/
+
+&PHYSICS
+  nu = 1.0e-3, sgs_model = 0,
+/
+
+&NUMERICS
+  dt = 1.0e-3, nsteps = -1, nsave = 1000000, nmonitor = 10, cfl_adaptive = 1, cfl_target = 0.4, cfl_safety = 0.9,
+  dt_max = 2.0e-2, sim_end_time = 0.3,
+/
+
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 1, bc_face_yhi = 1, x_bc_type = 0, y_bc_type = 1, z_bc_type = 0,
+/
+
+&INITIAL_CONDITIONS
+  Utarget = 0.0, ic_type = 3, noise_percent = 0.0, restart = 0,
+/
+
+&IO
+  filein = 'restart/vof_ibm_buoy.1', fileout = 'vof_ibm_buoy',
+/
+
+&IBM
+  ibm_input_mode = 1, ibm_wall_model_flag = 0, ibm_sdf_file = 'SDF_in', nsampling = 1,
+/
+
+&VOF
+  vof_active = 1, vof_flow = 1, vof_ic_type = 1, vof_level = 1.9, vof_rho_l = 1000.0, vof_rho_g = 1.0,
+  vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 9.81,
+/

@@ -210,6 +210,7 @@ list(APPEND SRCS
     src/vof_state.f90
     src/vof_curv.f90
     src/monitor.f90
+    src/vof_ibm.f90
     src/vof_twofluid.f90
     src/time_integration.f90
     src/reynolds_stress_budget.f90
@@ -632,6 +633,23 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME vof_pressure_seams_np1_vs_2x2
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_p_seam/check_pressure.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+    # Immersed body with a free surface: still water must stay at rest with the liquid of the fluid region conserved (1 vs 2x2 ranks),
+    # and the IBM load output of a submerged sphere must be the buoyancy (1 and 4 ranks)
+    add_test(NAME vof_ibm_still_np1_vs_np4_2x2
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_still --exe $<TARGET_FILE:dopamine>
+                --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 2,2 --max-dvol 1e-12
+                --rowmax 16:1e-8 --rowmax 17:1e-8 --same-cols 4,5,6,7)
+    add_test(NAME vof_ibm_slosh_np1_vs_np4_2x2
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_slosh --exe $<TARGET_FILE:dopamine>
+                --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 2,2 --max-dvol 1e-12 --same-tol 1e-7
+                --same-cols 4,5,6,7,11,12,13,14,16,17,18,28,32)
+    foreach(_np 1 4)
+        add_test(NAME vof_ibm_buoyancy_np${_np}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_buoy/check_buoyancy.py
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --np ${_np})
+    endforeach()
     # Unsupported feature combinations must abort at input
     add_test(NAME vof_input_aborts
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_input_checks/check_aborts.py

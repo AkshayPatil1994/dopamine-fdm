@@ -22,7 +22,7 @@ Module vof_twofluid
   Use sgs_models, Only : compute_sgs_model
   Use wallmodel, Only : compute_wall_model
   Use waves, Only : wave_eta, wave_profile_at
-  Use monitor, Only : compute_cfl
+  Use monitor, Only : compute_cfl, write_force_csv
   Use vof_plic
   Use vof_normals
   Use vof_advect
@@ -32,6 +32,7 @@ Module vof_twofluid
   Use mom_recon
   Use halo_pad, Only : pad_field
   Use ibm, Only : apply_ghost_cell_ibm
+  Use vof_ibm, Only : vof_compute_ibm_forces
   Use projection, Only : compute_pseudo_pressure_rhs, solve_poisson_equation, project_velocity
 
   Implicit None
@@ -52,6 +53,8 @@ Module vof_twofluid
   Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c, mr_c, kap_c
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
+  ! IBM load output: whether this step is a sampling step
+  Logical :: ibm_sampling_now = .False.
   Real(Int64) :: vf_bnd_loc = 0d0, vf_relax_loc = 0d0   ! rank-local liquid volume through the x boundaries / added by relaxation this step
 
 Contains
@@ -321,6 +324,10 @@ Contains
   !  volume of liquid is conserved to round-off whatever residual the variable-density PCG leaves
   Subroutine make_transport_velocity
 
+    If ( vp_masked ) Then
+       Call make_transport_velocity_masked
+       Return
+    End If
     Utmp = U;  Vtmp = V;  Wtmp = W
     Call compute_pseudo_pressure_rhs
     Call solve_poisson_equation(skip_p_save=.True.)
@@ -330,6 +337,39 @@ Contains
     U = Utmp;  V = Vtmp;  W = Wtmp
 
   End Subroutine make_transport_velocity
+
+
+  !> Transporting velocity with an immersed body: the fast solver cannot honour the closed faces, so the constant-coefficient
+  !  projection is done by PCG on the masked operator (Neumann at the body), to round-off. Closed faces carry no flux, hence no
+  !  liquid or momentum crosses the body, and the divergence-free field is exact in every fluid cell.
+  Subroutine make_transport_velocity_masked
+
+    Real(Int64), Allocatable :: sbu(:,:,:), sbv(:,:,:), sbw(:,:,:), gu(:,:,:), gv(:,:,:), gw(:,:,:), ph(:,:,:)
+    Real(Int64) :: beta0_save, umax
+
+    Allocate( sbu(nx,nyg,nzg), sbv(nxg,ny,nzg), sbw(nxg,nyg,nz), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz), ph(nxg,nyg,nzg) )
+    sbu = vp_bu;  sbv = vp_bv;  sbw = vp_bw;  beta0_save = vp_beta0
+    vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
+
+    Utmp = U;  Vtmp = V;  Wtmp = W
+    U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
+    Call vp_div(U, V, W, fdiv)
+    ! the iteration stops at the round-off level of the velocity (a relative tolerance alone is unreachable once the field is
+    ! already nearly divergence free, and PCG then amplifies noise)
+    umax = Max( MaxVal(Abs(U)), MaxVal(Abs(V)), MaxVal(Abs(W)) )
+    Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
+    Call vp_pcg(fdiv, 800, 1d-13, ph, rfloor=1d-14*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
+    Call vp_halo(ph, .True.)
+    Call vp_grad(ph, gu, gv, gw)
+    Call apply_face_gradient(gu, gv, gw, 1d0)
+    Ut = U;  Vt = V;  Wt = W
+    Call face_halo(Ut, Vt, Wt)
+    U = Utmp;  V = Vtmp;  W = Wtmp
+
+    vp_bu = sbu;  vp_bv = sbv;  vp_bw = sbw;  vp_beta0 = beta0_save;  vp_use_layered = .True.
+    Deallocate( sbu, sbv, sbw, gu, gv, gw, ph )
+
+  End Subroutine make_transport_velocity_masked
 
 
   !> Liquid volume that crossed the inlet (positive in) and outlet (positive out) faces in the x-sweep just done
@@ -1070,6 +1110,8 @@ Contains
     Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap, dt_in
     Integer(Int32) :: isub, nsub
 
+    ibm_sampling_now = ( ibm_input_mode >= 1 .And. nsampling > 0 )
+    If ( ibm_sampling_now ) ibm_sampling_now = ( Mod(istep, nsampling) == 0 )
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
     Call compute_sgs_model(U, V, W, nu_t)
     Call compute_wall_model(U, V, W, nu_t)
@@ -1134,6 +1176,14 @@ Contains
     If ( Mod(istep, nmonitor) == 0 ) Call vof_output_monitor
     Call vof_write_gauges
     outflow_relax_on = .True.
+    If ( ibm_sampling_now ) Then
+       Block
+          Real(Int64) :: fi(3), fp(3), fv(3)
+          Call vof_compute_ibm_forces(fi(1), fi(2), fi(3), fp(1), fp(2), fp(3), fv(1), fv(2), fv(3))
+          Call write_force_csv(fi(1), fi(2), fi(3), fp(1), fp(2), fp(3), fv(1), fv(2), fv(3))
+       End Block
+       ibm_sampling_now = .False.
+    End If
     dt_step = dt
     dt = dt_presnap
 
