@@ -490,7 +490,7 @@ Contains
        Flush(vof_unit)
     End If
     vof_its_prev = vp_its_total
-    If ( vof_debug == 1 .And. vof_snap_dt > 0d0 .And. nprocs == 1 ) Call write_snapshot
+    If ( vof_debug == 1 .And. vof_snap_dt > 0d0 ) Call write_snapshot
     vof_co_max = 0d0
     ! diagnostic (vof_debug = 1): deviation of the velocity from the uniform start-up stream vof_u0
     If ( vof_debug == 1 ) Then
@@ -595,7 +595,11 @@ Contains
     nsnap = nsnap + 1
     tnext = tnext + vof_snap_dt
     k = nzg/2
-    Write(fn,'(A,I5.5,A)') 'vof_snap_', nsnap, '.dat'
+    If ( nprocs == 1 ) Then
+       Write(fn,'(A,I5.5,A)') 'vof_snap_', nsnap, '.dat'
+    Else
+       Write(fn,'(A,I5.5,A,I3.3,A)') 'vof_snap_', nsnap, '_r', myid, '.dat'
+    End If
     Open(newunit=iu, file=Trim(fn), status='replace', action='write')
     Write(iu,'(A,ES14.6)') '# t = ', t
     Do j = 2, nyg-1
