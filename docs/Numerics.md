@@ -672,3 +672,19 @@ Configured via `&INITIAL_CONDITIONS` — see
 > **Reference:** Reichardt, H. (1951). *Vollständige Darstellung der turbulenten
 > Geschwindigkeitsverteilung in glatten Leitungen*. Z. Angew. Math. Mech. 31(7), 208–219.
 > DOI: [10.1002/zamm.19510310704](https://doi.org/10.1002/zamm.19510310704)
+
+
+## 13. Two-phase flow (`vof_flow = 1`)
+
+With `vof_active = 1`, `vof_flow = 1` the solver advances a liquid fraction $C$ and solves the incompressible two-fluid equations
+in conservative one-fluid form,
+
+$$\frac{\partial \rho}{\partial t} + \nabla\!\cdot(\rho\mathbf{u}) = 0,\qquad
+\frac{\partial \rho\mathbf{u}}{\partial t} + \nabla\!\cdot(\rho\mathbf{u}\otimes\mathbf{u}) = -\nabla p + \rho\mathbf{g} + \nabla\!\cdot\!\big[\mu(\nabla\mathbf{u}+\nabla\mathbf{u}^T)\big] + \sigma\kappa\nabla C,\qquad \nabla\!\cdot\mathbf{u}=0,$$
+
+with $\rho = \rho_g + (\rho_l-\rho_g)C$. The interface is advected by direction-split PLIC sweeps with exact geometric fluxes; the momentum
+on every staggered control volume is advanced with the *same* mass fluxes (WENO5-Z face values, pseudo-time SSP-RK3 inside each
+sweep, refill-Courant blend to upwind), so density and momentum stay consistent at density ratios of 1000. The pressure equation
+$\nabla\!\cdot(\rho_f^{-1}\nabla p)=\nabla\!\cdot\mathbf{u}^*/\Delta t$ uses the geometric half-cell face density and is solved by PCG
+preconditioned with the constant-coefficient fast Poisson solver of §4. The single-phase solver of §§1–12 is untouched when
+`vof_active = 0`. Full description, validation and limits: [[Two-Phase VOF|Two-Phase-VOF]].

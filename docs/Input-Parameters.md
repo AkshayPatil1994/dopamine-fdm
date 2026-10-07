@@ -74,7 +74,7 @@ See [[Numerics § Time integration|Numerics#3-time-integration]].
 ## `&INFLOW` *(optional — used only when `x_bc_type = 1`)*
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `inflow_type` | `0` | 0=constant uniform flow (`U=inflow_Uconst`, `V=W=0`, no fluctuation); 1=synthetic eddy method (SEM) — mean `U(y)` and Reynolds-stress profiles from `inflow_profile_file` |
+| `inflow_type` | `0` | 0=constant uniform flow (`U=inflow_Uconst`, `V=W=0`, no fluctuation); 1=synthetic eddy method (SEM) — mean `U(y)` and Reynolds-stress profiles from `inflow_profile_file`; 3=wave inlet of the two-fluid solver (`&WAVES`: water follows the target wave, the air returns its flux — see [[Two-Phase VOF|Two-Phase-VOF#waves-inlet-and-relaxation-zones]]) |
 | `inflow_Uconst` | `0.0` | Uniform streamwise velocity (`inflow_type=0` only) |
 | `inflow_profile_file` | `'inflow_profile.dat'` | Reference profile file (`inflow_type=1`): rows `y U V W uu vv ww uv [uw vw]`; only `y,U,uu,vv,ww,uv` are used (`uw=vw=0` assumed) |
 | `sem_n_eddies` | `200` | Number of eddies in the virtual inflow box |
@@ -247,6 +247,66 @@ See `examples/uav_hover_disk` (static), `examples/uav_ground_effect`
 working cases. `dopamine_post.uav.UAVPath.disk_animation(...)` (or
 `dopamine-post uav disk-animate`) renders a `uav_path_file` as a moving-disk
 ParaView animation.
+
+## `&VOF` *(optional — omit to disable)*
+
+Geometric PLIC volume-of-fluid liquid fraction `C` and the two-fluid Navier–Stokes solver built on it. Method, validation and
+limits: [[Two-Phase VOF|Two-Phase-VOF]]. With `vof_active = 0` (the default) none of this code runs and the solver is
+bit-for-bit the single-phase solver.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `vof_active` | `0` | 0=off; 1=advance the liquid fraction `C` |
+| `vof_flow` | `0` | 0=passive: `C` is only advected by the (single-phase) flow; 1=two-fluid solver: density and viscosity from `C`, conservative momentum transport with the VOF mass fluxes, variable-density pressure projection, gravity |
+| `vof_ic_type` | `1` | Initial interface: 1=plane (liquid below `y=vof_level`), 2=sphere (`vof_center`, `vof_radius`), 3=gas bubble in liquid, 4=standing/progressive wave (`vof_level`, `vof_wave_amp`, `vof_wave_lambda`), 5=box `x<vof_center(1)`, `y<vof_center(2)` (dam break; `vof_radius>0` adds its periodic mirror image), 6=disk in the x–y plane (`vof_center(1:2)`, `vof_radius`) |
+| `vof_level`, `vof_center(3)`, `vof_radius` | `0` | Interface level / centre / radius of the initial shape |
+| `vof_wave_amp`, `vof_wave_lambda` | `0` | `vof_ic_type=4`: amplitude and wavelength of the cosine surface (periodic length = `vof_wave_lambda`) |
+| `vof_wave_stokes` | `0` | 1: `vof_ic_type=4` gets the second-order Stokes harmonic and the water the deep-water potential velocity of a wave travelling in +x (initial state of a breaking wave, steepness `ka = 2π·amp/λ`) |
+| `vof_normal_scheme` | `1` | Interface normal: 1=Youngs, 2=centred-column height function with Youngs fallback |
+| `vof_method` | `1` | Face fluxes of `C`: 1=PLIC (sharp), 2=THINC tanh profile (diffuse over 2–3 cells, `vof_beta`) |
+| `vof_rho_l`, `vof_rho_g` | `1000`, `1` | Liquid and gas density |
+| `vof_nu_l`, `vof_nu_g` | `1e-6`, `1.5e-5` | Liquid and gas kinematic viscosity (`μ=ρν`; `nu` of `&PHYSICS` is overwritten by the larger one for the viscous CFL limit) |
+| `vof_grav` | `9.81` | Gravity magnitude, acting along −y |
+| `vof_sigma` | `0` | Surface tension coefficient. `>0` adds the balanced-force `σκ∇C` (height-function curvature) and the capillary time-step limit; `0` skips the curvature computation entirely |
+| `vof_u0` | `0` | Uniform streamwise velocity imposed at a fresh start (also the amplitude of `vof_tgv`/`vof_shear`) |
+| `vof_mom_scheme` | `6` | Momentum face value: 0 central, 1 upwind, 2 Koren, 4 QUICK, 5 central 4th order, 6 WENO5-Z |
+| `vof_mom_cm0`, `vof_mom_cm1` | `2e-3`, `1e-2` | Refill-Courant numbers between which the face value is blended from the high-order value to first-order upwind (control volumes whose mass turns over in a step) |
+| `vof_geo_density` | `1` | 1=staggered face density from the reconstructed interface planes in the half cells of each control volume (hydrostatically exact); 0=arithmetic mean |
+| `vof_rk_mom` | `1` | Momentum update inside each geometric sweep: 1=pseudo-time SSP-RK3 with frozen exact mass fluxes; 0=forward Euler. Switched to 0 automatically above density ratio 2000 |
+| `vof_rk_nth` | `0` | Pseudo-time segments of the RK3 (0 = 1) |
+| `vof_nsub`, `vof_co_sub` | `0`, `0.12` | Sub-steps of the advection half-step; `vof_nsub=0` chooses them so that the sub-step Courant number is below `vof_co_sub` (0.03 is used for forward Euler) |
+| `vof_freeze_ut` | `1` | 1: the divergence-free transporting velocity is projected once per half-step |
+| `vof_pcg_iters`, `vof_pcg_tol` | `30`, `0.2` | PCG for the force-stage pressure increment: at most `vof_pcg_iters` iterations, stopped at the relative residual `vof_pcg_tol` (`0` = always `vof_pcg_iters`) |
+| `vof_adv_iters`, `vof_adv_tol` | `3`, `1e-8` | Projection after each advection half-step |
+| `vof_layered_precond` | `0` | 1: PCG preconditioner with the row-wise mean density (CPU, y walls) |
+| `vof_cfl_max` | `0.4` | Courant limit of the advection step |
+| `vof_prescribed`, `vof_presc_T` | `0`, `8` | Passive tests (`vof_flow=0`): 1=LeVeque vortex reversal in the x–y plane, 2=Enright 3-D deformation; `C` is advected by an analytic divergence-free field that reverses at `t=vof_presc_T/2` (unit box); `vof_diag.dat` column 28 is the L1 distance to the initial shape |
+| `vof_tgv` | `0` | 1: Taylor–Green initial velocity of amplitude `vof_u0` (periodic x, z; mirror symmetry at free-slip y walls) |
+| `vof_shear` | `0` | 1: the gas above `y=vof_level` starts with velocity `vof_u0` (impulsive-start shear layer) |
+| `vof_debug` | `0` | 1: write `vof_dev.dat`, `vof_prof.dat`, `vof_front.dat`, `vof_vmax.dat` (development diagnostics); with `vof_snap_dt>0` also `vof_snap_NNNN.dat` slices |
+| `vof_snap_dt` | `0` | (`vof_debug=1`) interval between mid-plane slices of `C, u, v` (`vof_snap_NNNNN.dat`, or one `_rRRR` file per rank) |
+
+Not supported with `vof_flow=1` (the run aborts with a message): the IBM wall model (`ibm_wall_model_flag`), flat wall models,
+sediment, Boussinesq buoyancy, particles, UAV, rotation; the solver is host-only (a GPU build aborts in `vof_init`).
+The ghost-cell IBM (`ibm_input_mode=1`) is supported. Constant-pressure-gradient / mass-flux forcing (`dPdx`, `Ub_target`) is
+not applied by the two-fluid solver. Only periodic z is supported.
+
+## `&WAVES` *(optional — used with `vof_flow=1`, `x_bc_type=1`, `inflow_type=3`)*
+
+Target wave of the numerical wave flume: Dirichlet inlet plus waves2Foam-style relaxation zones. See
+[[Two-Phase VOF § Waves, inlet and relaxation zones|Two-Phase-VOF#waves-inlet-and-relaxation-zones]].
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `wave_type` | `0` | 0=off; 1=linear (Airy); 2=Rienecker–Fenton stream function; 3=JONSWAP sea state |
+| `wave_height`, `wave_period`, `wave_phase` | `0`, `1`, `0` | Height, period and phase of types 1 and 2 |
+| `wave_sf_n` | `16` | Fourier order of the stream-function wave |
+| `wave_current_mode` | `1` | 1=zero mean volume flux (closed flume); 2=zero mean Eulerian velocity |
+| `wave_Hs`, `wave_Tp`, `wave_gamma`, `wave_nfreq`, `wave_seed` | `0`, `1`, `3.3`, `200`, `12345` | JONSWAP: significant height, peak period, peak enhancement, number of linear components, random-phase seed |
+| `wave_gen_len`, `wave_abs_len` | `0` | Length of the generation zone at the inlet and of the absorption zone at the outlet [m] |
+| `wave_relax_rate` | `20` | Relaxation rate at full strength [1/s] |
+| `wave_ramp_time` | `0` | Smooth start-up ramp of the amplitude [s] |
+| `wave_gauge_x(8)` | `-1` | x positions of surface-elevation gauges written to `vof_gauges.dat` (<0 unused) |
 
 ## `&STATISTICS` *(optional — omit to disable)*
 

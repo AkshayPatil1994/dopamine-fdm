@@ -118,3 +118,24 @@ small `nx,ny,nz = 66,(65 or 129),66`, `Lx,Ly,Lz = 1.0,(1.0 or 2.0),1.0` box, `sg
 `dopamine_post.uav.UAVPath.disk_animation(...)` (or `dopamine-post uav disk-animate`)
 renders any of these cases' path file as a moving-disk ParaView animation (see
 [[Pre- and Post-Processing Tools § dopamine_post.uav|Tools#dopamine_postuav]]).
+
+
+## Two-phase VOF cases
+
+The two-fluid solver ([[Two-Phase VOF|Two-Phase-VOF]]) has no `examples/` directory yet; its small, quick regression cases under
+`tests/regression/vof_*` are the starting points (each directory holds an `input_parameters`, and an `analyze.py` where the case
+has a physical reference; run them with `tests/regression/vof_check.py` or copy the input next to the executable):
+
+| Case | What it shows |
+|------|---------------|
+| `vof_vortex_small`, `vof_deform_small` | Reversed LeVeque vortex (2-D) and Enright deformation (3-D): shape error after the reversal |
+| `vof_translate_small` | A drop carried by a uniform periodic stream: volume to round-off, identical for every rank layout |
+| `vof_drop_small` | Static drop with surface tension: Laplace pressure jump and parasitic currents |
+| `vof_capwave_small`, `vof_slosh_small` | Capillary wave and sloshing tank: oscillation frequency against linear theory |
+| `vof_flume_small`, `vof_flume_sf_ratio100` | Wave flume with relaxation zones (`x_bc_type = 1`, `inflow_type = 3`) at 1000:1 and 100:1 |
+| `vof_ibm_small` | Drop in a flow around an immersed sphere (ghost-cell IBM + two-fluid solver) |
+| `vof_break_small` | Steep (ka = 0.5) Stokes wave at 1000:1: layout independence with the interface crossing the rank seams |
+
+`tests/regression/vof_check.py` and the figure script `scripts/vof_figures.py` (breaking-wave panels, Taylor–Green dissipation) are
+described in [[Tools|Tools#two-phase-vof-tools]]. The plunging-breaker setup of the documentation figure is the `vof_break_small`
+input with `vof_sigma = 0.072`, `ak = 0.55` (`vof_wave_amp = 0.0875`), N = 128, `vof_debug = 1`, `vof_snap_dt = 0.1`.

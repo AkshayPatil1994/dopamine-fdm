@@ -217,3 +217,16 @@ ffmpeg, and an X display (wrap in `xvfb-run` on a headless node).
 position, normal, pressure, and pressure/viscous force per point (summing these
 reproduces the drag reported in `ibm_forces.csv`); `.to_vtp(out)` / `IBMSurface.to_pvd(
 glob_pattern, out)` convert one file or a whole time series for ParaView.
+
+
+## Two-phase VOF tools
+
+* **`tests/regression/vof_check.py`** — runs a `tests/regression/vof_*` case at one or two rank counts and checks `vof_diag.dat`:
+  volume drift, `C` in [0,1], the shape error of the reversal tests, agreement of selected columns between layouts
+  (`--np-b`, `--p-grid`, `--same-cols`, `--same-tol`), final-row limits (`--limit COL:MIN:MAX`), the largest value over the run
+  (`--rowmax`), and oscillation frequencies from zero crossings (`--freq COL:THEORY:TOL`). The ctest entries `vof_*` call it.
+* **`scripts/vof_figures.py`** — `breaker RUN OUT.png t1 t2 ...` draws liquid fraction and interface from the `vof_snap_*.dat`
+  slices (`vof_debug = 1`, `vof_snap_dt > 0`; per-rank files are merged), `tgv LABEL=DIR ... OUT.png` plots the energy dissipation
+  rate of Taylor–Green runs from `vof_diag.dat`.
+* **`vof_diag.dat`** — the named 30-column diagnostic file of the two-fluid solver (columns in
+  [[Two-Phase VOF § Running|Two-Phase-VOF#2-running-and-output]]); it is plain text and loads with `numpy.loadtxt(..., comments='#')`.

@@ -5,7 +5,8 @@ Navier–Stokes equations, targeting turbulent channel and open-channel flows. I
 rough-wall immersed boundary methods (IBM), equilibrium wall models, sub-grid scale (SGS)
 turbulence modelling, suspended-sediment scalar transport, Boussinesq buoyancy
 (thermal stratification), an exact Reynolds stress budget analysis module, and a moving
-UAV actuator-disk rotor model for takeoff/landing/wake studies.
+UAV actuator-disk rotor model for takeoff/landing/wake studies, and an optional two-fluid
+(density ratio 1000) volume-of-fluid solver for free-surface and wave flows.
 
 This wiki expands on the top-level [README](../README.md) with a page per topic. Start
 here, then jump to whichever page matches what you're doing.
@@ -21,6 +22,7 @@ here, then jump to whichever page matches what you're doing.
 | [[Installation & Running\|Installation]] | Dependencies, CPU/GPU build instructions, launching a run, output layout |
 | [[Input Parameters Reference\|Input-Parameters]] | Every namelist and parameter in `input_parameters`, grouped by section |
 | [[Numerics & Governing Equations\|Numerics]] | The discretisation, time integration, Poisson solver, SGS model, IBM, wall models, scalar transport, Reynolds stress budget, inflow/outflow BCs |
+| [[Two-Phase VOF\|Two-Phase-VOF]] | The two-fluid (air–water) solver: PLIC-VOF transport, consistent momentum transport, wave flume, surface tension, validation, limits |
 | [[Examples\|Examples]] | Walkthroughs of the bundled example cases |
 | [[Pre- and Post-Processing Tools\|Tools]] | `GenSDF` mesh/SDF generator and the Python scripts in `postProcessing/` |
 | [[Decomposition Consistency\|Decomposition-Consistency]] | Layout/CPU/GPU consistency: what is guaranteed, the trace tools, and the fixes |
@@ -42,6 +44,9 @@ here, then jump to whichever page matches what you're doing.
   buoyancy (thermal stratification), periodic or inflow/outflow (synthetic-eddy-method)
   streamwise boundary conditions, and a moving UAV actuator-disk rotor forcing (static or
   path-following, prescribed or scheduled thrust) for takeoff/landing/wake studies.
+- **Two-phase flow** — geometric PLIC-VOF interface, consistent momentum transport with
+  WENO5-Z, variable-density projection, surface tension, wave-flume inlet/relaxation zones,
+  ghost-cell IBM; off by default and then a strict no-op ([[Two-Phase VOF|Two-Phase-VOF]]).
 - **Diagnostics** — full Pope §7.4 Reynolds stress budget, line/slice probes, per-stage
   profiler summary at shutdown.
 

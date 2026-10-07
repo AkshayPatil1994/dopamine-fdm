@@ -35,8 +35,20 @@ fdm-dopamine/
 │   ├── reynolds_stress_budget.f90  # Pope §7.4 budget (all 6 components)
 │   ├── probe_output.f90     # Line/slice probe output
 │   ├── uav_actuator.f90     # UAV actuator-disk rotor forcing (moving marker ring)
+│   ├── waves.f90            # Target waves of the numerical wave flume: Airy, Rienecker-Fenton stream function, JONSWAP (inlet + relaxation zones)
+│   ├── vof_plic.f90         # PLIC geometry: plane constants, volume below a plane in a box (no solver dependencies)
+│   ├── vof_normals.f90      # Interface normals (Youngs, centred-column height function)
+│   ├── vof_advect.f90       # Split-sweep Weymouth-Yue advection of C with exact PLIC fluxes (or THINC); serial kernels, unit-tested
+│   ├── vof_state.f90        # C on the decomposed grid: halos, initial shapes, prescribed test fields, diagnostics (vof_diag.dat)
+│   ├── vof_pressure.f90     # Variable-density pressure operator, geometric face density, PCG with the fast Poisson solver as preconditioner
+│   ├── vof_curv.f90         # Height-function curvature for surface tension
+│   ├── mom_recon.f90        # Momentum face-value kernels (central, Koren, QUICK, WENO3-Z/WENO5-Z), pure functions
+│   ├── vof_twofluid.f90     # Two-fluid time step: consistent momentum transport, forces (viscous, gravity, surface tension), projections
 │   ├── finalization.f90
 │   └── main.f90             # Entry point
+├── tests/
+│   ├── regression/          # Small deterministic cases: np / layout parity, restart, VOF cases (vof_check.py)
+│   └── vof/                 # Standalone VOF unit tests: PLIC geometry, prescribed-velocity advection, momentum kernels
 ├── postProcessing/
 │   ├── pyproject.toml       # dopamine-fdm-post: pip install -e postProcessing/
 │   ├── dopamine_post/       # Post-processing library (see Tools page) + `dopamine-post` CLI
