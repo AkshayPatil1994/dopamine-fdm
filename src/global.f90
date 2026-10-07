@@ -755,6 +755,10 @@ Module global
   ! 1 = Taylor-Green vortex initial velocity (amplitude vof_u0), periodic in x,z and mirrored at the y walls
   Integer(Int32) :: vof_tgv           = 0
   Real   (Int64) :: vof_sigma         = 0d0   ! surface tension coefficient (0 = off: no curvature is computed)
+  ! vof_wave_stokes 1: the vof_ic_type=4 surface gets the second-order Stokes harmonic and the water the deep-water velocity of a
+  ! wave travelling in +x (u = w a e^{k y} cos(kx), v = w a e^{k y} sin(kx), w = sqrt(g k)): an initial state of a breaking wave
+  Integer(Int32) :: vof_wave_stokes   = 0
+  Real   (Int64) :: vof_snap_dt       = 0d0   ! vof_debug=1, one rank: dump a vof_snap_NNNN.dat (x y C u v of the mid z plane) every vof_snap_dt
   Integer(Int32) :: vof_rk_nth        = 0     ! pseudo-time segments of the momentum RK3 per sweep (0 = 1)
   ! vof_prescribed: C is advected by an analytic divergence-free field instead of the flow velocity (passive mode, vof_flow=0):
   ! 1 = LeVeque vortex reversal in x-y, 2 = Enright 3-D deformation field; both reverse at t = vof_presc_T/2 and return to the

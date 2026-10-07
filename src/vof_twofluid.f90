@@ -30,6 +30,7 @@ Module vof_twofluid
   Use vof_curv, Only : vof_curvature
   Use mom_recon
   Use halo_pad, Only : pad_field
+  Use ibm, Only : apply_ghost_cell_ibm
   Use projection, Only : compute_pseudo_pressure_rhs, solve_poisson_equation, project_velocity
 
   Implicit None
@@ -57,12 +58,12 @@ Contains
   Subroutine vof_flow_init
 
     Integer(Int32) :: i, j, k
-    Real(Int64) :: kt(3)
+    Real(Int64) :: kt(3), om
 
-    If ( ibm_input_mode >= 1 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
+    If ( ibm_wall_model_flag /= 0 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
          .Or. uav_active >= 1 .Or. flat_wall_model_flag /= 0 .Or. rotation_active >= 1 ) Then
-       If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support IBM, sediment, Boussinesq, particles, UAV, ' // &
-            'wall models or rotation'
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support the IBM wall model, sediment, ' // &
+            'Boussinesq, particles, UAV, flat wall models or rotation'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
 
@@ -114,6 +115,26 @@ Contains
           End Do
        End Do
        W = 0d0
+    Else If ( restart == 0 .And. vof_wave_stokes == 1 ) Then
+       kt(1) = 8d0*Atan(1d0)/vof_wave_lambda
+       om = Sqrt(vof_grav*kt(1))
+       V = 0d0;  W = 0d0
+       Do k = 1, nzg
+          Do j = 1, nyg
+             Do i = 1, nx
+                U(i,j,k) = Merge(om*vof_wave_amp*Exp(kt(1)*(yg(j) - vof_level))*Cos(kt(1)*x(i)), 0d0, &
+                                 yg(j) < vof_level + wave_surface(x(i)))
+             End Do
+          End Do
+       End Do
+       Do k = 1, nzg
+          Do j = 1, ny
+             Do i = 1, nxg
+                V(i,j,k) = Merge(om*vof_wave_amp*Exp(kt(1)*(y(j) - vof_level))*Sin(kt(1)*xg(i)), 0d0, &
+                                 y(j) < vof_level + wave_surface(xg(i)))
+             End Do
+          End Do
+       End Do
     Else If ( restart == 0 .And. vof_shear == 1 ) Then
        V = 0d0;  W = 0d0
        Do j = 1, nyg
@@ -199,6 +220,16 @@ Contains
   End Subroutine face_halo
 
 
+  !> Ghost-cell IBM on U, V, W followed by a halo refresh: the image-point corrections change interior values next to the rank
+  !  seams, whose neighbours' ghost planes must follow before the next stencil reads them
+  Subroutine enforce_ibm
+
+    Call apply_ghost_cell_ibm(U, V, W)
+    Call face_halo(U, V, W)
+
+  End Subroutine enforce_ibm
+
+
   !> Advance C and the momentum rho*u by tau with the current velocity U, V, W as the (divergence-free) transporting field
   Subroutine vof_advect_half(tau, keep_transport)
 
@@ -243,6 +274,7 @@ Contains
        If ( d == 1 .And. x_bc_type == 1 ) Call tally_x_boundary_flux
        Call sweep_mass_flux(d, tau)
        Call vp_halo(Md, .False.)
+       Call vp_halo(Dd, .False.)
        Md(:,1,:) = 0d0;  Md(:,nyg,:) = 0d0
        Call momentum_update(d)
        Call face_halo(qu, qv, qw)
@@ -860,6 +892,7 @@ Contains
        t = to + rk_t(s)*dt
 
        Call apply_boundary_conditions
+       If ( ibm_input_mode >= 1 ) Call enforce_ibm
        ! explicit predictor force, then the increment
        Call vp_halo(ppre, .True.)
        Call vp_grad(ppre, bu, bv, bw)
@@ -879,6 +912,7 @@ Contains
           Hu2 = Fu_ - (bu + gu);  Hv2 = Fv_ - (bv + gv);  Hw2 = Fw_ - (bw + gw)
        End If
        Call apply_boundary_conditions(after_projection=.True.)
+       If ( ibm_input_mode >= 1 ) Call enforce_ibm
     End Do
     Deallocate( bu, bv, bw, gu, gv, gw )
 
@@ -1011,6 +1045,7 @@ Contains
     Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap, dt_in
     Integer(Int32) :: isub, nsub
 
+    If ( ibm_input_mode >= 1 ) Call enforce_ibm
     Call compute_sgs_model(U, V, W, nu_t)
     Call compute_wall_model(U, V, W, nu_t)
     Call compute_cfl(cfl_conv, cfl_visc, cfl_accel)
@@ -1044,6 +1079,7 @@ Contains
     Call apply_boundary_conditions
     Call vof_project(vof_adv_tol, vof_adv_iters)
     Call apply_boundary_conditions(after_projection=.True.)
+    If ( ibm_input_mode >= 1 ) Call enforce_ibm
 
     Uo = U;  Vo = V;  Wo = W
     Call vof_forces_rk3(to)
@@ -1060,6 +1096,7 @@ Contains
     Call apply_boundary_conditions
     Call vof_project(vof_adv_tol, vof_adv_iters)
     Call apply_boundary_conditions(after_projection=.True.)
+    If ( ibm_input_mode >= 1 ) Call enforce_ibm
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call tally_ledger
     P(2:nxg-1,2:nyg-1,2:nzg-1) = ppre(2:nxg-1,2:nyg-1,2:nzg-1)

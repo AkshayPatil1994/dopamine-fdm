@@ -38,6 +38,8 @@ Module vof_state
   Real(Int64), Allocatable, Dimension(:) :: vof_rho_ref   ! still-water row densities of the initial state (hydrostatic reference)
   Logical        :: vof_have_prev = .False.
   Real(Int64)    :: vof_bnd_cum = 0d0, vof_relax_cum = 0d0   ! cumulative liquid volume through the x boundaries and from relaxation
+  Character(*), Parameter :: diag_fmt = '(I9,2ES18.9E3,ES23.14E3,ES13.4E3,2ES12.3E3,I8,2ES12.3E3,3ES18.9E3,ES15.6E3,' // &
+                                       'ES18.9E3,3ES14.5E3,I6,ES12.3E3,I4,*(ES16.7E3))'
   Integer(Int32) :: vof_nsub_last = 1
   Integer(Int64) :: vof_hf_fail = 0   ! interface cells without a valid height function in the last curvature evaluation (this rank)
   Integer(Int64) :: vof_its_prev = 0
@@ -50,8 +52,14 @@ Contains
   Subroutine vof_init
 
     Integer(Int32) :: i, j, k
+
     Real(Int64) :: vliq, cmin, cmax, mom(7)
     Integer(Int64) :: nint
+
+#ifdef GPU_POISSON
+    If ( myid == 0 ) Write(*,'(A)') ' ERROR: the VOF / two-fluid solver is host-only, not available in GPU builds'
+    Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+#endif
 
     Allocate( Cv(0:nxg+1,0:nyg+1,0:nzg+1), Cw(nxg,nyg,nzg), Pw(0:nxg+1,nyg,0:nzg+1) )
     Allocate( hx(nxg), hy(nyg), hz(nzg) )
@@ -178,7 +186,7 @@ Contains
        c = 0d0
        Do a = 1, 32
           px = x0 + (x1 - x0)*(Real(a,Int64) - 0.5d0)/32d0
-          c = c + Min(1d0, Max(0d0, (vof_level + vof_wave_amp*Cos(2d0*pi_*px/vof_wave_lambda) - y0)/(y1 - y0)))
+          c = c + Min(1d0, Max(0d0, (vof_level + wave_surface(px) - y0)/(y1 - y0)))
        End Do
        c = c/32d0
        Return
@@ -238,6 +246,20 @@ Contains
     If ( vof_ic_type == 3 ) c = 1d0 - c
 
   End Function initial_fraction
+
+
+  !> Initial surface elevation of the vof_ic_type=4 wave: cosine, plus the second-order Stokes harmonic if vof_wave_stokes = 1
+  Pure Function wave_surface(xx) Result(eta)
+
+    Real(Int64), Intent(In) :: xx
+    Real(Int64) :: eta, kk, pi_
+
+    pi_ = 4d0*Atan(1d0)
+    kk = 2d0*pi_/vof_wave_lambda
+    eta = vof_wave_amp*Cos(kk*xx)
+    If ( vof_wave_stokes == 1 ) eta = eta + 0.5d0*kk*vof_wave_amp**2*Cos(2d0*kk*xx)
+
+  End Function wave_surface
 
 
   !> Refresh both ghost layers of the padded C: rank seams and periodic wraps through the scalar-transport host path, zero-gradient
@@ -461,13 +483,14 @@ Contains
                '19 PCG_its_step  20 last_PCG_res  21 n_sub  22 bnd_cum  23 relax_cum  24 x_of_max|U|  25 y_of_max|U|  ' // &
                '26 KE_liquid  27 KE_gas  28 L1(C-C_init)  29 p_liquid-p_gas  30 HF_fallback_cells'
        End If
-       Write(vof_unit,'(I9,2ES17.9,ES22.14,ES12.4,2ES11.3,I8,2ES11.3,3ES17.9,ES14.6,ES17.9,3ES13.5,I6,ES11.3,I4,*(ES15.7))') &
+       Write(vof_unit, diag_fmt) &
             istep, t, dt, vliq, (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
             mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, Int(vp_its_total - vof_its_prev), vp_res_last, &
             vof_nsub_last, vof_bnd_cum, vof_relax_cum, xloc, yloc, mom(6), mom(7), serr, pjump, Real(nfail, Int64)
        Flush(vof_unit)
     End If
     vof_its_prev = vp_its_total
+    If ( vof_debug == 1 .And. vof_snap_dt > 0d0 .And. nprocs == 1 ) Call write_snapshot
     vof_co_max = 0d0
     ! diagnostic (vof_debug = 1): deviation of the velocity from the uniform start-up stream vof_u0
     If ( vof_debug == 1 ) Then
@@ -558,6 +581,31 @@ Contains
     End If
 
   End Subroutine vof_output_monitor
+
+
+  !> Debug snapshot (one rank): x, y, C and the cell-centred u, v of the middle z plane
+  Subroutine write_snapshot
+
+    Integer(Int32) :: i, j, k, iu
+    Integer, Save :: nsnap = 0
+    Real(Int64), Save :: tnext = 0d0
+    Character(len=32) :: fn
+
+    If ( t + 1d-12 < tnext ) Return
+    nsnap = nsnap + 1
+    tnext = tnext + vof_snap_dt
+    k = nzg/2
+    Write(fn,'(A,I5.5,A)') 'vof_snap_', nsnap, '.dat'
+    Open(newunit=iu, file=Trim(fn), status='replace', action='write')
+    Write(iu,'(A,ES14.6)') '# t = ', t
+    Do j = 2, nyg-1
+       Do i = 2, nxg-1
+          Write(iu,'(5ES14.6)') xg(i), yg(j), Cv(i,j,k), 0.5d0*(U(i,j,k) + U(i-1,j,k)), 0.5d0*(V(i,j,k) + V(i,j-1,k))
+       End Do
+    End Do
+    Close(iu)
+
+  End Subroutine write_snapshot
 
 
   !> Volume integral of |C - C_init| over the distinct cells (vof_prescribed runs: the reversal test returns to the initial shape)

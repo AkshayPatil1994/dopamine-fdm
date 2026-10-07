@@ -622,7 +622,7 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_slosh_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${MPIEXEC_EXECUTABLE} --freq 15:7.8290:0.01 --rowmax 16:0.4)
-    set(_vof_cases "vof_vortex_small|1.7e-4" "vof_deform_small|1.5e-2" "vof_translate_small|-1")
+    set(_vof_cases "vof_vortex_small|1.7e-4" "vof_deform_small|1.5e-2" "vof_translate_small|-1" "vof_ibm_small|-1")
     foreach(_vc ${_vof_cases})
         string(REPLACE "|" ";" _vcl ${_vc})
         list(GET _vcl 0 _vname)
@@ -633,7 +633,7 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                         --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vname} --exe $<TARGET_FILE:dopamine>
                         --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid ${_lay} --max-l1 ${_vl1}
-                        --same-cols 4,5,6,7,11,12,13,14,28)
+                        --same-cols 4,5,6,7,11,12,13,14,16,17,18,28)
         endforeach()
     endforeach()
 endif()
