@@ -628,6 +628,10 @@ if(Python3_Interpreter_FOUND)
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_break_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 4,1 --same-tol 1e-9
                 --same-cols 4,5,6,7,11,12,13,16,26,27,29,32)
+    # Unsupported feature combinations must abort at input
+    add_test(NAME vof_input_aborts
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_input_checks/check_aborts.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
     # Mirror symmetry of the wall padding of the momentum stencils (free-slip Taylor-Green vortex, ratio 1)
     add_test(NAME vof_tgv_mirror_symmetry
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_tgv_mirror/check_mirror.py
