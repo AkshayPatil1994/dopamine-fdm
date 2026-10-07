@@ -627,7 +627,17 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_break_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 4,1 --same-tol 1e-9
-                --same-cols 4,5,6,7,11,12,13,16,26,27)
+                --same-cols 4,5,6,7,11,12,13,16,26,27,29,32)
+    # Mirror symmetry of the wall padding of the momentum stencils (free-slip Taylor-Green vortex, ratio 1)
+    add_test(NAME vof_tgv_mirror_symmetry
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_tgv_mirror/check_mirror.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+    # LES (Vreman) + no-slip bed + wave inlet and relaxation zones: decomposition independence including the pressure checksums
+    add_test(NAME vof_les_flume_small_np1_vs_np4_4x1
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_les_flume_small --exe $<TARGET_FILE:dopamine>
+                --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 4,1 --max-dvol 1e-3 --same-tol 1e-9
+                --same-cols 4,5,6,7,11,12,13,16,29,31,32)
     set(_vof_cases "vof_vortex_small|1.7e-4" "vof_deform_small|1.5e-2" "vof_translate_small|-1" "vof_ibm_small|-1")
     foreach(_vc ${_vof_cases})
         string(REPLACE "|" ";" _vcl ${_vc})
@@ -639,7 +649,7 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                         --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vname} --exe $<TARGET_FILE:dopamine>
                         --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid ${_lay} --max-l1 ${_vl1}
-                        --same-cols 4,5,6,7,11,12,13,14,16,17,18,28)
+                        --same-cols 4,5,6,7,11,12,13,14,16,17,18,28,32)
         endforeach()
     endforeach()
 endif()

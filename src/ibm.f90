@@ -1549,7 +1549,7 @@ Contains
     wmin  = Min( nxg-2, nzg-2 )
     Call MPI_Allreduce(wmin, wmin_g, 1, MPI_INTEGER, MPI_MIN, MPI_COMM_WORLD, ierr)
     If ( nprocs > 1 .And. wmin_g < ibm_E ) Then
-       If ( myid == 0 ) Write(*,'(A,I0,A,I0,A)') ' ERROR: IBM needs at least ', ibm_E, ' interior cells per rank in x and z ', &
+       If ( myid == 0 ) Write(*,'(A,I0,2A,I0,A)') ' ERROR: IBM needs at least ', ibm_E, ' interior cells per rank in x and z ', &
             'for its image-point stencils, but the thinnest slab has ', wmin_g, '. Use fewer ranks (or a different p_row/p_col).'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If

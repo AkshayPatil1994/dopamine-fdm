@@ -763,6 +763,9 @@ Module global
   Real   (Int64) :: vof_pcg_tol       = 2d-1
   Integer(Int32) :: vof_adv_iters     = 3
   Real   (Int64) :: vof_adv_tol       = 1d-8
+  ! > 0: every pressure solve stops once dt*max|div u| (the CG residual is the divergence left after the correction) is below
+  ! this value, instead of the relative tests above; the iteration caps still apply
+  Real   (Int64) :: vof_div_tol       = 0d0
   Integer(Int32) :: vof_layered_precond = 0   ! 1 (CPU, y walls): PCG preconditioner with the row-wise mean density
   Real   (Int64) :: vof_cfl_max       = 0.4d0
   ! passive tests: vof_prescribed 1 LeVeque vortex reversal, 2 Enright deformation (C advected by an analytic divergence-free

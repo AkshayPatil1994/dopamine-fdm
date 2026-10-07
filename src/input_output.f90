@@ -100,7 +100,8 @@ Contains
                    vof_geo_density, vof_layered_precond, &
                    vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_sigma, &
                    vof_pcg_iters, vof_pcg_tol, vof_mom_scheme, vof_mom_cm0, vof_mom_cm1, &
-                   vof_rk_mom, vof_rk_nth, vof_co_sub, vof_nsub, vof_freeze_ut, vof_adv_iters, vof_adv_tol, vof_cfl_max, &
+                   vof_rk_mom, vof_rk_nth, vof_co_sub, vof_nsub, vof_freeze_ut, vof_adv_iters, vof_adv_tol, &
+                   vof_div_tol, vof_cfl_max, &
                    vof_u0, vof_wave_amp, vof_wave_lambda, vof_wave_stokes, vof_tgv, vof_shear, vof_prescribed, vof_presc_T, &
                    vof_selftest, vof_frozen, vof_smooth_w, vof_hsplit, vof_debug, vof_snap_dt
 
@@ -265,6 +266,7 @@ Contains
        If ( nsteps == 0 ) Call abort_input( 'ERROR: &NUMERICS nsteps must be set (>0 fixed step count, <0 run until sim_end_time)' )
        If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
        If ( nmonitor <= 0 ) Call abort_input( 'ERROR: &NUMERICS nmonitor must be set to a positive step interval' )
+       Call check_vof_inputs
 
        ! Map short namelist names to the global variable names
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
@@ -762,6 +764,7 @@ Contains
     Call Mpi_bcast ( vof_u0,                1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_adv_iters,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_adv_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_div_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_wave_amp,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_wave_lambda,       1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_frozen,           1, MPI_integer,0, MPI_COMM_WORLD, ierr )
@@ -784,6 +787,45 @@ Contains
     Call Mpi_bcast ( vof_smooth_w,         1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
+
+  !> Reject feature combinations the free-surface solver does not support (rank 0, right after the namelists are read). UAV is
+  !  excluded in both VOF modes; the two-fluid solver (vof_flow>=1) additionally excludes the features listed below.
+  Subroutine check_vof_inputs
+
+    If ( vof_active >= 1 .And. uav_active >= 1 ) &
+         Call abort_input( 'ERROR: &VOF (vof_active>=1) cannot be combined with the UAV actuator (uav_active>=1)' )
+    If ( vof_flow >= 1 .And. vof_active < 1 ) &
+         Call abort_input( 'ERROR: vof_flow>=1 requires vof_active=1' )
+    If ( wave_type > 0 ) Then
+       If ( vof_active < 1 .Or. vof_flow < 1 ) &
+            Call abort_input( 'ERROR: &WAVES wave_type>0 requires vof_active=1 and vof_flow=1' )
+       If ( x_bc_type /= 1 .Or. inflow_type /= 3 ) &
+            Call abort_input( 'ERROR: &WAVES wave_type>0 requires x_bc_type=1 and inflow_type=3 (wave inlet)' )
+    End If
+    If ( inflow_type == 3 .And. wave_type <= 0 ) &
+         Call abort_input( 'ERROR: inflow_type=3 (wave inlet) requires wave_type>0 in &WAVES' )
+    If ( ( wave_gen_len > 0d0 .Or. wave_abs_len > 0d0 ) .And. ( wave_type <= 0 .Or. x_bc_type /= 1 ) ) &
+         Call abort_input( 'ERROR: wave_gen_len/wave_abs_len (relaxation zones) require wave_type>0 and x_bc_type=1' )
+    If ( wave_abs_len > 0d0 .And. wave_current_mode == 2 ) &
+         Write(*,'(A)') ' WARNING: the absorption zone relaxes the velocity to rest: wrong for a mean current (wave_current_mode=2)'
+    If ( vof_flow >= 1 ) Then
+       If ( ibm_wall_model_flag /= 0 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
+            .Or. flat_wall_model_flag /= 0 .Or. rotation_active >= 1 ) &
+            Call abort_input( 'ERROR: vof_flow=1 does not support the IBM wall model, sediment, Boussinesq, particles, ' // &
+            'flat wall models or rotation' )
+       If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) &
+            Call abort_input( 'ERROR: vof_flow=1 does not apply dPdx, dPdz or mass-flux forcing (set them to zero)' )
+       If ( y_bc_type /= 1 ) Call abort_input( 'ERROR: vof_flow=1 supports wall-bounded y only (y_bc_type=1)' )
+       If ( z_bc_type /= 0 ) Call abort_input( 'ERROR: vof_flow=1 supports periodic z only (z_bc_type=0)' )
+       If ( x_bc_type == 1 .And. inflow_type /= 3 .And. inflow_type /= 0 ) &
+            Call abort_input( 'ERROR: vof_flow=1 with an x inlet supports only inflow_type=3 (wave inlet) or 0 (uniform)' )
+       If ( rsb_active == 1 .Or. inflow_opt_active == 1 ) &
+            Call abort_input( 'ERROR: vof_flow=1 does not support the Reynolds-stress budget or the inflow optimisation' )
+       If ( ibm_input_mode >= 1 .And. nsampling > 0 ) &
+            Call abort_input( 'ERROR: IBM force output (nsampling>0) is not yet available with vof_flow=1 (set nsampling=0)' )
+    End If
+
+  End Subroutine check_vof_inputs
 
   !> Report an input-file error and abort every rank (a bare Stop on rank 0 alone leaves the others blocked in the bcast below)
   Subroutine abort_input(msg)

@@ -9,15 +9,16 @@
 !>           hydrostatic part removed, and the pressure as an explicit predictor (previous stage) plus an increment from a few PCG
 !>           iterations preconditioned by the constant-coefficient fast solver (vof_pressure).
 !>
-!>  Supported so far: DNS/LES without wall model, periodic or wall boundaries; no IBM, scalars, particles or UAV (checked at start).
+!>  Supported: DNS/LES without wall model, periodic or wall boundaries, ghost-cell IBM (velocity condition), wave inlet and relaxation
+!>  zones; not scalars, particles, UAV or the wall models (checked at input).
 Module vof_twofluid
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
   Use decomp, Only : x_periodic_partner, z_periodic_partner
-  Use boundary_conditions, Only : apply_boundary_conditions, update_ghost_interior_planes, update_ghost_interior_planes_x, &
-                                  apply_periodic_bc_x, apply_periodic_bc_z
+  Use boundary_conditions, Only : apply_boundary_conditions, outflow_relax_on, update_ghost_interior_planes, &
+                                  update_ghost_interior_planes_x, apply_periodic_bc_x, apply_periodic_bc_z
   Use sgs_models, Only : compute_sgs_model
   Use wallmodel, Only : compute_wall_model
   Use waves, Only : wave_eta, wave_profile_at
@@ -64,6 +65,8 @@ Contains
          .Or. uav_active >= 1 .Or. flat_wall_model_flag /= 0 .Or. rotation_active >= 1 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support the IBM wall model, sediment, ' // &
             'Boussinesq, particles, UAV, flat wall models or rotation'
+       If ( myid == 0 ) Write(*,'(A,7I3)') ' ibm_wall_model, sediment, boussinesq, particles, uav, flat_wall, rotation: ', &
+            ibm_wall_model_flag, sediment_flag, boussinesq_flag, particles_active, uav_active, flat_wall_model_flag, rotation_active
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
     If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) Then
@@ -597,7 +600,7 @@ Contains
     Do m = 1, EP
        PadU(:,1-m,:)     = s_lo*PadU(:,2+m,:);        PadU(:,nyg+m,:) = s_hi*PadU(:,nyg-1-m,:)
        PadW(:,1-m,:)     = s_lo*PadW(:,2+m,:);        PadW(:,nyg+m,:) = s_hi*PadW(:,nyg-1-m,:)
-       PadV(:,1-m,:)     = -PadV(:,1+m+1,:);          PadV(:,ny+m,:)  = -PadV(:,ny-m,:)
+       PadV(:,1-m,:)     = -PadV(:,1+m,:);             PadV(:,ny+m,:)  = -PadV(:,ny-m,:)
     End Do
 
   End Subroutine pad_transported
@@ -618,7 +621,7 @@ Contains
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     Call vp_div(U, V, W, fdiv)
-    Call vp_pcg(fdiv, maxit, tol, dphi)
+    Call vp_pcg(fdiv, maxit, tol, dphi, dt)
     vf_proj_its_last = vp_iters_last
     vf_proj_its_sum = vf_proj_its_sum + vp_iters_last
     Call vp_halo(dphi, .True.)
@@ -663,6 +666,22 @@ Contains
           End Do
        End Do
     End Do
+    ! the SGS model leaves nu_t at a free-slip wall's ghost row unset: use the nearest interior value there (no-slip keeps zero)
+    If ( bc_face_ylo == 2 ) Then
+       Do k = 1, nzg
+          Do i = 1, nxg
+             mu_c(i,1,k) = mug + (mul - mug)*Cv(i,1,k) + vp_rho(i,1,k)*nu_t(i,2,k);  mr_c(i,1,k) = 1d0/mu_c(i,1,k)
+          End Do
+       End Do
+    End If
+    If ( bc_face_yhi == 2 ) Then
+       Do k = 1, nzg
+          Do i = 1, nxg
+             mu_c(i,nyg,k) = mug + (mul - mug)*Cv(i,nyg,k) + vp_rho(i,nyg,k)*nu_t(i,nyg-1,k)
+             mr_c(i,nyg,k) = 1d0/mu_c(i,nyg,k)
+          End Do
+       End Do
+    End If
 
   End Subroutine set_viscosity
 
@@ -895,6 +914,7 @@ Contains
        End Do
        t = to + rk_t(s)*dt
 
+       outflow_relax_on = .True.
        Call apply_boundary_conditions
        If ( ibm_input_mode >= 1 ) Call enforce_ibm
        ! explicit predictor force, then the increment
@@ -904,7 +924,7 @@ Contains
        Call face_halo(U, V, W)
        Call vp_div(U, V, W, fdiv)
        fdiv = fdiv/dta
-       Call vp_pcg(fdiv, Max(vof_pcg_iters, 1), vof_pcg_tol, dphi)
+       Call vp_pcg(fdiv, Max(vof_pcg_iters, 1), vof_pcg_tol, dphi, dt*dta)
        Call vp_halo(dphi, .True.)
        Call vp_grad(dphi, gu, gv, gw)
        Call apply_face_gradient(gu, gv, gw, dta)
@@ -918,6 +938,7 @@ Contains
        Call apply_boundary_conditions(after_projection=.True.)
        If ( ibm_input_mode >= 1 ) Call enforce_ibm
     End Do
+    outflow_relax_on = .False.
     Deallocate( bu, bv, bw, gu, gv, gw )
 
   End Subroutine vof_forces_rk3
@@ -1071,6 +1092,8 @@ Contains
     If ( nsave < 0 .And. t + dt > tsave_next ) dt = tsave_next - t
     If ( nsteps < 0 .And. t + dt > sim_end_time ) dt = sim_end_time - t
     to = t
+    ! the convective outflow relaxation runs once per RK stage inside vof_forces_rk3 (stage shares of dt sum to dt)
+    outflow_relax_on = .False.
 
     If ( vof_frozen == 0 ) Then
        nsub = vof_nsub
@@ -1108,6 +1131,7 @@ Contains
     Call vof_end_step
     If ( Mod(istep, nmonitor) == 0 ) Call vof_output_monitor
     Call vof_write_gauges
+    outflow_relax_on = .True.
     dt_step = dt
     dt = dt_presnap
 

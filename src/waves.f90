@@ -28,6 +28,7 @@ Module waves
   ! inlet profiles on the solver's y grid, refreshed by wave_inlet_profile
   Real(Int64), Allocatable, Dimension(:) :: wv_in_u, wv_in_v
   Real(Int64) :: wv_in_eta = 0d0
+  Real(Int64) :: wv_in_t = -1d300   ! time of the stored inlet profile: it is a pure function of t, so equal-t calls reuse it
 
 Contains
 
@@ -345,7 +346,9 @@ Contains
   Subroutine wave_inlet_profile(t)
 
     Real(Int64), Intent(In) :: t
+    If ( t == wv_in_t ) Return
     Call wave_profile_at(0d0, t, wv_in_eta, wv_in_u, wv_in_v)
+    wv_in_t = t
 
   End Subroutine wave_inlet_profile
 

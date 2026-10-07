@@ -12,6 +12,10 @@ Module boundary_conditions
   ! prevent implicit typing
   Implicit None
 
+  ! .False. skips the convective outflow relaxation of apply_outflow_bc_x: the two-fluid step calls apply_boundary_conditions
+  ! outside its RK stages, where the relaxation (whose Courant number is the stage share of dt) must not be repeated
+  Logical :: outflow_relax_on = .True.
+
 #ifdef GPU_POISSON
   Real(Int64), Allocatable :: dev_bs(:), dev_br(:)   ! device-resident MPI staging buffers (GPU-aware MPI)
 #endif
@@ -538,6 +542,7 @@ Contains
     Logical :: is_first, is_last
     Integer(Int32) :: partner
 
+    If ( .Not. outflow_relax_on ) Return
     Call x_periodic_partner(is_first, is_last, partner)
     If ( .Not. is_last ) Return
 

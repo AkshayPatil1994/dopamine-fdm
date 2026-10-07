@@ -1,0 +1,25 @@
+! Taylor-Green vortex at density ratio 1 with free-slip y walls: the flow is mirror-symmetric about y = Ly/2 (v antisymmetric, u symmetric),
+! which every wall treatment of the solver must preserve exactly (check_mirror.py). Guards the wall padding of the momentum stencils.
+&DOMAIN
+  nx = 34, ny = 33, nz = 6, Lx = 1.03125, Ly = 1.0, Lz = 0.15625, grid_type = 1, alpha_grid = 1.0, alpha_grid_z = 0.0, p_row = 0, p_col = 0,
+/
+&PHYSICS
+  nu = 1.0e-3, sgs_model = 0,
+/
+&NUMERICS
+  dt = 1.0e-3, nsteps = 60, nsave = 1000000, nmonitor = 5, cfl_adaptive = 1, cfl_target = 0.4, cfl_safety = 0.9,
+  dt_max = 5.0e-3,
+/
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 2, bc_face_yhi = 2, x_bc_type = 0, y_bc_type = 1, z_bc_type = 0,
+/
+&INITIAL_CONDITIONS
+  Utarget = 0.0, ic_type = 3, noise_percent = 0.0, restart = 0,
+/
+&IO
+  filein = 'restart/x.1', fileout = 'tgv',
+/
+&VOF
+  vof_active = 1, vof_flow = 1, vof_ic_type = 1, vof_level = 10.0, vof_rho_l = 1.0, vof_rho_g = 1.0,
+  vof_nu_l = 1.0e-3, vof_nu_g = 1.0e-3, vof_grav = 0.0, vof_u0 = 1.0, vof_tgv = 1, vof_debug = 1, vof_snap_dt = 0.1,
+/

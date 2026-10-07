@@ -33,6 +33,7 @@ Module vof_state
   ! transporting velocities: stage 1 and 2 of this step, stage 2 of the previous step, and the extrapolated midpoint field
   Real(Int64), Allocatable, Dimension(:,:,:) :: Us1, Vs1, Ws1, Us2, Vs2, Ws2, Ue, Ve, We
 
+  Integer(Int32), Parameter :: VOF_MIN_SLAB = 3   ! planes of padding the VOF stencils need from the neighbouring rank
   Integer(Int32) :: vof_unit = 0, gauge_unit = 0
   Logical :: vof_unit_open = .False., gauge_unit_open = .False.   ! newunit numbers are negative, so they cannot flag 'not opened'
   Real(Int64), Allocatable, Dimension(:) :: vof_rho_ref   ! still-water row densities of the initial state (hydrostatic reference)
@@ -55,11 +56,24 @@ Contains
 
     Real(Int64) :: vliq, cmin, cmax, mom(7)
     Integer(Int64) :: nint
+    Integer(Int32) :: wmin, wmin_g, wreq
 
 #ifdef GPU_POISSON
     If ( myid == 0 ) Write(*,'(A)') ' ERROR: the VOF / two-fluid solver is host-only, not available in GPU builds'
     Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
 #endif
+
+    ! the padded stencils (two-fluid momentum reconstruction, height-function curvature) reach VOF_MIN_SLAB planes into the
+    ! neighbouring rank, the passive transport one plane: a thinner slab silently gives rank-layout-dependent results
+    wreq = Merge(VOF_MIN_SLAB, 1, vof_flow >= 1)
+    wmin = Min( nxg-2, nzg-2 )
+    Call MPI_Allreduce(wmin, wmin_g, 1, MPI_INTEGER, MPI_MIN, MPI_COMM_WORLD, ierr)
+    If ( wmin_g < wreq ) Then
+       If ( myid == 0 ) Write(*,'(A,I0,A,I0,A)') ' ERROR: the VOF solver needs at least ', wreq, &
+            ' interior cells per rank in x and z, but the thinnest slab has ', wmin_g, &
+            '. Use fewer ranks (or a different p_row/p_col).'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
 
     Allocate( Cv(0:nxg+1,0:nyg+1,0:nzg+1), Cw(nxg,nyg,nzg), Pw(0:nxg+1,nyg,0:nzg+1) )
     Allocate( hx(nxg), hy(nyg), hz(nzg) )
@@ -305,13 +319,13 @@ Contains
   End Subroutine vof_fill_pad
 
 
-  !> Inlet ghost cell of C: liquid below the target wave surface at the ghost-cell centre
+  !> Inlet ghost cell of C: liquid below the target wave surface at the inlet plane x = 0
   Subroutine wave_inlet_fraction
 
     Integer(Int32) :: j
     Real(Int64) :: top
 
-    top = vof_level + wave_eta(xg(1), t)
+    top = vof_level + wave_eta(0d0, t)   ! same station as the velocity inlet profile (wave_inlet_profile)
     Do j = 2, nyg-1
        Cw(1,j,:) = Min(1d0, Max(0d0, (top - y(j-1))/(y(j) - y(j-1))))
     End Do
@@ -446,13 +460,14 @@ Contains
   !  cells, cumulative clip loss, largest sub-step Courant number seen since the last row
   Subroutine vof_output_monitor
 
-    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr, pjump
+    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr, pjump, pcs(2)
     Integer(Int64) :: nfail
     Integer(Int64) :: nint
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     serr = shape_error()
     pjump = pressure_jump()
+    pcs = pressure_checksums()
     Call MPI_Allreduce(vof_hf_fail, nfail, 1, MPI_integer8, MPI_SUM, MPI_COMM_WORLD, ierr)
     vv = Max(vliq, 1d-300)
     vel_loc = (/ MaxVal(Abs(U(2:nx-1,2:nyg-1,2:nzg-1))), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
@@ -477,16 +492,17 @@ Contains
     If ( myid == 0 ) Then
        If ( .Not. vof_unit_open ) Then
           vof_unit_open = .True.
-          Open(newunit=vof_unit, file='vof_diag.dat', status='unknown', position='append', action='write')
+          Open(newunit=vof_unit, file='vof_diag.dat', status=Merge('unknown','replace',restart==1), &
+               position=Merge('append','rewind',restart==1), action='write')
           Write(vof_unit,'(A)') '# 1 step  2 t  3 dt  4 Vliq  5 (Vliq-V0)/V0  6 Cmin  7 Cmax  8 n_interface  9 clip_loss_cum  ' // &
                '10 Co_adv_max  11 xc  12 yc  13 zc  14 int C(1-C)  15 cos-moment  16 max|U|  17 max|V|  18 max|W|  ' // &
                '19 PCG_its_step  20 last_PCG_res  21 n_sub  22 bnd_cum  23 relax_cum  24 x_of_max|U|  25 y_of_max|U|  ' // &
-               '26 KE_liquid  27 KE_gas  28 L1(C-C_init)  29 p_liquid-p_gas  30 HF_fallback_cells'
+               '26 KE_liquid  27 KE_gas  28 L1(C-C_init)  29 p_liquid-p_gas  30 HF_fallback_cells  31 sum(p*dV)  32 sum(p^2*dV)'
        End If
        Write(vof_unit, diag_fmt) &
             istep, t, dt, vliq, (vliq - vof_vol0)/Max(vof_vol0, 1d-300), cmin, cmax, Int(nint), vof_clip_total, vof_co_max, &
             mom(1)/vv, mom(2)/vv, mom(3)/vv, mom(4), mom(5), vel_glb, Int(vp_its_total - vof_its_prev), vp_res_last, &
-            vof_nsub_last, vof_bnd_cum, vof_relax_cum, xloc, yloc, mom(6), mom(7), serr, pjump, Real(nfail, Int64)
+            vof_nsub_last, vof_bnd_cum, vof_relax_cum, xloc, yloc, mom(6), mom(7), serr, pjump, Real(nfail, Int64), pcs
        Flush(vof_unit)
     End If
     vof_its_prev = vp_its_total
@@ -681,6 +697,37 @@ Contains
   End Function pressure_jump
 
 
+  !> Volume integrals of P and P^2 over the distinct cells: independent of the rank layout when the pressure halos/seams are right
+  Function pressure_checksums() Result(pc)
+
+    Real(Int64) :: pc(2), loc(2), vc
+    Integer(Int32) :: i, j, k, ihi, khi
+    Logical :: is_first, is_last
+    Integer(Int32) :: partner
+
+    ihi = nxg-1;  khi = nzg-1
+    If ( x_bc_type == 0 ) Then
+       Call x_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) ihi = nxg-2
+    End If
+    If ( z_bc_type == 0 ) Then
+       Call z_periodic_partner(is_first, is_last, partner)
+       If ( is_last ) khi = nzg-2
+    End If
+    loc = 0d0
+    Do k = 2, khi
+       Do j = 2, nyg-1
+          Do i = 2, ihi
+             vc = hx(i)*hy(j)*hz(k)
+             loc(1) = loc(1) + vc*P(i,j,k);  loc(2) = loc(2) + vc*P(i,j,k)**2
+          End Do
+       End Do
+    End Do
+    Call MPI_Allreduce(loc, pc, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+  End Function pressure_checksums
+
+
   !> Surface elevation at the wave gauges (column liquid height, mean over z), appended to vof_gauges.dat
   Subroutine vof_write_gauges
 
@@ -717,7 +764,8 @@ Contains
     If ( myid == 0 ) Then
        If ( .Not. gauge_unit_open ) Then
           gauge_unit_open = .True.
-          Open(newunit=gauge_unit, file='vof_gauges.dat', status='unknown', position='append', action='write')
+          Open(newunit=gauge_unit, file='vof_gauges.dat', status=Merge('unknown','replace',restart==1), &
+               position=Merge('append','rewind',restart==1), action='write')
           Write(gauge_unit,'(A,8ES12.4)') '# t eta(x_g) at x =', wave_gauge_x(1:ng)
        End If
        Write(gauge_unit,'(ES16.8,8ES14.6)') t, (glb(ig)/Max(cnt(ig), 1d0), ig = 1, ng)

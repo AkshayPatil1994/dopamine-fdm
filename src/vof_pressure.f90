@@ -350,6 +350,18 @@ Contains
   End Function vp_dot
 
 
+  !> max|a| over the distinct unknowns (zero-weight ghost and duplicate cells excluded)
+  Function vp_maxabs(a) Result(s)
+
+    Real(Int64), Intent(In) :: a(nxg,nyg,nzg)
+    Real(Int64) :: s, sl
+
+    sl = MaxVal( Abs(a), mask=( vp_w > 0d0 ) )
+    Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
+
+  End Function vp_maxabs
+
+
   Subroutine vp_remove_mean(a)
 
     Real(Int64), Intent(InOut) :: a(nxg,nyg,nzg)
@@ -388,16 +400,21 @@ Contains
 
 
   !> Up to nit PCG iterations on A x = f from x = 0 (f need not have zero mean: it is removed), stopping early once the residual
-  !  falls below tol times its initial norm (tol = 0: always nit iterations). Sets vp_iters_last and the final relative residual.
-  Subroutine vp_pcg(f, nit, tol, x)
+  !  falls below tol times its initial norm (tol = 0: always nit iterations). With vof_div_tol > 0 and rscale given, the stop is
+  !  instead rscale*max|r| < vof_div_tol: r is the divergence left after the correction, rscale the time scale of f.
+  !  Sets vp_iters_last and the final relative residual.
+  Subroutine vp_pcg(f, nit, tol, x, rscale)
 
     Real(Int64),    Intent(In)  :: f(nxg,nyg,nzg), tol
     Integer(Int32), Intent(In)  :: nit
     Real(Int64),    Intent(Out) :: x(nxg,nyg,nzg)
+    Real(Int64),    Intent(In), Optional :: rscale
 
     Integer(Int32) :: it
     Real(Int64) :: rz, rzn, alpha, r0, rn
+    Logical :: abs_stop
 
+    abs_stop = ( vof_div_tol > 0d0 .And. Present(rscale) )
     x = 0d0
     vp_iters_last = 0
     vp_res_last = 0d0
@@ -405,6 +422,9 @@ Contains
     Call vp_remove_mean(vp_r)
     r0 = Sqrt(vp_dot(vp_r, vp_r))
     If ( r0 == 0d0 ) Return
+    If ( abs_stop ) Then
+       If ( rscale*vp_maxabs(vp_r) < vof_div_tol ) Return
+    End If
     Call vp_precond(vp_r, vp_z)
     vp_d = vp_z
     rz = vp_dot(vp_r, vp_z)
@@ -419,7 +439,12 @@ Contains
        vp_its_total = vp_its_total + 1
        rn = Sqrt(vp_dot(vp_r, vp_r))
        vp_res_last = rn/r0
-       If ( it == nit .Or. rn < tol*r0 ) Exit
+       If ( it == nit ) Exit
+       If ( abs_stop ) Then
+          If ( rscale*vp_maxabs(vp_r) < vof_div_tol ) Exit
+       Else If ( rn < tol*r0 ) Then
+          Exit
+       End If
        Call vp_precond(vp_r, vp_z)
        rzn = vp_dot(vp_r, vp_z)
        vp_d = vp_z + (rzn/rz)*vp_d
