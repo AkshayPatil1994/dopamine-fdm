@@ -471,6 +471,7 @@ Contains
     sl = Sum( vp_w*a )
     Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     a = a - s/vp_wsum
+    If ( vp_masked ) a = a*vp_act(1:nxg,1:nyg,1:nzg)   ! the solid cells stay exactly zero (the weighted sum is unchanged)
 
   End Subroutine vp_remove_mean
 

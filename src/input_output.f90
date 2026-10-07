@@ -266,11 +266,10 @@ Contains
        If ( nsteps == 0 ) Call abort_input( 'ERROR: &NUMERICS nsteps must be set (>0 fixed step count, <0 run until sim_end_time)' )
        If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
        If ( nmonitor <= 0 ) Call abort_input( 'ERROR: &NUMERICS nmonitor must be set to a positive step interval' )
-       Call check_vof_inputs
-
        ! Map short namelist names to the global variable names
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
        Lx_i       = Lx;  Ly_i       = Ly;  Lz_i       = Lz
+       Call check_vof_inputs
        alphaGrid  = alpha_grid
        ! grid_type is used directly from the global module (no alias needed)
        nks_global = nks
@@ -808,6 +807,43 @@ Contains
          Call abort_input( 'ERROR: wave_gen_len/wave_abs_len (relaxation zones) require wave_type>0 and x_bc_type=1' )
     If ( wave_abs_len > 0d0 .And. wave_current_mode == 2 ) &
          Write(*,'(A)') ' WARNING: the absorption zone relaxes the velocity to rest: wrong for a mean current (wave_current_mode=2)'
+    If ( wave_type > 0 ) Then
+       ! gauges: the writer takes the leading entries >= 0, so a hole would write the wrong stations; all must lie inside the flume
+       Block
+          Integer(Int32) :: ig, ng_lead
+          ng_lead = 0
+          Do ig = 1, Size(wave_gauge_x)
+             If ( wave_gauge_x(ig) < 0d0 ) Exit
+             ng_lead = ig
+          End Do
+          If ( Count(wave_gauge_x >= 0d0) /= ng_lead ) &
+               Call abort_input( 'ERROR: &WAVES wave_gauge_x entries must be contiguous from the first (negative = unused)' )
+          Do ig = 1, ng_lead
+             If ( wave_gauge_x(ig) >= Lx_i ) Call abort_input( 'ERROR: &WAVES wave_gauge_x lies outside the domain (x >= Lx)' )
+          End Do
+       End Block
+       If ( wave_type <= 2 ) Then
+          If ( wave_period <= 0d0 .Or. wave_height <= 0d0 ) &
+               Call abort_input( 'ERROR: &WAVES wave_type 1/2 need wave_period > 0 and wave_height > 0' )
+       Else
+          If ( wave_Tp <= 0d0 .Or. wave_Hs <= 0d0 ) &
+               Call abort_input( 'ERROR: &WAVES wave_type 3 needs wave_Tp > 0 and wave_Hs > 0' )
+       End If
+       If ( wave_gen_len > 0d0 .And. wave_abs_len > 0d0 .And. wave_gen_len + wave_abs_len > Lx_i ) &
+            Call abort_input( 'ERROR: &WAVES the generation and absorption zones overlap (wave_gen_len + wave_abs_len > Lx)' )
+       If ( vof_level <= 0d0 .Or. vof_level >= Ly_i ) Call abort_input( 'ERROR: &VOF vof_level must lie inside (0, Ly) for waves' )
+       If ( wave_type <= 2 .And. 0.5d0*wave_height >= vof_level ) &
+            Write(*,'(A)') ' WARNING: wave amplitude is not smaller than the still-water depth vof_level'
+       If ( wave_type <= 2 .And. vof_level + 0.5d0*wave_height >= Ly_i ) &
+            Call abort_input( 'ERROR: &WAVES the wave crest reaches the top of the domain (vof_level + H/2 >= Ly)' )
+    End If
+    If ( vof_flow >= 1 .And. restart == 1 .And. t_start < 0d0 .And. cfl_adaptive == 1 ) Then
+       ! without t_start the restart clock is nstep_init*dt, which is wrong under adaptive dt
+       If ( wave_type > 0 .Or. nsave < 0 .Or. nsteps < 0 ) &
+            Call abort_input( 'ERROR: restart with adaptive dt needs t_start (the physical time of the snapshot): the clock ' // &
+            'nstep_init*dt would reset the wave phase, ramp and output cadence' )
+       Write(*,'(A)') ' WARNING: restart with adaptive dt and no t_start: t = nstep_init*dt is not the physical time'
+    End If
     If ( vof_flow >= 1 ) Then
        If ( ibm_wall_model_flag /= 0 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
             .Or. flat_wall_model_flag /= 0 .Or. rotation_active >= 1 ) &

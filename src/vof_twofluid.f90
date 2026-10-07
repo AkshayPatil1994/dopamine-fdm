@@ -55,6 +55,7 @@ Module vof_twofluid
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
   ! IBM load output: whether this step is a sampling step
   Logical :: ibm_sampling_now = .False.
+  Integer(Int32) :: vf_tr_warn = 0   ! transporting-velocity projections that did not converge (warnings are limited to the first few)
   Real(Int64) :: vf_bnd_loc = 0d0, vf_relax_loc = 0d0   ! rank-local liquid volume through the x boundaries / added by relaxation this step
 
 Contains
@@ -317,6 +318,9 @@ Contains
        End Do
     End Do
 
+    ! the interior was rewritten: refresh the seam and periodic ghost faces before the next sub-step rebuilds q = rho*u from them
+    Call face_halo(U, V, W)
+
   End Subroutine vof_advect_half
 
 
@@ -359,6 +363,14 @@ Contains
     umax = Max( MaxVal(Abs(U)), MaxVal(Abs(V)), MaxVal(Abs(W)) )
     Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     Call vp_pcg(fdiv, 800, 1d-13, ph, rfloor=1d-14*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
+    ! Ut must be solenoidal for the liquid volume to be conserved: report a solve that hit the cap or broke down at the start
+    If ( ( vp_iters_last >= 800 .And. vp_res_last > 1d-6 ) .Or. ( vp_iters_last == 0 .And. MaxVal(Abs(fdiv)) > 0d0 ) ) Then
+       vf_tr_warn = vf_tr_warn + 1
+       If ( myid == 0 .And. vf_tr_warn <= 5 ) Then
+          Write(*,'(A,I0,A,I0,A,ES9.2)') ' WARNING: transporting-velocity projection ended after ', vp_iters_last, &
+               ' iterations (cap 800) at step ', istep, ', relative residual ', vp_res_last
+       End If
+    End If
     Call vp_halo(ph, .True.)
     Call vp_grad(ph, gu, gv, gw)
     Call apply_face_gradient(gu, gv, gw, 1d0)
@@ -637,6 +649,10 @@ Contains
     Call pad_field(uqw, nxg, nyg, nz, .False., .True., EP, tmp)
     PadW(:,1:nyg,:) = tmp
     Deallocate( tmp )
+    ! the wall ghost rows: the stored ones are the boundary-condition values of the start of the step, not the reflection of the
+    ! rows just advected (alpha = 0 / large for no-slip / free-slip gives exactly -1 / +1)
+    PadU(:,1,:) = s_lo*PadU(:,2,:);  PadU(:,nyg,:) = s_hi*PadU(:,nyg-1,:)
+    PadW(:,1,:) = s_lo*PadW(:,2,:);  PadW(:,nyg,:) = s_hi*PadW(:,nyg-1,:)
     Do m = 1, EP
        PadU(:,1-m,:)     = s_lo*PadU(:,2+m,:);        PadU(:,nyg+m,:) = s_hi*PadU(:,nyg-1-m,:)
        PadW(:,1-m,:)     = s_lo*PadW(:,2+m,:);        PadW(:,nyg+m,:) = s_hi*PadW(:,nyg-1-m,:)
@@ -1048,6 +1064,9 @@ Contains
        Do j = 2, nyg-1
           ct = Min(1d0, Max(0d0, (top - y(j-1))/(y(j) - y(j-1))))
           Do k = 2, nzg-1
+             If ( vp_masked ) Then
+                If ( vp_act(i,j,k) < 0.5d0 ) Cycle   ! IBM solid cell: its liquid fraction is a continuation, not a state
+             End If
              vol = Cv(i,j,k)
              Cv(i,j,k) = Cv(i,j,k) + fr*(ct - Cv(i,j,k))
              If ( k <= khi ) vf_relax_loc = vf_relax_loc + (Cv(i,j,k) - vol)*dx*hy(j)*hz(k)

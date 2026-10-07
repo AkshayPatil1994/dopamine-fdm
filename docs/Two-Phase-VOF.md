@@ -92,7 +92,9 @@ geometry for the transport and pressure; the velocity condition at the body keep
 
 **Loads.** With `nsampling > 0` the two-fluid step writes `ibm_forces.csv` like the single-fluid solver: pressure (total pressure =
 dynamic part + the still-water hydrostatic reference, so a submerged body feels buoyancy) and viscous traction (mixture viscosity
-plus the SGS part) summed over the staircase faces, pressure linearly extrapolated to the face. The IBM-impulse columns
+plus the SGS part) summed over the faces between fluid-type (signed distance >= 0) and solid-type cells, pressure linearly
+extrapolated to the face. This staircase of the distance sign can differ from the faces closed in the solver (face-averaged distance < 0) by
+O(dx), and the pressure level of a periodic box is arbitrary (closed bodies are unaffected). The IBM-impulse columns
 (`Fx_ibm, ...`) are NaN: the pressure acts through the closed faces. Validation: a submerged sphere in still water
 (`vof_ibm_buoy`) gives the buoyancy within 3 %, identical on 1 and 4 ranks. `ibm_surface_nsampling` is not available.
 
@@ -245,6 +247,10 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
 * **Density ratio ≥ 1e5.** Forward Euler with small sub-steps is used; a uniform stream through a drop stays clean to 1e-12 for 1e3
   and 1e4, but at ≥ 1e5 the error grows slowly (1e-12 → 1e-10 over ≈ 10 s).
 * **Thin sheets** (thinner than a cell): the geometric density and the PLIC reconstruction are not valid there (Enright test).
+* **Restart.** The restart file has no block flags: it must be read with the same `sgs_model`, `sediment_flag` and `boussinesq_flag` as it was
+  written. With adaptive `dt` give `t_start` (the clock `nstep_init*dt` is wrong otherwise; waves and `nsave < 0` runs abort without it). The
+  hydrostatic reference density is rebuilt from the initial-condition input, so keep that input unchanged. The ledger columns restart at zero.
+  A bed (IBM) must not reach into the wave generation zone: the inlet profile and the relaxation assume a flat bed at `y = 0` there (checked).
 * **Cost.** 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the
   WENO5-Z tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1).
 * **Not supported** with `vof_flow = 1` (the run aborts at input with a message): IBM wall model and `ibm_surface_nsampling`, flat

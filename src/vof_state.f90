@@ -113,6 +113,7 @@ Contains
     Allocate( Cvof_io(nxg,nyg,nzg), vof_rho_ref(nyg) )
     If ( vof_flow >= 1 ) Then
        Call vp_init
+       If ( vp_masked .And. wave_type > 0 ) Call check_bed_outside_generation_zone
        Call vof_fill_pad(Cv, nxg, nyg, nzg)
        Call vp_set_density(Cv)
        Call row_reference_density
@@ -136,6 +137,32 @@ Contains
          '   VOF initial liquid volume = ', vliq, '  C range ', cmin, ' ..', cmax
 
   End Subroutine vof_init
+
+
+  !> The wave inlet profile, its return flow and the relaxation zone assume the still-water depth above a flat bed at y = 0: a body in
+  !  the generation zone (or at the inlet) would be inconsistent with them
+  Subroutine check_bed_outside_generation_zone
+
+    Integer(Int32) :: i, j, k, nbad, nbad_g
+
+    nbad = 0
+    Do k = 2, nzg-1
+       Do j = 2, nyg-1
+          Do i = 2, nxg-1
+             If ( xg(i) < Max(wave_gen_len, dx) .And. phi(i,j,k) < 0d0 ) nbad = nbad + 1
+          End Do
+       End Do
+    End Do
+    Call MPI_Allreduce(nbad, nbad_g, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr)
+    If ( nbad_g > 0 ) Then
+       If ( myid == 0 ) Then
+          Write(*,'(A,I0,A)') ' ERROR: ', nbad_g, ' IBM solid cells lie in the wave generation zone or at the inlet;'
+          Write(*,'(A)') '        the wave inlet and relaxation assume a flat bed at y = 0 there'
+       End If
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
+
+  End Subroutine check_bed_outside_generation_zone
 
 
   !> x-z mean density of every row of the initial state (volume weighted, periodic duplicate cells excluded)
@@ -316,7 +343,17 @@ Contains
        Cp(:,0,:)    = Cp(:,3,:)
        Cp(:,n2+1,:) = Cp(:,n2-2,:)
     End If
-    If ( vp_masked ) Call fill_solid_fraction(Cp, n1, n2, n3)
+    If ( vp_masked ) Then
+       Call fill_solid_fraction(Cp, n1, n2, n3)
+       ! wall ghost rows from the filled rows, and the x/z pad layers (second ghost layer) from the neighbours' filled cells
+       Cw = Cp(1:n1,1:n2,1:n3)
+       Cw(:,1,:)  = Cw(:,2,:)
+       Cw(:,n2,:) = Cw(:,n2-1,:)
+       Call pad_field(Cw, n1, n2, n3, .False., .False., 1, Pw)
+       Cp(0:n1+1,1:n2,0:n3+1) = Pw
+       Cp(:,0,:)    = Cp(:,3,:)
+       Cp(:,n2+1,:) = Cp(:,n2-2,:)
+    End If
 
   End Subroutine vof_fill_pad
 
@@ -341,6 +378,7 @@ Contains
              Do kk = k-1, k+1
                 Do jj = j-1, j+1
                    Do ii = i-1, i+1
+                      If ( jj < 2 .Or. jj > n2-1 ) Cycle   ! wall ghost rows are copies of the rows next to them
                       If ( vp_act(ii,jj,kk) > 0.5d0 ) Then
                          acc = acc + Cp(ii,jj,kk);  cnt = cnt + 1
                       End If
@@ -799,7 +837,8 @@ Contains
              Do k = 2, khi
                 col = 0d0
                 Do j = 2, nyg-1
-                   col = col + Cv(i,j,k)*hy(j)
+                   ! solid cells (IBM) count as bed: the gauge reports the surface elevation above the still level, not above the bed
+                   col = col + hy(j)*( Cv(i,j,k)*fluid_weight(i,j,k) + 1d0 - fluid_weight(i,j,k) )
                 End Do
                 loc(ig) = loc(ig) + col - vof_level
                 cnt_loc(ig) = cnt_loc(ig) + 1d0
