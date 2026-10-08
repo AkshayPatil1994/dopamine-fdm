@@ -35,6 +35,7 @@ Contains
 
     If ( Allocated(vof_mx) ) Then
        If ( Size(vof_mx,1) == n1 .And. Size(vof_mx,2) == n2 .And. Size(vof_mx,3) == n3 ) Return
+       !$acc exit data delete(vof_mx,vof_my,vof_mz,vof_al,vof_flux,vof_cc)
        Deallocate( vof_mx, vof_my, vof_mz, vof_al, vof_flux, vof_cc )
     End If
     Allocate( vof_mx(n1,n2,n3), vof_my(n1,n2,n3), vof_mz(n1,n2,n3), vof_al(n1,n2,n3), vof_flux(n1,n2,n3), vof_cc(n1,n2,n3) )
