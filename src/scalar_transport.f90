@@ -90,7 +90,8 @@ Contains
 
     Call scalar_fill_pad(C_)
 
-    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,nu_t,qT_wall,phi,x,xg,y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
+    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,nu_t,qT_wall,phi,x,xg,y,yg,z,zg, &
+    !$acc& weight_y_0,weight_y_1,weight_z_0,weight_z_1)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
