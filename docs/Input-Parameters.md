@@ -286,7 +286,7 @@ bit-for-bit the single-phase solver.
 | `vof_debug` | `0` | 1: write `vof_dev.dat`, `vof_prof.dat`, `vof_front.dat`, `vof_vmax.dat` (development diagnostics); with `vof_snap_dt>0` also `vof_snap_NNNN.dat` slices |
 | `vof_snap_dt` | `0` | (`vof_debug=1`) interval between mid-plane slices of `C, u, v` (`vof_snap_NNNNN.dat`, or one `_rRRR` file per rank) |
 
-Not supported with `vof_flow=1` (the run aborts with a message): the IBM wall model (`ibm_wall_model_flag`), the rough flat-wall model
+Not supported with `vof_flow=1` (the run aborts with a message): the rough flat-wall model
 (`flat_wall_model_flag=2`; `=1` is supported, see [[Two-Phase-VOF]] §1.4), sediment, Boussinesq buoyancy, particles, UAV, rotation; the solver is host-only (a GPU build aborts in `vof_init`).
 The ghost-cell IBM (`ibm_input_mode=1`) is supported. Constant-pressure-gradient / mass-flux forcing (`dPdx`, `Ub_target`) is
 not applied by the two-fluid solver. Only periodic z is supported.

@@ -68,9 +68,9 @@ Contains
     Integer(Int32) :: i, j, k
     Real(Int64) :: kt(3), om
 
-    If ( ibm_wall_model_flag /= 0 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
          .Or. uav_active >= 1 .Or. flat_wall_model_flag > 1 .Or. rotation_active >= 1 ) Then
-       If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support the IBM wall model, sediment, ' // &
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support sediment, ' // &
             'Boussinesq, particles, UAV, the rough flat-wall model or rotation'
        If ( myid == 0 ) Write(*,'(A,7I3)') ' ibm_wall_model, sediment, boussinesq, particles, uav, flat_wall, rotation: ', &
             ibm_wall_model_flag, sediment_flag, boussinesq_flag, particles_active, uav_active, flat_wall_model_flag, rotation_active
@@ -746,6 +746,30 @@ Contains
 
   End Subroutine set_viscosity
 
+  !> Viscosity the IBM wall model uses at each ghost point: that of the phase at its reference cell, or 0 (the ghost keeps its no-slip
+  !  value) unless the reference cell and its 26 neighbours hold one fluid, as for the flat wall in set_wall_stress
+  Subroutine set_ghost_phase_nu(ng, ref, gnu)
+
+    Integer(Int32), Intent(In)    :: ng, ref(3,ng)
+    Real(Int64),    Intent(InOut) :: gnu(ng)
+
+    Real(Int64), Parameter :: cgate = 0.05d0
+    Integer(Int32) :: n, ia, ib, ja, jb, ka, kb
+    Real(Int64) :: cmn, cmx
+
+    Do n = 1, ng
+       ia = Max(ref(1,n)-1, 1);  ib = Min(ref(1,n)+1, nxg)
+       ja = Max(ref(2,n)-1, 1);  jb = Min(ref(2,n)+1, nyg)
+       ka = Max(ref(3,n)-1, 1);  kb = Min(ref(3,n)+1, nzg)
+       cmn = MinVal(Cv(ia:ib,ja:jb,ka:kb));  cmx = MaxVal(Cv(ia:ib,ja:jb,ka:kb))
+       gnu(n) = 0d0
+       If ( cmn >= 1d0 - cgate ) gnu(n) = vof_nu_l
+       If ( cmx <= cgate ) gnu(n) = vof_nu_g
+    End Do
+
+  End Subroutine set_ghost_phase_nu
+
+
   !> Flat-wall EQWM stress at the y walls: wt_u / wt_w are the tangential stress fluxes (rho u_tau**2 along the local tangential velocity,
   !  signed as the momentum flux through the wall-edge of the first interior row) that viscous_accel uses in place of the molecular
   !  edge flux. u_tau is solved from the first interior row with the viscosity of the phase there. The log law holds in a single
@@ -967,6 +991,11 @@ Contains
     Do s = 1, 3
        rk_step = s
        Call compute_sgs_model(U, V, W, nu_t)
+       If ( ibm_input_mode >= 1 .And. ibm_wall_model_flag == 1 ) Then
+          Call set_ghost_phase_nu(n_ghost_u, ghost_u_ref, ghost_u_nu)
+          Call set_ghost_phase_nu(n_ghost_v, ghost_v_ref, ghost_v_nu)
+          Call set_ghost_phase_nu(n_ghost_w, ghost_w_ref, ghost_w_nu)
+       End If
        Call compute_wall_model(U, V, W, nu_t)
        Call set_viscosity
        If ( flat_wall_model_flag == 1 ) Call set_wall_stress

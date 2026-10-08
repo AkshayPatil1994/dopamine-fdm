@@ -69,6 +69,11 @@ where the interface lies within the first two rows or one cell sideways (the `C`
 model. Free-slip walls take no stress. The stress is independent of the density ratio, and a uniform stream over a modelled bed
 decays as the log law predicts (`vof_wm_stream`).
 
+**IBM wall model (`ibm_wall_model_flag = 1`).** The single-phase ghost-point mirror is used unchanged, with the viscosity of the phase at each
+ghost point's reference cell (the same 0.05 / 0.95 gate over the cell and its 26 neighbours; a gated ghost keeps its no-slip value).
+As in the single-phase solver the mirror only reshapes the ghost values: the stress the viscous term then carries is `(ν + ν_t) Δu/Δy`, so
+it equals `ρ u_τ²` only where the SGS viscosity supplies the difference (it does not on a flat plate in a uniform stream).
+
 ### 1.5 Surface tension
 
 `vof_sigma > 0` adds the balanced-force term `σ κ ∇C / ρ_f` on the faces with the curvature from **height functions** (9-cell
@@ -262,7 +267,7 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
   A bed (IBM) must not reach into the wave generation zone: the inlet profile and the relaxation assume a flat bed at `y = 0` there (checked).
 * **Cost.** 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the
   WENO5-Z tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1).
-* **Not supported** with `vof_flow = 1` (the run aborts at input with a message): IBM wall model and `ibm_surface_nsampling`, the rough
+* **Not supported** with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, the rough
   flat-wall model (`flat_wall_model_flag = 2`), sediment, Boussinesq buoyancy, particles, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
   non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. **GPU builds abort in `vof_init`**
   (the solver is host-only; no GPU test was possible).

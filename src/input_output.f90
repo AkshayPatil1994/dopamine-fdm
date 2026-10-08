@@ -845,10 +845,8 @@ Contains
        Write(*,'(A)') ' WARNING: restart with adaptive dt and no t_start: t = nstep_init*dt is not the physical time'
     End If
     If ( vof_flow >= 1 ) Then
-       If ( ibm_wall_model_flag /= 0 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
-            .Or. rotation_active >= 1 ) &
-            Call abort_input( 'ERROR: vof_flow=1 does not support the IBM wall model, sediment, Boussinesq, particles ' // &
-            'or rotation' )
+       If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 .Or. rotation_active >= 1 ) &
+            Call abort_input( 'ERROR: vof_flow=1 does not support sediment, Boussinesq, particles or rotation' )
        If ( flat_wall_model_flag > 1 ) &
             Call abort_input( 'ERROR: vof_flow=1 supports only the smooth flat-wall model (flat_wall_model_flag = 0 or 1)' )
        If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) &
