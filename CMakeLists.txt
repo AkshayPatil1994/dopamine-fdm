@@ -692,7 +692,9 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream/check_wm_stream.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --rough 1e-4 --tol 0.08)
     # Same for the spanwise (z) walls and the 4-wall duct: stream decay by the log-law stress, same on 1 and 4 ranks; rough EQWM refused with z walls
-    foreach(wmz IN ITEMS "wm_stream_z|" "wm_stream_duct|--duct" "wm_stream_z_rough_rejected|--reject-rough")
+    # (zv, zdiag: streams along y and the diagonal; zprof, zprof_stretch: unequal non-uniform (U,V) profile, uniform and stretched z, z split over ranks)
+    foreach(wmz IN ITEMS "wm_stream_z|" "wm_stream_duct|--duct" "wm_stream_z_rough_rejected|--reject-rough" "wm_stream_zv|--mode=v"
+            "wm_stream_zdiag|--mode=diag" "wm_stream_zprof|--mode=prof" "wm_stream_zprof_stretch|--mode=prof_stretch")
         string(REPLACE "|" ";" wmz_l "${wmz}")
         list(GET wmz_l 0 wmz_name)
         list(GET wmz_l 1 wmz_arg)
