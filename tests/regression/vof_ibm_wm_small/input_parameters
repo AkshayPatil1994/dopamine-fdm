@@ -62,5 +62,5 @@
 /
 &VOF
   vof_active = 1, vof_flow = 1, vof_ic_type = 1, vof_level = 2.0,
-  vof_rho_l = 1000.0, vof_rho_g = 1.2, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 0.0, vof_pcg_tol = 1e-10, vof_pcg_iters = 400,
+  vof_rho_l = 1000.0, vof_rho_g = 1.2, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 0.0, vof_pcg_tol = 1e-10, vof_pcg_iters = 400, vof_adv_iters = 60, vof_adv_tol = 1d-12,
 /
