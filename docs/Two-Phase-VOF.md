@@ -69,7 +69,7 @@ where the interface lies within the first two rows or one cell sideways (the `C`
 model. Free-slip walls take no stress. The stress is independent of the density ratio, and a uniform stream over a modelled bed
 decays as the log law predicts (`vof_wm_stream`).
 
-**IBM wall model (`ibm_wall_model_flag = 1`).** On every staircase face next to a fluid face (closed face = face-averaged `φ < 0`, the
+**IBM wall model (`ibm_wall_model_flag = 1`).** On every staircase face next to a fluid face (closed face = either neighbouring cell has `φ < 0`, the
 mask of the pressure solve) the log-law stress `ρ u_τ²` along the tangential velocity of that fluid face replaces the viscous flux through
 the edge in `viscous_accel` (`src/ibm_stress.f90`, `ibm_stress_update`). `u_τ` uses the distance from the face centre to the closed face
 (half a cell), the viscosity of the phase (the same 0.05 / 0.95 single-fluid gate over the cell and its 26 neighbours; a gated face keeps
@@ -89,8 +89,8 @@ free surface and the explicit interface coupling goes unstable (seen at `vof_sig
 ### 1.6 Immersed boundaries
 
 The ghost-cell IBM (`ibm_input_mode = 1`) is re-applied after every velocity update (force stage, both projections, start of the
-step). For the interface and the pressure the body is a **staircase**: a face is closed if the face-averaged signed distance is
-negative (the faces the IBM zeroes or overwrites), a cell is a solid cell if all its faces are closed.
+step). For the interface and the pressure the body is a **staircase**: a face is closed if either cell it joins has a negative
+signed distance (the faces the IBM zeroes or overwrites), a cell is a solid cell if all its faces are closed.
 
 * the pressure operator, the pressure gradient and the divergence skip closed faces (Neumann condition at the body; the ghost-face
   velocities of the IBM are not touched by the projection);
@@ -109,8 +109,7 @@ geometry for the transport and pressure; the velocity condition at the body keep
 **Loads.** With `nsampling > 0` the two-fluid step writes `ibm_forces.csv` like the single-fluid solver: pressure (total pressure =
 dynamic part + the still-water hydrostatic reference, so a submerged body feels buoyancy) and viscous traction (mixture viscosity
 plus the SGS part) summed over the faces between fluid-type (signed distance >= 0) and solid-type cells, pressure linearly
-extrapolated to the face. This staircase of the distance sign can differ from the faces closed in the solver (face-averaged distance < 0) by
-O(dx), and the pressure level of a periodic box is arbitrary (closed bodies are unaffected). The IBM-impulse columns
+extrapolated to the face. The load faces are the faces closed in the solver. The pressure level of a periodic box is arbitrary (closed bodies are unaffected). The IBM-impulse columns
 (`Fx_ibm, ...`) are NaN: the pressure acts through the closed faces. Validation: a submerged sphere in still water
 (`vof_ibm_buoy`) gives the buoyancy within 3 %, identical on 1 and 4 ranks. `ibm_surface_nsampling` is not available.
 
