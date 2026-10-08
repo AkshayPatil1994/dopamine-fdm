@@ -439,12 +439,10 @@ $\kappa\,\partial T/\partial y$ through the wall face of the first-cell temperat
 (as the stress does for momentum, §7.1), and the ghost row is zero-gradient. An earlier
 Robin slip-length form could floor to an isothermal wall and not apply the modelled flux.
 
-This stability correction feeds the thermal flux only. The momentum
-coefficients ($\alpha_x$, $\alpha_z$) stay on the neutral rough log law of §7.3 even
-under `T_bc_* = 2` -- they are sampled at different index spaces (x-faces, z-faces)
-than this cell-centred MOST pass, so consistently stability-correcting them would
-need their own persisted $L$ state; this is a known, documented scope limitation
-rather than an oversight.
+The stability correction also sets the momentum stress on the same walls: under `T_bc_* = 2` the
+wall stress uses $u_\tau = \kappa u/(\ln(y/z_0)-\psi_m(y/L))$ with the Obukhov length $L$ of the previous step
+(one-step lag; $L$ starts neutral). The x-face and z-face stresses read $L$ from the lower-index adjacent
+cell, without averaging.
 
 ### 7.6 IBM per-object roughness
 

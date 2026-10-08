@@ -616,8 +616,8 @@ Contains
 
   !> Flat-wall rough-EQWM thermal coupling: the kinematic wall heat flux u_tau*theta_tau of the iterated MOST law at the matching height
   !  is stored in qT_wall as the wall-edge flux kappa*dT/dy that replaces the diffusive flux of the first-cell balance (the temperature
-  !  analogue of tau_x/tau_z). The ghost row is zero-gradient. The stability correction feeds only this flux: alpha_x/alpha_z
-  !  stay on the neutral rough z0 law. Only active on walls where T_bc_bot/top==2.
+  !  analogue of tau_x/tau_z). The ghost row is zero-gradient. The Obukhov length it stores is read one step later by
+  !  compute_flat_wall_eqwm for the momentum stress. Only active on walls where T_bc_bot/top==2.
   Subroutine compute_flat_wall_thermal_eqwm(U_, W_, T_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_

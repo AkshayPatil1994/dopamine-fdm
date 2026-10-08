@@ -196,11 +196,8 @@ coupling. See
 and [[Numerics § Wall models|Numerics#7-wall-models]].
 
 `T_bc_bot/top=2`'s MOST stability coupling (Businger-Dyer `psi_m`/`psi_h`, iterated
-Obukhov length) applies to the thermal EQWM only -- `alpha_x`/`alpha_z` (momentum) stay
-on the neutral rough `z0` log law even under this mode. This is a known, documented
-scope limitation (see `wallmodel.f90`'s `compute_flat_wall_thermal_eqwm`), not an
-oversight: the momentum Robin coefficients are sampled at different index spaces
-(x-faces, z-faces) than this cell-centred pass.
+Obukhov length) sets both the wall heat flux and the momentum stress of that wall; the momentum stress uses
+`u_tau` from the Obukhov length of the previous step (one-step lag, neutral on the first step).
 
 ## `&UAV` *(optional — omit to disable)*
 
