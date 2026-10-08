@@ -814,6 +814,13 @@ Module global
   Real   (Int64) :: wave_abs_len      = 0d0
   Real   (Int64) :: wave_relax_rate   = 20d0
   Real   (Int64) :: wave_ramp_time    = 0d0    ! smooth start-up ramp of the wave amplitude [s] (0 = none)
+  ! mean current through the flume (throughflow), added to the wave in the water at the inlet and the relaxation target of the
+  ! absorption zone: 0 none, 1 uniform, 2 log law (bed roughness current_z0), 3 power law (exponent 1/current_n); current_U is the
+  ! depth-mean over the still-water depth. The air above carries only the wave's return flow. Ramped with wave_ramp_time.
+  Integer(Int32) :: current_type      = 0
+  Real   (Int64) :: current_U         = 0d0
+  Real   (Int64) :: current_z0        = 1d-3
+  Real   (Int64) :: current_n         = 7d0
   Real   (Int64) :: wave_gauge_x(8)   = -1d0   ! x positions of surface-elevation gauges written to vof_gauges.dat (<0 unused)
 
   ! 1-D line probes: config and output file layout

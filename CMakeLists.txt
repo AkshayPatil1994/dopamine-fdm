@@ -689,6 +689,10 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME vof_ibm_wm_plate
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_wm_plate/check_wm_plate.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+    # Mean log-law current plus a small wave through the wave inlet and the relaxation zones
+    add_test(NAME vof_current_flume
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_current_flume/check_current.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
     # Mirror symmetry of the wall padding of the momentum stencils (free-slip Taylor-Green vortex, ratio 1)
     add_test(NAME vof_tgv_mirror_symmetry
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_tgv_mirror/check_mirror.py

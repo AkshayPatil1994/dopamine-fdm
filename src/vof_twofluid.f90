@@ -22,7 +22,7 @@ Module vof_twofluid
   Use sgs_models, Only : compute_sgs_model
   Use wallmodel, Only : compute_wall_model, solve_u_tau_wall
   Use ibm_stress
-  Use waves, Only : wave_eta, wave_profile_at
+  Use waves, Only : wave_eta, wave_profile_at, current_profile
   Use monitor, Only : compute_cfl, write_force_csv
   Use vof_plic
   Use vof_normals
@@ -167,6 +167,15 @@ Contains
        End Do
     Else If ( restart == 0 .And. vof_u0 /= 0d0 ) Then
        U = vof_u0;  V = 0d0;  W = 0d0
+    Else If ( restart == 0 .And. current_type > 0 ) Then
+       Block
+          Real(Int64) :: ucur(nyg)
+          Call current_profile(t, ucur)
+          V = 0d0;  W = 0d0
+          Do j = 1, nyg
+             U(:,j,:) = ucur(j)
+          End Do
+       End Block
     End If
 
     ! pseudo-time RK3 of the momentum needs less than half of a control volume's mass to leave in one sweep, which fails for
@@ -1207,6 +1216,8 @@ Contains
        fr = 1d0 - Exp(-wave_relax_rate*strength*dts)
        If ( gen .And. wave_type > 0 ) Then
           Call wave_profile_at(x(i), t, eta, uc, vf)
+       Else If ( current_type > 0 ) Then
+          Call current_profile(t, uc)
        Else
           uc = 0d0
        End If

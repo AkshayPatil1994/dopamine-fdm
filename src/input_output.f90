@@ -94,7 +94,8 @@ Contains
                          sgs_particle_model, particle_langevin_C0
 
     Namelist /WAVES/ wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, wave_Hs, wave_Tp, &
-                     wave_gamma, wave_nfreq, wave_seed, wave_gen_len, wave_abs_len, wave_relax_rate, wave_gauge_x, wave_ramp_time
+                     wave_gamma, wave_nfreq, wave_seed, wave_gen_len, wave_abs_len, wave_relax_rate, wave_gauge_x, wave_ramp_time, &
+                     current_type, current_U, current_z0, current_n
 
     Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, vof_method, vof_beta, &
                    vof_geo_density, vof_layered_precond, &
@@ -750,6 +751,10 @@ Contains
     Call Mpi_bcast ( wave_relax_rate,   1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_gauge_x,      8, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_ramp_time,    1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( current_type,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( current_U,         1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( current_z0,        1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( current_n,         1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_active,            1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_ic_type,           1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_level,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
@@ -816,6 +821,12 @@ Contains
          Call abort_input( 'ERROR: inflow_type=3 (wave inlet) requires wave_type>0 in &WAVES' )
     If ( ( wave_gen_len > 0d0 .Or. wave_abs_len > 0d0 ) .And. ( wave_type <= 0 .Or. x_bc_type /= 1 ) ) &
          Call abort_input( 'ERROR: wave_gen_len/wave_abs_len (relaxation zones) require wave_type>0 and x_bc_type=1' )
+    If ( current_type < 0 .Or. current_type > 3 ) Call abort_input( 'ERROR: &WAVES current_type must be 0..3' )
+    If ( current_type > 0 .And. wave_type <= 0 ) &
+         Call abort_input( 'ERROR: &WAVES current_type>0 requires wave_type>0 (wave inlet)' )
+    If ( current_type == 2 .And. ( current_z0 <= 0d0 .Or. current_z0 >= 0.5d0*vof_level ) ) &
+         Call abort_input( 'ERROR: &WAVES current_type=2 needs 0 < current_z0 < vof_level/2' )
+    If ( current_type == 3 .And. current_n < 1d0 ) Call abort_input( 'ERROR: &WAVES current_type=3 needs current_n >= 1' )
     If ( wave_abs_len > 0d0 .And. wave_current_mode == 2 ) &
          Write(*,'(A)') ' WARNING: the absorption zone relaxes the velocity to rest: wrong for a mean current (wave_current_mode=2)'
     If ( wave_type > 0 ) Then

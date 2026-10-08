@@ -306,6 +306,10 @@ Target wave of the numerical wave flume: Dirichlet inlet plus waves2Foam-style r
 | `wave_gen_len`, `wave_abs_len` | `0` | Length of the generation zone at the inlet and of the absorption zone at the outlet [m] |
 | `wave_relax_rate` | `20` | Relaxation rate at full strength [1/s] |
 | `wave_ramp_time` | `0` | Smooth start-up ramp of the amplitude [s] |
+| `current_type` | `0` | Mean current through the flume (throughflow), added to the wave in the water at the inlet and used as the relaxation target of the absorption zone (the air above carries only the wave's return flow): 0=none, 1=uniform, 2=log law, 3=power law. Needs `wave_type>0`; starts from the current at `t=0` and is ramped with `wave_ramp_time` |
+| `current_U` | `0` | Depth-mean current over the still-water depth [m/s] |
+| `current_z0` | `1e-3` | Bed roughness length of the log-law current (`current_type=2`) [m], below `vof_level/2` |
+| `current_n` | `7` | Exponent denominator of the power-law current (`current_type=3`): `u ~ (y/d)^(1/n)` |
 | `wave_gauge_x(8)` | `-1` | x positions of surface-elevation gauges written to `vof_gauges.dat` (<0 unused) |
 
 ## `&STATISTICS` *(optional — omit to disable)*

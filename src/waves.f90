@@ -6,6 +6,7 @@
 !    wave_type 3  JONSWAP spectrum (wave_Hs, wave_Tp, wave_gamma) as a sum of wave_nfreq linear components with seeded random
 !                 phases, finite-depth dispersion and Wheeler stretching of the velocity profile
 !
+!  A mean current (current_type, throughflow) adds to the water velocity; the air then still returns only the wave's flux.
 !  Above the surface the water velocity is not defined; the air carries the uniform return flow that makes the inlet flux zero (a
 !  closed flume): u_air = -Q/(Ly - d - eta), Q the volume flux of the water column. All setup (dispersion roots, spectrum, phases,
 !  the stream-function solve) runs on every rank from the same inputs and the same seed, so no communication is needed.
@@ -13,7 +14,8 @@ Module waves
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global, Only : nyg, ny, y, yg, Ly_i, vof_level, vof_grav, wave_type, wave_height, wave_period, wave_phase, wave_sf_n, &
-                     wave_current_mode, wave_Hs, wave_Tp, wave_gamma, wave_nfreq, wave_seed, wave_ramp_time
+                     wave_current_mode, wave_Hs, wave_Tp, wave_gamma, wave_nfreq, wave_seed, wave_ramp_time, &
+                     current_type, current_U, current_z0, current_n
 
   Implicit None
 
@@ -353,6 +355,44 @@ Contains
   End Subroutine wave_inlet_profile
 
 
+  !> Mean current at height ys (clamped to the still-water depth, so the water above it keeps the surface value); depth-mean current_U
+  Function current_vel(ys, t) Result(u)
+
+    Real(Int64), Intent(In) :: ys, t
+    Real(Int64) :: u, yc
+
+    u = 0d0
+    yc = Min(Max(ys, 0d0), wv_d)
+    Select Case(current_type)
+    Case(1)
+       u = current_U
+    Case(2)
+       u = current_U*Log(Max(yc, current_z0)/current_z0)/( Log(wv_d/current_z0) - 1d0 + current_z0/wv_d )
+    Case(3)
+       u = current_U*(current_n + 1d0)/current_n*(yc/wv_d)**(1d0/current_n)
+    End Select
+    u = wave_ramp(t)*u
+
+  End Function current_vel
+
+
+  !> Cell-centre velocity of the current alone (water below the still level, nothing above): the target of the absorption zone
+  Subroutine current_profile(t, uc)
+
+    Real(Int64), Intent(In)  :: t
+    Real(Int64), Intent(Out) :: uc(nyg)
+    Integer(Int32) :: j, jj
+    Real(Int64) :: cf
+
+    Do j = 1, nyg
+       jj = Min(Max(j, 2), nyg-1)
+       cf = Min(1d0, Max(0d0, (wv_d - y(jj-1))/(y(jj) - y(jj-1))))
+       uc(j) = cf*current_vel(yg(jj), t)
+    End Do
+
+  End Subroutine current_profile
+
+
   !> Same as the inlet profile at an arbitrary station x
   Subroutine wave_profile_at(x, t, eta, uc, vf)
 
@@ -380,7 +420,7 @@ Contains
        jj = Min(Max(j, 2), nyg-1)
        cf = Min(1d0, Max(0d0, (hs - y(jj-1))/(y(jj) - y(jj-1))))
        Call wave_vel(x, Max(Min(yg(jj), hs), 0d0), t, u, v)
-       uc(j) = cf*u + (1d0 - cf)*ua
+       uc(j) = cf*( u + current_vel(yg(jj), t) ) + (1d0 - cf)*ua
     End Do
     Do j = 1, ny
        If ( y(j) <= hs ) Then

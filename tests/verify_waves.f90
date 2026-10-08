@@ -4,7 +4,8 @@ Program verify_waves
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global, Only : nyg, ny, vof_level, vof_grav, wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, &
-                     wave_Hs, wave_Tp, wave_gamma, wave_nfreq, wave_seed
+                     wave_Hs, wave_Tp, wave_gamma, wave_nfreq, wave_seed, &
+                     current_type, current_U, current_z0, current_n
   Use waves
 
   Implicit None
@@ -93,6 +94,25 @@ Program verify_waves
   Write(*,'(A,2ES12.4)') 'JONSWAP: 4 sigma, Hs =', 4d0*Sqrt(var), wave_Hs
   If ( Abs(4d0*Sqrt(var)/wave_Hs - 1d0) > 0.1d0 ) Then
      Write(*,*) 'FAIL Hs';  nfail = nfail + 1
+  End If
+
+  ! ---- mean current: depth-mean equals current_U for every profile, zero at the bed for the log law
+  current_U = 0.3d0;  current_z0 = 1d-3;  current_n = 7d0
+  Do i = 1, 3
+     current_type = i
+     mean = 0d0
+     nt = 20000
+     Do j = 1, nt
+        mean = mean + current_vel(d*(j - 0.5d0)/nt, 1d9)/nt
+     End Do
+     Write(*,'(A,I2,A,ES12.4)') 'current type', i, ': depth mean / current_U - 1 =', mean/current_U - 1d0
+     If ( Abs(mean/current_U - 1d0) > 2d-3 ) Then
+        Write(*,*) 'FAIL current mean';  nfail = nfail + 1
+     End If
+  End Do
+  current_type = 2
+  If ( Abs(current_vel(0d0, 1d9)) > 0d0 .Or. current_vel(d, 1d9) <= current_U ) Then
+     Write(*,*) 'FAIL log profile shape';  nfail = nfail + 1
   End If
 
   If ( nfail > 0 ) Then
