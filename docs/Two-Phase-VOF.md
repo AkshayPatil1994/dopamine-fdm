@@ -69,10 +69,12 @@ where the interface lies within the first two rows or one cell sideways (the `C`
 model. Free-slip walls take no stress. The stress is independent of the density ratio, and a uniform stream over a modelled bed
 decays as the log law predicts (`vof_wm_stream`).
 
-**IBM wall model (`ibm_wall_model_flag = 1`).** The single-phase ghost-point mirror is used unchanged, with the viscosity of the phase at each
-ghost point's reference cell (the same 0.05 / 0.95 gate over the cell and its 26 neighbours; a gated ghost keeps its no-slip value).
-As in the single-phase solver the mirror only reshapes the ghost values: the stress the viscous term then carries is `(ν + ν_t) Δu/Δy`, so
-it equals `ρ u_τ²` only where the SGS viscosity supplies the difference (it does not on a flat plate in a uniform stream).
+**IBM wall model (`ibm_wall_model_flag = 1`).** On every staircase face next to a fluid face (closed face = face-averaged `φ < 0`, the
+mask of the pressure solve) the log-law stress `ρ u_τ²` along the tangential velocity of that fluid face replaces the viscous flux through
+the edge in `viscous_accel` (`src/ibm_stress.f90`, `ibm_stress_update`). `u_τ` uses the distance from the face centre to the closed face
+(half a cell), the viscosity of the phase (the same 0.05 / 0.95 single-fluid gate over the cell and its 26 neighbours; a gated face keeps
+its stencil flux), and the per-object roughness `ibm_z0` when set. The ghost-point velocity mirror is not used. Validation: a uniform
+stream over a flat plate decays as the integrated log law, independent of the density ratio (`vof_ibm_wm_plate`).
 
 ### 1.5 Surface tension
 

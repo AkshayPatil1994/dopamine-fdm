@@ -21,6 +21,7 @@ Module vof_twofluid
                                   update_ghost_interior_planes_x, apply_periodic_bc_x, apply_periodic_bc_z
   Use sgs_models, Only : compute_sgs_model
   Use wallmodel, Only : compute_wall_model, solve_u_tau_wall
+  Use ibm_stress
   Use waves, Only : wave_eta, wave_profile_at
   Use monitor, Only : compute_cfl, write_force_csv
   Use vof_plic
@@ -55,6 +56,9 @@ Module vof_twofluid
   ! flat-wall EQWM stress fluxes on the u and w faces of the bottom (3rd index 1) and top (2) wall, and where they replace the molecular flux
   Real(Int64), Allocatable, Dimension(:,:,:) :: wt_u, wt_w
   Logical,     Allocatable, Dimension(:,:,:) :: wt_on_u, wt_on_w
+  ! IBM wall-model stress (ibm_stress): on when the IBM wall model is active; kinematic viscosity of the phase at the cells (0 = off)
+  Logical :: ibm_wm_on = .False.
+  Real(Int64), Allocatable, Dimension(:,:,:) :: nu_cw
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
   ! IBM load output: whether this step is a sampling step
   Logical :: ibm_sampling_now = .False.
@@ -83,6 +87,11 @@ Contains
 
     Allocate( wt_u(nx,nzg,2), wt_w(nxg,nz,2), wt_on_u(nx,nzg,2), wt_on_w(nxg,nz,2) )
     wt_u = 0d0;  wt_w = 0d0;  wt_on_u = .False.;  wt_on_w = .False.
+    ibm_wm_on = ( ibm_input_mode >= 1 .And. ibm_wall_model_flag == 1 )
+    If ( ibm_wm_on ) Then
+       Allocate( nu_cw(nxg,nyg,nzg) )
+       Call ibm_stress_init
+    End If
     Allocate( qu(nx,nyg,nzg), qv(nxg,ny,nzg), qw(nxg,nyg,nz), uqu(nx,nyg,nzg), uqv(nxg,ny,nzg), uqw(nxg,nyg,nz) )
     Allocate( Md(nxg,nyg,nzg), rt(nxg,nyg,nzg), Dd(nxg,nyg,nzg) )
     Allocate( Ut(nx,nyg,nzg), Vt(nxg,ny,nzg), Wt(nxg,nyg,nz), Utmp(nx,nyg,nzg), Vtmp(nxg,ny,nzg), Wtmp(nxg,nyg,nz) )
@@ -746,28 +755,27 @@ Contains
 
   End Subroutine set_viscosity
 
-  !> Viscosity the IBM wall model uses at each ghost point: that of the phase at its reference cell, or 0 (the ghost keeps its no-slip
-  !  value) unless the reference cell and its 26 neighbours hold one fluid, as for the flat wall in set_wall_stress
-  Subroutine set_ghost_phase_nu(ng, ref, gnu)
-
-    Integer(Int32), Intent(In)    :: ng, ref(3,ng)
-    Real(Int64),    Intent(InOut) :: gnu(ng)
+  !> Kinematic viscosity of the phase at each cell for the IBM wall model: that of the fluid when the cell and its 26 neighbours hold
+  !  one fluid (C within 0.05 of 0 or 1), else 0 (the wall model is off and the stencil flux stays), as for the flat wall in set_wall_stress
+  Subroutine set_cell_phase_nu
 
     Real(Int64), Parameter :: cgate = 0.05d0
-    Integer(Int32) :: n, ia, ib, ja, jb, ka, kb
+    Integer(Int32) :: i, j, k
     Real(Int64) :: cmn, cmx
 
-    Do n = 1, ng
-       ia = Max(ref(1,n)-1, 1);  ib = Min(ref(1,n)+1, nxg)
-       ja = Max(ref(2,n)-1, 1);  jb = Min(ref(2,n)+1, nyg)
-       ka = Max(ref(3,n)-1, 1);  kb = Min(ref(3,n)+1, nzg)
-       cmn = MinVal(Cv(ia:ib,ja:jb,ka:kb));  cmx = MaxVal(Cv(ia:ib,ja:jb,ka:kb))
-       gnu(n) = 0d0
-       If ( cmn >= 1d0 - cgate ) gnu(n) = vof_nu_l
-       If ( cmx <= cgate ) gnu(n) = vof_nu_g
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             cmn = MinVal(Cv(Max(i-1,1):Min(i+1,nxg), Max(j-1,1):Min(j+1,nyg), Max(k-1,1):Min(k+1,nzg)))
+             cmx = MaxVal(Cv(Max(i-1,1):Min(i+1,nxg), Max(j-1,1):Min(j+1,nyg), Max(k-1,1):Min(k+1,nzg)))
+             nu_cw(i,j,k) = 0d0
+             If ( cmn >= 1d0 - cgate ) nu_cw(i,j,k) = vof_nu_l
+             If ( cmx <= cgate ) nu_cw(i,j,k) = vof_nu_g
+          End Do
+       End Do
     End Do
 
-  End Subroutine set_ghost_phase_nu
+  End Subroutine set_cell_phase_nu
 
 
   !> Flat-wall EQWM stress at the y walls: wt_u / wt_w are the tangential stress fluxes (rho u_tau**2 along the local tangential velocity,
@@ -841,7 +849,7 @@ Contains
 
     Integer(Int32) :: i, j, k
     Real(Int64) :: inv_dx, inv_dx2, mx1, mx2, my1, my2, mz1, mz2, hyj, hzk, ihy, ihz
-    Real(Int64) :: dy1, dy2, dyc, dz1, dz2, dzc, fy1, fy2
+    Real(Int64) :: dy1, dy2, dyc, dz1, dz2, dzc, fx1, fx2, fy1, fy2, fz1, fz2
 
     inv_dx = 1d0/dx
     inv_dx2 = inv_dx*inv_dx
@@ -866,11 +874,16 @@ Contains
              fy1 = my1*( ( U(i,j,k) - U(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i+1,j-1,k) - V(i,j-1,k) )*inv_dx )
              If ( j == nyg-1 ) Then;  If ( wt_on_u(i,k,2) ) fy2 = wt_u(i,k,2);  End If
              If ( j == 2 ) Then;  If ( wt_on_u(i,k,1) ) fy1 = wt_u(i,k,1);  End If
+             fz2 = mz2*( ( U(i,j,k+1) - U(i,j,k) )/( zg(k+1) - zg(k) ) + ( W(i+1,j,k) - W(i,j,k) )*inv_dx )
+             fz1 = mz1*( ( U(i,j,k) - U(i,j,k-1) )/( zg(k) - zg(k-1) ) + ( W(i+1,j,k-1) - W(i,j,k-1) )*inv_dx )
+             If ( ibm_wm_on ) Then
+                If ( ovr_u(i,j,k,1) < ovr_none ) fy1 = ovr_u(i,j,k,1)*vp_rfu(i,j,k)
+                If ( ovr_u(i,j,k,2) < ovr_none ) fy2 = ovr_u(i,j,k,2)*vp_rfu(i,j,k)
+                If ( ovr_u(i,j,k,3) < ovr_none ) fz1 = ovr_u(i,j,k,3)*vp_rfu(i,j,k)
+                If ( ovr_u(i,j,k,4) < ovr_none ) fz2 = ovr_u(i,j,k,4)*vp_rfu(i,j,k)
+             End If
              Fu(i,j,k) = ( 2d0*inv_dx2*( mx2*( U(i+1,j,k) - U(i,j,k) ) - mx1*( U(i,j,k) - U(i-1,j,k) ) )              &
-                  + ihy*( fy2 - fy1 ) &
-                  + ihz*( mz2*( ( U(i,j,k+1) - U(i,j,k) )/( zg(k+1) - zg(k) ) + ( W(i+1,j,k) - W(i,j,k) )*inv_dx )   &
-                        - mz1*( ( U(i,j,k) - U(i,j,k-1) )/( zg(k) - zg(k-1) ) + ( W(i+1,j,k-1) - W(i,j,k-1) )*inv_dx ) ) &
-                  )/vp_rfu(i,j,k)
+                  + ihy*( fy2 - fy1 ) + ihz*( fz2 - fz1 ) )/vp_rfu(i,j,k)
           End Do
        End Do
     End Do
@@ -890,12 +903,19 @@ Contains
                    + weight_z_1(k-1)*( weight_y_0(j)*mr_c(i,j,k) + weight_y_1(j)*mr_c(i,j+1,k) ) )
              mz2 = 1d0/( weight_z_0(k)*( weight_y_0(j)*mr_c(i,j,k) + weight_y_1(j)*mr_c(i,j+1,k) ) &
                    + weight_z_1(k)*( weight_y_0(j)*mr_c(i,j,k+1) + weight_y_1(j)*mr_c(i,j+1,k+1) ) )
-             Fv(i,j,k) = ( inv_dx*( mx2*( ( V(i+1,j,k) - V(i,j,k) )*inv_dx + ( U(i,j+1,k) - U(i,j,k) )/dyc )          &
-                                  - mx1*( ( V(i,j,k) - V(i-1,j,k) )*inv_dx + ( U(i-1,j+1,k) - U(i-1,j,k) )/dyc ) )      &
+             fx2 = mx2*( ( V(i+1,j,k) - V(i,j,k) )*inv_dx + ( U(i,j+1,k) - U(i,j,k) )/dyc )
+             fx1 = mx1*( ( V(i,j,k) - V(i-1,j,k) )*inv_dx + ( U(i-1,j+1,k) - U(i-1,j,k) )/dyc )
+             fz2 = mz2*( ( V(i,j,k+1) - V(i,j,k) )/( zg(k+1) - zg(k) ) + ( W(i,j+1,k) - W(i,j,k) )/dyc )
+             fz1 = mz1*( ( V(i,j,k) - V(i,j,k-1) )/( zg(k) - zg(k-1) ) + ( W(i,j+1,k-1) - W(i,j,k-1) )/dyc )
+             If ( ibm_wm_on ) Then
+                If ( ovr_v(i,j,k,1) < ovr_none ) fx1 = ovr_v(i,j,k,1)*vp_rfv(i,j,k)
+                If ( ovr_v(i,j,k,2) < ovr_none ) fx2 = ovr_v(i,j,k,2)*vp_rfv(i,j,k)
+                If ( ovr_v(i,j,k,3) < ovr_none ) fz1 = ovr_v(i,j,k,3)*vp_rfv(i,j,k)
+                If ( ovr_v(i,j,k,4) < ovr_none ) fz2 = ovr_v(i,j,k,4)*vp_rfv(i,j,k)
+             End If
+             Fv(i,j,k) = ( inv_dx*( fx2 - fx1 )                                                                       &
                   + 2d0/dyc*( my2*( V(i,j+1,k) - V(i,j,k) )/dy2 - my1*( V(i,j,k) - V(i,j-1,k) )/dy1 )                 &
-                  + ihz*( mz2*( ( V(i,j,k+1) - V(i,j,k) )/( zg(k+1) - zg(k) ) + ( W(i,j+1,k) - W(i,j,k) )/dyc )       &
-                        - mz1*( ( V(i,j,k) - V(i,j,k-1) )/( zg(k) - zg(k-1) ) + ( W(i,j+1,k-1) - W(i,j,k-1) )/dyc ) ) &
-                  )/vp_rfv(i,j,k)
+                  + ihz*( fz2 - fz1 ) )/vp_rfv(i,j,k)
           End Do
        End Do
     End Do
@@ -919,8 +939,15 @@ Contains
              fy1 = my1*( ( W(i,j,k) - W(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i,j-1,k+1) - V(i,j-1,k) )/dzc )
              If ( j == nyg-1 ) Then;  If ( wt_on_w(i,k,2) ) fy2 = wt_w(i,k,2);  End If
              If ( j == 2 ) Then;  If ( wt_on_w(i,k,1) ) fy1 = wt_w(i,k,1);  End If
-             Fw(i,j,k) = ( inv_dx*( mx2*( ( W(i+1,j,k) - W(i,j,k) )*inv_dx + ( U(i,j,k+1) - U(i,j,k) )/dzc )          &
-                                  - mx1*( ( W(i,j,k) - W(i-1,j,k) )*inv_dx + ( U(i-1,j,k+1) - U(i-1,j,k) )/dzc ) )      &
+             fx2 = mx2*( ( W(i+1,j,k) - W(i,j,k) )*inv_dx + ( U(i,j,k+1) - U(i,j,k) )/dzc )
+             fx1 = mx1*( ( W(i,j,k) - W(i-1,j,k) )*inv_dx + ( U(i-1,j,k+1) - U(i-1,j,k) )/dzc )
+             If ( ibm_wm_on ) Then
+                If ( ovr_w(i,j,k,1) < ovr_none ) fx1 = ovr_w(i,j,k,1)*vp_rfw(i,j,k)
+                If ( ovr_w(i,j,k,2) < ovr_none ) fx2 = ovr_w(i,j,k,2)*vp_rfw(i,j,k)
+                If ( ovr_w(i,j,k,3) < ovr_none ) fy1 = ovr_w(i,j,k,3)*vp_rfw(i,j,k)
+                If ( ovr_w(i,j,k,4) < ovr_none ) fy2 = ovr_w(i,j,k,4)*vp_rfw(i,j,k)
+             End If
+             Fw(i,j,k) = ( inv_dx*( fx2 - fx1 )                                                                       &
                   + ihy*( fy2 - fy1 )  &
                   + 2d0/dzc*( mz2*( W(i,j,k+1) - W(i,j,k) )/dz2 - mz1*( W(i,j,k) - W(i,j,k-1) )/dz1 )                 &
                   )/vp_rfw(i,j,k)
@@ -994,10 +1021,9 @@ Contains
     Do s = 1, 3
        rk_step = s
        Call compute_sgs_model(U, V, W, nu_t)
-       If ( ibm_input_mode >= 1 .And. ibm_wall_model_flag == 1 ) Then
-          Call set_ghost_phase_nu(n_ghost_u, ghost_u_ref, ghost_u_nu)
-          Call set_ghost_phase_nu(n_ghost_v, ghost_v_ref, ghost_v_nu)
-          Call set_ghost_phase_nu(n_ghost_w, ghost_w_ref, ghost_w_nu)
+       If ( ibm_wm_on ) Then
+          Call set_cell_phase_nu
+          Call ibm_stress_update(U, V, W, vp_mu, vp_mv, vp_mw, nu_cw)
        End If
        Call compute_wall_model(U, V, W, nu_t)
        Call set_viscosity

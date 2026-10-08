@@ -196,6 +196,7 @@ endif()
 list(APPEND SRCS
     src/initialization.f90
     src/wallmodel.f90
+    src/ibm_stress.f90
     src/finalization.f90
 )
 
@@ -680,6 +681,10 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME vof_wm_stream_rough
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wm_stream/check_wm_stream.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --rough 1e-4 --tol 0.08)
+    # IBM wall model on the staircase faces of a flat plate: stream decay by the log-law stress, density independent, same on 1 and 4 ranks
+    add_test(NAME vof_ibm_wm_plate
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_wm_plate/check_wm_plate.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
     # Mirror symmetry of the wall padding of the momentum stencils (free-slip Taylor-Green vortex, ratio 1)
     add_test(NAME vof_tgv_mirror_symmetry
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_tgv_mirror/check_mirror.py

@@ -246,7 +246,7 @@ Contains
     End If
 
     ! IBM surface wall model (ghost-cell EQWM)
-    If ( ibm_input_mode >= 1 .And. ibm_wall_model_flag == 1 ) Then
+    If ( vof_flow < 1 .And. ibm_input_mode >= 1 .And. ibm_wall_model_flag == 1 ) Then
        Call compute_ibm_wall_model(U_, V_, W_, nu_t_)
     End If
 
