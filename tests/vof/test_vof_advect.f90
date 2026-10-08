@@ -90,6 +90,8 @@ Contains
     Integer(Int32), Intent(In)    :: n1, n2, n3
     Real(Int64),    Intent(InOut) :: Cp(0:n1+1,0:n2+1,0:n3+1)
 
+    !$acc update host(Cp) if_present
+
     Cp(1,:,:)    = Cp(n1-1,:,:)
     Cp(n1,:,:)   = Cp(2,:,:)
     Cp(0,:,:)    = Cp(n1-2,:,:)
@@ -102,6 +104,8 @@ Contains
     Cp(:,:,n3)   = Cp(:,:,2)
     Cp(:,:,0)    = Cp(:,:,n3-2)
     Cp(:,:,n3+1) = Cp(:,:,3)
+
+    !$acc update device(Cp) if_present
 
   End Subroutine fill_pad_periodic
 
@@ -153,6 +157,7 @@ Contains
        End Do
     End Do
     Call fill_pad_periodic(Cp, n1, n2, n3)
+    !$acc enter data copyin(Cp,U,V,W,hh)
     Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v0, cmin, cmax, nint)
     cotot = 0d0;  cltot = 0d0
     Do istep = 0, nsteps-1
@@ -161,6 +166,7 @@ Contains
     End Do
     Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v1, cmin, cmax, nint)
 
+    !$acc update self(Cp)
     err = 0d0
     vol = h**3
     Do k = 2, n3-1
@@ -175,6 +181,7 @@ Contains
     If ( n == 64 ) Write(*,'(a,es9.2,a,es9.2,a,es9.2,a,f5.2)') '      vol drift=', (v1-v0)/v0, '  clip=', cltot, &
          '  C range excess=', Max(-cmin, cmax-1d0), '  Co=', cotot
 
+    !$acc exit data delete(Cp,U,V,W,hh)
   End Subroutine run_translation
 
 
@@ -244,6 +251,7 @@ Contains
     End Do
     Call fill_pad_periodic(Cp, n1, n2, n3)
     C0 = Cp
+    !$acc enter data copyin(Cp,U,V,W,hh)
     Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v0, cmin, cmax, nint)
 
     dt = 0.4d0*h/(om*0.7072d0)
@@ -256,6 +264,7 @@ Contains
     End Do
     Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v1, cmin, cmax, nint)
 
+    !$acc update self(Cp)
     err = 0d0
     Do k = 2, n3-1
        Do j = 2, n2-1
@@ -269,6 +278,7 @@ Contains
     If ( n == 100 ) Write(*,'(a,es9.2,a,es9.2,a,es9.2,a,f5.2,a,i0)') '      vol drift=', (v1-v0)/v0, '  clip=', cltot, &
          '  C range excess=', Max(-cmin, cmax-1d0), '  Co=', cotot, '  interface cells=', nint
 
+    !$acc exit data delete(Cp,U,V,W,hh)
   End Subroutine run_zalesak
 
 
@@ -307,6 +317,7 @@ Contains
     End Do
     Call fill_pad_periodic(Cp, n1, n2, n3)
     C0 = Cp
+    !$acc enter data copyin(Cp,U,V,W,hh)
     Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v0, cmin, cmax, nint)
 
     dt = 0.4d0*h
@@ -331,10 +342,12 @@ Contains
              End Do
           End Do
        End Do
+       !$acc update device(U,V)
        Call vof_advect_step(Cp, n1, n2, n3, U, V, W, hh(1:n1), hh(1:n2), hh(1:n3), dt, istep, scheme, fill_pad_periodic, co, cl)
        cotot = Max(cotot, co);  cltot = cltot + cl
     End Do
     Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v1, cmin, cmax, nint)
+    !$acc update self(Cp)
     err = 0d0
     Do k = 2, n3-1
        Do j = 2, n2-1
@@ -347,6 +360,7 @@ Contains
     Write(*,'(a,i4,a,f4.1,a,es10.3,a,es9.2,a,es9.2,a,f5.2)') '  N=', n, ' T=', tper, '  L1 err=', err, '  vol drift=', &
          (v1-v0)/v0, '  C excess=', Max(-cmin, cmax-1d0), '  Co=', cotot
 
+    !$acc exit data delete(Cp,U,V,W,hh)
   End Subroutine run_vortex
 
 
@@ -394,6 +408,7 @@ Contains
        End Do
     End Do
     Call fill_pad_periodic(Cp, n1, n2, n3)
+    !$acc enter data copyin(Cp,U,V,W,hh)
     Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v0, cmin, cmax, nint)
     cotot = 0d0;  cltot = 0d0
     Do istep = 0, nsteps-1
@@ -402,6 +417,7 @@ Contains
     End Do
     Call vof_local_stats(Cp, n1, n2, n3, hh(1:n1), hh(1:n2), hh(1:n3), v1, cmin, cmax, nint)
     cx = uu*tend;  cy = vv*tend
+    !$acc update self(Cp)
     err = 0d0
     Do k = 2, n3-1
        Do j = 2, n2-1
@@ -419,6 +435,7 @@ Contains
     max_drift = Max(max_drift, Abs((v1-v0)/v0));  max_excess = Max(max_excess, -cmin, cmax-1d0)
     Write(*,'(a,f6.2,a,f5.2,a,es10.3,a,es9.2)') '  theta=', theta, ' Co=', cotot, '  L1 err=', err, '  vol drift=', (v1-v0)/v0
 
+    !$acc exit data delete(Cp,U,V,W,hh)
   End Subroutine run_disk_translate
 
 
