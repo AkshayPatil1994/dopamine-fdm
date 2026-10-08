@@ -60,7 +60,7 @@ the density is advected by the interface method and the momentum by an independe
 only for `ν_eff = μ_l / (2ρ_g)` — it diverges at density ratio ≥ 1e5. An SGS model (`sgs_model`) acts on the mixture, with
 `ν_t` weighted by the local density.
 
-**Wall model (`flat_wall_model_flag = 1`).** At a no-slip y wall the smooth log-law (Reichardt) wall stress `ρ u_τ²`, directed along the
+**Wall model (`flat_wall_model_flag = 1` smooth, `2` rough with `z0_ylo`/`z0_yhi`).** At a no-slip y wall the log-law (Reichardt, or rough `z0`) wall stress `ρ u_τ²`, directed along the
 tangential velocity of the first interior row, replaces the molecular stress at the wall edge of `viscous_accel` (`set_wall_stress`);
 `ρ` is the face density and `u_τ` is solved with the viscosity of the phase at the wall. The single-phase Robin slip length is not used:
 its floor at zero leaves it a plain no-slip condition on a grid whose first cell is at `y⁺ ≳ 10`, and without the floor the ghost
@@ -267,8 +267,7 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
   A bed (IBM) must not reach into the wave generation zone: the inlet profile and the relaxation assume a flat bed at `y = 0` there (checked).
 * **Cost.** 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the
   WENO5-Z tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1).
-* **Not supported** with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, the rough
-  flat-wall model (`flat_wall_model_flag = 2`), sediment, Boussinesq buoyancy, particles, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
+* **Not supported** with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, sediment, Boussinesq buoyancy, particles, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
   non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. **GPU builds abort in `vof_init`**
   (the solver is host-only; no GPU test was possible).
 * Wave flume (`vof_flume_small` geometry, 6 m, 4 ranks, t = 8 s): the stream-function wave (`wave_type = 2`, H = 0.04) reaches the

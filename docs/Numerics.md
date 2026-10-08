@@ -355,7 +355,7 @@ $\tau_w = u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$ (kinematic) replaces the molecu
 mirror ($\alpha = 0$). An earlier version imposed the stress through a Robin slip length
 $\alpha = \nu u_\text{ref}/u_\tau^2 - \Delta y/2$; since $u^+ \le y^+$ this is never positive, so with the zero floor it was a plain no-slip
 wall whenever the first cell is at $y^+ \gtrsim 10$, and without the floor the ghost value is many times the interior one and corrupts
-the SGS gradient in the first cell. Free-slip walls take no stress. Check: a uniform stream between two modelled walls decays as the
+the SGS gradient in the first cell. Free-slip walls take no stress. This applies to the $y$ walls (smooth and rough); the spanwise ($z$) walls of `z_bc_type = 1` still use the Robin form and are therefore effectively no-slip. Check: a uniform stream between two modelled walls decays as the
 integrated log law (`wm_stream`), and a coarse channel ($Re_\tau = 395$, first cell at $y^+ \approx 25$) holds a mean wall stress equal to
 $dP/dx\,h$. The skew-symmetric convective form (`advection_scheme = 0`) is not momentum conserving on such a coarse near-wall grid (a
 spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES until that is resolved.

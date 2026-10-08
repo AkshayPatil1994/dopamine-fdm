@@ -6,6 +6,7 @@ import argparse, math, os, re, shutil, subprocess, sys, tempfile
 ap = argparse.ArgumentParser()
 ap.add_argument('--exe', required=True)
 ap.add_argument('--mpirun', default='mpirun')
+ap.add_argument('--rough', type=float, default=0.0, help='roughness length z0 of the bed (0: smooth Reichardt law)')
 ap.add_argument('--tol', type=float, default=0.05, help='relative tolerance on the velocity deficit')
 a = ap.parse_args()
 src = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +33,8 @@ def uplus(yp):
 
 
 def u_tau(u, y, nu):
+    if a.rough > 0:
+        return 0.41*u/math.log(y/a.rough)
     lo, hi = 1e-6*u, u
     for _ in range(200):
         m = 0.5*(lo + hi)
@@ -40,9 +43,10 @@ def u_tau(u, y, nu):
 
 
 try:
-    step, t, u_np1 = run('np1', 1, [])
-    _, _, u_rho = run('rho', 1, [(r'vof_rho_l = 1000.0', 'vof_rho_l = 7.0')])
-    _, _, u_np4 = run('np4', 4, [(r'p_row = 0, p_col = 0', 'p_row = 2, p_col = 2')])
+    rough = [(r'flat_wall_model_flag = 1', 'flat_wall_model_flag = 2, z0_ylo = %g, z0_yhi = %g' % (a.rough, a.rough))] if a.rough > 0 else []
+    step, t, u_np1 = run('np1', 1, rough)
+    _, _, u_rho = run('rho', 1, rough + [(r'vof_rho_l = 1000.0', 'vof_rho_l = 7.0')])
+    _, _, u_np4 = run('np4', 4, rough + [(r'p_row = 0, p_col = 0', 'p_row = 2, p_col = 2')])
     ly, y_ref, nu, dt, u = 1.0, 0.5*1.0/32, 1e-6, 2e-3, 1.0
     for _ in range(step):
         u -= dt*u_tau(u, y_ref, nu)**2/ly

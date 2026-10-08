@@ -7,7 +7,6 @@ CASES = [
     ('UAV with VOF', r'&VOF', '&UAV\n  uav_active = 1,\n/\n&VOF', 'cannot be combined with the UAV'),
     ('wave inlet without wave', r'x_bc_type\s*=\s*0', 'x_bc_type = 1', None),
     ('wave_type without inflow', r'&VOF', '&WAVES\n  wave_type = 1, wave_height = 0.01, wave_period = 1.0,\n/\n&VOF', 'requires x_bc_type=1 and inflow_type=3'),
-    ('rough flat wall', r'sgs_model\s*=\s*0,', 'sgs_model = 0, flat_wall_model_flag = 2, z0_ylo = 1.0e-3, z0_yhi = 1.0e-3,', 'only the smooth flat-wall model'),
     ('y periodic', r'y_bc_type\s*=\s*1', 'y_bc_type = 0', 'wall-bounded y only'),
     ('IBM surface dump', r'&VOF', '&IBM\n  ibm_input_mode = 1, ibm_sdf_file = \'none\', ibm_surface_nsampling = 10,\n/\n&VOF', 'IBM surface field dump'),
 ]

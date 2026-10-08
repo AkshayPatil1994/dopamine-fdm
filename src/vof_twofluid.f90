@@ -20,7 +20,7 @@ Module vof_twofluid
   Use boundary_conditions, Only : apply_boundary_conditions, outflow_relax_on, update_ghost_interior_planes, &
                                   update_ghost_interior_planes_x, apply_periodic_bc_x, apply_periodic_bc_z
   Use sgs_models, Only : compute_sgs_model
-  Use wallmodel, Only : compute_wall_model, solve_u_tau_reichardt
+  Use wallmodel, Only : compute_wall_model, solve_u_tau_wall
   Use waves, Only : wave_eta, wave_profile_at
   Use monitor, Only : compute_cfl, write_force_csv
   Use vof_plic
@@ -69,9 +69,9 @@ Contains
     Real(Int64) :: kt(3), om
 
     If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
-         .Or. uav_active >= 1 .Or. flat_wall_model_flag > 1 .Or. rotation_active >= 1 ) Then
+         .Or. uav_active >= 1 .Or. rotation_active >= 1 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support sediment, ' // &
-            'Boussinesq, particles, UAV, the rough flat-wall model or rotation'
+            'Boussinesq, particles, UAV or rotation'
        If ( myid == 0 ) Write(*,'(A,7I3)') ' ibm_wall_model, sediment, boussinesq, particles, uav, flat_wall, rotation: ', &
             ibm_wall_model_flag, sediment_flag, boussinesq_flag, particles_active, uav_active, flat_wall_model_flag, rotation_active
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
@@ -777,19 +777,20 @@ Contains
   Subroutine set_wall_stress
 
     Real(Int64), Parameter :: cgate = 0.05d0
-    Integer(Int32) :: i, k, iw, jw, jn, ia, ib, ka, kb, ph(nxg,nzg), pa, pb
-    Real(Int64) :: yref, ut, ux, wz, ur, nul, rhof, sgn
+    Integer(Int32) :: i, k, iw, jw, jn, jm, ia, ib, ka, kb, ph(nxg,nzg), pa, pb
+    Real(Int64) :: ym, z0w, ut, ux, wz, ur, um, nul, rhof, sgn
 
     wt_on_u = .False.;  wt_on_w = .False.
     Do iw = 1, 2
        If ( Merge(bc_face_ylo, bc_face_yhi, iw == 1) == 2 ) Cycle
        jw = Merge(2, nyg-1, iw == 1);  jn = Merge(3, nyg-2, iw == 1)
-       yref = Merge(yg(2), y(ny) - yg(nyg-1), iw == 1);  sgn = Merge(1d0, -1d0, iw == 1)
+       jm = Merge(j_match_ylo, j_match_yhi, iw == 1);  z0w = Merge(z0_ylo, z0_yhi, iw == 1)
+       ym = Merge(yg(jm), Ly - yg(jm), iw == 1);  sgn = Merge(1d0, -1d0, iw == 1)
        Do k = 1, nzg
           Do i = 1, nxg
              ph(i,k) = 0
-             If ( Min(Cv(i,jw,k), Cv(i,jn,k)) >= 1d0 - cgate ) ph(i,k) = 1
-             If ( Max(Cv(i,jw,k), Cv(i,jn,k)) <= cgate ) ph(i,k) = -1
+             If ( Min(Cv(i,jw,k), Cv(i,jn,k), Cv(i,jm,k)) >= 1d0 - cgate ) ph(i,k) = 1
+             If ( Max(Cv(i,jw,k), Cv(i,jn,k), Cv(i,jm,k)) <= cgate ) ph(i,k) = -1
           End Do
        End Do
        Do k = 1, nzg
@@ -806,7 +807,8 @@ Contains
              ux = U(i,jw,k);  wz = 0.5d0*( W(i,jw,k-1) + W(i,jw,k) );  ur = Sqrt(ux*ux + wz*wz)
              If ( ur == 0d0 ) Cycle
              nul = Merge(vof_nu_l, vof_nu_g, pa == 1)
-             Call solve_u_tau_reichardt(ur, yref, nul, ut)
+             um = Sqrt(U(i,jm,k)**2 + (0.5d0*( W(i,jm,k-1) + W(i,jm,k) ))**2)
+             Call solve_u_tau_wall(um, ym, z0w, nul, ut)
              rhof = vp_rfu(i,jw,k)
              wt_u(i,k,iw) = sgn*rhof*ut*ut*ux/ur;  wt_on_u(i,k,iw) = .True.
           End Do
@@ -818,7 +820,8 @@ Contains
              wz = W(i,jw,k);  ux = 0.5d0*( U(i-1,jw,k) + U(i,jw,k) );  ur = Sqrt(ux*ux + wz*wz)
              If ( ur == 0d0 ) Cycle
              nul = Merge(vof_nu_l, vof_nu_g, pa == 1)
-             Call solve_u_tau_reichardt(ur, yref, nul, ut)
+             um = Sqrt(W(i,jm,k)**2 + (0.5d0*( U(i-1,jm,k) + U(i,jm,k) ))**2)
+             Call solve_u_tau_wall(um, ym, z0w, nul, ut)
              rhof = vp_rfw(i,jw,k)
              wt_w(i,k,iw) = sgn*rhof*ut*ut*wz/ur;  wt_on_w(i,k,iw) = .True.
           End Do
@@ -998,7 +1001,7 @@ Contains
        End If
        Call compute_wall_model(U, V, W, nu_t)
        Call set_viscosity
-       If ( flat_wall_model_flag == 1 ) Call set_wall_stress
+       If ( flat_wall_model_flag > 0 ) Call set_wall_stress
        Call viscous_accel(Fu_, Fv_, Fw_)
        If ( vof_hsplit == 0 ) Then
           Do k = 2, nzg-1

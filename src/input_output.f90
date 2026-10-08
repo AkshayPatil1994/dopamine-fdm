@@ -847,8 +847,6 @@ Contains
     If ( vof_flow >= 1 ) Then
        If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 .Or. rotation_active >= 1 ) &
             Call abort_input( 'ERROR: vof_flow=1 does not support sediment, Boussinesq, particles or rotation' )
-       If ( flat_wall_model_flag > 1 ) &
-            Call abort_input( 'ERROR: vof_flow=1 supports only the smooth flat-wall model (flat_wall_model_flag = 0 or 1)' )
        If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) &
             Call abort_input( 'ERROR: vof_flow=1 does not apply dPdx, dPdz or mass-flux forcing (set them to zero)' )
        If ( y_bc_type /= 1 ) Call abort_input( 'ERROR: vof_flow=1 supports wall-bounded y only (y_bc_type=1)' )
