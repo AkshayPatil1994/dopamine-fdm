@@ -90,7 +90,7 @@ Contains
     ibm_wm_on = ( ibm_input_mode >= 1 .And. ibm_wall_model_flag == 1 )
     If ( ibm_wm_on ) Then
        Allocate( nu_cw(nxg,nyg,nzg) )
-       Call ibm_stress_init
+       Call ibm_stress_init(.True.)
     End If
     Allocate( qu(nx,nyg,nzg), qv(nxg,ny,nzg), qw(nxg,nyg,nz), uqu(nx,nyg,nzg), uqv(nxg,ny,nzg), uqw(nxg,nyg,nz) )
     Allocate( Md(nxg,nyg,nzg), rt(nxg,nyg,nzg), Dd(nxg,nyg,nzg) )
@@ -702,22 +702,6 @@ Contains
   End Subroutine vof_project
 
 
-  !> U -= s*gu etc. on the faces the solver's projection updates (interior faces, the row-seam face, the outflow face)
-  Subroutine apply_face_gradient(gu, gv, gw, s)
-
-    Real(Int64), Intent(In) :: gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz), s
-    Logical :: is_first_x, is_last_x
-    Integer(Int32) :: partner_x
-
-    Call x_periodic_partner(is_first_x, is_last_x, partner_x)
-    U(2:nx-1,2:nyg-1,2:nzg-1) = U(2:nx-1,2:nyg-1,2:nzg-1) - s*gu(2:nx-1,2:nyg-1,2:nzg-1)
-    If ( .Not. is_last_x .Or. x_bc_type == 1 ) Then
-       U(nx,2:nyg-1,2:nzg-1) = U(nx,2:nyg-1,2:nzg-1) - s*gu(nx,2:nyg-1,2:nzg-1)
-    End If
-    V(2:nxg-1,2:ny-1,2:nzg-1) = V(2:nxg-1,2:ny-1,2:nzg-1) - s*gv(2:nxg-1,2:ny-1,2:nzg-1)
-    W(2:nxg-1,2:nyg-1,2:nz-1) = W(2:nxg-1,2:nyg-1,2:nz-1) - s*gw(2:nxg-1,2:nyg-1,2:nz-1)
-
-  End Subroutine apply_face_gradient
 
 
   !> Dynamic viscosity (molecular mixture plus the SGS contribution scaled by the local density) at the cell centres

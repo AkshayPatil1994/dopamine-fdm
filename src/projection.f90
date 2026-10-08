@@ -589,10 +589,10 @@ Contains
              If ( ibm_input_mode >= 1 ) Then
                 ! Skip solid cells: ghost-cell face velocities make divergence inside the solid physically meaningless
                 If ( phi(i,j,k) < 0d0 ) Cycle
-                ! Skip IBM-adjacent fluid cells
-                If ( phi(i-1,j,k) < 0d0 .Or. phi(i+1,j,k) < 0d0 .Or. &
+                ! Skip IBM-adjacent fluid cells (not for the staircase method, whose closed faces carry exactly zero flux)
+                If ( ibm_method /= 1 .And. ( phi(i-1,j,k) < 0d0 .Or. phi(i+1,j,k) < 0d0 .Or. &
                      phi(i,j-1,k) < 0d0 .Or. phi(i,j+1,k) < 0d0 .Or. &
-                     phi(i,j,k-1) < 0d0 .Or. phi(i,j,k+1) < 0d0 ) Cycle
+                     phi(i,j,k-1) < 0d0 .Or. phi(i,j,k+1) < 0d0 ) ) Cycle
              End If
              div  = Max(div, Abs(( U(i,j,k) - U(i-1,j,k) )/( x(i)-x(i-1) ) + &
                                   ( V(i,j,k) - V(i,j-1,k) )/( y(j)-y(j-1) ) + &

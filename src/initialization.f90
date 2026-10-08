@@ -19,6 +19,8 @@ Module initialization
   Use ibmSetup
   Use scalar_transport, Only : compute_settling_velocity
   Use vof_state, Only : vof_init
+  Use vof_pressure, Only : vp_init_masked
+  Use ibm_stress, Only : ibm_stress_init
   Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
   Use uav_actuator, Only : setup_uav
 #ifdef GPU_POISSON
@@ -761,6 +763,9 @@ Contains
     Allocate( alpha_z_u(1:nx ,1:nyg,1:2) )
     Allocate( alpha_z_v(1:nxg,1:ny ,1:2) )
     Allocate( tau_x(1:nx ,1:2,1:nzg), tau_z(1:nxg,1:2,1:nz ) )
+    Call ibm_stress_init( ibm_method == 1 .And. vof_flow < 1 )
+    ibm_stress_on = ( ibm_method == 1 .And. ibm_wall_model_flag == 1 .And. vof_flow < 1 )
+    !$acc update device(ibm_stress_on)
 
     alpha_x   = 0d0
     alpha_y   = 0d0
@@ -878,6 +883,7 @@ Contains
        End If
     End If
 
+    If ( ibm_method == 1 .And. vof_flow < 1 ) Call vp_init_masked   ! needs the grid spacings, the masks and the weights
     If ( vof_active >= 1 ) Call vof_init
 
     ! Done

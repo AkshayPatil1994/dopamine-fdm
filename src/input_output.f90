@@ -51,7 +51,7 @@ Contains
                        inflow_recycle_file, inflow_recycle_loop, inflow_recycle_t_offset, &
                        inflow_recycle_shift_z, inflow_recycle_seed
 
-    Namelist /IBM/ ibm_input_mode, ibm_wall_model_flag, &
+    Namelist /IBM/ ibm_input_mode, ibm_method, ibm_wall_model_flag, &
                    ibm_sdf_file, ibm_objid_file, ks, nks, nsampling, ibm_surface_nsampling, &
                    ibm_T_bc_type, ibm_T_wall, ibm_z0, smooth_ibm
 
@@ -167,6 +167,7 @@ Contains
        Else
           Write(*,'(A)') ' INFO: no &IBM found, using defaults (no IBM body)'
           ibm_input_mode      = 0
+          ibm_method          = 0
           ibm_wall_model_flag = 0
           ibm_sdf_file        = 'SDF_in'
           ks                  = 0d0
@@ -270,6 +271,14 @@ Contains
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
        Lx_i       = Lx;  Ly_i       = Ly;  Lz_i       = Lz
        Call check_vof_inputs
+       If ( ibm_method < 0 .Or. ibm_method > 1 ) &
+            Call abort_input( 'ERROR: ibm_method must be 0 (ghost-cell) or 1 (staircase)' )
+       If ( ibm_method == 1 .And. ibm_input_mode < 1 ) &
+            Call abort_input( 'ERROR: ibm_method=1 needs an immersed body (ibm_input_mode >= 1)' )
+#ifdef GPU_POISSON
+       If ( ibm_method == 1 ) &
+            Call abort_input( 'ERROR: ibm_method=1 (masked projection) is host-only; not available in a GPU build' )
+#endif
        alphaGrid  = alpha_grid
        ! grid_type is used directly from the global module (no alias needed)
        nks_global = nks
@@ -431,6 +440,7 @@ Contains
           End If
        End If
        Write(*,'(A,I2)')     '   ibm_input_mode              = ', ibm_input_mode
+       Write(*,'(A,I2)')     '   ibm_method (0 ghost-cell, 1 staircase) = ', ibm_method
        Write(*,'(A,I2)')     '   ibm_wall_model_flag         = ', ibm_wall_model_flag
        Write(*,'(A,I4)')     '   smooth_ibm (SDF corner-rounding passes, 0=off) = ', smooth_ibm
        Write(*,'(A,I8)')     '   nsampling                   = ', nsampling
@@ -524,6 +534,7 @@ Contains
     Call Mpi_bcast ( p_col,                1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( ibm_input_mode,       1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( ibm_method,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_sdf_file,  Len(ibm_sdf_file),  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_objid_file, Len(ibm_objid_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_wall_model_flag,  1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -855,6 +866,8 @@ Contains
             Call abort_input( 'ERROR: vof_flow=1 with an x inlet supports only inflow_type=3 (wave inlet) or 0 (uniform)' )
        If ( rsb_active == 1 .Or. inflow_opt_active == 1 ) &
             Call abort_input( 'ERROR: vof_flow=1 does not support the Reynolds-stress budget or the inflow optimisation' )
+       If ( ibm_method == 1 ) &
+            Call abort_input( 'ERROR: vof_flow=1 always uses the staircase wall stress; leave ibm_method = 0' )
        If ( ibm_input_mode >= 1 .And. ibm_surface_nsampling > 0 ) &
             Call abort_input( 'ERROR: the IBM surface field dump (ibm_surface_nsampling>0) is not available with vof_flow=1' )
     End If

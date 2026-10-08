@@ -12,7 +12,8 @@ Module vof_pressure
   Use global
   Use mpi
   Use decomp, Only : x_periodic_partner, z_periodic_partner
-  Use boundary_conditions, Only : update_ghost_interior_planes_x
+  Use boundary_conditions, Only : update_ghost_interior_planes_x, update_ghost_interior_planes, &
+                                  apply_periodic_bc_x, apply_periodic_bc_z
   Use scalar_transport, Only : finish_scalar_halos
   Use projection, Only : solve_poisson_equation, pois_layered, pois_bf, pois_bh, poisson_layered_supported
   Use vof_plic
@@ -90,6 +91,78 @@ Contains
     Call MPI_Allreduce(wl, vp_wsum, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
   End Subroutine vp_init
+
+
+  !> U -= s*gu etc. on the faces the solver's projection updates (interior faces, the row-seam face, the outflow face)
+  Subroutine apply_face_gradient(gu, gv, gw, s)
+
+    Real(Int64), Intent(In) :: gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz), s
+    Logical :: is_first_x, is_last_x
+    Integer(Int32) :: partner_x
+
+    Call x_periodic_partner(is_first_x, is_last_x, partner_x)
+    U(2:nx-1,2:nyg-1,2:nzg-1) = U(2:nx-1,2:nyg-1,2:nzg-1) - s*gu(2:nx-1,2:nyg-1,2:nzg-1)
+    If ( .Not. is_last_x .Or. x_bc_type == 1 ) Then
+       U(nx,2:nyg-1,2:nzg-1) = U(nx,2:nyg-1,2:nzg-1) - s*gu(nx,2:nyg-1,2:nzg-1)
+    End If
+    V(2:nxg-1,2:ny-1,2:nzg-1) = V(2:nxg-1,2:ny-1,2:nzg-1) - s*gv(2:nxg-1,2:ny-1,2:nzg-1)
+    W(2:nxg-1,2:nyg-1,2:nz-1) = W(2:nxg-1,2:nyg-1,2:nz-1) - s*gw(2:nxg-1,2:nyg-1,2:nz-1)
+
+  End Subroutine apply_face_gradient
+
+
+  !> Single-phase setup for ibm_method = 1: the masks and the PCG workspace, with the Neumann-at-body operator of constant coefficient
+  Subroutine vp_init_masked
+
+    Call vp_init
+    vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
+
+  End Subroutine vp_init_masked
+
+
+  !> Projection of the single-phase velocity with an immersed body (ibm_method = 1): the fast solver cannot honour the closed faces, so
+  !  the pseudo-pressure is found by PCG on the masked operator (no flux through the body), to round-off, and the closed faces stay zero.
+  Subroutine vp_project_masked
+
+    Real(Int64), Allocatable :: fd(:,:,:), ph(:,:,:), gu(:,:,:), gv(:,:,:), gw(:,:,:)
+    Real(Int64) :: umax
+    Logical :: is_first_p, is_last_p
+    Integer(Int32) :: partner_p
+
+    Allocate( fd(nxg,nyg,nzg), ph(nxg,nyg,nzg), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
+    U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
+    Call vp_div(U, V, W, fd)
+    umax = Max( MaxVal(Abs(U)), MaxVal(Abs(V)), MaxVal(Abs(W)) )
+    Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
+    Call vp_pcg(fd, 800, 1d-13, ph, rfloor=1d-14*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
+    Call vp_halo(ph, .True.)
+    Call vp_grad(ph, gu, gv, gw)
+    Call apply_face_gradient(gu, gv, gw, 1d0)
+
+    If ( rk_step == 3 ) Then
+       P = 0d0
+       P(2:nxg-1,2:nyg-1,2:nzg-1) = ph(2:nxg-1,2:nyg-1,2:nzg-1)/(dt*rk_coef(3,3))
+       P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)
+       Call update_ghost_interior_planes_x(P,4)
+       Call update_ghost_interior_planes(P,4)
+       If ( x_bc_type == 0 ) Then
+          Call apply_periodic_bc_x(P,4)
+       Else
+          Call x_periodic_partner(is_first_p, is_last_p, partner_p)
+          If ( is_first_p ) P(1,:,:) = P(2,:,:)
+          If ( is_last_p  ) P(nxg,:,:) = P(nxg-1,:,:)
+       End If
+       If ( z_bc_type == 0 ) Then
+          Call apply_periodic_bc_z(P,4)
+       Else
+          Call z_periodic_partner(is_first_p, is_last_p, partner_p)
+          If ( is_first_p ) P(:,:,1) = P(:,:,2)
+          If ( is_last_p  ) P(:,:,nzg) = P(:,:,nzg-1)
+       End If
+    End If
+    Deallocate( fd, ph, gu, gv, gw )
+
+  End Subroutine vp_project_masked
 
 
   !> IBM face and cell masks from the signed distance (same face test as apply_ghost_cell_ibm: x/z by the plain mean, y by the

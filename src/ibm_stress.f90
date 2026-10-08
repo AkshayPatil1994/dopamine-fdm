@@ -11,13 +11,24 @@ Module ibm_stress
   ! Last index: U faces (y-lo, y-hi, z-lo, z-hi), V faces (x-lo, x-hi, z-lo, z-hi), W faces (x-lo, x-hi, y-lo, y-hi); ovr_none = no override
   Real(Int64), Parameter :: ovr_none = Huge(1d0)
   Real(Int64), Allocatable, Dimension(:,:,:,:) :: ovr_u, ovr_v, ovr_w
+  Real(Int64), Allocatable, Dimension(:,:,:)   :: nu_const
 
 Contains
 
-  Subroutine ibm_stress_init
+  !> Allocate the override arrays: full size when the stress is used, a single element otherwise (so that the viscous-term kernels,
+  !  which list the arrays, always have them); nu_const is the kinematic viscosity at every cell for the single-phase solver
+  Subroutine ibm_stress_init(full)
 
-    Allocate( ovr_u(nx,nyg,nzg,4), ovr_v(nxg,ny,nzg,4), ovr_w(nxg,nyg,nz,4) )
-    ovr_u = ovr_none;  ovr_v = ovr_none;  ovr_w = ovr_none
+    Logical, Intent(In) :: full
+
+    If ( Allocated(ovr_u) ) Deallocate( ovr_u, ovr_v, ovr_w, nu_const )
+    If ( full ) Then
+       Allocate( ovr_u(nx,nyg,nzg,4), ovr_v(nxg,ny,nzg,4), ovr_w(nxg,nyg,nz,4), nu_const(nxg,nyg,nzg) )
+    Else
+       Allocate( ovr_u(1,1,1,4), ovr_v(1,1,1,4), ovr_w(1,1,1,4), nu_const(1,1,1) )
+    End If
+    ovr_u = ovr_none;  ovr_v = ovr_none;  ovr_w = ovr_none;  nu_const = nu
+    !$acc enter data copyin(ovr_u,ovr_v,ovr_w)
 
   End Subroutine ibm_stress_init
 

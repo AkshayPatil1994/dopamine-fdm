@@ -279,6 +279,8 @@ Contains
     Real   (Int64) :: yplus, uplus_img, duplus_img
     Real   (Int64) :: nx_, ny_, nz_       ! unit inward wall normal
 
+    If ( ibm_method == 1 ) Return   ! staircase method: the wall stress comes from ibm_stress
+
     ! reference-cell velocities come from the extended copies (planes beyond the seam ghost plane)
     Call ibm_fill_ext_uvw(U_, V_, W_)
     kwmin = ext_fz_lo

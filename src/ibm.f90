@@ -1145,6 +1145,12 @@ Contains
     End Do
     !$acc end parallel loop
 
+    ! staircase method: solid and ghost faces stay zero, the wall stress is applied by ibm_stress
+    If ( ibm_method == 1 ) Then
+       If ( nprocs > 1 ) Call exchange_velocity_halos
+       Return
+    End If
+
     ! image-point stencils read the extended copies (extra planes beyond the seam ghost plane)
     Call ibm_fill_ext_uvw(U_, V_, W_)
 

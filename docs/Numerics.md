@@ -360,6 +360,17 @@ integrated log law (`wm_stream`), and a coarse channel ($Re_\tau = 395$, first c
 $dP/dx\,h$. The skew-symmetric convective form (`advection_scheme = 0`) is not momentum conserving on such a coarse near-wall grid (a
 spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES until that is resolved.
 
+### 7.1b Wall stress on an immersed body (staircase IBM, `ibm_method = 1`)
+
+The ghost-cell IBM of §6 only rewrites the ghost velocities with a log-law mirror, so the stress it delivers is
+$(\nu+\nu_t)\,\partial u/\partial n$ through the viscous stencil. In near-1-D shear $\nu_t \approx 0$ there, and a flat plate under a uniform stream
+decays about 40 times too slowly. The staircase method (`ibm_method = 1`, and the two-fluid solver always) instead keeps the velocity
+exactly zero on the closed faces (face-averaged $\phi < 0$), projects with a PCG on the masked operator (no flux through the body, divergence at
+round-off also next to it), and replaces the viscous flux through every edge between a fluid face and a closed face (`ibm_stress_update`,
+`ibm_stress.f90`) by the log-law wall shear $u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$. $u_\tau$ is solved at half a cell from the closed face from the
+tangential velocity of the fluid face; `ibm_z0` gives the per-object roughness. The stress of a staircase corner adds up over its faces. The
+staircase is first order in the geometry. Check: a flat plate under a uniform stream decays as the integrated log law (`ibm_stair_plate`).
+
 ### 7.2 Log-law Newton iteration
 
 The friction velocity $u_\tau$ is obtained by a Newton iteration on the log-law /

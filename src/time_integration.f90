@@ -11,6 +11,8 @@ Module time_integration
   Use wallmodel
   Use sgs_models
   Use ibm
+  Use ibm_stress,       Only : ibm_stress_update, nu_const
+  Use vof_pressure,     Only : vp_project_masked, vp_mu, vp_mv, vp_mw
   Use scalar_transport,  Only : compute_rhs_scalar, apply_scalar_bc
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
   Use monitor,          Only : compute_cfl, write_force_csv, compute_bulk_velocity
@@ -27,6 +29,24 @@ Module time_integration
   Real(Int64), Allocatable :: U_pre(:,:,:), V_pre(:,:,:), W_pre(:,:,:)
 
 Contains
+
+  !> Projection: the fast Poisson solver, or with the staircase IBM (ibm_method = 1) the masked PCG that keeps the closed faces at zero flux
+  Subroutine project_velocity_field
+
+    If ( ibm_method == 1 ) Then
+       Call vp_project_masked
+    Else
+       Call compute_projection_step
+    End If
+
+  End Subroutine project_velocity_field
+
+  !> Wall-model stress on the staircase faces of the immersed body (ibm_method = 1 with the IBM wall model), from the current velocity
+  Subroutine update_ibm_stress
+
+    If ( ibm_stress_on ) Call ibm_stress_update(U, V, W, vp_mu, vp_mv, vp_mw, nu_const)
+
+  End Subroutine update_ibm_stress
 
   !> Update imposed pressure gradients for oscillatory/pulsatile forcing: dPdx=dPdx_t+Ub_x*waveOmega_x*cos(waveOmega_x*t+phi_wave_x), analogous in z
   Subroutine update_pressure_forcing
@@ -158,7 +178,8 @@ Contains
     rk_step = 1
     ! nu_t, U,V,W stay device-resident throughout; compute_wall_model is device-resident too (except the host-only compute_pseudo_pressure_bc_for_robin_bc), so no update device needed here
     Call profiler_start(PROF_WALLMODEL)
-    Call compute_wall_model(U,V,W,nu_t) ! sets alpha + EQWM ghost cells on old velocity
+    Call compute_wall_model(U,V,W,nu_t) ! sets the wall stress + EQWM ghost cells on old velocity
+    Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
     Call compute_rhs_u(U,V,W,Fu1)
@@ -227,7 +248,7 @@ Contains
     Call apply_boundary_conditions
     Call trace_stage('s1_bc_pre')
     Call profiler_stop(PROF_BC)
-    Call compute_projection_step
+    Call project_velocity_field
     Call trace_stage('s1_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
@@ -296,6 +317,7 @@ Contains
     Call profiler_stop(PROF_SGS)
     Call profiler_start(PROF_WALLMODEL)
     Call compute_wall_model(U,V,W,nu_t)
+    Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
     Call compute_rhs_u(U,V,W,Fu2)
@@ -357,7 +379,7 @@ Contains
     Call apply_boundary_conditions
     Call trace_stage('s2_bc_pre')
     Call profiler_stop(PROF_BC)
-    Call compute_projection_step
+    Call project_velocity_field
     Call trace_stage('s2_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
@@ -428,6 +450,7 @@ Contains
     Call profiler_stop(PROF_SGS)
     Call profiler_start(PROF_WALLMODEL)
     Call compute_wall_model(U,V,W,nu_t)
+    Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
     Call compute_rhs_u(U,V,W,Fu3)
@@ -492,7 +515,7 @@ Contains
     Call apply_boundary_conditions
     Call trace_stage('s3_bc_pre')
     Call profiler_stop(PROF_BC)
-    Call compute_projection_step
+    Call project_velocity_field
     Call trace_stage('s3_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)

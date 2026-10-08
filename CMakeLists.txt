@@ -451,7 +451,7 @@ set(CPU_REFERENCE_MPIRUN "" CACHE FILEPATH "mpirun matching CPU_REFERENCE_EXE (d
 set(TEST_LD_LIBRARY_PATH "" CACHE STRING "LD_LIBRARY_PATH prepended for parity tests (e.g. a matching user-space libcuda)")
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small rsb_small)
+    foreach(case tgv_small chan_small chan_les_small duct_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small rsb_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE} --fields --field-tol 1e-8)
@@ -666,6 +666,10 @@ if(Python3_Interpreter_FOUND)
     # Unsupported feature combinations must abort at input
     add_test(NAME vof_input_aborts
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_input_checks/check_aborts.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+    # Single-phase staircase IBM (ibm_method = 1) on a flat plate: stream decay by the log-law stress, round-off divergence, same on 1 and 4 ranks
+    add_test(NAME ibm_stair_plate
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_plate/check_stair_plate.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
     # Single-phase flat-wall EQWM: a uniform stream between two modelled walls decays by the log-law wall stress, same on 1 and 4 ranks
     add_test(NAME wm_stream
