@@ -307,6 +307,7 @@ Target wave of the numerical wave flume: Dirichlet inlet plus waves2Foam-style r
 | `wave_relax_rate` | `20` | Relaxation rate at full strength [1/s] |
 | `wave_ramp_time` | `0` | Smooth start-up ramp of the amplitude [s] |
 | `current_type` | `0` | Mean current through the flume (throughflow), added to the wave in the water at the inlet and used as the relaxation target of the absorption zone (the air above carries only the wave's return flow): 0=none, 1=uniform, 2=log law, 3=power law. Needs `wave_type>0`; starts from the current at `t=0` and is ramped with `wave_ramp_time` |
+| `wave_turb` | `0` | 1 = add the turbulence of a recycled precursor slice (`inflow_recycle_file`, same format and grid rules as `inflow_type=2`: same `ny` and `nz`) to the wave + current at the inlet. The inlet takes the donor's fluctuation (donor minus the z-mean of its first frame over the unique cells), multiplied by the water fraction of the cell (and the wave ramp), so the air above the free surface receives none; `V` and `W` are taken from the donor. Run the precursor with the same bed wall model and set `current_U`/`current_z0` to its mean profile |
 | `current_U` | `0` | Depth-mean current over the still-water depth [m/s] |
 | `current_z0` | `1e-3` | Bed roughness length of the log-law current (`current_type=2`) [m], below `vof_level/2` |
 | `current_n` | `7` | Exponent denominator of the power-law current (`current_type=3`): `u ~ (y/d)^(1/n)` |

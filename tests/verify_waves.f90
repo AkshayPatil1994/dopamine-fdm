@@ -28,7 +28,7 @@ Program verify_waves
   If ( Abs(wave_eta(0d0, 0d0) - 0.025d0) > 1d-14 ) Then
      Write(*,*) 'FAIL linear crest';  nfail = nfail + 1
   End If
-  Deallocate( wv_a, wv_k, wv_w, wv_ph, wv_in_u, wv_in_v )
+  Deallocate( wv_a, wv_k, wv_w, wv_ph, wv_in_u, wv_in_v, wv_in_m, wv_in_mv )
 
   ! ---- stream function, H/d = 0.4
   wave_type = 2;  wave_height = 0.2d0;  wave_period = 2.2d0;  wave_sf_n = 20;  wave_current_mode = 1
@@ -79,7 +79,7 @@ Program verify_waves
   If ( Abs(q) > 1d-5 ) Then
      Write(*,*) 'FAIL mean flux';  nfail = nfail + 1
   End If
-  Deallocate( wv_in_u, wv_in_v )
+  Deallocate( wv_in_u, wv_in_v, wv_in_m, wv_in_mv )
 
   ! ---- JONSWAP: significant height from the variance of a long record
   wave_type = 3;  wave_Hs = 0.1d0;  wave_Tp = 1.6d0;  wave_gamma = 3.3d0;  wave_nfreq = 400;  wave_seed = 7

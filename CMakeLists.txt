@@ -689,6 +689,10 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME vof_ibm_wm_plate
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_wm_plate/check_wm_plate.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+    # Recycled-precursor turbulence at the wave inlet (synthetic donor slice), masked above the free surface
+    add_test(NAME vof_wave_turb_inlet
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wave_turb_inlet/check_turb_inlet.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
     # Mean log-law current plus a small wave through the wave inlet and the relaxation zones
     add_test(NAME vof_current_flume
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_current_flume/check_current.py

@@ -95,7 +95,7 @@ Contains
 
     Namelist /WAVES/ wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, wave_Hs, wave_Tp, &
                      wave_gamma, wave_nfreq, wave_seed, wave_gen_len, wave_abs_len, wave_relax_rate, wave_gauge_x, wave_ramp_time, &
-                     current_type, current_U, current_z0, current_n
+                     current_type, current_U, current_z0, current_n, wave_turb
 
     Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, vof_method, vof_beta, &
                    vof_geo_density, vof_layered_precond, &
@@ -752,6 +752,7 @@ Contains
     Call Mpi_bcast ( wave_gauge_x,      8, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_ramp_time,    1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_type,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_turb,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_U,         1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_z0,        1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_n,         1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
@@ -811,6 +812,9 @@ Contains
          Call abort_input( 'ERROR: &VOF (vof_active>=1) cannot be combined with the UAV actuator (uav_active>=1)' )
     If ( vof_flow >= 1 .And. vof_active < 1 ) &
          Call abort_input( 'ERROR: vof_flow>=1 requires vof_active=1' )
+    If ( wave_turb /= 0 .And. wave_turb /= 1 ) Call abort_input( 'ERROR: &WAVES wave_turb must be 0 or 1' )
+    If ( wave_turb == 1 .And. ( wave_type <= 0 .Or. Len_trim(inflow_recycle_file) == 0 ) ) &
+         Call abort_input( 'ERROR: &WAVES wave_turb=1 needs wave_type>0 and inflow_recycle_file (the precursor slice)' )
     If ( wave_type > 0 ) Then
        If ( vof_active < 1 .Or. vof_flow < 1 ) &
             Call abort_input( 'ERROR: &WAVES wave_type>0 requires vof_active=1 and vof_flow=1' )

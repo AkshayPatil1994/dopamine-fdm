@@ -28,7 +28,7 @@ Module waves
   Real(Int64) :: sf_k = 0d0, sf_c = 0d0, sf_ubar = 0d0, sf_q = 0d0, sf_r = 0d0
   Real(Int64) :: sf_b(0:SF_MAX_N) = 0d0, sf_e(0:SF_MAX_N) = 0d0
   ! inlet profiles on the solver's y grid, refreshed by wave_inlet_profile
-  Real(Int64), Allocatable, Dimension(:) :: wv_in_u, wv_in_v
+  Real(Int64), Allocatable, Dimension(:) :: wv_in_u, wv_in_v, wv_in_m, wv_in_mv   ! m, mv: water fraction (x ramp) at the u/w and v heights
   Real(Int64) :: wv_in_eta = 0d0
   Real(Int64) :: wv_in_t = -1d300   ! time of the stored inlet profile: it is a pure function of t, so equal-t calls reuse it
 
@@ -64,8 +64,8 @@ Contains
     pi_ = 4d0*Atan(1d0)
     wv_d = vof_level
     wv_g = vof_grav
-    Allocate( wv_in_u(nyg), wv_in_v(ny) )
-    wv_in_u = 0d0;  wv_in_v = 0d0
+    Allocate( wv_in_u(nyg), wv_in_v(ny), wv_in_m(nyg), wv_in_mv(ny) )
+    wv_in_u = 0d0;  wv_in_v = 0d0;  wv_in_m = 0d0;  wv_in_mv = 0d0
 
     Select Case(wave_type)
     Case(1)
@@ -348,9 +348,20 @@ Contains
   Subroutine wave_inlet_profile(t)
 
     Real(Int64), Intent(In) :: t
+    Real(Int64) :: hs, rm
+    Integer(Int32) :: j, jj
     If ( t == wv_in_t ) Return
     Call wave_profile_at(0d0, t, wv_in_eta, wv_in_u, wv_in_v)
     wv_in_t = t
+    hs = wv_d + wv_in_eta
+    rm = wave_ramp(t)
+    Do j = 1, nyg
+       jj = Min(Max(j, 2), nyg-1)
+       wv_in_m(j) = rm*Min(1d0, Max(0d0, (hs - y(jj-1))/(y(jj) - y(jj-1))))
+    End Do
+    Do j = 1, ny
+       wv_in_mv(j) = Merge(rm, 0d0, y(j) <= hs)
+    End Do
 
   End Subroutine wave_inlet_profile
 

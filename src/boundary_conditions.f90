@@ -7,7 +7,7 @@ Module boundary_conditions
   Use mpi
   Use decomp, Only : z_halo_neighbors, x_halo_neighbors, z_periodic_partner, x_periodic_partner, comm_outflow_x
   Use synthetic_eddy_method
-  Use waves, Only : wave_inlet_profile, wv_in_u, wv_in_v
+  Use waves, Only : wave_inlet_profile, wv_in_u, wv_in_v, wv_in_m, wv_in_mv
 
   ! prevent implicit typing
   Implicit None
@@ -361,14 +361,21 @@ Contains
     ! wave inlet (inflow_type==3): water follows the wave target, the air returns its flux; V mirrors about the target, W target is 0
     If ( inflow_type == 3 ) Then
        Call wave_inlet_profile(t)
+       If ( wave_turb == 1 ) Call update_inflow_recycle(t)
        Do k = 1, n3
           Do j = 1, n2
              If ( comp == 1 ) Then
                 F(1,j,k) = wv_in_u(j)
+                If ( wave_turb == 1 ) F(1,j,k) = F(1,j,k) + &
+                     wv_in_m(j)*( recycle_value(1, j, k) - prof_U_fl(Max(1, Min(n_profile, j-1))) )
              Else If ( comp == 2 ) Then
-                F(1,j,k) = 2d0*wv_in_v(j) - F(2,j,k)
+                target_val = wv_in_v(j)
+                If ( wave_turb == 1 ) target_val = target_val + wv_in_mv(j)*recycle_value(2, j, k)
+                F(1,j,k) = 2d0*target_val - F(2,j,k)
              Else
-                F(1,j,k) = -F(2,j,k)
+                target_val = 0d0
+                If ( wave_turb == 1 ) target_val = wv_in_m(j)*recycle_value(3, j, k)
+                F(1,j,k) = 2d0*target_val - F(2,j,k)
              End If
           End Do
        End Do

@@ -12,6 +12,8 @@ Module synthetic_eddy_method
   ! ---- mean/Reynolds-stress reference profile (inflow_type==1) ----------
   Integer(Int32) :: n_profile = 0
   Real   (Int64), Allocatable :: prof_y(:), prof_U(:)
+  ! z-mean of the donor's first frame over its unique cells (the periodic last cell repeats the first); the wave inlet subtracts it
+  Real   (Int64), Allocatable :: prof_U_fl(:)
   Real   (Int64), Allocatable :: prof_R11(:), prof_R22(:), prof_R33(:), prof_R12(:)
   Logical :: inflow_profile_loaded = .False.   ! guards init_inflow_profile against a second (redundant) file read
 
@@ -416,8 +418,9 @@ Contains
 
     If ( x_bc_type /= 1 ) Return
 
-    If ( inflow_type == 2 ) Then
-       Call init_inflow_profile
+    If ( inflow_type == 2 .Or. ( inflow_type == 3 .And. wave_turb == 1 ) ) Then
+       If ( inflow_type == 3 ) Call read_recycle_mean_profile   ! the wave inlet takes only the donor's fluctuation, so its mean is needed
+       If ( inflow_type == 2 ) Call init_inflow_profile
        Call init_inflow_recycle
        Return
     End If
@@ -567,7 +570,7 @@ Contains
   !> Mean-profile seed for inflow_type==2 (recycled precursor inflow): every rank independently reads the donor's first frame and z-averages U(y), mirroring read_mean_profile's per-rank-independent read of a small shared file (here the read is one frame, not the whole donor file); R11/R22/R33/R12 are left at zero since sem_fluctuation is never called under inflow_type==2 -- these only feed mean_profile_U, used by genGridandIC to seed the IC mean
   Subroutine read_recycle_mean_profile
 
-    Integer(Int32) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy
+    Integer(Int32) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy, n2_unique
     Logical :: v_native
     Real(Int64), Allocatable :: frame_U(:,:)
     Character(300) :: fname
@@ -578,7 +581,7 @@ Contains
     If ( n2 /= nzm_global ) Call sem_abort('ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global')
 
     n_profile = n1
-    Allocate( prof_y(n_profile), prof_U(n_profile) )
+    Allocate( prof_y(n_profile), prof_U(n_profile), prof_U_fl(n_profile) )
     Allocate( prof_R11(n_profile), prof_R22(n_profile), prof_R33(n_profile), prof_R12(n_profile) )
     prof_y = ym_global
     prof_R11 = 0d0;  prof_R22 = 0d0;  prof_R33 = 0d0;  prof_R12 = 0d0
@@ -587,6 +590,7 @@ Contains
     ! U block (the first block on disk, see the per-component block order written by
     ! dopamine-ESEM); the result (prof_U, n1 reals) is tiny, so broadcast it instead
     If ( myid == 0 ) Then
+       n2_unique = n2 - Merge(1, 0, z_bc_type == 0)
        Allocate( frame_U(n1,n2) )
        Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
        Open(newunit=unit_in, file=Trim(fname), access='stream', form='unformatted', &
@@ -596,11 +600,13 @@ Contains
        Close(unit_in)
        Do jy = 1, n1
           prof_U(jy) = Sum(frame_U(jy,:)) / Real(n2,8)
+          prof_U_fl(jy) = Sum(frame_U(jy,1:n2_unique)) / Real(n2_unique,8)
        End Do
        Deallocate(frame_U)
     End If
 
     Call Mpi_bcast( prof_U, n_profile, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast( prof_U_fl, n_profile, MPI_real8, 0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_recycle_mean_profile
 
