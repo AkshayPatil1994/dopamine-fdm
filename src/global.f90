@@ -769,7 +769,7 @@ Module global
   Integer(Int32) :: vof_layered_precond = 0   ! 1 (CPU, y walls): PCG preconditioner with the row-wise mean density
   Real   (Int64) :: vof_cfl_max       = 0.4d0
   ! passive tests: vof_prescribed 1 LeVeque vortex reversal, 2 Enright deformation (C advected by an analytic divergence-free
-  ! field, reversing at t = vof_presc_T/2); vof_tgv 1 Taylor-Green initial velocity (amplitude vof_u0); vof_shear 1 gas above
+  ! field, reversing at t = vof_presc_T/2), 3 steady rigid rotation with period vof_presc_T; vof_tgv 1 Taylor-Green initial velocity (amplitude vof_u0); vof_shear 1 gas above
   ! y = vof_level starts at vof_u0
   Integer(Int32) :: vof_prescribed    = 0
   Real   (Int64) :: vof_presc_T       = 8d0

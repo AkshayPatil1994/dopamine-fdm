@@ -122,7 +122,7 @@ renders any of these cases' path file as a moving-disk ParaView animation (see
 
 ## Two-phase VOF cases
 
-The two-fluid solver ([[Two-Phase VOF|Two-Phase-VOF]]) has no `examples/` directory yet; its small, quick regression cases under
+The two-fluid solver ([[Two-Phase VOF|Two-Phase-VOF]]) has one example, `examples/vof_zalesak_disk` (Zalesak slotted disk with PLIC, 100 × 100, `vof_ic_type = 7`, `vof_prescribed = 3`; `plot_zalesak.py RUN_DIR` draws the validation figure against the exact solution). Its small, quick regression cases under
 `tests/regression/vof_*` are the starting points (each directory holds an `input_parameters`, and an `analyze.py` where the case
 has a physical reference; run them with `tests/regression/vof_check.py` or copy the input next to the executable):
 

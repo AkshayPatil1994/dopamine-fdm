@@ -1,0 +1,67 @@
+! ================================================================
+! Zalesak's slotted disk (1979): a disk of radius 0.15 with a slot of width 0.05 at (0.5, 0.75) in the unit square, advected by
+! steady rigid rotation about (0.5, 0.5), one revolution (T = 1). The exact solution at t = T is the initial shape, so the L1
+! error is ||C(T) - C(0)||_1 (vof_diag.dat column 28) and the interface at t = T is compared with the initial one.
+! The velocity is analytic and discretely divergence free (vof_prescribed = 3), C is advected by the PLIC scheme only
+! (vof_flow = 0, 2-D slab of 5 cells in z). 100 x 100 cells; for the grid-convergence study scale nx, ny, Lx, nsteps, dt with N.
+! Plot with plot_zalesak.py in this directory (needs the vof_snap_*.dat files written by vof_debug = 1).
+! ================================================================
+
+&DOMAIN
+  nx         = 102,
+  ny         = 101,
+  nz         = 6,
+  Lx         = 1.01,
+  Ly         = 1.0,
+  Lz         = 0.05,
+  grid_type  = 1,
+  alpha_grid = 1.0,
+  alpha_grid_z = 0.0,
+  p_row      = 0,
+  p_col      = 0,
+/
+
+&PHYSICS
+  nu        = 1.0e-3,
+  sgs_model = 0,
+/
+
+&NUMERICS
+  dt           = 1.0e-3,
+  nsteps       = 1000,
+  nsave        = 1000000,
+  nmonitor     = 50,
+  cfl_adaptive = 0,
+/
+
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 2,
+  bc_face_yhi = 2,
+  x_bc_type   = 0,
+  y_bc_type   = 1,
+  z_bc_type   = 0,
+/
+
+&INITIAL_CONDITIONS
+  Utarget       = 0.0,
+  ic_type       = 3,
+  noise_percent = 0.0,
+  restart       = 0,
+/
+
+&IO
+  filein  = 'restart/vof_zalesak_disk.1',
+  fileout = 'vof_zalesak_disk',
+/
+
+&VOF
+  vof_active        = 1,
+  vof_ic_type       = 7,
+  vof_center        = 0.5, 0.75, 0.0,
+  vof_radius        = 0.15,
+  vof_prescribed    = 3,
+  vof_presc_T       = 1.0,
+  vof_normal_scheme = 1,
+  vof_debug         = 1,
+  vof_snap_dt       = 0.25,
+/

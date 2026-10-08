@@ -258,7 +258,7 @@ bit-for-bit the single-phase solver.
 |-----------|---------|-------------|
 | `vof_active` | `0` | 0=off; 1=advance the liquid fraction `C` |
 | `vof_flow` | `0` | 0=passive: `C` is only advected by the (single-phase) flow; 1=two-fluid solver: density and viscosity from `C`, conservative momentum transport with the VOF mass fluxes, variable-density pressure projection, gravity |
-| `vof_ic_type` | `1` | Initial interface: 1=plane (liquid below `y=vof_level`), 2=sphere (`vof_center`, `vof_radius`), 3=gas bubble in liquid, 4=standing/progressive wave (`vof_level`, `vof_wave_amp`, `vof_wave_lambda`), 5=box `x<vof_center(1)`, `y<vof_center(2)` (dam break; `vof_radius>0` adds its periodic mirror image), 6=disk in the x–y plane (`vof_center(1:2)`, `vof_radius`) |
+| `vof_ic_type` | `1` | Initial interface: 1=plane (liquid below `y=vof_level`), 2=sphere (`vof_center`, `vof_radius`), 3=gas bubble in liquid, 4=standing/progressive wave (`vof_level`, `vof_wave_amp`, `vof_wave_lambda`), 5=box `x<vof_center(1)`, `y<vof_center(2)` (dam break; `vof_radius>0` adds its periodic mirror image), 6=disk in the x–y plane (`vof_center(1:2)`, `vof_radius`), 7=Zalesak slotted disk (as 6, slot of width `vof_radius/3` up to `vof_center(2) + 2 vof_radius/3`) |
 | `vof_level`, `vof_center(3)`, `vof_radius` | `0` | Interface level / centre / radius of the initial shape |
 | `vof_wave_amp`, `vof_wave_lambda` | `0` | `vof_ic_type=4`: amplitude and wavelength of the cosine surface (periodic length = `vof_wave_lambda`) |
 | `vof_wave_stokes` | `0` | 1: `vof_ic_type=4` gets the second-order Stokes harmonic and the water the deep-water potential velocity of a wave travelling in +x (initial state of a breaking wave, steepness `ka = 2π·amp/λ`) |
@@ -280,7 +280,7 @@ bit-for-bit the single-phase solver.
 | `vof_adv_iters`, `vof_adv_tol` | `3`, `1e-8` | Projection after each advection half-step |
 | `vof_layered_precond` | `0` | 1: PCG preconditioner with the row-wise mean density (CPU, y walls) |
 | `vof_cfl_max` | `0.4` | Courant limit of the advection step |
-| `vof_prescribed`, `vof_presc_T` | `0`, `8` | Passive tests (`vof_flow=0`): 1=LeVeque vortex reversal in the x–y plane, 2=Enright 3-D deformation; `C` is advected by an analytic divergence-free field that reverses at `t=vof_presc_T/2` (unit box); `vof_diag.dat` column 28 is the L1 distance to the initial shape |
+| `vof_prescribed`, `vof_presc_T` | `0`, `8` | Passive tests (`vof_flow=0`): 1=LeVeque vortex reversal in the x–y plane, 2=Enright 3-D deformation, 3=steady rigid rotation about (0.5, 0.5) with period `vof_presc_T` (Zalesak); in 1 and 2 `C` is advected by an analytic divergence-free field that reverses at `t=vof_presc_T/2` (unit box); `vof_diag.dat` column 28 is the L1 distance to the initial shape |
 | `vof_tgv` | `0` | 1: Taylor–Green initial velocity of amplitude `vof_u0` (periodic x, z; mirror symmetry at free-slip y walls) |
 | `vof_shear` | `0` | 1: the gas above `y=vof_level` starts with velocity `vof_u0` (impulsive-start shear layer) |
 | `vof_debug` | `0` | 1: write `vof_dev.dat`, `vof_prof.dat`, `vof_front.dat`, `vof_vmax.dat` (development diagnostics); with `vof_snap_dt>0` also `vof_snap_NNNN.dat` slices |

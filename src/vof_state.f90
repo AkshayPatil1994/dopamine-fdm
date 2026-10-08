@@ -243,14 +243,18 @@ Contains
        Return
     End If
 
-    If ( vof_ic_type == 6 ) Then
-       ! disk in the x-y plane (uniform in z): vof_center(1:2), vof_radius; sampled 20 x 20 per cell
+    If ( vof_ic_type == 6 .Or. vof_ic_type == 7 ) Then
+       ! disk in the x-y plane (uniform in z): vof_center(1:2), vof_radius; sampled 20 x 20 per cell. Type 7 is Zalesak's slotted
+       ! disk: slot of width R/3 from the bottom of the disk up to 2R/3 above the centre
        cnt = 0
        Do b = 1, 20
           py = y0 + (y1 - y0)*(Real(b,Int64) - 0.5d0)/20d0
           Do a = 1, 20
              px = x0 + (x1 - x0)*(Real(a,Int64) - 0.5d0)/20d0
-             If ( (px - vof_center(1))**2 + (py - vof_center(2))**2 <= vof_radius**2 ) cnt = cnt + 1
+             If ( (px - vof_center(1))**2 + (py - vof_center(2))**2 > vof_radius**2 ) Cycle
+             If ( vof_ic_type == 7 .And. Abs(px - vof_center(1)) <= vof_radius/6d0 &
+                  .And. py <= vof_center(2) + 2d0*vof_radius/3d0 ) Cycle
+             cnt = cnt + 1
           End Do
        End Do
        c = Real(cnt,Int64)/400d0
@@ -471,7 +475,8 @@ Contains
 
 
   !> Analytic divergence-free test velocity at time tm on the staggered faces, evaluated as the discrete curl of a vector potential
-  !  at the cell edges so that the discrete divergence is zero to round-off: 1 LeVeque vortex reversal, 2 Enright deformation
+  !  at the cell edges so that the discrete divergence is zero to round-off: 1 LeVeque vortex reversal, 2 Enright deformation,
+  !  3 steady rigid rotation about (0.5,0.5) with period vof_presc_T (Zalesak)
   Subroutine prescribed_velocity(tm, Uf, Vf, Wf)
 
     Real(Int64), Intent(In)  :: tm
@@ -480,6 +485,7 @@ Contains
     Real(Int64) :: g
 
     g = Cos(4d0*Atan(1d0)*tm/vof_presc_T)
+    If ( vof_prescribed == 3 ) g = 1d0
     Uf = 0d0;  Vf = 0d0;  Wf = 0d0
     Do k = 2, nzg-1
        Do j = 2, nyg-1
@@ -516,6 +522,8 @@ Contains
     pi = 4d0*Atan(1d0)
     If ( vof_prescribed == 1 ) Then
        a = Sin(pi*xx)**2*Sin(pi*yy)**2/pi
+    Else If ( vof_prescribed == 3 ) Then
+       a = -pi/vof_presc_T*((xx - 0.5d0)**2 + (yy - 0.5d0)**2)
     Else
        a = -Cos(2d0*pi*xx)/(2d0*pi)*Sin(pi*yy)**2*Sin(2d0*pi*zz)
     End If
