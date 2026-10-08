@@ -3,8 +3,9 @@
 over the whole depth (the air included) is added to the wave + current inlet. The water receives it (none without wave_turb), the liquid ledger still
 closes (1e-4). On the inlet face of the last snapshot, against the run without wave_turb at the same time: the injected u' = U_on - U_off has zero z-mean
 (the donor mean is subtracted) and the rms and pattern of the donor slice in the water cells, the target w' = (W_ghost + W_first)/2 is the donor w' (peak
-= amplitude) and both are exactly zero in the air above the free surface. max|W| of the monitor lies in (amp, 2 amp): the ghost mirror 2 w' - W_first, with
-0 < W_first < amp because the synthetic slice is not divergence free and w' decays within a few cells."""
+= amplitude) and both are exactly zero in the air above the free surface. The ghost mirror 2 w' - W_first has max|W_ghost| in (amp, 2 amp), with 0 < W_first < amp because the synthetic slice is not divergence free and w'
+decays within a few cells; the monitor max|W| (interior) is then W_first, in [max|W_first| of the snapshot, amp). (With the old FFT-preconditioned
+PCG, which does not converge at the density ratio 1000, the unprojected velocity left max|W| = 0.07 and a divergence of 2.8; the converged value is 0.027.)"""
 import argparse, os, re, shutil, subprocess, sys, tempfile
 import numpy as np
 
@@ -73,7 +74,7 @@ try:
     e_w = np.abs(dw[wet] - wp).max()
     e_air = max(np.abs(du[air]).max(), np.abs(dw[air]).max())
     e_part = max(np.abs(du).max()/amp, np.abs(dw).max()/amp)
-    ok = (t_end > 1.49 and abs(res) < 1e-4 and amp < w_on < 2*amp and w_off < 0.1*amp and e_mean < 1e-9 and e_u < 1e-6
+    ok = (t_end > 1.49 and abs(res) < 1e-4 and np.abs(ww_on[1]).max() - 1e-9 <= w_on < amp and amp < np.abs(ww_on[0]).max() < 2*amp and w_off < 0.1*amp and e_mean < 1e-9 and e_u < 1e-6
           and abs(rms/np.sqrt((up**2).mean()) - 1) < 1e-6 and e_w < 1e-6 and e_air < 1e-12 and e_part <= 1 + 1e-6)
     print('max|W| with %.4f without %.4f (amplitude %.2f)  ledger residual %.2e (%.2e without)' % (w_on, w_off, amp, res, res_off))
     print("inlet face: z-mean of u' %.1e  |u' - donor| %.1e  rms(u')/rms(donor) %.6f  |w' - donor| %.1e  in the air %.1e  %s"
