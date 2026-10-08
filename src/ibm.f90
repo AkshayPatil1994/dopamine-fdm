@@ -279,7 +279,10 @@ Contains
     Integer(Int32) :: partner_x
     Integer(Int32) :: objid_max_local, objid_max_global
 
-    If (Allocated(phi))       Deallocate(phi)
+    If (Allocated(phi)) Then
+       !$acc exit data delete(phi)
+       Deallocate(phi)
+    End If
     If (Allocated(Umask_cc))  Deallocate(Umask_cc)
     If (Allocated(ibm_obj_id)) Deallocate(ibm_obj_id)
     Allocate ( phi       (nxg, nyg, nzg) )
