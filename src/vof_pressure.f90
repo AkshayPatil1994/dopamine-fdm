@@ -35,6 +35,7 @@ Module vof_pressure
   ! carry no flux in the pressure operator, the transporting velocity and the interface transport. vp_mu/mv/mw are the 1/0 face
   ! masks (shaped like U, V, W), vp_act the 1/0 cell mask (0 = every face closed: solid cell), padded by one plane like C.
   Logical :: vp_masked = .False.
+  Logical :: vp_dev = .False.   ! masked single-phase path on the GPU: the PCG vectors and coefficients are device-resident
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_mu, vp_mv, vp_mw, vp_act
   Logical :: vp_use_layered = .True.   ! .False.: the layered preconditioner is skipped (constant-coefficient solves)
 
@@ -103,12 +104,14 @@ Contains
     Integer(Int32) :: partner_x
 
     Call x_periodic_partner(is_first_x, is_last_x, partner_x)
+    !$acc kernels present(U,V,W,gu,gv,gw) if(vp_dev)
     U(2:nx-1,2:nyg-1,2:nzg-1) = U(2:nx-1,2:nyg-1,2:nzg-1) - s*gu(2:nx-1,2:nyg-1,2:nzg-1)
     If ( .Not. is_last_x .Or. x_bc_type == 1 ) Then
        U(nx,2:nyg-1,2:nzg-1) = U(nx,2:nyg-1,2:nzg-1) - s*gu(nx,2:nyg-1,2:nzg-1)
     End If
     V(2:nxg-1,2:ny-1,2:nzg-1) = V(2:nxg-1,2:ny-1,2:nzg-1) - s*gv(2:nxg-1,2:ny-1,2:nzg-1)
     W(2:nxg-1,2:nyg-1,2:nz-1) = W(2:nxg-1,2:nyg-1,2:nz-1) - s*gw(2:nxg-1,2:nyg-1,2:nz-1)
+    !$acc end kernels
 
   End Subroutine apply_face_gradient
 
@@ -119,6 +122,8 @@ Contains
     Call vp_init
     vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
     If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
+    vp_dev = .True.
+    !$acc enter data copyin(vp_bu,vp_bv,vp_bw,vp_mu,vp_mv,vp_mw,vp_w,vp_act) create(vp_r,vp_z,vp_d,vp_ap)
     If ( pcg_precond == 2 ) Call vp_selftest_mg
 
   End Subroutine vp_init_masked
@@ -141,10 +146,12 @@ Contains
        End Do
     End Do
     a = a*vp_w/Max(vp_w, 1d-300);  b = b*vp_w/Max(vp_w, 1d-300)
+    !$acc enter data copyin(a,b) create(Ma,Mb)
     Call vp_remove_mean(a);  Call vp_remove_mean(b)
     Call vp_precond(a, Ma);  Call vp_precond(b, Mb)
     sab = vp_dot(a, Mb);  sba = vp_dot(b, Ma);  saa = vp_dot(a, Ma);  sbb = vp_dot(b, Mb)
     If ( myid == 0 ) Write(*,'(A,4ES14.5)') '   GMG selftest a.Mb, b.Ma, a.Ma, b.Mb = ', sab, sba, saa, sbb
+    !$acc exit data delete(a,b,Ma,Mb)
     Deallocate( a, b, Ma, Mb )
 
   End Subroutine vp_selftest_mg
@@ -157,12 +164,39 @@ Contains
     Real(Int64), Allocatable :: fd(:,:,:), ph(:,:,:), gu(:,:,:), gv(:,:,:), gw(:,:,:)
     Real(Int64) :: umax
     Logical :: is_first_p, is_last_p
-    Integer(Int32) :: partner_p
+    Integer(Int32) :: partner_p, i, j, k
 
     Allocate( fd(nxg,nyg,nzg), ph(nxg,nyg,nzg), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
+    !$acc enter data create(fd,ph,gu,gv,gw) if(vp_dev)
+    !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
     U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
+    !$acc end kernels
     Call vp_div(U, V, W, fd)
-    umax = Max( MaxVal(Abs(U)), MaxVal(Abs(V)), MaxVal(Abs(W)) )
+    umax = 0d0
+    !$acc parallel loop collapse(3) reduction(max:umax) present(U) if(vp_dev)
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nx
+             umax = Max(umax, Abs(U(i,j,k)))
+          End Do
+       End Do
+    End Do
+    !$acc parallel loop collapse(3) reduction(max:umax) present(V) if(vp_dev)
+    Do k = 1, nzg
+       Do j = 1, ny
+          Do i = 1, nxg
+             umax = Max(umax, Abs(V(i,j,k)))
+          End Do
+       End Do
+    End Do
+    !$acc parallel loop collapse(3) reduction(max:umax) present(W) if(vp_dev)
+    Do k = 1, nz
+       Do j = 1, nyg
+          Do i = 1, nxg
+             umax = Max(umax, Abs(W(i,j,k)))
+          End Do
+       End Do
+    End Do
     Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     Call vp_pcg(fd, 800, 1d-13, ph, rfloor=1d-14*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
     Call vp_halo(ph, .True.)
@@ -170,26 +204,33 @@ Contains
     Call apply_face_gradient(gu, gv, gw, 1d0)
 
     If ( rk_step == 3 ) Then
+       !$acc kernels present(P,ph) if(vp_dev)
        P = 0d0
        P(2:nxg-1,2:nyg-1,2:nzg-1) = ph(2:nxg-1,2:nyg-1,2:nzg-1)/(dt*rk_coef(3,3))
        P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)
+       !$acc end kernels
        Call update_ghost_interior_planes_x(P,4)
        Call update_ghost_interior_planes(P,4)
        If ( x_bc_type == 0 ) Then
           Call apply_periodic_bc_x(P,4)
        Else
           Call x_periodic_partner(is_first_p, is_last_p, partner_p)
+          !$acc kernels present(P) if(vp_dev)
           If ( is_first_p ) P(1,:,:) = P(2,:,:)
           If ( is_last_p  ) P(nxg,:,:) = P(nxg-1,:,:)
+          !$acc end kernels
        End If
        If ( z_bc_type == 0 ) Then
           Call apply_periodic_bc_z(P,4)
        Else
           Call z_periodic_partner(is_first_p, is_last_p, partner_p)
+          !$acc kernels present(P) if(vp_dev)
           If ( is_first_p ) P(:,:,1) = P(:,:,2)
           If ( is_last_p  ) P(:,:,nzg) = P(:,:,nzg-1)
+          !$acc end kernels
        End If
     End If
+    !$acc exit data delete(fd,ph,gu,gv,gw) if(vp_dev)
     Deallocate( fd, ph, gu, gv, gw )
 
   End Subroutine vp_project_masked
@@ -398,10 +439,40 @@ Contains
     Real(Int64), Intent(InOut) :: F(nxg,nyg,nzg)
     Logical,     Intent(In)    :: antisym
 
+    If ( vp_dev .And. nprocs == 1 ) Then
+       ! one rank: the wraps of the host path below as device copies (z always wraps, as in finish_scalar_halos)
+       !$acc kernels present(F)
+       If ( x_bc_type == 0 ) Then
+          F(1,:,:) = F(nxg-2,:,:);  F(nxg-1,:,:) = F(2,:,:);  F(nxg,:,:) = F(3,:,:)
+       Else
+          F(1,:,:) = F(2,:,:)
+          If ( antisym ) Then
+             F(nxg,:,:) = -F(nxg-1,:,:)
+          Else
+             F(nxg,:,:) = F(nxg-1,:,:)
+          End If
+       End If
+       F(:,:,1) = F(:,:,nzg-2);  F(:,:,nzg-1) = F(:,:,2);  F(:,:,nzg) = F(:,:,3)
+       F(:,1,:) = F(:,2,:);  F(:,nyg,:) = F(:,nyg-1,:)
+       !$acc end kernels
+       Return
+    End If
+    Call vp_halo_host(F, antisym)
+    !$acc update device(F) if(vp_dev)
+
+  End Subroutine vp_halo
+
+
+  Subroutine vp_halo_host(F, antisym)
+
+    Real(Int64), Intent(InOut) :: F(nxg,nyg,nzg)
+    Logical,     Intent(In)    :: antisym
+
     Logical :: is_first, is_last
     Integer(Int32) :: partner
 
     Call update_ghost_interior_planes_x(F, 4)
+    !$acc update host(F) if(vp_dev)   ! with several ranks the GPU build exchanges the x planes on the device
     If ( x_bc_type == 1 ) Then
        Call x_periodic_partner(is_first, is_last, partner)
        If ( is_first ) F(1,:,:) = F(2,:,:)
@@ -423,7 +494,7 @@ Contains
        F(:,nyg,:) = F(:,nyg-1,:)
     End If
 
-  End Subroutine vp_halo
+  End Subroutine vp_halo_host
 
 
   !> out = div(beta grad phi) at the interior cells; phi needs valid ghost layers (vp_halo with antisym=.True.)
@@ -436,14 +507,17 @@ Contains
     Real(Int64) :: inv_dx2, hy, hz, ihy_hi, ihy_lo, ihz_hi, ihz_lo, fxh, fxl, fyh, fyl, fzh, fzl
 
     inv_dx2 = 1d0/(dx*dx)
+    !$acc kernels present(out) if(vp_dev)
     out = 0d0
+    !$acc end kernels
+    !$acc parallel loop collapse(3) present(phi,out,vp_bu,vp_bv,vp_bw,y,yg,z,zg) if(vp_dev)
     Do k = 2, nzg-1
-       hz = z(k) - z(k-1)
-       ihz_hi = 1d0/(zg(k+1) - zg(k));  ihz_lo = 1d0/(zg(k) - zg(k-1))
        Do j = 2, nyg-1
-          hy = y(j) - y(j-1)
-          ihy_hi = 1d0/(yg(j+1) - yg(j));  ihy_lo = 1d0/(yg(j) - yg(j-1))
           Do i = 2, nxg-1
+             hz = z(k) - z(k-1)
+             ihz_hi = 1d0/(zg(k+1) - zg(k));  ihz_lo = 1d0/(zg(k) - zg(k-1))
+             hy = y(j) - y(j-1)
+             ihy_hi = 1d0/(yg(j+1) - yg(j));  ihy_lo = 1d0/(yg(j) - yg(j-1))
              fxh = vp_bu(i,j,k)*( phi(i+1,j,k) - phi(i,j,k) )
              fxl = vp_bu(i-1,j,k)*( phi(i,j,k) - phi(i-1,j,k) )
              fyh = vp_bv(i,j,k)*( phi(i,j+1,k) - phi(i,j,k) )*ihy_hi
@@ -468,7 +542,10 @@ Contains
     Real(Int64) :: inv_dx
 
     inv_dx = 1d0/dx
+    !$acc kernels present(gu,gv,gw) if(vp_dev)
     gu = 0d0;  gv = 0d0;  gw = 0d0
+    !$acc end kernels
+    !$acc parallel loop collapse(3) present(phi,gu,vp_bu) if(vp_dev)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, Min(nx, nxg-1)
@@ -476,6 +553,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(phi,gv,vp_bv,yg) if(vp_dev)
     Do k = 1, nzg
        Do j = 1, ny
           Do i = 1, nxg
@@ -483,6 +561,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(phi,gw,vp_bw,zg) if(vp_dev)
     Do k = 1, Min(nz, nzg-1)
        Do j = 1, nyg
           Do i = 1, nxg
@@ -504,12 +583,15 @@ Contains
     Real(Int64) :: inv_dx, inv_hy, inv_hz
 
     inv_dx = 1d0/dx
+    !$acc kernels present(d) if(vp_dev)
     d = 0d0
+    !$acc end kernels
+    !$acc parallel loop collapse(3) present(Fu,Fv,Fw,d,y,z) if(vp_dev)
     Do k = 2, nzg-1
-       inv_hz = 1d0/(z(k) - z(k-1))
        Do j = 2, nyg-1
-          inv_hy = 1d0/(y(j) - y(j-1))
           Do i = 2, nxg-1
+             inv_hz = 1d0/(z(k) - z(k-1))
+             inv_hy = 1d0/(y(j) - y(j-1))
              d(i,j,k) = ( Fu(i,j,k) - Fu(i-1,j,k) )*inv_dx + ( Fv(i,j,k) - Fv(i,j-1,k) )*inv_hy &
                       + ( Fw(i,j,k) - Fw(i,j,k-1) )*inv_hz
           End Do
@@ -517,11 +599,12 @@ Contains
     End Do
     If ( vp_masked ) Then
        ! blocked (IBM solid) faces carry no flux: every connected fluid region keeps a compatible right-hand side
+       !$acc parallel loop collapse(3) present(Fu,Fv,Fw,d,vp_mu,vp_mv,vp_mw,y,z) if(vp_dev)
        Do k = 2, nzg-1
-          inv_hz = 1d0/(z(k) - z(k-1))
           Do j = 2, nyg-1
-             inv_hy = 1d0/(y(j) - y(j-1))
              Do i = 2, nxg-1
+                inv_hz = 1d0/(z(k) - z(k-1))
+                inv_hy = 1d0/(y(j) - y(j-1))
                 d(i,j,k) = ( Fu(i,j,k)*vp_mu(i,j,k) - Fu(i-1,j,k)*vp_mu(i-1,j,k) )*inv_dx &
                          + ( Fv(i,j,k)*vp_mv(i,j,k) - Fv(i,j-1,k)*vp_mv(i,j-1,k) )*inv_hy &
                          + ( Fw(i,j,k)*vp_mw(i,j,k) - Fw(i,j,k-1)*vp_mw(i,j,k-1) )*inv_hz
@@ -537,8 +620,17 @@ Contains
 
     Real(Int64), Intent(In) :: a(nxg,nyg,nzg), b(nxg,nyg,nzg)
     Real(Int64) :: s, sl
+    Integer(Int32) :: i, j, k
 
-    sl = Sum( vp_w*a*b )
+    sl = 0d0
+    !$acc parallel loop collapse(3) reduction(+:sl) present(vp_w,a,b) if(vp_dev)
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             sl = sl + vp_w(i,j,k)*a(i,j,k)*b(i,j,k)
+          End Do
+       End Do
+    End Do
     Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
   End Function vp_dot
@@ -549,8 +641,17 @@ Contains
 
     Real(Int64), Intent(In) :: a(nxg,nyg,nzg)
     Real(Int64) :: s, sl
+    Integer(Int32) :: i, j, k
 
-    sl = MaxVal( Abs(a), mask=( vp_w > 0d0 ) )
+    sl = 0d0
+    !$acc parallel loop collapse(3) reduction(max:sl) present(vp_w,a) if(vp_dev)
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             If ( vp_w(i,j,k) > 0d0 ) sl = Max(sl, Abs(a(i,j,k)))
+          End Do
+       End Do
+    End Do
     Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
 
   End Function vp_maxabs
@@ -560,14 +661,25 @@ Contains
 
     Real(Int64), Intent(InOut) :: a(nxg,nyg,nzg)
     Real(Int64) :: sl, s
+    Integer(Int32) :: i, j, k
 
     ! the pressure is pinned by the Dirichlet outlet when x is not periodic, so the operator is not singular: a mean removal
     ! would perturb the system and stall the PCG at a finite residual
     If ( x_bc_type == 1 ) Return
-    sl = Sum( vp_w*a )
+    sl = 0d0
+    !$acc parallel loop collapse(3) reduction(+:sl) present(vp_w,a) if(vp_dev)
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             sl = sl + vp_w(i,j,k)*a(i,j,k)
+          End Do
+       End Do
+    End Do
     Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    !$acc kernels present(a,vp_act) if(vp_dev)
     a = a - s/vp_wsum
     If ( vp_masked ) a = a*vp_act(1:nxg,1:nyg,1:nzg)   ! the solid cells stay exactly zero (the weighted sum is unchanged)
+    !$acc end kernels
 
   End Subroutine vp_remove_mean
 
@@ -594,7 +706,9 @@ Contains
        z(2:nxg,2:nyg-1,2:nzg) = rhs_p(2:nxg,2:nyg-1,2:nzg)
     End If
     ! the fast solver knows nothing of the body: keep the correction out of the solid cells (rows of the operator are empty there)
+    !$acc kernels present(z,vp_act) if(vp_dev)
     If ( vp_masked ) z = z*vp_act(1:nxg,1:nyg,1:nzg)
+    !$acc end kernels
     Call vp_remove_mean(z)
 
   End Subroutine vp_precond
@@ -618,10 +732,12 @@ Contains
     Logical :: abs_stop
 
     abs_stop = ( vof_div_tol > 0d0 .And. Present(rscale) )
+    !$acc kernels present(x,vp_r,f) if(vp_dev)
     x = 0d0
+    vp_r = f
+    !$acc end kernels
     vp_iters_last = 0
     vp_res_last = 0d0
-    vp_r = f
     Call vp_remove_mean(vp_r)
     r0 = Sqrt(vp_dot(vp_r, vp_r))
     If ( r0 == 0d0 ) Return
@@ -629,7 +745,9 @@ Contains
        If ( rscale*vp_maxabs(vp_r) < vof_div_tol ) Return
     End If
     Call vp_precond(vp_r, vp_z)
+    !$acc kernels present(vp_d,vp_z) if(vp_dev)
     vp_d = vp_z
+    !$acc end kernels
     rz = vp_dot(vp_r, vp_z)
     If ( .Not. ( rz < 0d0 ) ) Return   ! the operator and the preconditioner are negative definite (Laplacians)
     Do it = 1, nit
@@ -638,8 +756,10 @@ Contains
        den = vp_dot(vp_d, vp_ap)
        If ( .Not. ( den < 0d0 ) ) Exit
        alpha = rz/den
+       !$acc kernels present(x,vp_d,vp_r,vp_ap) if(vp_dev)
        x = x + alpha*vp_d
        vp_r = vp_r - alpha*vp_ap
+       !$acc end kernels
        Call vp_remove_mean(vp_r)
        vp_iters_last = it
        vp_its_total = vp_its_total + 1
@@ -657,7 +777,9 @@ Contains
        Call vp_precond(vp_r, vp_z)
        rzn = vp_dot(vp_r, vp_z)
        If ( .Not. ( rzn < 0d0 ) ) Exit
+       !$acc kernels present(vp_d,vp_z) if(vp_dev)
        vp_d = vp_z + (rzn/rz)*vp_d
+       !$acc end kernels
        rz = rzn
     End Do
 

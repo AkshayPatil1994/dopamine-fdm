@@ -11,7 +11,7 @@ Module time_integration
   Use wallmodel
   Use sgs_models
   Use ibm
-  Use ibm_stress,       Only : ibm_stress_update, nu_const, ibm_stair_forces
+  Use ibm_stress,       Only : ibm_stress_update, nu_const, ibm_stair_forces, ovr_u, ovr_v, ovr_w
   Use vof_pressure,     Only : vp_project_masked, vp_mu, vp_mv, vp_mw
   Use scalar_transport,  Only : compute_rhs_scalar, apply_scalar_bc
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
@@ -44,7 +44,10 @@ Contains
   !> Wall-model stress on the staircase faces of the immersed body (ibm_method = 1 with the IBM wall model), from the current velocity
   Subroutine update_ibm_stress
 
-    If ( ibm_stress_on ) Call ibm_stress_update(U, V, W, vp_mu, vp_mv, vp_mw, nu_const)
+    If ( .Not. ibm_stress_on ) Return
+    !$acc update host(U,V,W)
+    Call ibm_stress_update(U, V, W, vp_mu, vp_mv, vp_mw, nu_const)
+    !$acc update device(ovr_u,ovr_v,ovr_w)
 
   End Subroutine update_ibm_stress
 
@@ -615,6 +618,7 @@ Contains
     If ( ibm_input_mode >= 1 .And. nsampling > 0 .And. Mod(istep, nsampling) == 0 ) Then
        Call profiler_start(PROF_IBM)
        If ( ibm_method == 1 ) Then
+          !$acc update host(U,V,W,P,nu_t)
           Call ibm_stair_forces(U, V, W, Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc)
        Else
           Call compute_ibm_forces(U, V, W, &

@@ -277,8 +277,10 @@ Contains
        If ( ibm_method == 1 .And. ibm_input_mode < 1 ) &
             Call abort_input( 'ERROR: ibm_method=1 needs an immersed body (ibm_input_mode >= 1)' )
 #ifdef GPU_POISSON
-       If ( ibm_method == 1 ) &
-            Call abort_input( 'ERROR: ibm_method=1 (masked projection) is host-only; not available in a GPU build' )
+       If ( ibm_method == 1 .And. pcg_precond < 1 ) &
+            Call abort_input( 'ERROR: ibm_method=1 in a GPU build needs the multigrid preconditioner (pcg_precond = 1)' )
+       If ( pcg_precond >= 1 .And. vof_flow >= 1 ) &
+            Call abort_input( 'ERROR: pcg_precond = 1 is not available for the two-fluid solver in a GPU build' )
 #endif
        alphaGrid  = alpha_grid
        ! grid_type is used directly from the global module (no alias needed)

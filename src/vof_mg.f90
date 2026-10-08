@@ -366,24 +366,25 @@ Contains
     Integer(Int32) :: i, j, k, n
     Real(Int64) :: glo, ghi
 
-    !$acc kernels present(a)
+    !$acc kernels present(a) async(1)
     a(:,0,:) = a(:,1,:)
     a(:,nj+1,:) = a(:,nj,:)
     !$acc end kernels
     If ( mg_xself ) Then
-       !$acc kernels present(a)
+       !$acc kernels present(a) async(1)
        a(0,:,:) = a(ni,:,:)
        a(ni+1,:,:) = a(1,:,:)
        !$acc end kernels
     Else
        n = (nj+2)*(nk+2)
-       !$acc parallel loop collapse(2) present(a,mg_sbx)
+       !$acc parallel loop collapse(2) present(a,mg_sbx) async(1)
        Do k = 0, nk+1
           Do j = 0, nj+1
              mg_sbx(1+j+(nj+2)*k,1) = a(ni,j,k)
              mg_sbx(1+j+(nj+2)*k,2) = a(1,j,k)
           End Do
        End Do
+       !$acc wait(1)
        !$acc update host(mg_sbx(1:n,1:2))
        Call MPI_Sendrecv(mg_sbx(1,1), n, MPI_real8, mg_xup, 301, mg_rbx(1,1), n, MPI_real8, mg_xdn, 301, &
                          MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
@@ -391,7 +392,7 @@ Contains
                          MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
        !$acc update device(mg_rbx(1:n,1:2))
        glo = mg_xlo_gs;  ghi = mg_xhi_gs
-       !$acc parallel loop collapse(2) present(a,mg_rbx) firstprivate(glo,ghi)
+       !$acc parallel loop collapse(2) present(a,mg_rbx) firstprivate(glo,ghi) async(1)
        Do k = 0, nk+1
           Do j = 0, nj+1
              If ( mg_xdn /= MPI_PROC_NULL ) Then
@@ -408,26 +409,27 @@ Contains
        End Do
     End If
     If ( mg_zself ) Then
-       !$acc kernels present(a)
+       !$acc kernels present(a) async(1)
        a(:,:,0) = a(:,:,nk)
        a(:,:,nk+1) = a(:,:,1)
        !$acc end kernels
     Else
        n = (ni+2)*(nj+2)
-       !$acc parallel loop collapse(2) present(a,mg_sbz)
+       !$acc parallel loop collapse(2) present(a,mg_sbz) async(1)
        Do j = 0, nj+1
           Do i = 0, ni+1
              mg_sbz(1+i+(ni+2)*j,1) = a(i,j,nk)
              mg_sbz(1+i+(ni+2)*j,2) = a(i,j,1)
           End Do
        End Do
+       !$acc wait(1)
        !$acc update host(mg_sbz(1:n,1:2))
        Call MPI_Sendrecv(mg_sbz(1,1), n, MPI_real8, mg_zup, 303, mg_rbz(1,1), n, MPI_real8, mg_zdn, 303, &
                          MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
        Call MPI_Sendrecv(mg_sbz(1,2), n, MPI_real8, mg_zdn, 304, mg_rbz(1,2), n, MPI_real8, mg_zup, 304, &
                          MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
        !$acc update device(mg_rbz(1:n,1:2))
-       !$acc parallel loop collapse(2) present(a,mg_rbz)
+       !$acc parallel loop collapse(2) present(a,mg_rbz) async(1)
        Do j = 0, nj+1
           Do i = 0, ni+1
              If ( mg_zdn /= MPI_PROC_NULL ) Then
@@ -456,7 +458,7 @@ Contains
     Real(Int64), Intent(InOut) :: t(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
-    !$acc parallel loop collapse(3) present(x,b,cx,cy,cz,dd,t)
+    !$acc parallel loop collapse(3) present(x,b,cx,cy,cz,dd,t) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
@@ -478,27 +480,38 @@ Contains
     Real(Int64), Intent(In) :: cy(0:ni+1,0:nj+1,0:nk+1), m(0:ni+1,0:nj+1,0:nk+1), iw(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
-    !$acc parallel loop gang present(t,cy,m,iw)
+#ifdef GPU_POISSON
+    !$acc parallel loop collapse(2) gang vector present(t,cy,m,iw) async(1)
     Do k = 1, nk
-       !$acc loop seq
+       Do i = 1, ni
+          !$acc loop seq
+          Do j = 2, nj
+             t(i,j,k) = t(i,j,k) + m(i,j,k)*t(i,j-1,k)
+          End Do
+          t(i,nj,k) = t(i,nj,k)*iw(i,nj,k)
+          !$acc loop seq
+          Do j = nj-1, 1, -1
+             t(i,j,k) = ( t(i,j,k) + cy(i,j,k)*t(i,j+1,k) )*iw(i,j,k)
+          End Do
+       End Do
+    End Do
+#else
+    Do k = 1, nk
        Do j = 2, nj
-          !$acc loop vector
           Do i = 1, ni
              t(i,j,k) = t(i,j,k) + m(i,j,k)*t(i,j-1,k)
           End Do
        End Do
-       !$acc loop vector
        Do i = 1, ni
           t(i,nj,k) = t(i,nj,k)*iw(i,nj,k)
        End Do
-       !$acc loop seq
        Do j = nj-1, 1, -1
-          !$acc loop vector
           Do i = 1, ni
              t(i,j,k) = ( t(i,j,k) + cy(i,j,k)*t(i,j+1,k) )*iw(i,j,k)
           End Do
        End Do
     End Do
+#endif
 
   End Subroutine mg_line
 
@@ -512,7 +525,7 @@ Contains
     Logical, Intent(In) :: zero
     Integer(Int32) :: i, j, k
 
-    !$acc parallel loop collapse(3) present(x,d,t)
+    !$acc parallel loop collapse(3) present(x,d,t) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
@@ -569,7 +582,7 @@ Contains
     Real(Int64), Intent(InOut) :: c(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
-    !$acc parallel loop collapse(3) present(a,c)
+    !$acc parallel loop collapse(3) present(a,c) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
@@ -590,7 +603,7 @@ Contains
     Integer(Int32) :: I, J, K, ii, jj, kk
     Real(Int64) :: s
 
-    !$acc parallel loop collapse(3) present(tf,bc)
+    !$acc parallel loop collapse(3) gang vector present(tf,bc) async(1)
     Do K = 1, nkc
        Do J = 1, njc
           Do I = 1, nic
@@ -617,7 +630,7 @@ Contains
     Real(Int64), Intent(In) :: xc(0:nic+1,0:njc+1,0:nkc+1)
     Integer(Int32) :: i, j, k
 
-    !$acc parallel loop collapse(3) present(xf,xc)
+    !$acc parallel loop collapse(3) present(xf,xc) async(1)
     Do k = 1, nkf
        Do j = 1, njf
           Do i = 1, nif
@@ -667,6 +680,7 @@ Contains
     Call mg_load(mg_ni(1), mg_nj(1), mg_nk(1), r, mg_hy1, mg_hz1, mg_b)
     Call mg_vcycle
     Call mg_store(mg_ni(1), mg_nj(1), mg_nk(1), mg_x, z)
+    !$acc wait(1)
 
   End Subroutine mg_precond
 
@@ -678,7 +692,7 @@ Contains
     Real(Int64), Intent(InOut) :: b(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
-    !$acc parallel loop collapse(3) present(r,hy,hz,b)
+    !$acc parallel loop collapse(3) present(r,hy,hz,b) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
@@ -697,7 +711,7 @@ Contains
     Real(Int64), Intent(InOut) :: z(nxg,nyg,nzg)
     Integer(Int32) :: i, j, k
 
-    !$acc parallel loop collapse(3) present(x,z)
+    !$acc parallel loop collapse(3) present(x,z) async(1)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
@@ -705,7 +719,7 @@ Contains
           End Do
        End Do
     End Do
-    !$acc parallel loop collapse(3) present(x,z)
+    !$acc parallel loop collapse(3) present(x,z) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
