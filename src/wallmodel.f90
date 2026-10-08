@@ -418,175 +418,95 @@ Contains
   !  Flat-wall equilibrium wall model — local per-point EQWM
   Subroutine compute_flat_wall_eqwm(U_, W_)
 
-    ! Local per-point EQWM for flat channel walls
-    ! u_tau is solved from nu only -- excluding nu_t avoids SGS contamination of the wall-law, mirrors compute_ibm_wall_model
+    ! Local per-point EQWM for flat channel walls. u_tau comes from the log law at the matching height (nu only: nu_t would contaminate
+    ! the wall law); the wall shear u_tau^2 along the first-cell velocity goes to tau_x / tau_z, which compute_rhs_u / _w use in place of
+    ! the molecular wall-edge flux. The ghost rows stay a no-slip mirror (alpha = 0): a Robin slip length that reproduced the stress
+    ! would be negative for y+ > ~10, and a ghost far from the interior value corrupts the SGS gradient at j=2.
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(In) :: W_
 
     Integer(Int32) :: i, k
-    Real   (Int64) :: u_ref, u_match
-    Real   (Int64) :: y_ref_lo, y_ref_hi, y_match_lo, y_match_hi
-    Real   (Int64) :: u_tau
-    Real   (Int64) :: Delta_yg_lo, Delta_yg_hi
-    Real   (Int64) :: alpha_lo, alpha_hi
-    Real   (Int64) :: nu_eff_lo, nu_eff_hi
-    Real   (Int64) :: W_at_pt, W_match
+    Real   (Int64) :: u_ref, u_match, y_match_lo, y_match_hi, u_tau, W_at_pt, W_match
 
-    ! Wall-normal reference distances (same for the entire wall plane). y_ref_*
-    ! is the actual first-interior-cell height the Robin BC extrapolates from
-    ! (j=2/nyg-1, always); y_match_* is where u_tau/theta_tau are sampled from --
-    ! the same point when flat_wall_model_flag/=2 (j_match_*=2/nyg-1, unshifted),
-    ! or a point further from the wall for the rough EQWM (see j_match_ylo/yhi).
-    y_ref_lo    = yg(2)
-    Delta_yg_lo = yg(2) - yg(1)
-    y_ref_hi    = Ly - yg(nyg-1)
-    Delta_yg_hi = yg(nyg) - yg(nyg-1)
-    y_ref_lo    = Max(y_ref_lo, 1d-14)
-    y_ref_hi    = Max(y_ref_hi, 1d-14)
-    y_match_lo  = Max(yg(j_match_ylo), 1d-14)
-    y_match_hi  = Max(Ly - yg(j_match_yhi), 1d-14)
+    y_match_lo = Max(yg(j_match_ylo), 1d-14)
+    y_match_hi = Max(Ly - yg(j_match_yhi), 1d-14)
 
-    !  alpha_x : Robin slip-length for U (x-faces, nx × nyg × nzg)
-    !$acc parallel loop collapse(2) present(U_,W_,alpha_x)
+    !  U faces (nx × nyg × nzg)
+    !$acc parallel loop collapse(2) present(U_,W_,alpha_x,tau_x)
     Do k = 2, nzg-1
        Do i = 2, nx-1
-
-          ! ---- bottom wall: tangential speed at first interior cell (j=2) ----
+          alpha_x(i, 1, k) = 1.0e10_8;  tau_x(i, 1, k) = 0d0     ! free-slip: Neumann, no stress
           If ( bc_face_ylo /= 2 ) Then
-             ! W approximated by averaging the two bracketing z-faces.
-             W_at_pt  = 0.5d0*(W_(i, 2, k-1) + W_(i, 2, k))
-             u_ref    = Sqrt(U_(i, 2, k)**2 + W_at_pt**2)
-
-             ! Matching-height sample for the u_tau solve (== u_ref/j=2 unless
-             ! flat_wall_model_flag=2 shifted it further from the wall)
-             W_match  = 0.5d0*(W_(i, j_match_ylo, k-1) + W_(i, j_match_ylo, k))
-             u_match  = Sqrt(U_(i, j_match_ylo, k)**2 + W_match**2)
-
-             ! Newton solve (smooth) or explicit log law (rough) for u_tau using nu only
+             W_at_pt = 0.5d0*(W_(i, 2, k-1) + W_(i, 2, k))
+             u_ref   = Sqrt(U_(i, 2, k)**2 + W_at_pt**2)
+             W_match = 0.5d0*(W_(i, j_match_ylo, k-1) + W_(i, j_match_ylo, k))
+             u_match = Sqrt(U_(i, j_match_ylo, k)**2 + W_match**2)
              Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
-
-             ! Robin alpha derivation -- always referenced to the actual first
-             ! interior cell (u_ref/y_ref_lo), since that's what apply_Robin_bc_y
-             ! extrapolates from; only the u_tau solve above uses the matching height.
-             ! Molecular nu governs the near-wall flux for the smooth EQWM (a real
-             ! viscous sublayer sits under y_ref_lo). The rough EQWM has no viscous
-             ! sublayer -- u_tau is set by roughness drag, not molecular diffusion --
-             ! so nu*u_ref/u_tau**2 collapses to ~1e-5 while Delta_yg_lo*0.5 is set by
-             ! the grid (typically 1e-3..1e-2), and alpha saturates at its zero floor
-             ! (molecular no-slip) regardless of z0, silently discarding u_tau. Using
-             ! the mixing-length eddy viscosity implied by the log law at y_ref_lo
-             ! (nu_eff = kappa*u_tau*y_ref_lo) instead keeps alpha in the grid's scale.
-             If ( flat_wall_model_flag == 2 ) Then
-                nu_eff_lo = kappa_wm * u_tau * y_ref_lo
-             Else
-                nu_eff_lo = nu
-             End If
-             alpha_lo = nu_eff_lo * u_ref / Max(u_tau**2, 1d-20) &
-                      - Delta_yg_lo*0.5d0
-             alpha_x(i, 1, k) = Max(alpha_lo, 0d0)
-          Else
-             alpha_x(i, 1, k) = 1.0e10_8   ! Neumann free-slip
+             alpha_x(i, 1, k) = 0d0
+             tau_x(i, 1, k)   = u_tau**2 * U_(i, 2, k) / Max(u_ref, 1d-30)
           End If
 
-          ! ---- top wall -------------------------------------------
+          alpha_x(i, 2, k) = 1.0e10_8;  tau_x(i, 2, k) = 0d0
           If ( bc_face_yhi /= 2 ) Then
-             W_at_pt  = 0.5d0*(W_(i, nyg-1, k-1) + W_(i, nyg-1, k))
-             u_ref    = Sqrt(U_(i, nyg-1, k)**2 + W_at_pt**2)
-
-             W_match  = 0.5d0*(W_(i, j_match_yhi, k-1) + W_(i, j_match_yhi, k))
-             u_match  = Sqrt(U_(i, j_match_yhi, k)**2 + W_match**2)
-
+             W_at_pt = 0.5d0*(W_(i, nyg-1, k-1) + W_(i, nyg-1, k))
+             u_ref   = Sqrt(U_(i, nyg-1, k)**2 + W_at_pt**2)
+             W_match = 0.5d0*(W_(i, j_match_yhi, k-1) + W_(i, j_match_yhi, k))
+             u_match = Sqrt(U_(i, j_match_yhi, k)**2 + W_match**2)
              Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
-
-             If ( flat_wall_model_flag == 2 ) Then
-                nu_eff_hi = kappa_wm * u_tau * y_ref_hi
-             Else
-                nu_eff_hi = nu
-             End If
-             alpha_hi = nu_eff_hi * u_ref / Max(u_tau**2, 1d-20) &
-                      - Delta_yg_hi*0.5d0
-             alpha_x(i, 2, k) = Max(alpha_hi, 0d0)
-          Else
-             alpha_x(i, 2, k) = 1.0e10_8   ! Neumann free-slip
+             alpha_x(i, 2, k) = 0d0
+             tau_x(i, 2, k)   = -u_tau**2 * U_(i, nyg-1, k) / Max(u_ref, 1d-30)
           End If
-
        End Do
     End Do
     !$acc end parallel loop
 
-    ! Fill x-halo planes (periodic in x)
-    !$acc kernels present(alpha_x)
+    ! Fill x-halo planes (periodic in x), z-halo planes (copy from nearest interior; avoids extra MPI exchange)
+    !$acc kernels present(alpha_x,tau_x)
     alpha_x( 1, :, :) = alpha_x(   2, :, :)
     alpha_x(nx, :, :) = alpha_x(nx-1, :, :)
-    ! Fill z-halo planes (copy from nearest interior; avoids extra MPI exchange)
     alpha_x(:, :,     1) = alpha_x(:, :,       2)
     alpha_x(:, :, nzg  ) = alpha_x(:, :, nzg-1  )
+    tau_x( 1, :, :) = tau_x(   2, :, :)
+    tau_x(nx, :, :) = tau_x(nx-1, :, :)
+    tau_x(:, :,     1) = tau_x(:, :,       2)
+    tau_x(:, :, nzg  ) = tau_x(:, :, nzg-1  )
     !$acc end kernels
 
-    !  alpha_z : Robin slip-length for W (z-faces, nxg × nyg × nz)
-    !$acc parallel loop collapse(2) present(U_,W_,alpha_z)
+    !  W faces (nxg × nyg × nz)
+    !$acc parallel loop collapse(2) present(U_,W_,alpha_z,tau_z)
     Do k = 2, nz-1
        Do i = 2, nxg-1
-
-          ! ---- bottom wall ----------------------------------------
+          alpha_z(i, 1, k) = 1.0e10_8;  tau_z(i, 1, k) = 0d0
           If ( bc_face_ylo /= 2 ) Then
-             ! U at this x-centre: average the two bracketing x-faces.
-             u_ref    = Sqrt((0.5d0*(U_(i-1, 2, k) + U_(i, 2, k)))**2 &
-                           + W_(i, 2, k)**2)
-
-             u_match  = Sqrt((0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k)))**2 &
-                           + W_(i, j_match_ylo, k)**2)
-
+             u_ref   = Sqrt((0.5d0*(U_(i-1, 2, k) + U_(i, 2, k)))**2 + W_(i, 2, k)**2)
+             u_match = Sqrt((0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k)))**2 + W_(i, j_match_ylo, k)**2)
              Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
-
-             ! See the alpha_x bottom-wall block above for why nu is replaced
-             ! by a mixing-length nu_eff under the rough EQWM.
-             If ( flat_wall_model_flag == 2 ) Then
-                nu_eff_lo = kappa_wm * u_tau * y_ref_lo
-             Else
-                nu_eff_lo = nu
-             End If
-             alpha_lo = nu_eff_lo * u_ref / Max(u_tau**2, 1d-20) &
-                      - Delta_yg_lo*0.5d0
-             alpha_z(i, 1, k) = Max(alpha_lo, 0d0)
-          Else
-             alpha_z(i, 1, k) = 1.0e10_8   ! Neumann free-slip
+             alpha_z(i, 1, k) = 0d0
+             tau_z(i, 1, k)   = u_tau**2 * W_(i, 2, k) / Max(u_ref, 1d-30)
           End If
 
-          ! ---- top wall -------------------------------------------
+          alpha_z(i, 2, k) = 1.0e10_8;  tau_z(i, 2, k) = 0d0
           If ( bc_face_yhi /= 2 ) Then
-             u_ref    = Sqrt((0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k)))**2 &
-                           + W_(i, nyg-1, k)**2)
-
-             u_match  = Sqrt((0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k)))**2 &
-                           + W_(i, j_match_yhi, k)**2)
-
+             u_ref   = Sqrt((0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k)))**2 + W_(i, nyg-1, k)**2)
+             u_match = Sqrt((0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k)))**2 + W_(i, j_match_yhi, k)**2)
              Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
-
-             If ( flat_wall_model_flag == 2 ) Then
-                nu_eff_hi = kappa_wm * u_tau * y_ref_hi
-             Else
-                nu_eff_hi = nu
-             End If
-             alpha_hi = nu_eff_hi * u_ref / Max(u_tau**2, 1d-20) &
-                      - Delta_yg_hi*0.5d0
-             alpha_z(i, 2, k) = Max(alpha_hi, 0d0)
-          Else
-             alpha_z(i, 2, k) = 1.0e10_8   ! Neumann free-slip
+             alpha_z(i, 2, k) = 0d0
+             tau_z(i, 2, k)   = -u_tau**2 * W_(i, nyg-1, k) / Max(u_ref, 1d-30)
           End If
-
        End Do
     End Do
     !$acc end parallel loop
 
-    ! Fill x-halo planes (periodic in x)
-    !$acc kernels present(alpha_z,alpha_y)
+    !$acc kernels present(alpha_z,alpha_y,tau_z)
     alpha_z(   1, :, :) = alpha_z(     2, :, :)
     alpha_z( nxg, :, :) = alpha_z( nxg-1, :, :)
-    ! Fill z-halo planes (copy from nearest interior)
     alpha_z(:, :,   1) = alpha_z(:, :,     2)
     alpha_z(:, :,  nz) = alpha_z(:, :, nz-1)
+    tau_z(   1, :, :) = tau_z(     2, :, :)
+    tau_z( nxg, :, :) = tau_z( nxg-1, :, :)
+    tau_z(:, :,   1) = tau_z(:, :,     2)
+    tau_z(:, :,  nz) = tau_z(:, :, nz-1)
 
     alpha_y = 0d0
     !$acc end kernels

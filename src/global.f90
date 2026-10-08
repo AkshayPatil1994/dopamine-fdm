@@ -326,6 +326,10 @@ Module global
   ! wall-model Robin BC coefficient arrays
   Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_x, alpha_y, alpha_z
 
+  ! flat-wall EQWM stress: kinematic wall shear along x (U faces) and z (W faces) at the bottom (2nd index 1) and top (2) y wall, used in
+  ! place of the molecular wall-edge flux of compute_rhs_u / compute_rhs_w when flat_wall_model_flag > 0
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: tau_x, tau_z
+
   ! spanwise (z) wall-model Robin BC coefficients (z_bc_type==1, flat_wall_model_flag==1 only --
   ! smooth Reichardt EQWM; rough (flag==2) is not yet supported for z walls). U,V are tangential
   ! to a z wall (Robin); W is the wall-normal component and stays exactly no-penetration, so

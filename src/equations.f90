@@ -10,7 +10,7 @@ Module equations
                               boussinesq_flag, beta_T, grav, T_ref, Tscal, &
                               advection_scheme, uav_active,           &
                               rotation_active, Omega_x, y0_rot, z0_rot, &
-                              y_bc_type, bc_face_ylo, bc_face_yhi
+                              y_bc_type, bc_face_ylo, bc_face_yhi, flat_wall_model_flag, tau_x, tau_z
   Use interpolation
   Use uav_actuator, Only : apply_uav_forcing_u, apply_uav_forcing_v, apply_uav_forcing_w
   
@@ -31,6 +31,7 @@ Contains
     Integer(Int32) :: i, j, k
     Real   (Int64) :: dy_3, dz_3
     Real   (Int64) :: nu_x1, nu_x2, nu_y1, nu_y2, nu_z1, nu_z2
+    Real   (Int64) :: fy1, fy2   ! y-edge momentum fluxes of the viscous term
     ! Uniform x grid: all face/centre spacings equal dx. z spacing z(k)-z(k-1) varies with k
     ! when z_bc_type==1 and alpha_grid_z>0 (spanwise stretching); computed per-k below.
     Real   (Int64) :: inv_dx, inv_dx2
@@ -136,7 +137,7 @@ Contains
     End Do
     !$acc end kernels
 
-    !$acc parallel loop collapse(2) present(term_1,term_2,rhs_u,nu_t,weight_y_0,weight_y_1,weight_z_0,weight_z_1,U_,V_,W_,y,z)
+    !$acc parallel loop collapse(2) present(term_1,term_2,rhs_u,nu_t,tau_x,weight_y_0,weight_y_1,weight_z_0,weight_z_1,U_,V_,W_,y,z)
     Do k=2,nzg-1
 
        Do j=2,nyg-1
@@ -178,11 +179,18 @@ Contains
              nu_z2 = nu + 0.5d0*( weight_z_0(k  )*( nu_t(i,j,k  ) + nu_t(i+1,j,k  ) ) + &
                               weight_z_1(k  )*( nu_t(i,j,k+1) + nu_t(i+1,j,k+1) ) )
 
+             fy2 = nu_y2*( term_1(i,j  ,k) + (V_(i+1,j  ,k)-V_(i,j  ,k))*inv_dx )
+             fy1 = nu_y1*( term_1(i,j-1,k) + (V_(i+1,j-1,k)-V_(i,j-1,k))*inv_dx )
+             ! wall model: the modelled wall shear replaces the molecular flux through the wall edge
+             If ( flat_wall_model_flag > 0 ) Then
+                If ( wall_lo .And. j == 2 ) fy1 = tau_x(i,1,k)
+                If ( wall_hi .And. j == nyg-1 ) fy2 = tau_x(i,2,k)
+             End If
+
              ! viscous term, fused directly into rhs_u (was written to scratch `term` then accumulated separately)
              rhs_u(i,j,k) = rhs_u(i,j,k) +                                                                  &
                            2d0*inv_dx2*(nu_x2*(U_(i+1,j,k)-U_(i,j,k)) - nu_x1*(U_(i,j,k)-U_(i-1,j,k)) )    + & !d(2(nu+nu_t)*du/dx)/dx
-                           inv_dy3*(nu_y2*( term_1(i,j  ,k) + (V_(i+1,j  ,k)-V_(i,j  ,k))*inv_dx )         - &
-                                     nu_y1*( term_1(i,j-1,k) + (V_(i+1,j-1,k)-V_(i,j-1,k))*inv_dx ) )       + & !d((nu+nu_t)*(du/dy+dv/dx))/dy
+                           inv_dy3*( fy2 - fy1 )                                         + & !d((nu+nu_t)*(du/dy+dv/dx))/dy
                            inv_dz3*(nu_z2*( term_2(i,j,k  ) + (W_(i+1,j,k  )-W_(i,j,k  ))*inv_dx ) - &
                                     nu_z1*( term_2(i,j,k-1) + (W_(i+1,j,k-1)-W_(i,j,k-1))*inv_dx ) ) + & !d((nu+nu_t)*(du/dz+dw/dx))/dz
                            dPdx ! constant pressure gradient forcing
@@ -415,6 +423,7 @@ Contains
     Real   (Int64) :: dy_3
     Real   (Int64) :: dz_1, dz_2, dz_3   ! z spacings, W's own face-indexed convention (mirrors V's dy_1/dy_2/dy_3 in y)
     Real   (Int64) :: nu_x1, nu_x2, nu_y1, nu_y2, nu_z1, nu_z2
+    Real   (Int64) :: fy1, fy2   ! y-edge momentum fluxes of the viscous term
     Real   (Int64) :: inv_dx
     Real   (Int64) :: inv_dy_j   ! 1/(y(j)-y(j-1))
     Real   (Int64) :: inv_dy3    ! 1/dy_3
@@ -510,7 +519,7 @@ Contains
     ! nu_t at the required face locations is read directly from the global array
     ! in the loop below; a separate interpolate_y pass is not needed.
 
-    !$acc parallel loop collapse(2) present(term_1,rhs_w,nu_t,weight_y_0,weight_y_1,weight_z_0,weight_z_1,U_,V_,W_,y,z,zg)
+    !$acc parallel loop collapse(2) present(term_1,rhs_w,nu_t,tau_z,weight_y_0,weight_y_1,weight_z_0,weight_z_1,U_,V_,W_,y,z,zg)
     Do k=2,nz-1
 
        Do j=2,nyg-1
@@ -557,12 +566,18 @@ Contains
              nu_z1 = nu + nu_t(i,j,k)
              nu_z2 = nu + nu_t(i,j,k+1)
 
+             fy2 = nu_y2*( term_1(i,j  ,k) + (V_(i,j  ,k+1) - V_(i,j  ,k))*inv_dz3 )
+             fy1 = nu_y1*( term_1(i,j-1,k) + (V_(i,j-1,k+1) - V_(i,j-1,k))*inv_dz3 )
+             If ( flat_wall_model_flag > 0 ) Then
+                If ( wall_lo .And. j == 2 ) fy1 = tau_z(i,1,k)
+                If ( wall_hi .And. j == nyg-1 ) fy2 = tau_z(i,2,k)
+             End If
+
              ! viscous term, fused directly into rhs_w (was written to scratch `term` then accumulated separately)
              rhs_w(i,j,k) = rhs_w(i,j,k) +                                                                                &
                            inv_dx*(nu_x2*( (W_(i+1,j,k) - W_(i  ,j,k))*inv_dx + (U_(i  ,j,k+1) - U_(i  ,j,k))*inv_dz3 )   - &
                                    nu_x1*( (W_(i  ,j,k) - W_(i-1,j,k))*inv_dx + (U_(i-1,j,k+1) - U_(i-1,j,k))*inv_dz3 ) ) + & !d((nu+nu_t)*(dw/dx+du/dz))/dx
-                           inv_dy3*(nu_y2*( term_1(i,j  ,k) + (V_(i,j  ,k+1) - V_(i,j  ,k))*inv_dz3 )                   - &
-                                     nu_y1*( term_1(i,j-1,k) + (V_(i,j-1,k+1) - V_(i,j-1,k))*inv_dz3 ) )                 + & !d((nu+nu_t)*(dw/dy+dv/dz))/dy
+                           inv_dy3*( fy2 - fy1 )                                         + & !d((nu+nu_t)*(dw/dy+dv/dz))/dy
                            two_inv_dz3*(nu_z2*(W_(i,j,k+1)-W_(i,j,k))*inv_dz2 - nu_z1*(W_(i,j,k)-W_(i,j,k-1))*inv_dz1)     + & !d(2(nu+nu_t)*dw/dz)/dz
                            dPdz ! constant pressure gradient forcing
 

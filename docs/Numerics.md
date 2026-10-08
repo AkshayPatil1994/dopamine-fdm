@@ -347,15 +347,18 @@ cross-term for the *other* tangential velocity, e.g. $V$ interpolated onto $U$'s
 point) and $W$ is wall-normal, staying exactly no-penetration — the direct $y$-wall
 analogue of §7.1 below, with $y \leftrightarrow z$ and $V \leftrightarrow W$.
 
-### 7.1 Robin ghost-cell BC
+### 7.1 Wall-stress boundary condition (flat walls)
 
-The wall-normal velocity gradient at the boundary is related to the local wall-shear
-stress through a Robin (slip-length) condition parameterised by $\alpha$:
-
-$$U_\text{ghost} = \alpha_y\\,U_\text{interior} + (1-\alpha_y)\\,U_\text{wall}$$
-
-For no-slip ($\alpha_y = 0$) and free-slip ($\alpha_y = 1$) this reduces to the
-respective Dirichlet/Neumann limits.
+The log law gives the friction velocity $u_\tau$ from the first-cell tangential speed, and the modelled wall shear
+$\tau_w = u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$ (kinematic) replaces the molecular wall-edge flux of the viscous term in
+`compute_rhs_u` / `compute_rhs_w` (arrays `tau_x`, `tau_z`, set in `compute_flat_wall_eqwm`). The ghost rows keep the no-slip
+mirror ($\alpha = 0$). An earlier version imposed the stress through a Robin slip length
+$\alpha = \nu u_\text{ref}/u_\tau^2 - \Delta y/2$; since $u^+ \le y^+$ this is never positive, so with the zero floor it was a plain no-slip
+wall whenever the first cell is at $y^+ \gtrsim 10$, and without the floor the ghost value is many times the interior one and corrupts
+the SGS gradient in the first cell. Free-slip walls take no stress. Check: a uniform stream between two modelled walls decays as the
+integrated log law (`wm_stream`), and a coarse channel ($Re_\tau = 395$, first cell at $y^+ \approx 25$) holds a mean wall stress equal to
+$dP/dx\,h$. The skew-symmetric convective form (`advection_scheme = 0`) is not momentum conserving on such a coarse near-wall grid (a
+spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES until that is resolved.
 
 ### 7.2 Log-law Newton iteration
 
@@ -365,7 +368,7 @@ viscous-sublayer composite:
 $$u^+ = \begin{cases} y^+ & y^+ < 5 \\\\ \frac{1}{\kappa}\ln(y^+) + B & y^+ \geq 5 \end{cases}$$
 
 with $\kappa = 0.41$ and $B = 5.2$ (Prandtl–Kármán constants). The iteration uses up to
-20 Newton steps; $\alpha$ is then back-computed from $u_\tau$.
+20 Newton steps; the wall stress $u_\tau^2$ then follows directly.
 
 For IBM surfaces the reference velocity is the wall-tangential component of the velocity
 interpolated at the image-point location, projected onto the surface tangent plane.
@@ -382,9 +385,7 @@ u_\tau = \frac{\kappa\,u_\text{ref}}{\ln(y_\text{ref}/z_0)}$$
 Momentum ($z_0$, `z0_ylo`/`z0_yhi`) and thermal ($z_0^h$, `z0h_ylo`/`z0h_yhi`)
 roughness are independent inputs, matching real surfaces where the two transport
 mechanisms (bluff-body drag vs. molecular diffusion at the roughness elements) differ.
-The Robin coefficient $\alpha$ is still derived exactly as in §7.1/7.2 -- only the
-source of $u_\tau$ changes; $\alpha$ is a numerical device that makes the discrete
-ghost-to-first-cell flux reproduce $u_\tau^2$, independent of which log law produced it.
+The wall stress is applied exactly as in §7.1 -- only the source of $u_\tau$ changes.
 
 ### 7.4 Matching-height sampling
 
@@ -395,9 +396,7 @@ run, the literal first grid cell can violate this badly (e.g. $y_\text{ref}/z_0
 $u_\tau$ becomes extremely sensitive to noise in the sampled velocity). To avoid
 this, `flat_wall_model_flag = 2` resolves a **matching-height** grid index once at
 startup -- the nearest interior point whose distance to the wall clears
-$20\,z_0$ -- and samples $u_\tau$/$\theta_\tau$ there instead of at $j=2$. The Robin
-$\alpha$ itself still references the actual first interior cell, since that is what
-the ghost-cell extrapolation in §7.1 uses; only the log-law solve benefits from the
+$20\,z_0$ -- and samples $u_\tau$/$\theta_\tau$ there instead of at $j=2$. The stress direction still follows the first interior cell; only the log-law solve benefits from the
 better-conditioned sample point. A startup warning is printed if no grid point within
 the half-channel clears the ratio.
 

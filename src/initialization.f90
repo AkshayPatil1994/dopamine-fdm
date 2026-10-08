@@ -760,12 +760,15 @@ Contains
     Allocate( alpha_z(1:nxg,1:2,1:nz ) )
     Allocate( alpha_z_u(1:nx ,1:nyg,1:2) )
     Allocate( alpha_z_v(1:nxg,1:ny ,1:2) )
+    Allocate( tau_x(1:nx ,1:2,1:nzg), tau_z(1:nxg,1:2,1:nz ) )
 
     alpha_x   = 0d0
     alpha_y   = 0d0
     alpha_z   = 0d0
     alpha_z_u = 0d0
     alpha_z_v = 0d0
+    tau_x     = 0d0
+    tau_z     = 0d0
 
     If ( boussinesq_flag >= 1 ) Then
        Allocate( alpha_T(1:nxg,1:2,1:nzg) )
@@ -780,6 +783,7 @@ Contains
     ! solves in wallmodel.f90 aren't sampled from inside the roughness sublayer just
     ! because the near-wall grid happens to be fine (same threshold as wallmodel.f90's
     ! MATCH_RATIO_MIN -- kept as a literal here to avoid a new module dependency).
+    j_match_ylo = 2;  j_match_yhi = nyg-1
     If ( flat_wall_model_flag == 2 ) Then
        j_match_ylo = 2
        If ( bc_face_ylo /= 2 .And. z0_ylo > 0d0 ) Then
@@ -828,7 +832,7 @@ Contains
     ! nu_t too: DNS (sgs_model==0) never writes it on device, but the viscous stencils read it (incl. z wrap ghost planes)
     !$acc update device(U,V,W,nu_t)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
-    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,alpha_z_u,alpha_z_v)
+    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,alpha_z_u,alpha_z_v,tau_x,tau_z)
     ! Boussinesq temperature: stays device-resident end-to-end so compute_rhs_v can read it directly
     If ( boussinesq_flag >= 1 ) Then
        !$acc enter data create(Tscal,Tscal_o,Ft1,Ft2,Ft3)
