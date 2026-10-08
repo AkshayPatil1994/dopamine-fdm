@@ -272,6 +272,8 @@ Contains
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
        Lx_i       = Lx;  Ly_i       = Ly;  Lz_i       = Lz
        Call check_vof_inputs
+       If ( pcg_precond < 0 .Or. pcg_precond > 1 ) &
+            Call abort_input( 'ERROR: pcg_precond must be 0 (fast Poisson solver) or 1 (multigrid)' )
        If ( ibm_method < 0 .Or. ibm_method > 1 ) &
             Call abort_input( 'ERROR: ibm_method must be 0 (ghost-cell) or 1 (staircase)' )
        If ( ibm_method == 1 .And. ibm_input_mode < 1 ) &

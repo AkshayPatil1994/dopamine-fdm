@@ -124,37 +124,8 @@ Contains
     If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
     vp_dev = .True.
     !$acc enter data copyin(vp_bu,vp_bv,vp_bw,vp_mu,vp_mv,vp_mw,vp_w,vp_act) create(vp_r,vp_z,vp_d,vp_ap)
-    If ( pcg_precond == 2 ) Call vp_selftest_mg
 
   End Subroutine vp_init_masked
-
-
-  !> pcg_precond = 2: symmetry (a.Mb - b.Ma) and sign (a.Ma < 0) of the multigrid preconditioner for rough zero-mean vectors
-  Subroutine vp_selftest_mg
-
-    Real(Int64), Allocatable :: a(:,:,:), b(:,:,:), Ma(:,:,:), Mb(:,:,:)
-    Integer(Int32) :: i, j, k
-    Real(Int64) :: sab, sba, saa, sbb
-
-    Allocate( a(nxg,nyg,nzg), b(nxg,nyg,nzg), Ma(nxg,nyg,nzg), Mb(nxg,nyg,nzg) )
-    Do k = 1, nzg
-       Do j = 1, nyg
-          Do i = 1, nxg
-             a(i,j,k) = Sin(1.7d0*i + 0.3d0*j*k + 2d0*myid) + Cos(0.9d0*k*i + j)
-             b(i,j,k) = Cos(2.3d0*i*j + 0.7d0*k) + Sin(0.4d0*j + 1.1d0*k + myid)
-          End Do
-       End Do
-    End Do
-    a = a*vp_w/Max(vp_w, 1d-300);  b = b*vp_w/Max(vp_w, 1d-300)
-    !$acc enter data copyin(a,b) create(Ma,Mb)
-    Call vp_remove_mean(a);  Call vp_remove_mean(b)
-    Call vp_precond(a, Ma);  Call vp_precond(b, Mb)
-    sab = vp_dot(a, Mb);  sba = vp_dot(b, Ma);  saa = vp_dot(a, Ma);  sbb = vp_dot(b, Mb)
-    If ( myid == 0 ) Write(*,'(A,4ES14.5)') '   GMG selftest a.Mb, b.Ma, a.Ma, b.Mb = ', sab, sba, saa, sbb
-    !$acc exit data delete(a,b,Ma,Mb)
-    Deallocate( a, b, Ma, Mb )
-
-  End Subroutine vp_selftest_mg
 
 
   !> Projection of the single-phase velocity with an immersed body (ibm_method = 1): the fast solver cannot honour the closed faces, so
