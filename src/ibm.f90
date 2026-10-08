@@ -1110,8 +1110,10 @@ Contains
 
     Integer(Int32) :: n, i, j, k, ee
     Real   (Int64) :: r
+    Logical :: stair
 
     ee = ibm_E
+    stair = ( ibm_method == 1 .Or. vof_flow >= 1 )   ! staircase faces close with either neighbouring cell solid (thin walls)
     ! Image-point stencils can reach into the seam halo planes, which are stale after the RK update / projection that precedes this call
     If ( nprocs > 1 ) Call exchange_velocity_halos
 
@@ -1121,7 +1123,11 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
-             If ( 0.5d0*(phi(i,j,k)+phi(i+1,j,k)) < 0d0 ) U_(i,j,k) = 0d0
+             If ( stair ) Then
+                If ( Min(phi(i,j,k), phi(i+1,j,k)) < 0d0 ) U_(i,j,k) = 0d0
+             Else If ( 0.5d0*(phi(i,j,k)+phi(i+1,j,k)) < 0d0 ) Then
+                U_(i,j,k) = 0d0
+             End If
           End Do
        End Do
     End Do
@@ -1130,7 +1136,11 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, ny-1
           Do i = 2, nxg-1
-             If ( ( ( yg(j+1) - y(j) )*phi(i,j,k) + ( y(j) - yg(j) )*phi(i,j+1,k) ) / ( yg(j+1) - yg(j) ) < 0d0 ) V_(i,j,k) = 0d0
+             If ( stair ) Then
+                If ( Min(phi(i,j,k), phi(i,j+1,k)) < 0d0 ) V_(i,j,k) = 0d0
+             Else If ( ( ( yg(j+1) - y(j) )*phi(i,j,k) + ( y(j) - yg(j) )*phi(i,j+1,k) ) / ( yg(j+1) - yg(j) ) < 0d0 ) Then
+                V_(i,j,k) = 0d0
+             End If
           End Do
        End Do
     End Do
@@ -1139,7 +1149,11 @@ Contains
     Do k = 2, nz-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             If ( ( ( zg(k+1) - z(k) )*phi(i,j,k) + ( z(k) - zg(k) )*phi(i,j,k+1) ) / ( zg(k+1) - zg(k) ) < 0d0 ) W_(i,j,k) = 0d0
+             If ( stair ) Then
+                If ( Min(phi(i,j,k), phi(i,j,k+1)) < 0d0 ) W_(i,j,k) = 0d0
+             Else If ( ( ( zg(k+1) - z(k) )*phi(i,j,k) + ( z(k) - zg(k) )*phi(i,j,k+1) ) / ( zg(k+1) - zg(k) ) < 0d0 ) Then
+                W_(i,j,k) = 0d0
+             End If
           End Do
        End Do
     End Do

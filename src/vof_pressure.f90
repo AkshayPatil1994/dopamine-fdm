@@ -165,14 +165,13 @@ Contains
   End Subroutine vp_project_masked
 
 
-  !> IBM face and cell masks from the signed distance (same face test as apply_ghost_cell_ibm: x/z by the plain mean, y by the
-  !  stretched-grid weights): a face is open if the face-averaged distance is >= 0; a cell is active if any of its faces is open.
+  !> IBM face and cell masks from the signed distance: a face is open only if both cells it joins have phi >= 0 (cell voxelisation,
+  !  so a wall one cell thick closes its faces); a cell is active if any of its faces is open.
   Subroutine vp_build_ibm_masks
 
     Real(Int64), Allocatable :: pp(:,:,:)
     Integer(Int32) :: i, j, k
     Logical :: ou1, ou2, ov1, ov2, ow1, ow2
-    Real(Int64) :: f
 
     If ( .Not. Allocated(phi) ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: IBM active but the signed distance is not available for the VOF masks'
@@ -187,22 +186,21 @@ Contains
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nx
-             If ( 0.5d0*( pp(i,j,k) + pp(i+1,j,k) ) < 0d0 ) vp_mu(i,j,k) = 0d0
+             If ( Min( pp(i,j,k), pp(i+1,j,k) ) < 0d0 ) vp_mu(i,j,k) = 0d0
           End Do
        End Do
     End Do
     Do k = 1, nzg
        Do j = 2, ny-1
           Do i = 1, nxg
-             f = ( ( yg(j+1) - y(j) )*pp(i,j,k) + ( y(j) - yg(j) )*pp(i,j+1,k) )/( yg(j+1) - yg(j) )
-             If ( f < 0d0 ) vp_mv(i,j,k) = 0d0
+             If ( Min( pp(i,j,k), pp(i,j+1,k) ) < 0d0 ) vp_mv(i,j,k) = 0d0
           End Do
        End Do
     End Do
     Do k = 1, nz
        Do j = 1, nyg
           Do i = 1, nxg
-             If ( 0.5d0*( pp(i,j,k) + pp(i,j,k+1) ) < 0d0 ) vp_mw(i,j,k) = 0d0
+             If ( Min( pp(i,j,k), pp(i,j,k+1) ) < 0d0 ) vp_mw(i,j,k) = 0d0
           End Do
        End Do
     End Do
@@ -212,18 +210,12 @@ Contains
     Do k = 0, nzg+1
        Do j = 2, nyg-1
           Do i = 0, nxg+1
-             ou1 = ( 0.5d0*( pp(i-1,j,k) + pp(i,j,k) ) >= 0d0 );  ou2 = ( 0.5d0*( pp(i,j,k) + pp(i+1,j,k) ) >= 0d0 )
+             ou1 = ( Min( pp(i-1,j,k), pp(i,j,k) ) >= 0d0 );  ou2 = ( Min( pp(i,j,k), pp(i+1,j,k) ) >= 0d0 )
              ! the wall faces (j = 1 and ny) carry no flux: they do not make a cell active
              ov1 = .False.;  ov2 = .False.
-             If ( j-1 >= 2 ) Then
-                f = ( ( yg(j) - y(j-1) )*pp(i,j-1,k) + ( y(j-1) - yg(j-1) )*pp(i,j,k) )/( yg(j) - yg(j-1) )
-                ov1 = ( f >= 0d0 )
-             End If
-             If ( j <= ny-1 ) Then
-                f = ( ( yg(j+1) - y(j) )*pp(i,j,k) + ( y(j) - yg(j) )*pp(i,j+1,k) )/( yg(j+1) - yg(j) )
-                ov2 = ( f >= 0d0 )
-             End If
-             ow1 = ( 0.5d0*( pp(i,j,k-1) + pp(i,j,k) ) >= 0d0 );  ow2 = ( 0.5d0*( pp(i,j,k) + pp(i,j,k+1) ) >= 0d0 )
+             If ( j-1 >= 2 ) ov1 = ( Min( pp(i,j-1,k), pp(i,j,k) ) >= 0d0 )
+             If ( j <= ny-1 ) ov2 = ( Min( pp(i,j,k), pp(i,j+1,k) ) >= 0d0 )
+             ow1 = ( Min( pp(i,j,k-1), pp(i,j,k) ) >= 0d0 );  ow2 = ( Min( pp(i,j,k), pp(i,j,k+1) ) >= 0d0 )
              If ( .Not. ( ou1 .Or. ou2 .Or. ov1 .Or. ov2 .Or. ow1 .Or. ow2 ) ) vp_act(i,j,k) = 0d0
           End Do
        End Do
