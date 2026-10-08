@@ -409,9 +409,6 @@ Module global
   Integer(Int32), Allocatable, Dimension(:)   :: ghost_u_objid   ! (n_ghost_u)
   Integer(Int32), Allocatable, Dimension(:)   :: ghost_v_objid   ! (n_ghost_v)
   Integer(Int32), Allocatable, Dimension(:)   :: ghost_w_objid   ! (n_ghost_w)
-  ! Per-ghost-point kinematic viscosity of the smooth IBM wall model: nu, or under vof_flow the viscosity of the phase at the reference
-  ! cell (<= 0: the ghost keeps its no-slip value)
-  Real   (Int64), Allocatable, Dimension(:)   :: ghost_u_nu, ghost_v_nu, ghost_w_nu
 
   ! Distance from ghost cell G to boundary point B along the wall normal.
   ! Used for surface-integral force Method 2: dA = dV / dGB.

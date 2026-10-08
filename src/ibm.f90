@@ -96,9 +96,9 @@ Contains
 
     ! Device-resident IBM data: phi (read once above) and the ghost-cell lists (built once above), never modified afterward
     !$acc enter data copyin(phi)
-    !$acc enter data copyin(ghost_u_idx,ghost_u_wgt,ghost_u_img,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_dGI,ghost_u_objid,ghost_u_nu)
-    !$acc enter data copyin(ghost_v_idx,ghost_v_wgt,ghost_v_img,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_dGI,ghost_v_objid,ghost_v_nu)
-    !$acc enter data copyin(ghost_w_idx,ghost_w_wgt,ghost_w_img,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_dGI,ghost_w_objid,ghost_w_nu)
+    !$acc enter data copyin(ghost_u_idx,ghost_u_wgt,ghost_u_img,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_dGI,ghost_u_objid)
+    !$acc enter data copyin(ghost_v_idx,ghost_v_wgt,ghost_v_img,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_dGI,ghost_v_objid)
+    !$acc enter data copyin(ghost_w_idx,ghost_w_wgt,ghost_w_img,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_dGI,ghost_w_objid)
     ! Cell-centre ghost list: used both by the host-only Method-2 force diagnostic and (when boussinesq_flag>=1) by the device-resident apply_ghost_cell_ibm_scalar
     !$acc enter data copyin(ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc,ghost_cc_objid,ghost_cc_dGB,ghost_cc_dGI)
 
@@ -474,8 +474,7 @@ Contains
     Allocate ( ghost_u_xB(3, n_ghost_u) )
     Allocate ( ghost_u_img_cc(3, n_ghost_u) )
     Allocate ( ghost_u_wgt_cc(8, n_ghost_u) )
-    Allocate ( ghost_u_objid(n_ghost_u), ghost_u_nu(n_ghost_u) )
-    ghost_u_nu = nu
+    Allocate ( ghost_u_objid(n_ghost_u) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
     ng = 0
@@ -631,8 +630,7 @@ Contains
     Allocate ( ghost_v_xB(3, n_ghost_v) )
     Allocate ( ghost_v_img_cc(3, n_ghost_v) )
     Allocate ( ghost_v_wgt_cc(8, n_ghost_v) )
-    Allocate ( ghost_v_objid(n_ghost_v), ghost_v_nu(n_ghost_v) )
-    ghost_v_nu = nu
+    Allocate ( ghost_v_objid(n_ghost_v) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
     ng = 0
@@ -766,8 +764,7 @@ Contains
     Allocate ( ghost_w_xB(3, n_ghost_w) )
     Allocate ( ghost_w_img_cc(3, n_ghost_w) )
     Allocate ( ghost_w_wgt_cc(8, n_ghost_w) )
-    Allocate ( ghost_w_objid(n_ghost_w), ghost_w_nu(n_ghost_w) )
-    ghost_w_nu = nu
+    Allocate ( ghost_w_objid(n_ghost_w) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
     ng = 0

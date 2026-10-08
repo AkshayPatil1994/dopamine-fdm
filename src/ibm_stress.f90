@@ -24,7 +24,10 @@ Contains
 
     Logical, Intent(In) :: full
 
-    If ( Allocated(ovr_u) ) Deallocate( ovr_u, ovr_v, ovr_w, nu_const )
+    If ( Allocated(ovr_u) ) Then
+       !$acc exit data delete(ovr_u,ovr_v,ovr_w)
+       Deallocate( ovr_u, ovr_v, ovr_w, nu_const )
+    End If
     If ( full ) Then
        Allocate( ovr_u(nx,nyg,nzg,4), ovr_v(nxg,ny,nzg,4), ovr_w(nxg,nyg,nz,4), nu_const(nxg,nyg,nzg) )
     Else
@@ -201,10 +204,8 @@ Contains
                    End If
                    pface = P(i,j,k)
                    ii = i - de(1);  jj = j - de(2);  kk = k - de(3)
-                   If ( jj >= 1 .And. jj <= nyg .And. ii >= 1 .And. ii <= nxg .And. kk >= 1 .And. kk <= nzg ) Then
-                      If ( phi(ii,jj,kk) >= 0d0 ) Then
-                         p2 = P(ii,jj,kk);  pface = pface + 0.5d0*( pface - p2 )
-                      End If
+                   If ( phi(ii,jj,kk) >= 0d0 ) Then
+                      p2 = P(ii,jj,kk);  pface = pface + 0.5d0*( pface - p2 )
                    End If
                    lpres(d) = lpres(d) + Real(sgn,Int64)*pface*area
                    Do e = 1, 3

@@ -286,9 +286,8 @@ Contains
     kwmin = ext_fz_lo
 
     !--- EQWM for U ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_u_idx,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_objid,ghost_u_nu,ibm_z0)
+    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_u_idx,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_objid,ibm_z0)
     Do n = 1, n_ghost_u
-       If ( ghost_u_nu(n) <= 0d0 ) Cycle
        i  = ghost_u_idx(1,n);  j  = ghost_u_idx(2,n);  k  = ghost_u_idx(3,n)
        ir = ghost_u_ref(1,n);  jr = ghost_u_ref(2,n);  kr = ghost_u_ref(3,n)
        oid = ghost_u_objid(n)
@@ -316,8 +315,8 @@ Contains
           Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
           Call rough_uplus( Min(ghost_u_dGB(n), y_ref), ibm_z0(oid), uplus_img )
        Else
-          Call solve_u_tau_reichardt(u_ref, y_ref, ghost_u_nu(n), u_tau)
-          yplus = Min(ghost_u_dGB(n), y_ref) * u_tau / ghost_u_nu(n)
+          Call solve_u_tau_reichardt(u_ref, y_ref, nu, u_tau)
+          yplus = Min(ghost_u_dGB(n), y_ref) * u_tau / nu
           Call reichardt_uplus(yplus, uplus_img, duplus_img)
        End If
        ! EQWM image-point capping at y_ref
@@ -333,9 +332,8 @@ Contains
     !$acc end parallel loop
 
     !--- EQWM for V ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_v_idx,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_objid,ghost_v_nu,ibm_z0)
+    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_v_idx,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_objid,ibm_z0)
     Do n = 1, n_ghost_v
-       If ( ghost_v_nu(n) <= 0d0 ) Cycle
        i  = ghost_v_idx(1,n);  j  = ghost_v_idx(2,n);  k  = ghost_v_idx(3,n)
        ir = ghost_v_ref(1,n);  jr = ghost_v_ref(2,n);  kr = ghost_v_ref(3,n)
        oid = ghost_v_objid(n)
@@ -358,8 +356,8 @@ Contains
           Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
           Call rough_uplus( Min(ghost_v_dGB(n), y_ref), ibm_z0(oid), uplus_img )
        Else
-          Call solve_u_tau_reichardt(u_ref, y_ref, ghost_v_nu(n), u_tau)
-          yplus = Min(ghost_v_dGB(n), y_ref) * u_tau / ghost_v_nu(n)
+          Call solve_u_tau_reichardt(u_ref, y_ref, nu, u_tau)
+          yplus = Min(ghost_v_dGB(n), y_ref) * u_tau / nu
           Call reichardt_uplus(yplus, uplus_img, duplus_img)
        End If
        u_I_eqwm = u_tau * uplus_img
@@ -373,9 +371,8 @@ Contains
     !$acc end parallel loop
 
     !--- EQWM for W ghost cells ---
-    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_w_idx,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_objid,ghost_w_nu,ibm_z0)
+    !$acc parallel loop present(U_,V_,W_,Uext,Vext,Wext,ghost_w_idx,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_objid,ibm_z0)
     Do n = 1, n_ghost_w
-       If ( ghost_w_nu(n) <= 0d0 ) Cycle
        i  = ghost_w_idx(1,n);  j  = ghost_w_idx(2,n);  k  = ghost_w_idx(3,n)
        ir = ghost_w_ref(1,n);  jr = ghost_w_ref(2,n);  kr = ghost_w_ref(3,n)
        oid = ghost_w_objid(n)
@@ -398,8 +395,8 @@ Contains
           Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
           Call rough_uplus( Min(ghost_w_dGB(n), y_ref), ibm_z0(oid), uplus_img )
        Else
-          Call solve_u_tau_reichardt(u_ref, y_ref, ghost_w_nu(n), u_tau)
-          yplus = Min(ghost_w_dGB(n), y_ref) * u_tau / ghost_w_nu(n)
+          Call solve_u_tau_reichardt(u_ref, y_ref, nu, u_tau)
+          yplus = Min(ghost_w_dGB(n), y_ref) * u_tau / nu
           Call reichardt_uplus(yplus, uplus_img, duplus_img)
        End If
        u_I_eqwm = u_tau * uplus_img

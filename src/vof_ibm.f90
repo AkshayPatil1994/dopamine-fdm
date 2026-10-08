@@ -43,7 +43,7 @@ Contains
   !  which the pressure operator has its Neumann condition, so a uniform pressure gives exactly zero and the still-water
   !  hydrostatic pressure gives the buoyancy of the staircase body. The face pressure is the linear extrapolation of the two
   !  fluid cells normal to the face (exact for the hydrostatic gradient); the shear uses the cell-centre velocity at half a cell,
-!  or the log-law wall stress of the staircase wall model when ibm_wall_model_flag = 1 (the stress the flow receives).
+  !  or the log-law wall stress of the staircase wall model when ibm_wall_model_flag = 1 (the stress the flow receives).
   Subroutine vof_compute_ibm_forces(Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc)
 
     Real(Int64), Intent(Out) :: Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc
