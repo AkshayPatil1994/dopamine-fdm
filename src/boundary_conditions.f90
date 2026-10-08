@@ -208,15 +208,11 @@ Contains
        If ( skip_outflow_u ) Call apply_outflow_bc_x(W,Uc)
     End If
 
-    ! z direction: periodic, or Dirichlet (DNS no-slip) / Robin (flat-wall EQWM) wall
+    ! z direction: periodic, or no-slip wall (the EQWM stress enters through tau_zu / tau_zv in the viscous flux)
     If ( z_bc_type == 0 ) Then
        Call apply_periodic_bc_z(U,1)
        Call apply_periodic_bc_z(V,2)
        Call apply_periodic_bc_z(W,3)
-    Else If ( flat_wall_model_flag == 1 ) Then
-       Call apply_Robin_bc_z(U,alpha_z_u,1)
-       Call apply_Robin_bc_z(V,alpha_z_v,2)
-       Call apply_Dirichlet_bc_z(W,3)   ! wall-normal: always exact no-penetration
     Else
        Call apply_Dirichlet_bc_z(U,1)
        Call apply_Dirichlet_bc_z(V,2)
@@ -745,30 +741,6 @@ Contains
     !$acc end kernels
 
   End Subroutine apply_Dirichlet_bc_z
-
-  ! Robin (slip-length) BC in z, for the tangential components (U,V) at a z wall-model wall;
-  ! z-centred only (id unused, kept for signature symmetry with apply_Dirichlet_bc_z) --
-  ! W stays exactly no-penetration (apply_Dirichlet_bc_z(W,3)), mirroring apply_Robin_bc_y's
-  ! own id==2 (z/y-centre) formula. Only the rank(s) owning the z=0/z=Lz boundary act, as
-  ! in apply_Dirichlet_bc_z.
-  Subroutine apply_Robin_bc_z(F,alpha,id)
-
-    Real   (Int64), Intent(InOut) :: F(:,:,:)
-    Real   (Int64), Intent(In)    :: alpha(:,:,:)
-    Integer(Int32), Intent(In)    :: id
-    Logical :: is_first, is_last
-    Integer(Int32) :: partner
-
-    Call z_periodic_partner(is_first, is_last, partner)
-
-    !$acc kernels present(F,alpha,zg)
-    If ( is_first ) F(:,:,1)   = ( 2d0*alpha(:,:,1)/(zg(  2) - zg(    1)) - 1d0 )*F(:,:,    2) &
-                                / ( 2d0*alpha(:,:,1)/(zg(  2) - zg(    1)) + 1d0 )
-    If ( is_last  ) F(:,:,nzg) = ( 2d0*alpha(:,:,2)/(zg(nzg) - zg(nzg-1)) - 1d0 )*F(:,:,nzg-1) &
-                                / ( 2d0*alpha(:,:,2)/(zg(nzg) - zg(nzg-1)) + 1d0 )
-    !$acc end kernels
-
-  End Subroutine apply_Robin_bc_z
 
   ! Periodicity in y, no MPI needed (y is never domain-decomposed, every rank
   ! already owns the full y-extent); id: 1=y-faces (V), 2=y-centres (U,W); F in/out

@@ -10,7 +10,9 @@ Module equations
                               boussinesq_flag, beta_T, grav, T_ref, Tscal, &
                               advection_scheme, uav_active,           &
                               rotation_active, Omega_x, y0_rot, z0_rot, &
-                              y_bc_type, bc_face_ylo, bc_face_yhi, flat_wall_model_flag, tau_x, tau_z, ibm_stress_on
+                              y_bc_type, bc_face_ylo, bc_face_yhi, flat_wall_model_flag, tau_x, tau_z, ibm_stress_on, &
+                              z_bc_type, tau_zu, tau_zv
+  Use decomp, Only : z_periodic_partner
   Use interpolation
   Use ibm_stress, Only : ovr_u, ovr_v, ovr_w, ovr_none
   Use uav_actuator, Only : apply_uav_forcing_u, apply_uav_forcing_v, apply_uav_forcing_w
@@ -41,9 +43,14 @@ Contains
     Real   (Int64) :: inv_dz3    ! 1/dz_3
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
     Logical        :: wall_lo, wall_hi   ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
+    Logical        :: zwall_lo, zwall_hi   ! this rank owns a modelled z wall
+    Integer(Int32) :: partner
 
     wall_lo = ( y_bc_type == 1 .And. bc_face_ylo == 1 )
     wall_hi = ( y_bc_type == 1 .And. bc_face_yhi == 1 )
+    Call z_periodic_partner(zwall_lo, zwall_hi, partner)
+    zwall_lo = zwall_lo .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
+    zwall_hi = zwall_hi .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
 
     inv_dx  = 1d0 / dx
     inv_dx2 = inv_dx * inv_dx   ! used for second derivative in x: 1/dx^2
@@ -138,8 +145,8 @@ Contains
     End Do
     !$acc end kernels
 
-    !$acc parallel loop collapse(2) present(term_1,term_2,rhs_u,nu_t,tau_x,ovr_u,weight_y_0,weight_y_1,weight_z_0,weight_z_1, &
-    !$acc&  U_,V_,W_,y,z)
+    !$acc parallel loop collapse(2) present(term_1,term_2,rhs_u,nu_t,tau_x,tau_zu,ovr_u,weight_y_0,weight_y_1,weight_z_0, &
+    !$acc&  weight_z_1,U_,V_,W_,y,z)
     Do k=2,nzg-1
 
        Do j=2,nyg-1
@@ -190,6 +197,8 @@ Contains
              End If
              fz2 = nu_z2*( term_2(i,j,k  ) + (W_(i+1,j,k  )-W_(i,j,k  ))*inv_dx )
              fz1 = nu_z1*( term_2(i,j,k-1) + (W_(i+1,j,k-1)-W_(i,j,k-1))*inv_dx )
+             If ( zwall_lo .And. k == 2 ) fz1 = tau_zu(i,j,1)
+             If ( zwall_hi .And. k == nzg-1 ) fz2 = tau_zu(i,j,2)
              If ( ibm_stress_on ) Then
                 If ( ovr_u(i,j,k,1) < ovr_none ) fy1 = ovr_u(i,j,k,1)
                 If ( ovr_u(i,j,k,2) < ovr_none ) fy2 = ovr_u(i,j,k,2)
@@ -233,6 +242,8 @@ Contains
     ! local variables
     Integer(Int32) :: i, j, k
     Real   (Int64) :: dx_1, dx_2, dx_3, maxerr
+    Logical        :: zwall_lo, zwall_hi   ! this rank owns a modelled z wall
+    Integer(Int32) :: partner
     Real   (Int64) :: dy_1, dy_2, dy_3
     Real   (Int64) :: dz_1, dz_2, dz_3
     Real   (Int64) :: nu_x1, nu_x2, nu_y1, nu_y2, nu_z1, nu_z2
@@ -243,6 +254,10 @@ Contains
     Real   (Int64) :: inv_dz3    ! 1/dz_3; z spacing varies with k (z_bc_type==1, alpha_grid_z>0)
     Real   (Int64) :: inv_dzg1, inv_dzg2   ! 1/(zg(k)-zg(k-1)), 1/(zg(k+1)-zg(k))
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
+
+    Call z_periodic_partner(zwall_lo, zwall_hi, partner)
+    zwall_lo = zwall_lo .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
+    zwall_hi = zwall_hi .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
 
     inv_dx  = 1d0 / dx
     inv_dx2 = inv_dx * inv_dx
@@ -322,7 +337,7 @@ Contains
     ! interpolate eddy viscosity to faces
 
     ! second order remain, no need to interpolate
-    !$acc parallel loop collapse(2) present(rhs_v,V_,U_,W_,nu_t,ovr_v,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg)
+    !$acc parallel loop collapse(2) present(rhs_v,V_,U_,W_,nu_t,ovr_v,tau_zv,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg)
     Do k=2,nzg-1
 
        Do j=2,ny-1
@@ -367,6 +382,8 @@ Contains
              fx1 = nu_x1*( (V_(i,  j,k) - V_(i-1,j,k))*inv_dx + (U_(i-1,j+1,k) - U_(i-1,j,k))*inv_dy3 )
              fz2 = nu_z2*( (V_(i,j,k+1) - V_(i,j,k  ))*inv_dzg2 + (W_(i,j+1,k  ) - W_(i,j,k  ))*inv_dy3 )
              fz1 = nu_z1*( (V_(i,j,k  ) - V_(i,j,k-1))*inv_dzg1 + (W_(i,j+1,k-1) - W_(i,j,k-1))*inv_dy3 )
+             If ( zwall_lo .And. k == 2 ) fz1 = tau_zv(i,j,1)
+             If ( zwall_hi .And. k == nzg-1 ) fz2 = tau_zv(i,j,2)
              If ( ibm_stress_on ) Then
                 If ( ovr_v(i,j,k,1) < ovr_none ) fx1 = ovr_v(i,j,k,1)
                 If ( ovr_v(i,j,k,2) < ovr_none ) fx2 = ovr_v(i,j,k,2)

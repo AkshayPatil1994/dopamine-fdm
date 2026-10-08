@@ -515,98 +515,69 @@ Contains
   !> Spanwise (z) flat-wall EQWM: smooth Reichardt log law only (flat_wall_model_flag==2
   !  rough is rejected together with z_bc_type==1 at input-read time). U and V are the
   !  two components tangential to a z wall; W (wall-normal) stays exact no-penetration.
-  !  z is domain-decomposed (unlike y), so only the rank(s) owning the z=0/z=Lz physical
-  !  boundary compute real values here -- mirrors apply_Dirichlet_bc_z/apply_Robin_bc_z.
+  !  The wall shear u_tau^2 along the first-cell velocity goes to tau_zu / tau_zv, which
+  !  compute_rhs_u / _v use in place of the molecular wall-edge flux (as tau_x / tau_z at
+  !  the y walls); the ghost planes stay a no-slip mirror. z is domain-decomposed (unlike
+  !  y), so only the rank(s) owning the z=0/z=Lz physical boundary compute real values.
   Subroutine compute_flat_wall_eqwm_z(U_, V_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
     Real(Int64), Dimension(nxg, ny,  nzg), Intent(In) :: V_
 
     Integer(Int32) :: i, j
-    Real   (Int64) :: u_ref, v_ref, u_tau
-    Real   (Int64) :: z_ref_lo, z_ref_hi, Delta_zg_lo, Delta_zg_hi
-    Real   (Int64) :: alpha_lo, alpha_hi
-    Real   (Int64) :: V_at_pt, U_at_pt
+    Real   (Int64) :: u_ref, v_ref, u_tau, z_ref_lo, z_ref_hi, V_at_pt, U_at_pt
     Logical        :: is_first, is_last
     Integer(Int32) :: partner
 
     Call z_periodic_partner(is_first, is_last, partner)
 
-    z_ref_lo    = Max(zg(2), 1d-14)
-    Delta_zg_lo = zg(2) - zg(1)
-    z_ref_hi    = Max(Lz - zg(nzg-1), 1d-14)
-    Delta_zg_hi = zg(nzg) - zg(nzg-1)
+    z_ref_lo = Max(zg(2), 1d-14)
+    z_ref_hi = Max(Lz - zg(nzg-1), 1d-14)
 
-    !  alpha_z_u: Robin slip-length for U (x-faces, y-centres, at z walls)
     If ( is_first ) Then
-       !$acc parallel loop collapse(2) present(U_,V_,alpha_z_u)
+       !$acc parallel loop collapse(2) present(U_,V_,tau_zu)
        Do j = 2, nyg-1
           Do i = 2, nx-1
-             V_at_pt  = 0.25d0*(V_(i,j-1,2) + V_(i,j,2) + V_(i+1,j-1,2) + V_(i+1,j,2))
-             u_ref    = Sqrt(U_(i,j,2)**2 + V_at_pt**2)
+             V_at_pt = 0.25d0*(V_(i,j-1,2) + V_(i,j,2) + V_(i+1,j-1,2) + V_(i+1,j,2))
+             u_ref   = Sqrt(U_(i,j,2)**2 + V_at_pt**2)
              Call solve_u_tau_reichardt(u_ref, z_ref_lo, nu, u_tau)
-             alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) - Delta_zg_lo*0.5d0
-             alpha_z_u(i,j,1) = Max(alpha_lo, 0d0)
+             tau_zu(i,j,1) = u_tau**2 * U_(i,j,2) / Max(u_ref, 1d-30)
+          End Do
+       End Do
+       !$acc end parallel loop
+       !$acc parallel loop collapse(2) present(U_,V_,tau_zv)
+       Do j = 2, ny-1
+          Do i = 2, nxg-1
+             U_at_pt = 0.25d0*(U_(i-1,j,2) + U_(i,j,2) + U_(i-1,j+1,2) + U_(i,j+1,2))
+             v_ref   = Sqrt(V_(i,j,2)**2 + U_at_pt**2)
+             Call solve_u_tau_reichardt(v_ref, z_ref_lo, nu, u_tau)
+             tau_zv(i,j,1) = u_tau**2 * V_(i,j,2) / Max(v_ref, 1d-30)
           End Do
        End Do
        !$acc end parallel loop
     End If
     If ( is_last ) Then
-       !$acc parallel loop collapse(2) present(U_,V_,alpha_z_u)
+       !$acc parallel loop collapse(2) present(U_,V_,tau_zu)
        Do j = 2, nyg-1
           Do i = 2, nx-1
-             V_at_pt  = 0.25d0*(V_(i,j-1,nzg-1) + V_(i,j,nzg-1) + V_(i+1,j-1,nzg-1) + V_(i+1,j,nzg-1))
-             u_ref    = Sqrt(U_(i,j,nzg-1)**2 + V_at_pt**2)
+             V_at_pt = 0.25d0*(V_(i,j-1,nzg-1) + V_(i,j,nzg-1) + V_(i+1,j-1,nzg-1) + V_(i+1,j,nzg-1))
+             u_ref   = Sqrt(U_(i,j,nzg-1)**2 + V_at_pt**2)
              Call solve_u_tau_reichardt(u_ref, z_ref_hi, nu, u_tau)
-             alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) - Delta_zg_hi*0.5d0
-             alpha_z_u(i,j,2) = Max(alpha_hi, 0d0)
+             tau_zu(i,j,2) = -u_tau**2 * U_(i,j,nzg-1) / Max(u_ref, 1d-30)
           End Do
        End Do
        !$acc end parallel loop
-    End If
-
-    ! Fill x/y halo planes (nearest-interior copy; sufficient for the Robin BC's read pattern)
-    !$acc kernels present(alpha_z_u)
-    alpha_z_u(  1,:,:) = alpha_z_u(   2,:,:)
-    alpha_z_u( nx,:,:) = alpha_z_u( nx-1,:,:)
-    alpha_z_u(:,  1,:) = alpha_z_u(:,   2,:)
-    alpha_z_u(:,nyg,:) = alpha_z_u(:,nyg-1,:)
-    !$acc end kernels
-
-    !  alpha_z_v: Robin slip-length for V (x-centres, y-faces, at z walls)
-    If ( is_first ) Then
-       !$acc parallel loop collapse(2) present(U_,V_,alpha_z_v)
+       !$acc parallel loop collapse(2) present(U_,V_,tau_zv)
        Do j = 2, ny-1
           Do i = 2, nxg-1
-             U_at_pt  = 0.25d0*(U_(i-1,j,2) + U_(i,j,2) + U_(i-1,j+1,2) + U_(i,j+1,2))
-             v_ref    = Sqrt(V_(i,j,2)**2 + U_at_pt**2)
-             Call solve_u_tau_reichardt(v_ref, z_ref_lo, nu, u_tau)
-             alpha_lo = nu * v_ref / Max(u_tau**2, 1d-20) - Delta_zg_lo*0.5d0
-             alpha_z_v(i,j,1) = Max(alpha_lo, 0d0)
-          End Do
-       End Do
-       !$acc end parallel loop
-    End If
-    If ( is_last ) Then
-       !$acc parallel loop collapse(2) present(U_,V_,alpha_z_v)
-       Do j = 2, ny-1
-          Do i = 2, nxg-1
-             U_at_pt  = 0.25d0*(U_(i-1,j,nzg-1) + U_(i,j,nzg-1) + U_(i-1,j+1,nzg-1) + U_(i,j+1,nzg-1))
-             v_ref    = Sqrt(V_(i,j,nzg-1)**2 + U_at_pt**2)
+             U_at_pt = 0.25d0*(U_(i-1,j,nzg-1) + U_(i,j,nzg-1) + U_(i-1,j+1,nzg-1) + U_(i,j+1,nzg-1))
+             v_ref   = Sqrt(V_(i,j,nzg-1)**2 + U_at_pt**2)
              Call solve_u_tau_reichardt(v_ref, z_ref_hi, nu, u_tau)
-             alpha_hi = nu * v_ref / Max(u_tau**2, 1d-20) - Delta_zg_hi*0.5d0
-             alpha_z_v(i,j,2) = Max(alpha_hi, 0d0)
+             tau_zv(i,j,2) = -u_tau**2 * V_(i,j,nzg-1) / Max(v_ref, 1d-30)
           End Do
        End Do
        !$acc end parallel loop
     End If
-
-    !$acc kernels present(alpha_z_v)
-    alpha_z_v(  1,:,:) = alpha_z_v(    2,:,:)
-    alpha_z_v(nxg,:,:) = alpha_z_v(nxg-1,:,:)
-    alpha_z_v(:,  1,:) = alpha_z_v(:,   2,:)
-    alpha_z_v(:, ny,:) = alpha_z_v(:, ny-1,:)
-    !$acc end kernels
 
   End Subroutine compute_flat_wall_eqwm_z
 

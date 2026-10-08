@@ -686,6 +686,15 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME wm_stream_rough
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream/check_wm_stream.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --rough 1e-4 --tol 0.08)
+    # Same for the spanwise (z) walls and the 4-wall duct: stream decay by the log-law stress, same on 1 and 4 ranks; rough EQWM refused with z walls
+    foreach(wmz IN ITEMS "wm_stream_z|" "wm_stream_duct|--duct" "wm_stream_z_rough_rejected|--reject-rough")
+        string(REPLACE "|" ";" wmz_l "${wmz}")
+        list(GET wmz_l 0 wmz_name)
+        list(GET wmz_l 1 wmz_arg)
+        add_test(NAME ${wmz_name}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream_z/check_wm_stream_z.py
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} ${wmz_arg})
+    endforeach()
     # Wall-modelled bed (smooth log law) under a uniform stream: wall stress rho u_tau^2, density independent, same on 1 and 4 ranks
     add_test(NAME vof_wm_stream
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wm_stream/check_wm_stream.py

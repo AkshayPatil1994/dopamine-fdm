@@ -760,8 +760,7 @@ Contains
     Allocate( alpha_x(1:nx ,1:2,1:nzg) )
     Allocate( alpha_y(1:nxg,1:2,1:nzg) )
     Allocate( alpha_z(1:nxg,1:2,1:nz ) )
-    Allocate( alpha_z_u(1:nx ,1:nyg,1:2) )
-    Allocate( alpha_z_v(1:nxg,1:ny ,1:2) )
+    Allocate( tau_zu(1:nx ,1:nyg,1:2), tau_zv(1:nxg,1:ny ,1:2) )
     Allocate( tau_x(1:nx ,1:2,1:nzg), tau_z(1:nxg,1:2,1:nz ) )
     Call ibm_stress_init( ibm_method == 1 .And. vof_flow < 1 )
     ibm_stress_on = ( ibm_method == 1 .And. ibm_wall_model_flag == 1 .And. vof_flow < 1 )
@@ -770,8 +769,8 @@ Contains
     alpha_x   = 0d0
     alpha_y   = 0d0
     alpha_z   = 0d0
-    alpha_z_u = 0d0
-    alpha_z_v = 0d0
+    tau_zu    = 0d0
+    tau_zv    = 0d0
     tau_x     = 0d0
     tau_z     = 0d0
 
@@ -837,7 +836,7 @@ Contains
     ! nu_t too: DNS (sgs_model==0) never writes it on device, but the viscous stencils read it (incl. z wrap ghost planes)
     !$acc update device(U,V,W,nu_t)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
-    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,alpha_z_u,alpha_z_v,tau_x,tau_z)
+    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv)
     ! Boussinesq temperature: stays device-resident end-to-end so compute_rhs_v can read it directly
     If ( boussinesq_flag >= 1 ) Then
        !$acc enter data create(Tscal,Tscal_o,Ft1,Ft2,Ft3)

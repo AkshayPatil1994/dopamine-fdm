@@ -336,11 +336,9 @@ Module global
   Logical        :: ibm_stress_on = .False.
   !$acc declare create(ibm_stress_on)
 
-  ! spanwise (z) wall-model Robin BC coefficients (z_bc_type==1, flat_wall_model_flag==1 only --
-  ! smooth Reichardt EQWM; rough (flag==2) is not yet supported for z walls). U,V are tangential
-  ! to a z wall (Robin); W is the wall-normal component and stays exactly no-penetration, so
-  ! there is no alpha_z_w -- mirrors how alpha_y (V, wall-normal at a y wall) is always 0.
-  Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_z_u, alpha_z_v
+  ! spanwise (z) wall-model shear stress on U and V (tangential to a z wall) at the low/high z wall (index 1/2), z_bc_type==1 and
+  ! flat_wall_model_flag==1 only (smooth Reichardt; rough is rejected at input). W is wall-normal and stays exact no-penetration.
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: tau_zu, tau_zv
 
   ! Thermal Robin-BC coefficient (flat-wall rough EQWM, T_bc_bot/top==2); cell-centred in x,z like alpha_z
   Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_T

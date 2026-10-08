@@ -342,21 +342,19 @@ walls) or `ibm_wall_model_flag = 1` (IBM surfaces).
 `flat_wall_model_flag` governs the $y$ walls always, and the $z$ walls too when
 `z_bc_type = 1` — mode 1 (smooth Reichardt EQWM) only; mode 2 (rough `z0`) is not yet
 extended to $z$ walls. At a $z$ wall the roles swap: $U$ and $V$ are the tangential
-components (each Robin-BC'd via the log-law, combined with a bilinearly-interpolated
-cross-term for the *other* tangential velocity, e.g. $V$ interpolated onto $U$'s grid
-point) and $W$ is wall-normal, staying exactly no-penetration — the direct $y$-wall
-analogue of §7.1 below, with $y \leftrightarrow z$ and $V \leftrightarrow W$.
+components (the log-law stress enters their $z$-edge viscous flux, see §7.1) and $W$ is wall-normal, staying exactly
+no-penetration — the direct $y$-wall analogue of §7.1 below, with $y \leftrightarrow z$ and $V \leftrightarrow W$.
 
 ### 7.1 Wall-stress boundary condition (flat walls)
 
 The log law gives the friction velocity $u_\tau$ from the first-cell tangential speed, and the modelled wall shear
 $\tau_w = u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$ (kinematic) replaces the molecular wall-edge flux of the viscous term in
-`compute_rhs_u` / `compute_rhs_w` (arrays `tau_x`, `tau_z`, set in `compute_flat_wall_eqwm`). The ghost rows keep the no-slip
+`compute_rhs_u` / `compute_rhs_w` (arrays `tau_x`, `tau_z`, set in `compute_flat_wall_eqwm`; at the $z$ walls `tau_zu`, `tau_zv` replace the $z$-edge flux of `compute_rhs_u` / `compute_rhs_v`, set in `compute_flat_wall_eqwm_z` on the ranks owning the wall). The ghost rows keep the no-slip
 mirror ($\alpha = 0$). An earlier version imposed the stress through a Robin slip length
 $\alpha = \nu u_\text{ref}/u_\tau^2 - \Delta y/2$; since $u^+ \le y^+$ this is never positive, so with the zero floor it was a plain no-slip
 wall whenever the first cell is at $y^+ \gtrsim 10$, and without the floor the ghost value is many times the interior one and corrupts
-the SGS gradient in the first cell. Free-slip walls take no stress. This applies to the $y$ walls (smooth and rough); the spanwise ($z$) walls of `z_bc_type = 1` still use the Robin form and are therefore effectively no-slip. Check: a uniform stream between two modelled walls decays as the
-integrated log law (`wm_stream`), and a coarse channel ($Re_\tau = 395$, first cell at $y^+ \approx 25$) holds a mean wall stress equal to
+the SGS gradient in the first cell. Free-slip walls take no stress. This applies to the $y$ walls (smooth and rough) and to the spanwise ($z$) walls of `z_bc_type = 1` (smooth only). Check: a uniform stream between two modelled walls decays as the
+integrated log law (`wm_stream`, `wm_stream_z`, `wm_stream_duct`), and a coarse channel ($Re_\tau = 395$, first cell at $y^+ \approx 25$) holds a mean wall stress equal to
 $dP/dx\,h$. The skew-symmetric convective form (`advection_scheme = 0`) is not momentum conserving on such a coarse near-wall grid (a
 spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES until that is resolved.
 
