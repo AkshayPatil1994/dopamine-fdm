@@ -371,6 +371,11 @@ round-off also next to it), and replaces the viscous flux through every edge bet
 tangential velocity of the fluid face; `ibm_z0` gives the per-object roughness. The stress of a staircase corner adds up over its faces. The
 staircase is first order in the geometry. Check: a flat plate under a uniform stream decays as the integrated log law (`ibm_stair_plate`).
 
+The loads written with `nsampling > 0` (`ibm_forces.csv`) use the same faces: pressure from the linear extrapolation of the two fluid cells normal
+to each closed face, and the viscous column is the wall stress the flow receives (`ibm_stair_forces`, `vof_compute_ibm_forces`), so the
+impulse of the load equals the momentum lost by the fluid (checked to 1% on the plate). The IBM-impulse columns are NaN for these methods.
+The load uses the cell-centre sign of $\phi$ for the closed faces, the flow the face-averaged one; they differ only on curved or oblique surfaces.
+
 ### 7.2 Log-law Newton iteration
 
 The friction velocity $u_\tau$ is obtained by a Newton iteration on the log-law /
@@ -439,6 +444,8 @@ need their own persisted $L$ state; this is a known, documented scope limitation
 rather than an oversight.
 
 ### 7.6 IBM per-object roughness
+
+(Applies to the ghost-cell method, `ibm_method = 0`, and equally to the staircase stress of §7.1b through `ibm_stress.f90`, which calls the same rough solver.)
 
 IBM surfaces support a per-object momentum roughness length `ibm_z0(0:15)`, indexed
 by the solid ID field (`ibm_objid_file`). `ibm_z0(id) > 0` swaps the smooth Reichardt

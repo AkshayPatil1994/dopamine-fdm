@@ -103,7 +103,7 @@ and the [[precursor/successor example|Examples#precursor_successor]].
 | `ibm_z0(0:15)` | `0.0` | Per-IBM-object momentum roughness length [m], indexed by object ID; `0` = smooth Reichardt EQWM (only meaningful with `ibm_wall_model_flag=1`). No thermal counterpart (`ibm_z0h`) yet -- see the note below |
 | `ks` | — | Roughness sublayer height (grid types 5–7) |
 | `nks` | `0` | Number of uniform cells in roughness sublayer |
-| `nsampling` | `0` | IBM force output interval (0 = disabled) |
+| `nsampling` | `0` | IBM force output interval (0 = disabled); with `ibm_method=1` or `vof_flow=1` the loads are summed on the staircase faces and the viscous column carries the modelled wall stress |
 | `ibm_surface_nsampling` | `0` | Per-point surface field (pressure + pressure/viscous force) dump interval, written to `ibm_surface/surface.<step>.bin` (0 = disabled) |
 
 > **Note:** Single IBM path: `ibm_input_mode = 1` always
