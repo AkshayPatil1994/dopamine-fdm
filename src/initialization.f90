@@ -97,12 +97,13 @@ Contains
 
 #ifdef GPU_POISSON
     ! Poisson solve is pencil-decomposed (multi-GPU) for every supported BC combination below
-    If ( x_bc_type /= 0 .And. x_bc_type /= 1 ) Stop 'ERROR: GPU_POISSON build only supports x_bc_type=0 or 1'
-    If ( y_bc_type == 0 .And. x_bc_type /= 0 ) Stop 'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too'
+    If ( x_bc_type /= 0 .And. x_bc_type /= 1 ) Call abort_input( 'ERROR: GPU_POISSON build only supports x_bc_type=0 or 1' )
+    If ( y_bc_type == 0 .And. x_bc_type /= 0 ) Call abort_input( &
+         'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too' )
     If ( z_bc_type == 1 .And. ( y_bc_type /= 1 .Or. x_bc_type /= 0 ) ) &
-         Stop 'ERROR: GPU_POISSON build only supports z_bc_type=1 (spanwise wall) combined with ' // &
+         Call abort_input( 'ERROR: GPU_POISSON build only supports z_bc_type=1 (spanwise wall) combined with ' // &
               'y_bc_type=1 and x_bc_type=0 (4-wall duct, periodic x); other z-wall combinations ' // &
-              '(spanwise wall alone, or duct with inflow/outflow x) need the CPU build'
+              '(spanwise wall alone, or duct with inflow/outflow x) need the CPU build' )
 #endif
 
     ! time: on restart, t_start (explicit) takes precedence over nstep_init*dt --
@@ -122,32 +123,34 @@ Contains
     If ( nsave < 0 ) tsave_next = t + tsave
     
     ! restrictions
-    If ( Mod( nx_global, 2 )/=0 ) Stop 'Error: nx must be even'
-    If ( Mod( nz_global, 2 )/=0 ) Stop 'Error: nz must be even'
-    If ( y_bc_type == 0 .And. grid_type /= 1 ) Stop 'ERROR: y_bc_type=0 (periodic y) requires grid_type=1 (uniform y grid)'
+    If ( Mod( nx_global, 2 )/=0 ) Call abort_input( 'Error: nx must be even' )
+    If ( Mod( nz_global, 2 )/=0 ) Call abort_input( 'Error: nz must be even' )
+    If ( y_bc_type == 0 .And. grid_type /= 1 ) Call abort_input( &
+         'ERROR: y_bc_type=0 (periodic y) requires grid_type=1 (uniform y grid)' )
     If ( ic_type == 6 .And. ( x_bc_type /= 0 .Or. y_bc_type /= 0 ) ) &
-       Stop 'ERROR: ic_type=6 (Taylor-Green Vortex) requires x_bc_type=0 and y_bc_type=0 (fully periodic box)'
+       Call abort_input( 'ERROR: ic_type=6 (Taylor-Green Vortex) requires x_bc_type=0 and y_bc_type=0 (fully periodic box)' )
     ! y_bc_type==0 (periodic y, e.g. Taylor-Green vortex): there is no wall at all,
     ! so bc_face_ylo/yhi are meaningless here -- skip the wall-model check entirely
     ! instead of possibly Stop-ing on a stale flat_wall_model_flag=2 left over from
     ! a different (wall-bounded) namelist
     If ( flat_wall_model_flag == 2 .And. y_bc_type /= 0 ) Then
        If ( bc_face_ylo /= 2 .And. z0_ylo <= 0d0 ) &
-          Stop 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_ylo > 0 for a no-slip bottom wall'
+          Call abort_input( 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_ylo > 0 for a no-slip bottom wall' )
        If ( bc_face_yhi /= 2 .And. z0_yhi <= 0d0 ) &
-          Stop 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_yhi > 0 for a no-slip top wall'
+          Call abort_input( 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_yhi > 0 for a no-slip top wall' )
     End If
     If ( ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) .And. z_bc_type /= 0 ) &
-       Stop 'ERROR: sediment/Boussinesq scalars require periodic z (z_bc_type=0); the scalar z BC and MUSCL halo assume it'
+       Call abort_input( &
+            'ERROR: sediment/Boussinesq scalars require periodic z (z_bc_type=0); the scalar z BC and MUSCL halo assume it' )
     If ( T_bc_bot == 2 .Or. T_bc_top == 2 ) Then
        If ( boussinesq_flag < 1 ) &
-          Stop 'ERROR: T_bc_bot/top=2 (rough EQWM flux BC) requires boussinesq_flag >= 1'
+          Call abort_input( 'ERROR: T_bc_bot/top=2 (rough EQWM flux BC) requires boussinesq_flag >= 1' )
        If ( flat_wall_model_flag /= 2 ) &
-          Stop 'ERROR: T_bc_bot/top=2 (rough EQWM flux BC) requires flat_wall_model_flag=2'
+          Call abort_input( 'ERROR: T_bc_bot/top=2 (rough EQWM flux BC) requires flat_wall_model_flag=2' )
        If ( T_bc_bot == 2 .And. z0h_ylo <= 0d0 ) &
-          Stop 'ERROR: T_bc_bot=2 requires z0h_ylo > 0'
+          Call abort_input( 'ERROR: T_bc_bot=2 requires z0h_ylo > 0' )
        If ( T_bc_top == 2 .And. z0h_yhi <= 0d0 ) &
-          Stop 'ERROR: T_bc_top=2 requires z0h_yhi > 0'
+          Call abort_input( 'ERROR: T_bc_top=2 requires z0h_yhi > 0' )
     End If
 
     ! domain decomposition: resolves p_row/p_col (auto-factorized when both are 0, see decomp_auto_factorize), then builds this rank's x/z ownership ranges via 2decomp&fft's own distribute() algorithm, replicated locally -- no restriction that nx_global/nz_global divide evenly by p_row/p_col
@@ -162,8 +165,8 @@ Contains
     If ( x_bc_type == 1 ) Call init_outflow_x_comm
 
     ! restriction for MPI boundaries (ghost-cell stencils need >=2 interior cells per rank)
-    If ( Any( (kg2_global-kg1_global-1) < 2 ) ) Stop 'Error: each rank needs at least 2 interior z-cells'
-    If ( Any( (ig2_global-ig1_global-1) < 2 ) ) Stop 'Error: each rank needs at least 2 interior x-cells'
+    If ( Any( (kg2_global-kg1_global-1) < 2 ) ) Call abort_input( 'Error: each rank needs at least 2 interior z-cells' )
+    If ( Any( (ig2_global-ig1_global-1) < 2 ) ) Call abort_input( 'Error: each rank needs at least 2 interior x-cells' )
 
     ! face points
     nx = i2_global(myid) - i1_global(myid) + 1
@@ -643,7 +646,8 @@ Contains
             tz_sub(k) = 1d0 / ( ( zg_global(k+2) - zg_global(k+1) ) * Sqrt( cell_w(k) * cell_w(k+1) ) )
          End Do
          Call dstev( 'V', nzm_global, tz_diag, tz_sub, Qz, nzm_global, eig_work, eig_info )
-         If ( eig_info /= 0 ) Stop 'ERROR: dstev failed to diagonalise the spanwise (z) wall operator (4-wall duct init)'
+         If ( eig_info /= 0 ) Call abort_input( &
+            'ERROR: dstev failed to diagonalise the spanwise (z) wall operator (4-wall duct init)' )
          lambda_z = tz_diag   ! dstev overwrites the diagonal argument with the eigenvalues, ascending
          Deallocate ( tz_diag, tz_sub, eig_work, cell_w )
        End Block

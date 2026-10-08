@@ -3,6 +3,7 @@ Module interpolation
 
   ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
+  Use mpi,             Only : ierr, MPI_COMM_WORLD
   Use global,          Only : weight_y_0, weight_y_1, weight_z_0, weight_z_1
 
   ! prevent implicit typing
@@ -54,7 +55,8 @@ Contains
        End Do
        !$acc end kernels
     Else
-       Stop 'Error: invalid interpolation'
+       Write(*,'(A)') 'Error: invalid interpolation'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
    
   End Subroutine interpolate_y
@@ -103,7 +105,10 @@ Contains
 
     ny = size(y)
 
-    If ( ny/=n(1) ) Stop 'Error wrong size!'
+    If ( ny/=n(1) ) Then
+       Write(*,'(A)') 'Error wrong size!'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
 
     ui = 0d0    
     ! middle points
@@ -171,7 +176,10 @@ Contains
 
     ny = size(y)
 
-    If ( ny/=n(3) ) Stop 'Error wrong size!'
+    If ( ny/=n(3) ) Then
+       Write(*,'(A)') 'Error wrong size!'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
 
     ui = 0d0    
     ! middle points

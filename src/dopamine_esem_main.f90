@@ -78,7 +78,7 @@ Program dopamine_esem
           ' ERROR: --dt and --samples both set the donor sample spacing -- pass only one'
      Call Mpi_Abort(MPI_COMM_WORLD, 1, ierr)
   End If
-  If ( dt_given .And. dt_sample_in <= 0d0 ) Stop 'ERROR: --dt must be > 0'
+  If ( dt_given .And. dt_sample_in <= 0d0 ) Call abort_input( 'ERROR: --dt must be > 0' )
 
   If ( myid == 0 ) Then
      Write(*,'(A)') ' dopamine-ESEM: standalone ESEM inflow precursor generator'
@@ -88,17 +88,17 @@ Program dopamine_esem
 
   Call read_input_parameters(Trim(input_path))
 
-  If ( x_bc_type /= 1 ) Stop 'ERROR: dopamine-ESEM requires x_bc_type=1 in the namelist'
-  If ( inflow_type /= 1 ) Stop 'ERROR: dopamine-ESEM requires inflow_type=1 (SEM) in the namelist -- ' // &
+  If ( x_bc_type /= 1 ) Call abort_input( 'ERROR: dopamine-ESEM requires x_bc_type=1 in the namelist' )
+  If ( inflow_type /= 1 ) Call abort_input( 'ERROR: dopamine-ESEM requires inflow_type=1 (SEM) in the namelist -- ' // &
        'this generates the donor file a *separate* inflow_type=2 successor run will consume, ' // &
-       'it does not itself read inflow_type=2 settings'
-  If ( sem_use_esem /= 1 ) Stop 'ERROR: dopamine-ESEM requires sem_use_esem=1 (classical SEM has no ' // &
-       'well-defined per-grid-point normalisation to precompute from, see init_inflow)'
+       'it does not itself read inflow_type=2 settings' )
+  If ( sem_use_esem /= 1 ) Call abort_input( 'ERROR: dopamine-ESEM requires sem_use_esem=1 (classical SEM has no ' // &
+       'well-defined per-grid-point normalisation to precompute from, see init_inflow)' )
 
   Call decomp_init_pencil
   Call decomp_build_xz_ranges
   If ( Any( (kg2_global-kg1_global-1) < 2 ) ) &
-       Stop 'ERROR: each rank needs at least 2 interior z-cells -- use fewer ranks or a larger nz'
+       Call abort_input( 'ERROR: each rank needs at least 2 interior z-cells -- use fewer ranks or a larger nz' )
 
   ! grid: face points then cell centers (global)
   Allocate( x_global(nx_global), y_global(ny_global), z_global(nz_global) )
