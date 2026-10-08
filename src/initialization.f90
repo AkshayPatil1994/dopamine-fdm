@@ -51,9 +51,9 @@ Contains
     Call assign_gpu_device_pre_mpi
 #endif
     ! first initialize MPI
-    call Mpi_init(ierr)
-    call Mpi_comm_size(MPI_COMM_WORLD, nprocs, ierr)
-    call Mpi_comm_rank(MPI_COMM_WORLD,   myid, ierr)
+    Call Mpi_init(ierr)
+    Call Mpi_comm_size(MPI_COMM_WORLD, nprocs, ierr)
+    Call Mpi_comm_rank(MPI_COMM_WORLD,   myid, ierr)
 
 #ifdef GPU_POISSON
     ! Must run before any device allocation or cuFFT/cuSPARSE plan creation
