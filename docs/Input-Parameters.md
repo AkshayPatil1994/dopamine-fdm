@@ -59,7 +59,7 @@ See [[Numerics § Forcing|Numerics#1-governing-equations]],
 | `cfl_safety` | `0.9` | Safety factor on adaptive `dt` adjustment |
 | `dt_min` | `1e-10` | Minimum allowed `dt` (adaptive mode) |
 | `dt_max` | `1e10` | Maximum allowed `dt` (adaptive mode) |
-| `pcg_precond` | `0` | Preconditioner of the masked/variable-density PCG (`ibm_method=1`, `vof_flow>=1`): 0=constant-coefficient fast Poisson solver, 1=mask-aware geometric multigrid (needs y walls; required for `ibm_method=1` in a GPU build, not available for `vof_flow>=1` on the GPU) |
+| `pcg_precond` | `-1` | Preconditioner of the masked/variable-density PCG (`ibm_method=1`, `vof_flow>=1`): 0=constant-coefficient fast Poisson solver, 1=mask-aware geometric multigrid (needs y walls), -1=automatic (1 with y walls, else 0; 0 for `vof_flow>=1` on the GPU; required for `ibm_method=1` in a GPU build, not available for `vof_flow>=1` on the GPU) |
 
 See [[Numerics § Time integration|Numerics#3-time-integration]].
 

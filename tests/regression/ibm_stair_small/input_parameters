@@ -28,7 +28,7 @@
   nsteps       = 20,
   nsave        = 20,
   nmonitor     = 1,
-  cfl_adaptive = 0,
+  cfl_adaptive = 0, pcg_precond = 0,
 /
 
 &BOUNDARY_CONDITIONS

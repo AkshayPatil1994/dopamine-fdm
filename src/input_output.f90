@@ -272,8 +272,15 @@ Contains
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
        Lx_i       = Lx;  Ly_i       = Ly;  Lz_i       = Lz
        Call check_vof_inputs
-       If ( pcg_precond < 0 .Or. pcg_precond > 1 ) &
-            Call abort_input( 'ERROR: pcg_precond must be 0 (fast Poisson solver) or 1 (multigrid)' )
+       If ( pcg_precond < -1 .Or. pcg_precond > 1 ) &
+            Call abort_input( 'ERROR: pcg_precond must be 0 (fast Poisson solver), 1 (multigrid) or -1 (automatic)' )
+       If ( pcg_precond < 0 ) Then
+          pcg_precond = 0
+          If ( y_bc_type /= 0 ) pcg_precond = 1
+#ifdef GPU_POISSON
+          If ( vof_flow >= 1 ) pcg_precond = 0
+#endif
+       End If
        If ( ibm_method < 0 .Or. ibm_method > 1 ) &
             Call abort_input( 'ERROR: ibm_method must be 0 (ghost-cell) or 1 (staircase)' )
        If ( ibm_method == 1 .And. ibm_input_mode < 1 ) &
