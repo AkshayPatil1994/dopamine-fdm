@@ -84,13 +84,15 @@ Contains
   End Function open_mean4
 
 
-  !> Roughness id of the closed face between two cells: the solid one (a fluid cell carries id 0)
+  !> Roughness id of the closed face between two cells: that of the solid cell (phi < 0), the larger one when both are solid
   Pure Function face_id(i1, j1, k1, i2, j2, k2) Result(oid)
 
     Integer(Int32), Intent(In) :: i1, j1, k1, i2, j2, k2
     Integer(Int32) :: oid
 
-    oid = Max( solid_id(i1, j1, k1), solid_id(i2, j2, k2) )
+    oid = 0
+    If ( phi(i1,j1,k1) < 0d0 ) oid = solid_id(i1, j1, k1)
+    If ( phi(i2,j2,k2) < 0d0 ) oid = Max( oid, solid_id(i2, j2, k2) )
 
   End Function face_id
 

@@ -26,12 +26,14 @@ def fields(wd, mirror):
         f.astype('>f8').flatten(order='F').tofile(os.path.join(wd, name))
 
 
-def run(tag, mirror):
+def run(tag, mirror, z0=None):
     wd = os.path.join(tmp, tag)
     os.makedirs(os.path.join(wd, 'restart'))
     text = open(os.path.join(src, 'input_parameters')).read()
     if mirror:
         text = text.replace('Utarget = 1.0', 'Utarget = -1.0')
+    if z0:
+        text = text.replace('ibm_z0(1) = 1.0e-2', 'ibm_z0(1) = %g' % z0)
     open(os.path.join(wd, 'input_parameters'), 'w').write(text)
     fields(wd, mirror)
     r = subprocess.run([a.mpirun, '--oversubscribe', '-np', '1', a.exe], cwd=wd, capture_output=True, text=True, timeout=900)
@@ -42,9 +44,10 @@ def run(tag, mirror):
 
 
 try:
-    (u0, m0), (u1, m1) = run('fwd', False), run('mirror', True)
-    ok = abs(u0 - u1) < 1e-4 and abs(m0 - m1) < 1e-3*m0 and u0 < 0.99
-    print('mean U %.6f / %.6f  max |U| %.5f / %.5f  %s' % (u0, u1, m0, m1, 'ok' if ok else 'FAIL'))
+    (u0, m0), (u1, m1), (u2, m2) = run('fwd', False), run('mirror', True), run('smooth_block', False, 1e-4)
+    # the block's roughness acts (a 100 times smaller z0 changes the result by far more than the mirror asymmetry)
+    ok = abs(u0 - u1) < 1e-4 and abs(m0 - m1) < 1e-3*m0 and u0 < 0.99 and abs(u0 - u2) > 20*abs(u0 - u1)
+    print('mean U %.6f / %.6f  max |U| %.5f / %.5f  smaller z0: %.6f  %s' % (u0, u1, m0, m1, u2, 'ok' if ok else 'FAIL'))
     sys.exit(0 if ok else 1)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
