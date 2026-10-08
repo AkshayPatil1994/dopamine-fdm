@@ -778,9 +778,9 @@ Contains
     tau_x     = 0d0
     tau_z     = 0d0
 
+    Allocate( qT_wall(1:nxg,1:2,1:nzg) )
+    qT_wall = 0d0
     If ( boussinesq_flag >= 1 ) Then
-       Allocate( alpha_T(1:nxg,1:2,1:nzg) )
-       alpha_T = 0d0
        Allocate( L_obukhov_ylo(1:nxg,1:nzg), L_obukhov_yhi(1:nxg,1:nzg) )
        L_obukhov_ylo = 1d10   ! neutral seed; solve_most iterates this in place each call
        L_obukhov_yhi = 1d10
@@ -840,13 +840,11 @@ Contains
     ! nu_t too: DNS (sgs_model==0) never writes it on device, but the viscous stencils read it (incl. z wrap ghost planes)
     !$acc update device(U,V,W,nu_t)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
-    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv)
+    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv,qT_wall)
     ! Boussinesq temperature: stays device-resident end-to-end so compute_rhs_v can read it directly
     If ( boussinesq_flag >= 1 ) Then
        !$acc enter data create(Tscal,Tscal_o,Ft1,Ft2,Ft3)
        !$acc update device(Tscal,Tscal_o)
-       !$acc enter data create(alpha_T)
-       !$acc update device(alpha_T)
        !$acc enter data copyin(L_obukhov_ylo,L_obukhov_yhi)
     End If
     ! Sediment scalar: device residency required by the shared compute_rhs_scalar_core (see scalar_transport.f90)

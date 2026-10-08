@@ -702,6 +702,10 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream_z/check_wm_stream_z.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} ${wmz_arg})
     endforeach()
+    # Rough-wall MOST heat flux (T_bc = 2): the heat the column gains equals u_tau*theta_tau of the matching-height state, same on 1 and 4 ranks
+    add_test(NAME wm_thermal
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_thermal/check_wm_thermal.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
     # Wall-modelled bed (smooth log law) under a uniform stream: wall stress rho u_tau^2, density independent, same on 1 and 4 ranks
     add_test(NAME vof_wm_stream
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wm_stream/check_wm_stream.py

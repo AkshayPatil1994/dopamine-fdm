@@ -434,7 +434,12 @@ neutral limit, and an adiabatic wall (zero surface buoyancy flux, $L \to \infty$
 always neutral regardless of ambient stratification -- so `T_bc_* = 0` never needs
 this coupling.
 
-This stability correction feeds the thermal Robin coefficient only. The momentum
+The wall heat flux $u_\tau\theta_\tau$ at the matching height replaces the diffusive flux
+$\kappa\,\partial T/\partial y$ through the wall face of the first-cell temperature balance
+(as the stress does for momentum, §7.1), and the ghost row is zero-gradient. An earlier
+Robin slip-length form could floor to an isothermal wall and not apply the modelled flux.
+
+This stability correction feeds the thermal flux only. The momentum
 coefficients ($\alpha_x$, $\alpha_z$) stay on the neutral rough log law of §7.3 even
 under `T_bc_* = 2` -- they are sampled at different index spaces (x-faces, z-faces)
 than this cell-centred MOST pass, so consistently stability-correcting them would

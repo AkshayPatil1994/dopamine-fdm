@@ -58,19 +58,20 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(In)    :: W_
     Real(Int64), Dimension(2:nxg-1, 2:nyg-1, 2:nzg-1), Intent(Out) :: Fc_
 
-    Call compute_rhs_scalar_core(C_, U_, V_, W_, ws, nu/Sc, 1d0/Sc_t, Fc_)
+    Call compute_rhs_scalar_core(C_, U_, V_, W_, ws, nu/Sc, 1d0/Sc_t, .False., Fc_)
 
   End Subroutine compute_rhs_scalar
 
 
   !> Shared MUSCL advection-diffusion core for any cell-centred scalar (sediment concentration, temperature, ...)
-  Subroutine compute_rhs_scalar_core(C_, U_, V_, W_, w_settle, kappa_mol, kappa_t_inv, Fc_)
+  Subroutine compute_rhs_scalar_core(C_, U_, V_, W_, w_settle, kappa_mol, kappa_t_inv, temp_wall_flux, Fc_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: C_
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In)    :: U_
     Real(Int64), Dimension(nxg, ny,  nzg), Intent(In)    :: V_
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(In)    :: W_
     Real(Int64), Intent(In) :: w_settle, kappa_mol, kappa_t_inv
+    Logical,     Intent(In) :: temp_wall_flux
     Real(Int64), Dimension(2:nxg-1, 2:nyg-1, 2:nzg-1), Intent(Out) :: Fc_
 
     Integer(Int32) :: i, j, k
@@ -81,10 +82,15 @@ Contains
     Real   (Int64) :: C_lo, C_hi                    ! TVD reconstructed face values
     Real   (Int64) :: gf, gb, slp                   ! face gradients & limited slope
     Real   (Int64) :: dx_f, dy_f, dz_f
+    Real   (Int64) :: flux_lo, flux_hi
+    Logical        :: wall_q_lo, wall_q_hi
+
+    wall_q_lo = temp_wall_flux .And. T_bc_bot == 2
+    wall_q_hi = temp_wall_flux .And. T_bc_top == 2
 
     Call scalar_fill_pad(C_)
 
-    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,nu_t,phi,x,xg,y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
+    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,nu_t,qT_wall,phi,x,xg,y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
@@ -216,8 +222,11 @@ Contains
              !-------- y-diffusion -----------------------------------------
              kappa_hi = kappa_mol + ( weight_y_0(j  )*nu_t(i,j,k) + weight_y_1(j  )*nu_t(i,j+1,k) )*kappa_t_inv
              kappa_lo = kappa_mol + ( weight_y_0(j-1)*nu_t(i,j-1,k) + weight_y_1(j-1)*nu_t(i,j,k) )*kappa_t_inv
-             diff_y = ( kappa_hi*(Cpad(i,j+1,k) - Cpad(i,j,k))/(yg(j+1)-yg(j)) &
-                      - kappa_lo*(Cpad(i,j,k) - Cpad(i,j-1,k))/(yg(j)-yg(j-1)) ) / dy_f
+             flux_hi = kappa_hi*(Cpad(i,j+1,k) - Cpad(i,j,k))/(yg(j+1)-yg(j))
+             flux_lo = kappa_lo*(Cpad(i,j,k) - Cpad(i,j-1,k))/(yg(j)-yg(j-1))
+             If ( wall_q_lo .And. j == 2     ) flux_lo = qT_wall(i,1,k)
+             If ( wall_q_hi .And. j == nyg-1 ) flux_hi = qT_wall(i,2,k)
+             diff_y = ( flux_hi - flux_lo ) / dy_f
 
              !-------- z-diffusion -----------------------------------------
              kappa_hi = kappa_mol + ( weight_z_0(k  )*nu_t(i,j,k) + weight_z_1(k  )*nu_t(i,j,k+1) )*kappa_t_inv

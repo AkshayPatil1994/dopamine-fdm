@@ -342,10 +342,11 @@ Module global
   ! flat_wall_model_flag==1 only (smooth Reichardt; rough is rejected at input). W is wall-normal and stays exact no-penetration.
   Real   (Int64), Allocatable, Dimension(:,:,:) :: tau_zu, tau_zv
 
-  ! Thermal Robin-BC coefficient (flat-wall rough EQWM, T_bc_bot/top==2); cell-centred in x,z like alpha_z
-  Real   (Int64), Allocatable, Dimension(:,:,:) :: alpha_T
+  ! Wall-edge temperature flux kappa*dT/dy at the low (1) / high (2) y wall from the MOST law (T_bc_bot/top==2), replacing the diffusive
+  ! flux of the first-cell scalar balance in compute_rhs_scalar_core; cell-centred in x,z
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: qT_wall
 
-  ! Persisted Obukhov length (nxg,nzg, cell-centred -- matches alpha_T's grid), seeded
+  ! Persisted Obukhov length (nxg,nzg, cell-centred), seeded
   ! neutral and iterated in place each call by solve_most (compute_flat_wall_thermal_eqwm);
   ! carrying it across calls/timesteps keeps the fixed-point iteration's cost low once
   ! the flow is quasi-steady. Only meaningful where T_bc_bot/top==2.

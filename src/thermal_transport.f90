@@ -6,8 +6,7 @@ Module thermal_transport
   Use mpi
   Use decomp, Only : x_periodic_partner
   Use boundary_conditions, Only : update_ghost_interior_planes_x, apply_inflow_bc_scalar_x, &
-                                  outflow_convection_velocity, outflow_stage_dt, &
-                                  apply_Robin_bc_y_scalar_lo, apply_Robin_bc_y_scalar_hi
+                                  outflow_convection_velocity, outflow_stage_dt
   Use scalar_transport,    Only : compute_rhs_scalar_core, finish_scalar_halos
 
   Implicit None
@@ -23,7 +22,7 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(In)    :: W_
     Real(Int64), Dimension(2:nxg-1, 2:nyg-1, 2:nzg-1), Intent(Out) :: Ft_
 
-    Call compute_rhs_scalar_core(T_, U_, V_, W_, 0d0, nu/Pr, 1d0/Pr_t, Ft_)
+    Call compute_rhs_scalar_core(T_, U_, V_, W_, 0d0, nu/Pr, 1d0/Pr_t, .True., Ft_)
 
   End Subroutine compute_rhs_temperature
 
@@ -53,13 +52,13 @@ Contains
     Call finish_scalar_halos(T_)
 
     ! y-bottom ghost: 0=adiabatic (zero-gradient), 1=isothermal (Dirichlet mirror),
-    ! 2=rough EQWM flux BC (Robin, alpha_T set by compute_flat_wall_thermal_eqwm)
+    ! 2=rough EQWM flux BC (zero-gradient ghost, the wall flux qT_wall enters compute_rhs_scalar_core)
     If ( T_bc_bot == 0 ) Then
        T_(:,1,:) = T_(:,2,:)
     Else If ( T_bc_bot == 1 ) Then
        T_(:,1,:) = 2d0*T_wall_bot - T_(:,2,:)
     Else
-       Call apply_Robin_bc_y_scalar_lo(T_, alpha_T, T_wall_bot)
+       T_(:,1,:) = T_(:,2,:)
     End If
 
     ! y-top ghost
@@ -68,7 +67,7 @@ Contains
     Else If ( T_bc_top == 1 ) Then
        T_(:,nyg,:) = 2d0*T_wall_top - T_(:,nyg-1,:)
     Else
-       Call apply_Robin_bc_y_scalar_hi(T_, alpha_T, T_wall_top)
+       T_(:,nyg,:) = T_(:,nyg-1,:)
     End If
 
     ! Fallback safety net inside IBM solid cells; apply_ghost_cell_ibm_scalar (ibm.f90) enforces the actual physical wall condition

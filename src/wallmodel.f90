@@ -581,15 +581,10 @@ Contains
 
   End Subroutine compute_flat_wall_eqwm_z
 
-  !> Flat-wall rough-EQWM thermal coupling (neutral limit: psi_h=0).
-  !  Computes the Robin slip-length alpha_T for Tscal's y-ghost cells from the
-  !  z0h log law, using the same numerical device as the momentum alpha_x/alpha_z:
-  !  alpha_T is chosen so that the discrete flux (nu_eff/Pr)*(T_ref-T_ghost)/dy
-  !  reproduces the target kinematic heat flux Q = u_tau*theta_tau, where nu_eff
-  !  = kappa*u_tau*y_ref is the mixing-length eddy diffusivity (there is no
-  !  viscous sublayer under a rough wall, so molecular nu/Pr alone would leave
-  !  alpha_T saturated at its zero floor -- see compute_flat_wall_eqwm). Only
-  !  active on walls where T_bc_bot/top==2; other walls leave alpha_T untouched.
+  !> Flat-wall rough-EQWM thermal coupling: the kinematic wall heat flux u_tau*theta_tau of the iterated MOST law at the matching height
+  !  is stored in qT_wall as the wall-edge flux kappa*dT/dy that replaces the diffusive flux of the first-cell balance (the temperature
+  !  analogue of tau_x/tau_z). The ghost row is zero-gradient. The stability correction feeds only this flux: alpha_x/alpha_z
+  !  stay on the neutral rough z0 law. Only active on walls where T_bc_bot/top==2.
   Subroutine compute_flat_wall_thermal_eqwm(U_, W_, T_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
@@ -597,92 +592,36 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In) :: T_
 
     Integer(Int32) :: i, k
-    Real   (Int64) :: u_match, u_tau, theta_tau, q_target
-    Real   (Int64) :: y_ref_lo, y_ref_hi, y_match_lo, y_match_hi, Delta_yg_lo, Delta_yg_hi
-    Real   (Int64) :: U_at_pt, W_at_pt, T_here, T_match, alpha_lo, alpha_hi
-    Real   (Int64) :: nu_eff_lo, nu_eff_hi
+    Real   (Int64) :: u_match, u_tau, theta_tau, y_match_lo, y_match_hi, U_at_pt, W_at_pt
 
-    y_ref_lo    = Max(yg(2), 1d-14)
-    Delta_yg_lo = yg(2) - yg(1)
-    y_ref_hi    = Max(Ly - yg(nyg-1), 1d-14)
-    Delta_yg_hi = yg(nyg) - yg(nyg-1)
-    y_match_lo  = Max(yg(j_match_ylo), 1d-14)
-    y_match_hi  = Max(Ly - yg(j_match_yhi), 1d-14)
+    y_match_lo = Max(yg(j_match_ylo), 1d-14)
+    y_match_hi = Max(Ly - yg(j_match_yhi), 1d-14)
 
-    ! u_tau/theta_tau are solved at the matching height (j_match_*, further from
-    ! the wall than j=2/nyg-1 when the near-wall grid is fine relative to z0/z0h),
-    ! via the coupled Businger-Dyer MOST iteration (reduces to the neutral log
-    ! laws when the surface buoyancy flux is ~0). The alpha_T formula still
-    ! references the actual first interior cell (T_here, y_ref_*), since that's
-    ! what apply_Robin_bc_y_scalar extrapolates from.
-    !
-    ! Known scope limitation: this stability correction feeds alpha_T only.
-    ! alpha_x/alpha_z (momentum) stay on the neutral rough z0 EQWM from
-    ! compute_flat_wall_eqwm -- they sample at different index spaces (x-faces,
-    ! z-faces) than this cell-centred pass, so consistently stability-correcting
-    ! them needs their own persisted L state and is deferred.
-    !$acc parallel loop collapse(2) present(U_,W_,T_,alpha_T,L_obukhov_ylo,L_obukhov_yhi,yg)
+    !$acc parallel loop collapse(2) present(U_,W_,T_,qT_wall,L_obukhov_ylo,L_obukhov_yhi,yg)
     Do k = 2, nzg-1
        Do i = 2, nxg-1
 
-          ! ---- bottom wall ----
           If ( T_bc_bot == 2 ) Then
              U_at_pt = 0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k))
              W_at_pt = 0.5d0*(W_(i, j_match_ylo, Max(k-1,2)) + W_(i, j_match_ylo, k))
              u_match = Sqrt(U_at_pt**2 + W_at_pt**2)
-             T_here  = T_(i, 2, k)
-             T_match = T_(i, j_match_ylo, k)
-
-             Call solve_most(u_match, T_match - T_wall_bot, y_match_lo, z0_ylo, z0h_ylo, &
+             Call solve_most(u_match, T_(i, j_match_ylo, k) - T_wall_bot, y_match_lo, z0_ylo, z0h_ylo, &
                               u_tau, theta_tau, L_obukhov_ylo(i,k))
-
-             q_target = u_tau * theta_tau
-             If ( Abs(q_target) > 1d-12 ) Then
-                ! Same molecular-vs-turbulent mismatch as alpha_x/alpha_z (see
-                ! compute_flat_wall_eqwm): under the rough EQWM there is no viscous
-                ! sublayer, so nu/Pr is replaced with the mixing-length eddy
-                ! diffusivity implied by the log law at y_ref_lo.
-                nu_eff_lo = kappa_wm * u_tau * y_ref_lo
-                alpha_lo = (nu_eff_lo/Pr) * (T_here - T_wall_bot) / q_target - Delta_yg_lo*0.5d0
-             Else
-                alpha_lo = 1.0e10_8   ! no resolved flux -> effectively adiabatic ghost
-             End If
-             alpha_T(i, 1, k) = Max(alpha_lo, 0d0)
+             qT_wall(i, 1, k) = u_tau * theta_tau
           End If
 
-          ! ---- top wall ----
           If ( T_bc_top == 2 ) Then
              U_at_pt = 0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k))
              W_at_pt = 0.5d0*(W_(i, j_match_yhi, Max(k-1,2)) + W_(i, j_match_yhi, k))
              u_match = Sqrt(U_at_pt**2 + W_at_pt**2)
-             T_here  = T_(i, nyg-1, k)
-             T_match = T_(i, j_match_yhi, k)
-
-             Call solve_most(u_match, T_match - T_wall_top, y_match_hi, z0_yhi, z0h_yhi, &
+             Call solve_most(u_match, T_(i, j_match_yhi, k) - T_wall_top, y_match_hi, z0_yhi, z0h_yhi, &
                               u_tau, theta_tau, L_obukhov_yhi(i,k))
-
-             q_target = u_tau * theta_tau
-             If ( Abs(q_target) > 1d-12 ) Then
-                nu_eff_hi = kappa_wm * u_tau * y_ref_hi
-                alpha_hi = (nu_eff_hi/Pr) * (T_here - T_wall_top) / q_target - Delta_yg_hi*0.5d0
-             Else
-                alpha_hi = 1.0e10_8
-             End If
-             alpha_T(i, 2, k) = Max(alpha_hi, 0d0)
+             qT_wall(i, 2, k) = -u_tau * theta_tau
           End If
 
        End Do
     End Do
     !$acc end parallel loop
-
-    ! Fill x-halo planes (periodic in x)
-    !$acc kernels present(alpha_T)
-    alpha_T(  1, :, :) = alpha_T(    2, :, :)
-    alpha_T(nxg, :, :) = alpha_T(nxg-1, :, :)
-    ! Fill z-halo planes (copy from nearest interior)
-    alpha_T(:, :,   1) = alpha_T(:, :,     2)
-    alpha_T(:, :, nzg) = alpha_T(:, :, nzg-1)
-    !$acc end kernels
 
   End Subroutine compute_flat_wall_thermal_eqwm
 
