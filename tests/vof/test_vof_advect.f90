@@ -45,7 +45,6 @@ Program test_vof_advect
         Call run_zalesak(n, iscm, e_now)
         rate = 0d0
         If ( ic > 1 ) rate = Log(e_prev/e_now)/Log(2d0)
-        If ( ic > 1 ) min_order = Min(min_order, rate)
         Write(*,'(a,i4,a,es10.3,a,f6.2)') '  N=', n, '  L1 err=', e_now, '  order=', rate
         e_prev = e_now
      End Do
@@ -179,7 +178,7 @@ Contains
   End Subroutine run_translation
 
 
-  !> Disk (centre (0.5,0.75), R=0.15) minus slot (width 0.05, down to y=0.7): sub-sampled volume fraction of cell (x0,y0,h)
+  !> Disk (centre (0.5,0.75), R=0.15) minus slot (width 0.05, up to y=0.85): sub-sampled fraction of cell (x0,y0,h)
   Function zalesak_fraction(x0, y0, h) Result(f)
 
     Real(Int64), Intent(In) :: x0, y0, h
@@ -193,7 +192,7 @@ Contains
        Do a = 1, ns
           x = x0 + (a-0.5d0)*h/ns
           If ( (x-0.5d0)**2 + (y-0.75d0)**2 <= 0.15d0**2 ) Then
-             If ( .Not. ( Abs(x-0.5d0) <= 0.025d0 .And. y <= 0.8250d0 ) ) f = f + 1d0
+             If ( .Not. ( Abs(x-0.5d0) <= 0.025d0 .And. y <= 0.85d0 ) ) f = f + 1d0
           End If
        End Do
     End Do
@@ -265,6 +264,7 @@ Contains
           End Do
        End Do
     End Do
+    err = err/((n3-2)*h)     ! area L1 of the 2-D shape (the slab thickness scales with h)
     max_drift = Max(max_drift, Abs((v1-v0)/v0));  max_excess = Max(max_excess, -cmin, cmax-1d0)
     If ( n == 100 ) Write(*,'(a,es9.2,a,es9.2,a,es9.2,a,f5.2,a,i0)') '      vol drift=', (v1-v0)/v0, '  clip=', cltot, &
          '  C range excess=', Max(-cmin, cmax-1d0), '  Co=', cotot, '  interface cells=', nint

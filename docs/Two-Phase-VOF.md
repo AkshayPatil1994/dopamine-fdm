@@ -174,6 +174,21 @@ The vortex error falls by ≈ 8.6× and 14.7× per doubling (the thin tail is un
 test: the sphere is drawn into a sheet thinner than a cell; the error falls only first order (N = 32 → 48: 0.7×) and L1 is still
 38 % of the sphere volume at N = 48.
 
+Zalesak's slotted disk (R = 0.15 at (0.5, 0.75), slot 0.05 × 0.25, one rigid rotation about (0.5, 0.5), prescribed velocity
+`vof_prescribed = 3`, PLIC with Youngs normals, example `examples/vof_zalesak_disk`): the exact solution at `t = T` is the initial
+shape. Liquid volume drift ≤ 7e-15 and `C` in [0,1] at both resolutions.
+
+| N | L1 error (area units) | % of disk area |
+|---|-----------------------|----------------|
+| 100 | 2.0e-3 | 3.5 |
+| 256 | 6.5e-4 | 1.1 |
+
+![Zalesak slotted disk, N = 256](vof_zalesak.png)
+
+The disk edge stays on the exact circle; the error is the rounded closed end of the slot (≈ 0.003 low) and the cut lower slot corners,
+the usual signature of a split PLIC method on features a few cells wide. The error falls at about 1.2 order between the two
+resolutions. The height-function normal option (`vof_normal_scheme = 2`) gives the same errors as Youngs on this case.
+
 ### 3.2 Surface tension
 
 A static drop of radius R = 0.25 in a periodic box, density ratio 1000, σ = 1, ν = 1e-3 (both fluids), no gravity:
@@ -203,25 +218,7 @@ at first order. Sloshing in a closed tank (`vof_slosh_small`) matches the linear
 flume cases (`vof_flume_small`, `vof_flume_sf_ratio100`) reproduce the target gauge amplitude within 10 % with a closed
 mass ledger (residual ≤ 2e-6).
 
-### 3.4 LES quality (ratio 1)
-
-Taylor–Green vortex, Re = 1600, free-slip y walls (equivalent to the periodic box), N = 64, peak of the dissipation rate (reference
-DNS: 0.0127 at t ≈ 9). The comparison is of the momentum kernels at a resolution that is far below DNS (N = 256 is the DNS standard):
-
-| Kernel | peak `−dE_k/dt` | time of the peak |
-|--------|-----------------|------------------|
-| WENO5-Z (default) | 0.0110 | 8.5 |
-| Koren | 0.0108 | 8.6 |
-| QUICK | 0.0100 | 8.7 |
-| central 2nd order (no numerical dissipation) | 0.0116 | 8.3 |
-| first-order upwind | 0.0121 | 4.9 (premature: too dissipative) |
-
-![Taylor–Green dissipation](vof_tgv.png)
-
-WENO5-Z has the best peak and timing of the dissipative kernels; the central kernel is the reference for "no numerical
-dissipation" but is not usable for violent two-phase flow. The Vreman SGS model runs stably on the two-phase solver.
-
-### 3.5 Stress transfer across the interface
+### 3.4 Stress transfer across the interface
 
 Impulsive shear of the gas over still water (the analytic two-fluid Rayleigh problem, ν_g = 1.5e-5): the momentum delivered to the
 liquid, relative to the exact value, depends only on the gas boundary-layer thickness `δ_g = 2√(ν_g t)` in cells and is the same for
@@ -234,7 +231,7 @@ N = 32, 64 and 128:
 The stress transfer is accurate to about 6 % once the gas viscous layer spans seven cells. Wind-forced waves therefore need the gas
 sub-layer resolved (or a wall-layer treatment, which this solver does not provide).
 
-### 3.6 Dam break and a breaking wave
+### 3.5 Dam break and a breaking wave
 
 Dam break (a = 0.146 m, 2a column, free-slip bottom, N = 64 and 128): front at `Z/a = 1.9` at `τ = t√(g/a) = 1.0`, 3.7 at `τ = 2.0`;
 volume drift 6e-15; gas / liquid kinetic energy ≤ 0.4 %. No quantitative comparison with experiments has been made.
@@ -245,7 +242,7 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
 
 ![Plunging breaker](vof_breaker.png)
 
-### 3.7 Rank-layout independence
+### 3.6 Rank-layout independence
 
 * Ratio-1 flows (translation, reversal, drop in an IBM-resolved flow) are identical to round-off (1e-15) for np = 1 and every
   `p_row × p_col` layout (tests `vof_*_np1_vs_np4_*`).

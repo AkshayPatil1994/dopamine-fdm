@@ -136,6 +136,6 @@ has a physical reference; run them with `tests/regression/vof_check.py` or copy 
 | `vof_ibm_small` | Drop in a flow around an immersed sphere (ghost-cell IBM + two-fluid solver) |
 | `vof_break_small` | Steep (ka = 0.5) Stokes wave at 1000:1: layout independence with the interface crossing the rank seams |
 
-`tests/regression/vof_check.py` and the figure script `scripts/vof_figures.py` (breaking-wave panels, Taylor–Green dissipation) are
+`tests/regression/vof_check.py` and the figure script `scripts/vof_figures.py` (breaking-wave panels) are
 described in [[Tools|Tools#two-phase-vof-tools]]. The plunging-breaker setup of the documentation figure is the `vof_break_small`
 input with `vof_sigma = 0.072`, `ak = 0.55` (`vof_wave_amp = 0.0875`), N = 128, `vof_debug = 1`, `vof_snap_dt = 0.1`.

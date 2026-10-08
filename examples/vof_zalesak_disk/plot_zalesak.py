@@ -12,7 +12,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-XC, YC, R, W, YTOP, T = 0.5, 0.75, 0.15, 0.05, 0.85, 1.0   # disk centre, radius, slot width, slot top, period
+XC, YC, R, W, YTOP, T = 0.5, 0.75, 0.15, 0.05, 0.85, 1.0   # disk centre, radius, slot width, slot top, period (set from the last snapshot)
 OMEGA_C = (0.5, 0.5)
 
 
@@ -56,7 +56,10 @@ def main():
     run = sys.argv[1] if len(sys.argv) > 1 else '.'
     out = sys.argv[2] if len(sys.argv) > 2 else 'zalesak_validation.png'
     snaps = [read_snapshot(f) for f in sorted(glob.glob(run + '/vof_snap_*.dat'))]
-    snaps = [s for s in snaps if s[0] > 0.2]     # the first file is written at the first monitor step, not at t = 0
+    tend = max(s[0] for s in snaps)              # the last snapshot is the end of the revolution
+    snaps = [min(snaps, key=lambda s: abs(s[0] - f*tend)) for f in (0.25, 0.5, 0.75, 1.0)]
+    global T
+    T = tend
     diag = np.loadtxt(run + '/vof_diag.dat')
 
     t, x, y, c = snaps[-1]

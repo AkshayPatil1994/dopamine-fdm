@@ -3,7 +3,6 @@
 
   vof_figures.py breaker RUN_DIR OUT.png [t1 t2 ...]   interface and liquid fraction at the snapshot times nearest to t1.. (vof_debug = 1,
                                                        vof_snap_dt > 0; one rank, or the per-rank vof_snap_NNNNN_rRRR.dat files)
-  vof_figures.py tgv LABEL=DIR [LABEL=DIR ...] OUT.png  Taylor-Green energy dissipation rate from vof_diag.dat (ratio 1, Re = 1600)
 """
 import glob, re, sys
 import numpy as np
@@ -49,22 +48,4 @@ def breaker(run, out, times):
     fig.savefig(out, dpi=130)
 
 
-def tgv(args, out):
-    fig, ax = plt.subplots(figsize=(6.2, 4))
-    for item in args:
-        label, d = item.split('=')
-        a = np.loadtxt(d + '/vof_diag.dat')
-        t, ke = a[:, 1], (a[:, 25] + a[:, 26]) / a[:, 3]
-        eps = np.convolve(-np.gradient(ke, t), np.ones(5) / 5, mode='same')
-        ax.plot(t[2:-2], eps[2:-2], label=label)
-    ax.axhline(0.0127, color='k', ls=':', lw=1)
-    ax.text(0.2, 0.01285, 'reference DNS peak 0.0127 (t = 9)', fontsize=8)
-    ax.set_xlabel('t'); ax.set_ylabel('$-dE_k/dt$'); ax.set_xlim(0, 12); ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out, dpi=130)
-
-
-if sys.argv[1] == 'breaker':
-    breaker(sys.argv[2], sys.argv[3], [float(v) for v in sys.argv[4:]])
-else:
-    tgv(sys.argv[2:-1], sys.argv[-1])
+breaker(sys.argv[2], sys.argv[3], [float(v) for v in sys.argv[4:]])
