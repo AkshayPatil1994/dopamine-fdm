@@ -45,23 +45,23 @@ Contains
   End Subroutine reichardt_uplus
 
   !> Newton solve for u_tau from (u_ref, y_ref) via the Reichardt profile
-  Subroutine solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+  Subroutine solve_u_tau_reichardt(u_ref, y_ref, nu_l, u_tau)
     !$acc routine seq
-    Real(Int64), Intent(In)  :: u_ref, y_ref
+    Real(Int64), Intent(In)  :: u_ref, y_ref, nu_l
     Real(Int64), Intent(Out) :: u_tau
 
     Real(Int64) :: yplus, uplus, duplus, f, fp, u_tau_new
     Integer(Int32) :: iter
 
-    u_tau = Max(1d-3*u_ref, Sqrt(nu*u_ref/Max(y_ref,1d-14)))
+    u_tau = Max(1d-3*u_ref, Sqrt(nu_l*u_ref/Max(y_ref,1d-14)))
 
     Do iter = 1, n_iter_wm
-       yplus = u_tau * y_ref / nu
+       yplus = u_tau * y_ref / nu_l
        Call reichardt_uplus(yplus, uplus, duplus)
 
        ! F(u_tau) = u_ref/u_tau - u+(y+) = 0; dF/du_tau adds the y+ chain term.
        f  =  u_ref / Max(u_tau, 1d-20) - uplus
-       fp = -u_ref / Max(u_tau**2, 1d-20) - duplus * y_ref / nu
+       fp = -u_ref / Max(u_tau**2, 1d-20) - duplus * y_ref / nu_l
 
        u_tau_new = u_tau - f / ( fp + Sign(1d-14, fp) )
        u_tau_new = Min(Max(u_tau_new, 0.1d0*u_tau), 10d0*u_tau)
@@ -103,15 +103,15 @@ Contains
 
   !> Dispatch the friction-velocity solve: smooth Reichardt EQWM (mode 1) or
   !  rough z0 log law (mode 2); z0 is unused (but still passed) in mode 1
-  Subroutine solve_u_tau_wall(u_ref, y_ref, z0, u_tau)
+  Subroutine solve_u_tau_wall(u_ref, y_ref, z0, nu_l, u_tau)
     !$acc routine seq
-    Real(Int64), Intent(In)  :: u_ref, y_ref, z0
+    Real(Int64), Intent(In)  :: u_ref, y_ref, z0, nu_l
     Real(Int64), Intent(Out) :: u_tau
 
     If ( flat_wall_model_flag == 2 ) Then
        Call solve_u_tau_rough(u_ref, y_ref, z0, u_tau)
     Else
-       Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+       Call solve_u_tau_reichardt(u_ref, y_ref, nu_l, u_tau)
     End If
 
   End Subroutine solve_u_tau_wall
@@ -212,7 +212,7 @@ Contains
     If ( y_bc_type == 0 .And. z_bc_type == 0 ) Return   ! no wall model meaning without a wall in either direction
 
     If ( y_bc_type == 1 ) Then
-       If ( flat_wall_model_flag == 1 .Or. flat_wall_model_flag == 2 ) Then
+       If ( vof_flow < 1 .And. ( flat_wall_model_flag == 1 .Or. flat_wall_model_flag == 2 ) ) Then
           ! Flat-wall log-law EQWM (smooth Reichardt or rough z0): compute alpha from local u_tau
           Call compute_flat_wall_eqwm(U_, W_)
        Else
@@ -313,7 +313,7 @@ Contains
           Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
           Call rough_uplus( Min(ghost_u_dGB(n), y_ref), ibm_z0(oid), uplus_img )
        Else
-          Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+          Call solve_u_tau_reichardt(u_ref, y_ref, nu, u_tau)
           yplus = Min(ghost_u_dGB(n), y_ref) * u_tau / nu
           Call reichardt_uplus(yplus, uplus_img, duplus_img)
        End If
@@ -354,7 +354,7 @@ Contains
           Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
           Call rough_uplus( Min(ghost_v_dGB(n), y_ref), ibm_z0(oid), uplus_img )
        Else
-          Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+          Call solve_u_tau_reichardt(u_ref, y_ref, nu, u_tau)
           yplus = Min(ghost_v_dGB(n), y_ref) * u_tau / nu
           Call reichardt_uplus(yplus, uplus_img, duplus_img)
        End If
@@ -393,7 +393,7 @@ Contains
           Call solve_u_tau_rough(u_ref, y_ref, ibm_z0(oid), u_tau)
           Call rough_uplus( Min(ghost_w_dGB(n), y_ref), ibm_z0(oid), uplus_img )
        Else
-          Call solve_u_tau_reichardt(u_ref, y_ref, u_tau)
+          Call solve_u_tau_reichardt(u_ref, y_ref, nu, u_tau)
           yplus = Min(ghost_w_dGB(n), y_ref) * u_tau / nu
           Call reichardt_uplus(yplus, uplus_img, duplus_img)
        End If
@@ -461,7 +461,7 @@ Contains
              u_match  = Sqrt(U_(i, j_match_ylo, k)**2 + W_match**2)
 
              ! Newton solve (smooth) or explicit log law (rough) for u_tau using nu only
-             Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, u_tau)
+             Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
 
              ! Robin alpha derivation -- always referenced to the actual first
              ! interior cell (u_ref/y_ref_lo), since that's what apply_Robin_bc_y
@@ -494,7 +494,7 @@ Contains
              W_match  = 0.5d0*(W_(i, j_match_yhi, k-1) + W_(i, j_match_yhi, k))
              u_match  = Sqrt(U_(i, j_match_yhi, k)**2 + W_match**2)
 
-             Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, u_tau)
+             Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
 
              If ( flat_wall_model_flag == 2 ) Then
                 nu_eff_hi = kappa_wm * u_tau * y_ref_hi
@@ -535,7 +535,7 @@ Contains
              u_match  = Sqrt((0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k)))**2 &
                            + W_(i, j_match_ylo, k)**2)
 
-             Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, u_tau)
+             Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
 
              ! See the alpha_x bottom-wall block above for why nu is replaced
              ! by a mixing-length nu_eff under the rough EQWM.
@@ -559,7 +559,7 @@ Contains
              u_match  = Sqrt((0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k)))**2 &
                            + W_(i, j_match_yhi, k)**2)
 
-             Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, u_tau)
+             Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
 
              If ( flat_wall_model_flag == 2 ) Then
                 nu_eff_hi = kappa_wm * u_tau * y_ref_hi
@@ -622,7 +622,7 @@ Contains
           Do i = 2, nx-1
              V_at_pt  = 0.25d0*(V_(i,j-1,2) + V_(i,j,2) + V_(i+1,j-1,2) + V_(i+1,j,2))
              u_ref    = Sqrt(U_(i,j,2)**2 + V_at_pt**2)
-             Call solve_u_tau_reichardt(u_ref, z_ref_lo, u_tau)
+             Call solve_u_tau_reichardt(u_ref, z_ref_lo, nu, u_tau)
              alpha_lo = nu * u_ref / Max(u_tau**2, 1d-20) - Delta_zg_lo*0.5d0
              alpha_z_u(i,j,1) = Max(alpha_lo, 0d0)
           End Do
@@ -635,7 +635,7 @@ Contains
           Do i = 2, nx-1
              V_at_pt  = 0.25d0*(V_(i,j-1,nzg-1) + V_(i,j,nzg-1) + V_(i+1,j-1,nzg-1) + V_(i+1,j,nzg-1))
              u_ref    = Sqrt(U_(i,j,nzg-1)**2 + V_at_pt**2)
-             Call solve_u_tau_reichardt(u_ref, z_ref_hi, u_tau)
+             Call solve_u_tau_reichardt(u_ref, z_ref_hi, nu, u_tau)
              alpha_hi = nu * u_ref / Max(u_tau**2, 1d-20) - Delta_zg_hi*0.5d0
              alpha_z_u(i,j,2) = Max(alpha_hi, 0d0)
           End Do
@@ -658,7 +658,7 @@ Contains
           Do i = 2, nxg-1
              U_at_pt  = 0.25d0*(U_(i-1,j,2) + U_(i,j,2) + U_(i-1,j+1,2) + U_(i,j+1,2))
              v_ref    = Sqrt(V_(i,j,2)**2 + U_at_pt**2)
-             Call solve_u_tau_reichardt(v_ref, z_ref_lo, u_tau)
+             Call solve_u_tau_reichardt(v_ref, z_ref_lo, nu, u_tau)
              alpha_lo = nu * v_ref / Max(u_tau**2, 1d-20) - Delta_zg_lo*0.5d0
              alpha_z_v(i,j,1) = Max(alpha_lo, 0d0)
           End Do
@@ -671,7 +671,7 @@ Contains
           Do i = 2, nxg-1
              U_at_pt  = 0.25d0*(U_(i-1,j,nzg-1) + U_(i,j,nzg-1) + U_(i-1,j+1,nzg-1) + U_(i,j+1,nzg-1))
              v_ref    = Sqrt(V_(i,j,nzg-1)**2 + U_at_pt**2)
-             Call solve_u_tau_reichardt(v_ref, z_ref_hi, u_tau)
+             Call solve_u_tau_reichardt(v_ref, z_ref_hi, nu, u_tau)
              alpha_hi = nu * v_ref / Max(u_tau**2, 1d-20) - Delta_zg_hi*0.5d0
              alpha_z_v(i,j,2) = Max(alpha_hi, 0d0)
           End Do

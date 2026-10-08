@@ -20,7 +20,7 @@ Module vof_twofluid
   Use boundary_conditions, Only : apply_boundary_conditions, outflow_relax_on, update_ghost_interior_planes, &
                                   update_ghost_interior_planes_x, apply_periodic_bc_x, apply_periodic_bc_z
   Use sgs_models, Only : compute_sgs_model
-  Use wallmodel, Only : compute_wall_model
+  Use wallmodel, Only : compute_wall_model, solve_u_tau_reichardt
   Use waves, Only : wave_eta, wave_profile_at
   Use monitor, Only : compute_cfl, write_force_csv
   Use vof_plic
@@ -52,6 +52,9 @@ Module vof_twofluid
   Real(Int64), Allocatable, Dimension(:,:,:) :: Hu1, Hv1, Hw1, Hu2, Hv2, Hw2, Fu_, Fv_, Fw_, Gu_, Gv_, Gw_
   Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c, mr_c, kap_c
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
+  ! flat-wall EQWM stress fluxes on the u and w faces of the bottom (3rd index 1) and top (2) wall, and where they replace the molecular flux
+  Real(Int64), Allocatable, Dimension(:,:,:) :: wt_u, wt_w
+  Logical,     Allocatable, Dimension(:,:,:) :: wt_on_u, wt_on_w
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
   ! IBM load output: whether this step is a sampling step
   Logical :: ibm_sampling_now = .False.
@@ -66,9 +69,9 @@ Contains
     Real(Int64) :: kt(3), om
 
     If ( ibm_wall_model_flag /= 0 .Or. sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
-         .Or. uav_active >= 1 .Or. flat_wall_model_flag /= 0 .Or. rotation_active >= 1 ) Then
+         .Or. uav_active >= 1 .Or. flat_wall_model_flag > 1 .Or. rotation_active >= 1 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support the IBM wall model, sediment, ' // &
-            'Boussinesq, particles, UAV, flat wall models or rotation'
+            'Boussinesq, particles, UAV, the rough flat-wall model or rotation'
        If ( myid == 0 ) Write(*,'(A,7I3)') ' ibm_wall_model, sediment, boussinesq, particles, uav, flat_wall, rotation: ', &
             ibm_wall_model_flag, sediment_flag, boussinesq_flag, particles_active, uav_active, flat_wall_model_flag, rotation_active
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
@@ -78,6 +81,8 @@ Contains
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
 
+    Allocate( wt_u(nx,nzg,2), wt_w(nxg,nz,2), wt_on_u(nx,nzg,2), wt_on_w(nxg,nz,2) )
+    wt_u = 0d0;  wt_w = 0d0;  wt_on_u = .False.;  wt_on_w = .False.
     Allocate( qu(nx,nyg,nzg), qv(nxg,ny,nzg), qw(nxg,nyg,nz), uqu(nx,nyg,nzg), uqv(nxg,ny,nzg), uqw(nxg,nyg,nz) )
     Allocate( Md(nxg,nyg,nzg), rt(nxg,nyg,nzg), Dd(nxg,nyg,nzg) )
     Allocate( Ut(nx,nyg,nzg), Vt(nxg,ny,nzg), Wt(nxg,nyg,nz), Utmp(nx,nyg,nzg), Vtmp(nxg,ny,nzg), Wtmp(nxg,nyg,nz) )
@@ -741,6 +746,64 @@ Contains
 
   End Subroutine set_viscosity
 
+  !> Flat-wall EQWM stress at the y walls: wt_u / wt_w are the tangential stress fluxes (rho u_tau**2 along the local tangential velocity,
+  !  signed as the momentum flux through the wall-edge of the first interior row) that viscous_accel uses in place of the molecular
+  !  edge flux. u_tau is solved from the first interior row with the viscosity of the phase there. The log law holds in a single
+  !  fluid only: where the interface lies within the wall cell, the one above it or one cell sideways the face stays no-slip.
+  Subroutine set_wall_stress
+
+    Real(Int64), Parameter :: cgate = 0.05d0
+    Integer(Int32) :: i, k, iw, jw, jn, ia, ib, ka, kb, ph(nxg,nzg), pa, pb
+    Real(Int64) :: yref, ut, ux, wz, ur, nul, rhof, sgn
+
+    wt_on_u = .False.;  wt_on_w = .False.
+    Do iw = 1, 2
+       If ( Merge(bc_face_ylo, bc_face_yhi, iw == 1) == 2 ) Cycle
+       jw = Merge(2, nyg-1, iw == 1);  jn = Merge(3, nyg-2, iw == 1)
+       yref = Merge(yg(2), y(ny) - yg(nyg-1), iw == 1);  sgn = Merge(1d0, -1d0, iw == 1)
+       Do k = 1, nzg
+          Do i = 1, nxg
+             ph(i,k) = 0
+             If ( Min(Cv(i,jw,k), Cv(i,jn,k)) >= 1d0 - cgate ) ph(i,k) = 1
+             If ( Max(Cv(i,jw,k), Cv(i,jn,k)) <= cgate ) ph(i,k) = -1
+          End Do
+       End Do
+       Do k = 1, nzg
+          ka = Max(k-1, 1);  kb = Min(k+1, nzg)
+          Do i = 1, nxg
+             ia = Max(i-1, 1);  ib = Min(i+1, nxg)
+             If ( Any( ph(ia:ib,ka:kb) /= ph(i,k) ) ) ph(i,k) = 0
+          End Do
+       End Do
+       Do k = 2, nzg-1
+          Do i = 2, nx-1
+             pa = ph(i,k);  pb = ph(i+1,k)
+             If ( pa == 0 .Or. pa /= pb ) Cycle
+             ux = U(i,jw,k);  wz = 0.5d0*( W(i,jw,k-1) + W(i,jw,k) );  ur = Sqrt(ux*ux + wz*wz)
+             If ( ur == 0d0 ) Cycle
+             nul = Merge(vof_nu_l, vof_nu_g, pa == 1)
+             Call solve_u_tau_reichardt(ur, yref, nul, ut)
+             rhof = vp_rfu(i,jw,k)
+             wt_u(i,k,iw) = sgn*rhof*ut*ut*ux/ur;  wt_on_u(i,k,iw) = .True.
+          End Do
+       End Do
+       Do k = 2, nz-1
+          Do i = 2, nxg-1
+             pa = ph(i,k);  pb = ph(i,k+1)
+             If ( pa == 0 .Or. pa /= pb ) Cycle
+             wz = W(i,jw,k);  ux = 0.5d0*( U(i-1,jw,k) + U(i,jw,k) );  ur = Sqrt(ux*ux + wz*wz)
+             If ( ur == 0d0 ) Cycle
+             nul = Merge(vof_nu_l, vof_nu_g, pa == 1)
+             Call solve_u_tau_reichardt(ur, yref, nul, ut)
+             rhof = vp_rfw(i,jw,k)
+             wt_w(i,k,iw) = sgn*rhof*ut*ut*wz/ur;  wt_on_w(i,k,iw) = .True.
+          End Do
+       End Do
+    End Do
+
+  End Subroutine set_wall_stress
+
+
 
   !> Acceleration from the viscous stress, (1/rho_face) div( mu (grad u + grad u^T) ), at the interior faces
   Subroutine viscous_accel(Fu, Fv, Fw)
@@ -751,7 +814,7 @@ Contains
 
     Integer(Int32) :: i, j, k
     Real(Int64) :: inv_dx, inv_dx2, mx1, mx2, my1, my2, mz1, mz2, hyj, hzk, ihy, ihz
-    Real(Int64) :: dy1, dy2, dyc, dz1, dz2, dzc
+    Real(Int64) :: dy1, dy2, dyc, dz1, dz2, dzc, fy1, fy2
 
     inv_dx = 1d0/dx
     inv_dx2 = inv_dx*inv_dx
@@ -772,9 +835,12 @@ Contains
                    + mr_c(i+1,j,k) ) ) )
              mz2 = 1d0/( 0.5d0*( weight_z_0(k)*( mr_c(i,j,k) + mr_c(i+1,j,k) ) + weight_z_1(k)*( mr_c(i,j,k+1) &
                    + mr_c(i+1,j,k+1) ) ) )
+             fy2 = my2*( ( U(i,j+1,k) - U(i,j,k) )/( yg(j+1) - yg(j) ) + ( V(i+1,j,k) - V(i,j,k) )*inv_dx )
+             fy1 = my1*( ( U(i,j,k) - U(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i+1,j-1,k) - V(i,j-1,k) )*inv_dx )
+             If ( j == nyg-1 ) Then;  If ( wt_on_u(i,k,2) ) fy2 = wt_u(i,k,2);  End If
+             If ( j == 2 ) Then;  If ( wt_on_u(i,k,1) ) fy1 = wt_u(i,k,1);  End If
              Fu(i,j,k) = ( 2d0*inv_dx2*( mx2*( U(i+1,j,k) - U(i,j,k) ) - mx1*( U(i,j,k) - U(i-1,j,k) ) )              &
-                  + ihy*( my2*( ( U(i,j+1,k) - U(i,j,k) )/( yg(j+1) - yg(j) ) + ( V(i+1,j,k) - V(i,j,k) )*inv_dx )   &
-                        - my1*( ( U(i,j,k) - U(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i+1,j-1,k) - V(i,j-1,k) )*inv_dx ) ) &
+                  + ihy*( fy2 - fy1 ) &
                   + ihz*( mz2*( ( U(i,j,k+1) - U(i,j,k) )/( zg(k+1) - zg(k) ) + ( W(i+1,j,k) - W(i,j,k) )*inv_dx )   &
                         - mz1*( ( U(i,j,k) - U(i,j,k-1) )/( zg(k) - zg(k-1) ) + ( W(i+1,j,k-1) - W(i,j,k-1) )*inv_dx ) ) &
                   )/vp_rfu(i,j,k)
@@ -822,10 +888,13 @@ Contains
              my2 = 1d0/( weight_z_0(k)*( weight_y_0(j)*mr_c(i,j,k) + weight_y_1(j)*mr_c(i,j+1,k) ) &
                    + weight_z_1(k)*( weight_y_0(j)*mr_c(i,j,k+1) + weight_y_1(j)*mr_c(i,j+1,k+1) ) )
              mz1 = mu_c(i,j,k);  mz2 = mu_c(i,j,k+1)
+             fy2 = my2*( ( W(i,j+1,k) - W(i,j,k) )/( yg(j+1) - yg(j) ) + ( V(i,j,k+1) - V(i,j,k) )/dzc )
+             fy1 = my1*( ( W(i,j,k) - W(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i,j-1,k+1) - V(i,j-1,k) )/dzc )
+             If ( j == nyg-1 ) Then;  If ( wt_on_w(i,k,2) ) fy2 = wt_w(i,k,2);  End If
+             If ( j == 2 ) Then;  If ( wt_on_w(i,k,1) ) fy1 = wt_w(i,k,1);  End If
              Fw(i,j,k) = ( inv_dx*( mx2*( ( W(i+1,j,k) - W(i,j,k) )*inv_dx + ( U(i,j,k+1) - U(i,j,k) )/dzc )          &
                                   - mx1*( ( W(i,j,k) - W(i-1,j,k) )*inv_dx + ( U(i-1,j,k+1) - U(i-1,j,k) )/dzc ) )      &
-                  + ihy*( my2*( ( W(i,j+1,k) - W(i,j,k) )/( yg(j+1) - yg(j) ) + ( V(i,j,k+1) - V(i,j,k) )/dzc )        &
-                        - my1*( ( W(i,j,k) - W(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i,j-1,k+1) - V(i,j-1,k) )/dzc ) )  &
+                  + ihy*( fy2 - fy1 )  &
                   + 2d0/dzc*( mz2*( W(i,j,k+1) - W(i,j,k) )/dz2 - mz1*( W(i,j,k) - W(i,j,k-1) )/dz1 )                 &
                   )/vp_rfw(i,j,k)
           End Do
@@ -900,6 +969,7 @@ Contains
        Call compute_sgs_model(U, V, W, nu_t)
        Call compute_wall_model(U, V, W, nu_t)
        Call set_viscosity
+       If ( flat_wall_model_flag == 1 ) Call set_wall_stress
        Call viscous_accel(Fu_, Fv_, Fw_)
        If ( vof_hsplit == 0 ) Then
           Do k = 2, nzg-1
