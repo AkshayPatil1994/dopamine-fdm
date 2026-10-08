@@ -675,6 +675,10 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME ibm_stair_fence
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_fence/check_fence.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+    # Staircase IBM wall stress: the per-object roughness of a closed face does not depend on the orientation of the stream
+    add_test(NAME ibm_stair_ids
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_ids/check_ids.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
     # Single-phase flat-wall EQWM: a uniform stream between two modelled walls decays by the log-law wall stress, same on 1 and 4 ranks
     add_test(NAME wm_stream
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream/check_wm_stream.py

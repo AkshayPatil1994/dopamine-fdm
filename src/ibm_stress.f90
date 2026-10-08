@@ -68,6 +68,30 @@ Contains
   End Function solid_id
 
 
+  !> Mean of the open faces among four (mask 1 = open); 0 when all four are closed
+  Pure Function open_mean4(f1, f2, f3, f4, m1, m2, m3, m4) Result(f)
+
+    Real(Int64), Intent(In) :: f1, f2, f3, f4, m1, m2, m3, m4
+    Real(Int64) :: f, n
+
+    n = m1 + m2 + m3 + m4
+    f = 0d0
+    If ( n > 0.5d0 ) f = ( m1*f1 + m2*f2 + m3*f3 + m4*f4 )/n
+
+  End Function open_mean4
+
+
+  !> Roughness id of the closed face between two cells: the solid one (a fluid cell carries id 0)
+  Pure Function face_id(i1, j1, k1, i2, j2, k2) Result(oid)
+
+    Integer(Int32), Intent(In) :: i1, j1, k1, i2, j2, k2
+    Integer(Int32) :: oid
+
+    oid = Max( solid_id(i1, j1, k1), solid_id(i2, j2, k2) )
+
+  End Function face_id
+
+
   !> Set the flux overrides from the current velocity. mu, mv, mw are the 1 (open) / 0 (closed) face masks; nu_cell is the kinematic
   !  viscosity at the cell centres, <= 0 where the wall model is off (the stencil flux stays). Domain-wall rows are left to the flat-wall model.
   Subroutine ibm_stress_update(U, V, W, mu, mv, mw, nu_cell)
@@ -87,14 +111,14 @@ Contains
              nul = Min(nu_cell(i,j,k), nu_cell(i+1,j,k))
              If ( nul <= 0d0 ) Cycle
              ua = U(i,j,k)
-             ub = 0.25d0*( W(i,j,k-1) + W(i,j,k) + W(i+1,j,k-1) + W(i+1,j,k) )
+             ub = open_mean4( W(i,j,k-1), W(i,j,k), W(i+1,j,k-1), W(i+1,j,k), mw(i,j,k-1), mw(i,j,k), mw(i+1,j,k-1), mw(i+1,j,k) )
              If ( j-1 >= 2 ) Then;  If ( mu(i,j-1,k) < 0.5d0 ) &
-                ovr_u(i,j,k,1) = wall_flux(ua, ub, yg(j) - y(j-1), nul, solid_id(i,j-1,k), 1d0);  End If
+                ovr_u(i,j,k,1) = wall_flux(ua, ub, yg(j) - y(j-1), nul, face_id(i,j-1,k, i+1,j-1,k), 1d0);  End If
              If ( j+1 <= nyg-1 ) Then;  If ( mu(i,j+1,k) < 0.5d0 ) &
-                ovr_u(i,j,k,2) = wall_flux(ua, ub, y(j) - yg(j), nul, solid_id(i,j+1,k), -1d0);  End If
-             ub = 0.25d0*( V(i,j-1,k) + V(i,j,k) + V(i+1,j-1,k) + V(i+1,j,k) )
-             If ( mu(i,j,k-1) < 0.5d0 ) ovr_u(i,j,k,3) = wall_flux(ua, ub, zg(k) - z(k-1), nul, solid_id(i,j,k-1), 1d0)
-             If ( mu(i,j,k+1) < 0.5d0 ) ovr_u(i,j,k,4) = wall_flux(ua, ub, z(k) - zg(k), nul, solid_id(i,j,k+1), -1d0)
+                ovr_u(i,j,k,2) = wall_flux(ua, ub, y(j) - yg(j), nul, face_id(i,j+1,k, i+1,j+1,k), -1d0);  End If
+             ub = open_mean4( V(i,j-1,k), V(i,j,k), V(i+1,j-1,k), V(i+1,j,k), mv(i,j-1,k), mv(i,j,k), mv(i+1,j-1,k), mv(i+1,j,k) )
+             If ( mu(i,j,k-1) < 0.5d0 ) ovr_u(i,j,k,3) = wall_flux(ua, ub, zg(k) - z(k-1), nul, face_id(i,j,k-1, i+1,j,k-1), 1d0)
+             If ( mu(i,j,k+1) < 0.5d0 ) ovr_u(i,j,k,4) = wall_flux(ua, ub, z(k) - zg(k), nul, face_id(i,j,k+1, i+1,j,k+1), -1d0)
           End Do
        End Do
     End Do
@@ -106,12 +130,12 @@ Contains
              nul = Min(nu_cell(i,j,k), nu_cell(i,j+1,k))
              If ( nul <= 0d0 ) Cycle
              ua = V(i,j,k)
-             ub = 0.25d0*( W(i,j,k-1) + W(i,j,k) + W(i,j+1,k-1) + W(i,j+1,k) )
-             If ( mv(i-1,j,k) < 0.5d0 ) ovr_v(i,j,k,1) = wall_flux(ua, ub, xg(i) - x(i-1), nul, solid_id(i-1,j,k), 1d0)
-             If ( mv(i+1,j,k) < 0.5d0 ) ovr_v(i,j,k,2) = wall_flux(ua, ub, x(i) - xg(i), nul, solid_id(i+1,j,k), -1d0)
-             ub = 0.25d0*( U(i-1,j,k) + U(i,j,k) + U(i-1,j+1,k) + U(i,j+1,k) )
-             If ( mv(i,j,k-1) < 0.5d0 ) ovr_v(i,j,k,3) = wall_flux(ua, ub, zg(k) - z(k-1), nul, solid_id(i,j,k-1), 1d0)
-             If ( mv(i,j,k+1) < 0.5d0 ) ovr_v(i,j,k,4) = wall_flux(ua, ub, z(k) - zg(k), nul, solid_id(i,j,k+1), -1d0)
+             ub = open_mean4( W(i,j,k-1), W(i,j,k), W(i,j+1,k-1), W(i,j+1,k), mw(i,j,k-1), mw(i,j,k), mw(i,j+1,k-1), mw(i,j+1,k) )
+             If ( mv(i-1,j,k) < 0.5d0 ) ovr_v(i,j,k,1) = wall_flux(ua, ub, xg(i) - x(i-1), nul, face_id(i-1,j,k, i-1,j+1,k), 1d0)
+             If ( mv(i+1,j,k) < 0.5d0 ) ovr_v(i,j,k,2) = wall_flux(ua, ub, x(i) - xg(i), nul, face_id(i+1,j,k, i+1,j+1,k), -1d0)
+             ub = open_mean4( U(i-1,j,k), U(i,j,k), U(i-1,j+1,k), U(i,j+1,k), mu(i-1,j,k), mu(i,j,k), mu(i-1,j+1,k), mu(i,j+1,k) )
+             If ( mv(i,j,k-1) < 0.5d0 ) ovr_v(i,j,k,3) = wall_flux(ua, ub, zg(k) - z(k-1), nul, face_id(i,j,k-1, i,j+1,k-1), 1d0)
+             If ( mv(i,j,k+1) < 0.5d0 ) ovr_v(i,j,k,4) = wall_flux(ua, ub, z(k) - zg(k), nul, face_id(i,j,k+1, i,j+1,k+1), -1d0)
           End Do
        End Do
     End Do
@@ -123,14 +147,14 @@ Contains
              nul = Min(nu_cell(i,j,k), nu_cell(i,j,k+1))
              If ( nul <= 0d0 ) Cycle
              ua = W(i,j,k)
-             ub = 0.25d0*( V(i,j-1,k) + V(i,j,k) + V(i,j-1,k+1) + V(i,j,k+1) )
-             If ( mw(i-1,j,k) < 0.5d0 ) ovr_w(i,j,k,1) = wall_flux(ua, ub, xg(i) - x(i-1), nul, solid_id(i-1,j,k), 1d0)
-             If ( mw(i+1,j,k) < 0.5d0 ) ovr_w(i,j,k,2) = wall_flux(ua, ub, x(i) - xg(i), nul, solid_id(i+1,j,k), -1d0)
-             ub = 0.25d0*( U(i-1,j,k) + U(i,j,k) + U(i-1,j,k+1) + U(i,j,k+1) )
+             ub = open_mean4( V(i,j-1,k), V(i,j,k), V(i,j-1,k+1), V(i,j,k+1), mv(i,j-1,k), mv(i,j,k), mv(i,j-1,k+1), mv(i,j,k+1) )
+             If ( mw(i-1,j,k) < 0.5d0 ) ovr_w(i,j,k,1) = wall_flux(ua, ub, xg(i) - x(i-1), nul, face_id(i-1,j,k, i-1,j,k+1), 1d0)
+             If ( mw(i+1,j,k) < 0.5d0 ) ovr_w(i,j,k,2) = wall_flux(ua, ub, x(i) - xg(i), nul, face_id(i+1,j,k, i+1,j,k+1), -1d0)
+             ub = open_mean4( U(i-1,j,k), U(i,j,k), U(i-1,j,k+1), U(i,j,k+1), mu(i-1,j,k), mu(i,j,k), mu(i-1,j,k+1), mu(i,j,k+1) )
              If ( j-1 >= 2 ) Then;  If ( mw(i,j-1,k) < 0.5d0 ) &
-                ovr_w(i,j,k,3) = wall_flux(ua, ub, yg(j) - y(j-1), nul, solid_id(i,j-1,k), 1d0);  End If
+                ovr_w(i,j,k,3) = wall_flux(ua, ub, yg(j) - y(j-1), nul, face_id(i,j-1,k, i,j-1,k+1), 1d0);  End If
              If ( j+1 <= nyg-1 ) Then;  If ( mw(i,j+1,k) < 0.5d0 ) &
-                ovr_w(i,j,k,4) = wall_flux(ua, ub, y(j) - yg(j), nul, solid_id(i,j+1,k), -1d0);  End If
+                ovr_w(i,j,k,4) = wall_flux(ua, ub, y(j) - yg(j), nul, face_id(i,j+1,k, i,j+1,k+1), -1d0);  End If
           End Do
        End Do
     End Do
