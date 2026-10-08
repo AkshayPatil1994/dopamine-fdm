@@ -59,6 +59,7 @@ See [[Numerics § Forcing|Numerics#1-governing-equations]],
 | `cfl_safety` | `0.9` | Safety factor on adaptive `dt` adjustment |
 | `dt_min` | `1e-10` | Minimum allowed `dt` (adaptive mode) |
 | `dt_max` | `1e10` | Maximum allowed `dt` (adaptive mode) |
+| `pcg_precond` | `0` | Preconditioner of the masked/variable-density PCG (`ibm_method=1`, `vof_flow>=1`): 0=constant-coefficient fast Poisson solver, 1=mask-aware geometric multigrid (needs y walls; required for `ibm_method=1` in a GPU build, not available for `vof_flow>=1` on the GPU) |
 
 See [[Numerics § Time integration|Numerics#3-time-integration]].
 
@@ -96,7 +97,7 @@ and the [[precursor/successor example|Examples#precursor_successor]].
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `ibm_input_mode` | `0` | 0=no IBM body (smooth walls); 1=SDF-based ghost-cell IBM — reads the precomputed cell-centre signed-distance field `ibm_sdf_file`; solid/fluid mask `Umask_cc` is derived from `sign(phi)` |
-| `ibm_method` | `0` | 0=ghost-cell IBM (image-point mirror); 1=staircase IBM: zero velocity in the solid (closed faces = face-averaged `phi<0`), masked PCG projection that keeps the closed faces at zero flux (exact continuity next to the body, host-only, aborts in a GPU build), and with `ibm_wall_model_flag=1` the log-law stress `u_tau^2` as the viscous flux through each edge next to a closed face (`ibm_stress`). Not for `vof_flow=1`, which always uses the staircase stress |
+| `ibm_method` | `0` | 0=ghost-cell IBM (image-point mirror); 1=staircase IBM: zero velocity in the solid (closed faces = face-averaged `phi<0`), masked PCG projection that keeps the closed faces at zero flux (exact continuity next to the body, in a GPU build needs `pcg_precond=1`), and with `ibm_wall_model_flag=1` the log-law stress `u_tau^2` as the viscous flux through each edge next to a closed face (`ibm_stress`). Not for `vof_flow=1`, which always uses the staircase stress |
 | `ibm_wall_model_flag` | `0` | 0=no-slip, 1=log-law EQWM on IBM surfaces. With `ibm_method=0` it only rewrites the ghost velocities (image-point mirror), which carries almost no stress in near-1-D shear; use `ibm_method=1` (or `vof_flow=1`) for a wall-modelled IBM |
 | `ibm_sdf_file` | `'SDF_in'` | Path to precomputed cell-centre SDF |
 | `ibm_objid_file` | `''` | Optional per-solid object-ID field (e.g. `GenSDF`'s `sdfp_objid.bin`), for per-object boundary conditions; `''` = a single uniform IBM condition applied to every solid |
