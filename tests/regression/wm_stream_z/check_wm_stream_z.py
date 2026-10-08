@@ -92,7 +92,7 @@ def euler(vel, y, dz, nsteps, dt, nu):
 
 
 def stream_modes(mode):
-    base = [(r'nsteps = 150, nsave = 100000', 'nsteps = 1, nsave = 1,')]
+    base = [(r'nsteps = 150, nsave = 100000', 'nsteps = 1, nsave = 1')]
     if mode == 'prof_stretch':
         base.append((r'alpha_grid = 1.0,', 'alpha_grid = 1.0, alpha_grid_z = 2.0,'))
     mesh, f = run('seed', 1, base, snap=True)
@@ -106,7 +106,7 @@ def stream_modes(mode):
     else:
         U, V = 0.5 + zg/lz, 1.0 - 0.6*zg/lz
     fields = [np.broadcast_to(U, f[0].shape).copy(), np.broadcast_to(V, f[1].shape).copy()] + f[2:]
-    ed = [(r'nsteps = 150, nsave = 100000', 'nsteps = 150, nsave = 150,'), (r'restart = 0', 'restart = 1, nstep_init = 0')]
+    ed = [(r'nsteps = 150, nsave = 100000', 'nsteps = 150, nsave = 150'), (r'restart = 0', 'restart = 1, nstep_init = 0')]
     ed += base[1:]
     e4 = ed + [(r'p_row = 1, p_col = 1', 'p_row = 1, p_col = 4')]
     out = {}
