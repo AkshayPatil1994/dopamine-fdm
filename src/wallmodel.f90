@@ -116,6 +116,19 @@ Contains
 
   End Subroutine solve_u_tau_wall
 
+  !> Stability-corrected rough-wall u_tau, u_tau = kappa*u_ref/[ln(y_ref/z0) - psi_m(y_ref/L)], with L lagged from the thermal EQWM
+  Pure Subroutine solve_u_tau_most(u_ref, y_ref, z0, L, u_tau)
+    !$acc routine seq
+    Real(Int64), Intent(In)  :: u_ref, y_ref, z0, L
+    Real(Int64), Intent(Out) :: u_tau
+
+    Real(Int64) :: psi_m, psi_h
+
+    Call most_stability_functions(y_ref / Sign(Max(Abs(L), 1d-3), L), psi_m, psi_h)
+    u_tau = kappa_wm * u_ref / Max( Log( Max(y_ref, 2d0*z0) / Max(z0, 1d-8) ) - psi_m, 1d-3 )
+
+  End Subroutine solve_u_tau_most
+
   !> Explicit fully-rough log law for the temperature scale theta_tau, from the
   !  wall-normal potential-temperature difference (T_ref - T_wall) and the thermal
   !  roughness z0h. Neutral limit only (psi_h=0) -- decoupled from u_tau, since in
@@ -427,12 +440,16 @@ Contains
 
     Integer(Int32) :: i, k
     Real   (Int64) :: u_ref, u_match, y_match_lo, y_match_hi, u_tau, W_at_pt, W_match
+    Logical        :: most_lo, most_hi
+
+    most_lo = boussinesq_flag >= 1 .And. flat_wall_model_flag == 2 .And. T_bc_bot == 2
+    most_hi = boussinesq_flag >= 1 .And. flat_wall_model_flag == 2 .And. T_bc_top == 2
 
     y_match_lo = Max(yg(j_match_ylo), 1d-14)
     y_match_hi = Max(Ly - yg(j_match_yhi), 1d-14)
 
     !  U faces (nx × nyg × nzg)
-    !$acc parallel loop collapse(2) present(U_,W_,alpha_x,tau_x)
+    !$acc parallel loop collapse(2) present(U_,W_,alpha_x,tau_x,L_obukhov_ylo,L_obukhov_yhi)
     Do k = 2, nzg-1
        Do i = 2, nx-1
           alpha_x(i, 1, k) = 1.0e10_8;  tau_x(i, 1, k) = 0d0     ! free-slip: Neumann, no stress
@@ -441,7 +458,11 @@ Contains
              u_ref   = Sqrt(U_(i, 2, k)**2 + W_at_pt**2)
              W_match = 0.5d0*(W_(i, j_match_ylo, k-1) + W_(i, j_match_ylo, k))
              u_match = Sqrt(U_(i, j_match_ylo, k)**2 + W_match**2)
-             Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
+             If ( most_lo ) Then
+                Call solve_u_tau_most(u_match, y_match_lo, z0_ylo, L_obukhov_ylo(i,k), u_tau)
+             Else
+                Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
+             End If
              alpha_x(i, 1, k) = 0d0
              tau_x(i, 1, k)   = u_tau**2 * U_(i, 2, k) / Max(u_ref, 1d-30)
           End If
@@ -452,7 +473,11 @@ Contains
              u_ref   = Sqrt(U_(i, nyg-1, k)**2 + W_at_pt**2)
              W_match = 0.5d0*(W_(i, j_match_yhi, k-1) + W_(i, j_match_yhi, k))
              u_match = Sqrt(U_(i, j_match_yhi, k)**2 + W_match**2)
-             Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
+             If ( most_hi ) Then
+                Call solve_u_tau_most(u_match, y_match_hi, z0_yhi, L_obukhov_yhi(i,k), u_tau)
+             Else
+                Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
+             End If
              alpha_x(i, 2, k) = 0d0
              tau_x(i, 2, k)   = -u_tau**2 * U_(i, nyg-1, k) / Max(u_ref, 1d-30)
           End If
@@ -473,14 +498,18 @@ Contains
     !$acc end kernels
 
     !  W faces (nxg × nyg × nz)
-    !$acc parallel loop collapse(2) present(U_,W_,alpha_z,tau_z)
+    !$acc parallel loop collapse(2) present(U_,W_,alpha_z,tau_z,L_obukhov_ylo,L_obukhov_yhi)
     Do k = 2, nz-1
        Do i = 2, nxg-1
           alpha_z(i, 1, k) = 1.0e10_8;  tau_z(i, 1, k) = 0d0
           If ( bc_face_ylo /= 2 ) Then
              u_ref   = Sqrt((0.5d0*(U_(i-1, 2, k) + U_(i, 2, k)))**2 + W_(i, 2, k)**2)
              u_match = Sqrt((0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k)))**2 + W_(i, j_match_ylo, k)**2)
-             Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
+             If ( most_lo ) Then
+                Call solve_u_tau_most(u_match, y_match_lo, z0_ylo, L_obukhov_ylo(i,k), u_tau)
+             Else
+                Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
+             End If
              alpha_z(i, 1, k) = 0d0
              tau_z(i, 1, k)   = u_tau**2 * W_(i, 2, k) / Max(u_ref, 1d-30)
           End If
@@ -489,7 +518,11 @@ Contains
           If ( bc_face_yhi /= 2 ) Then
              u_ref   = Sqrt((0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k)))**2 + W_(i, nyg-1, k)**2)
              u_match = Sqrt((0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k)))**2 + W_(i, j_match_yhi, k)**2)
-             Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
+             If ( most_hi ) Then
+                Call solve_u_tau_most(u_match, y_match_hi, z0_yhi, L_obukhov_yhi(i,k), u_tau)
+             Else
+                Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
+             End If
              alpha_z(i, 2, k) = 0d0
              tau_z(i, 2, k)   = -u_tau**2 * W_(i, nyg-1, k) / Max(u_ref, 1d-30)
           End If

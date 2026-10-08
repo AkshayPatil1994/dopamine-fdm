@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Rough-wall MOST heat-flux wall model (T_bc = 2, single phase): starting from uniform T = T_ref, the heat gained by the column (the
 flux the discretisation applies at the wall face) must equal the iterated Businger-Dyer flux u_tau*theta_tau evaluated at the matching
-height of the final state, for heated/cooled bottom and top walls, and be the same on 1 and 4 ranks."""
+height of the final state, and the momentum the column loses must equal the stability-corrected MOST u_tau^2 at the thermal wall plus
+the neutral rough-law stress at the other wall, for heated/cooled bottom and top walls, and be the same on 1 and 4 ranks."""
 import argparse, math, os, re, subprocess, sys, tempfile
 import numpy as np
 
@@ -35,7 +36,7 @@ def most(u, dtheta, y):
         L = Ln
         if done:
             break
-    return ut*tt
+    return ut*tt, ut
 
 
 def read_fields(wd):
@@ -73,27 +74,35 @@ def analyse(U, T, top):
         if yg(j)/Z0 >= 20:
             break
     ym = yg(jm)                                       # distance to the wall; the top wall mirrors the lower half-channel
+    um = lambda j: 0.5*(U[0:-1, j - 1, :] + U[1:, j - 1, :])[1:-1, 1:-1].mean()
+    u_other = um(jm if top else nyg + 1 - jm)         # matching-height speed at the wall without the thermal model
     jm = nyg + 1 - jm if top else jm
-    u = 0.5*(U[0:-1, jm - 1, :] + U[1:, jm - 1, :])[1:-1, 1:-1].mean()
+    u = um(jm)
     tm = T[1:-1, jm - 1, 1:-1].mean()
     heat = ((T[1:-1, 1:nyg - 1, 1:-1].mean(axis=(0, 2)) - TREF)*dy).sum()/(DT*NSTEPS)
-    return heat, u, tm, ym
+    drag = ((1.0 - U[1:-1, 1:nyg - 1, 1:-1].mean(axis=(0, 2)))*dy).sum()/(DT*NSTEPS)
+    return heat, drag, u, u_other, tm, ym
 
 
 try:
     cases = [('heated', [], False), ('cooled', [(r'T_wall_bot = 301.0', 'T_wall_bot = 299.0')], False),
+             ('neutral', [(r'T_wall_bot = 301.0', 'T_wall_bot = 300.0')], False),
              ('strong', [(r'T_wall_bot = 301.0', 'T_wall_bot = 330.0')], False),
              ('top', [(r'T_bc_bot = 2, T_bc_top = 0', 'T_bc_bot = 0, T_bc_top = 2'), (r'T_wall_top = 300.0', 'T_wall_top = 299.0')], True)]
     bad = False
     for tag, edits, top in cases:
         U, T = run(tag, 1, edits)
-        heat, u, tm, ym = analyse(U, T, top)
+        heat, drag, u, u_other, tm, ym = analyse(U, T, top)
         twall = float(re.search(r'T_wall_%s = ([\d.]+)' % ('top' if top else 'bot'),
                                 open(os.path.join(tmp, tag, 'input_parameters')).read()).group(1))
-        qm = -most(u, tm - twall, ym)                 # heat gained by the fluid per unit area: -u_tau*theta_tau
-        err = abs(heat - qm)/abs(qm)
-        print('%-8s applied %.5e  MOST %.5e  rel.err %.3f' % (tag, heat, qm, err))
-        bad |= not (err < a.tol)
+        qm, ut = most(u, tm - twall, ym)
+        qm = -qm                                      # heat gained by the fluid per unit area: -u_tau*theta_tau
+        err = abs(heat - qm)/max(abs(qm), 1e-12)
+        un = KAPPA*u_other/math.log(ym/Z0)            # the other wall keeps the neutral rough law
+        expected = ut**2 + un**2                      # momentum lost by the column = sum of both applied wall stresses
+        errm = abs(drag - expected)/expected
+        print('%-8s applied %.5e  MOST %.5e  rel.err %.3f | stress %.5e  MOST stress %.5e  rel.err %.3f' % (tag, heat, qm, err, drag, expected, errm))
+        bad |= not (err < a.tol and errm < 0.002)   # the stability correction shifts the weak cases by only ~0.5%
     U1, T1 = run('np1', 1, [])
     U4, T4 = run('np4', 4, [(r'p_row = 1, p_col = 1', 'p_row = 2, p_col = 2')])
     d14 = np.abs(T1 - T4).max()

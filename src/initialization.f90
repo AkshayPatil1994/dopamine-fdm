@@ -780,11 +780,9 @@ Contains
 
     Allocate( qT_wall(1:nxg,1:2,1:nzg) )
     qT_wall = 0d0
-    If ( boussinesq_flag >= 1 ) Then
-       Allocate( L_obukhov_ylo(1:nxg,1:nzg), L_obukhov_yhi(1:nxg,1:nzg) )
-       L_obukhov_ylo = 1d10   ! neutral seed; solve_most iterates this in place each call
-       L_obukhov_yhi = 1d10
-    End If
+    Allocate( L_obukhov_ylo(1:nxg,1:nzg), L_obukhov_yhi(1:nxg,1:nzg) )   ! always present for the momentum EQWM kernel
+    L_obukhov_ylo = 1d10   ! neutral seed; solve_most iterates this in place each call
+    L_obukhov_yhi = 1d10
 
     ! Rough-EQWM matching height: smallest interior j (bottom) / largest interior j
     ! (top) whose distance to the wall clears 20*z0, so the log-law u_tau/theta_tau
@@ -845,8 +843,8 @@ Contains
     If ( boussinesq_flag >= 1 ) Then
        !$acc enter data create(Tscal,Tscal_o,Ft1,Ft2,Ft3)
        !$acc update device(Tscal,Tscal_o)
-       !$acc enter data copyin(L_obukhov_ylo,L_obukhov_yhi)
     End If
+    !$acc enter data copyin(L_obukhov_ylo,L_obukhov_yhi)
     ! Sediment scalar: device residency required by the shared compute_rhs_scalar_core (see scalar_transport.f90)
     If ( sediment_flag >= 1 ) Then
        !$acc enter data create(Cscal,Cscal_o,Fcs1,Fcs2,Fcs3)
