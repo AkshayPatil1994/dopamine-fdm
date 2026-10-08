@@ -316,7 +316,7 @@ Contains
        ! No-slip/wall-model z walls: zero nu_t at the wall faces (mirrors the y-wall
        ! zeroing above) instead of periodically wrapping from the opposite domain
        ! edge -- z is domain-decomposed, so only the rank(s) owning the z=0/z=Lz
-       ! physical boundary act (as in apply_Dirichlet_bc_z/apply_Robin_bc_z).
+       ! physical boundary act (as in apply_Dirichlet_bc_z).
        Call z_periodic_partner(is_first, is_last, partner)
        !$acc kernels present(nu_t_)
        If ( is_first ) nu_t_(:,:,1)   = 0d0
