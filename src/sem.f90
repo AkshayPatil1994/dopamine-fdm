@@ -873,7 +873,7 @@ Contains
     If ( myid == 0 ) Write(*,'(A,A)') ' Reading SEM inflow temperature profile from ', Trim(inflow_temperature_file)
 
     Open(newunit=unit_in, file=Trim(inflow_temperature_file), status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_temperature_file'
+    If ( ios /= 0 ) Call sem_abort( 'ERROR: cannot open inflow_temperature_file' )
 
     n_profile_T = 0
     Do
@@ -916,7 +916,7 @@ Contains
 
     ! every rank reads the (small, shared) profile file independently; free-form text, skip blank/'#' lines, each row: y U V W uu vv ww uv [uw vw] (extra cols read but unused, see sem_fluctuation's R13=R23=0 assumption)
     Open(newunit=unit_in, file=Trim(inflow_profile_file), status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_profile_file'
+    If ( ios /= 0 ) Call sem_abort( 'ERROR: cannot open inflow_profile_file' )
 
     n_profile = 0
     Do
@@ -979,7 +979,7 @@ Contains
     If ( myid == 0 ) Write(*,'(A,A)') ' Reading wind-tunnel TI SEM inflow profile from ', Trim(inflow_profile_file)
 
     Open(newunit=unit_in, file=Trim(inflow_profile_file), status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open inflow_profile_file'
+    If ( ios /= 0 ) Call sem_abort( 'ERROR: cannot open inflow_profile_file' )
 
     ! ---- header: first non-blank line, must start with '#' and list column names ----
     Do
@@ -1205,7 +1205,7 @@ Contains
          Deallocate( sig_y, sig_ux, sig_uy, sig_uz, sig_vx, sig_vy, sig_vz, sig_wx, sig_wy, sig_wz )
 
     Open(newunit=unit_in, file=Trim(sem_sigma_file), status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open sem_sigma_file'
+    If ( ios /= 0 ) Call sem_abort( 'ERROR: cannot open sem_sigma_file' )
 
     n_sigma = 0
     Do

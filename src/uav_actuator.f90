@@ -43,7 +43,7 @@ Module uav_actuator
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global
-  Use mpi, Only : myid, k1_global, kg1_global
+  Use mpi, Only : myid, k1_global, kg1_global, ierr, MPI_COMM_WORLD
 
   Implicit None
 
@@ -181,7 +181,10 @@ Contains
     If ( myid==0 ) Write(*,'(A,A)') ' Reading UAV path from ', Trim(uav_path_file)
 
     Open(newunit=unit_in, file=Trim(uav_path_file), status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open uav_path_file'
+    If ( ios /= 0 ) Then
+       Write(*,'(A)') 'ERROR: cannot open uav_path_file'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
 
     n_path = 0
     Do
@@ -227,7 +230,10 @@ Contains
     If ( myid==0 ) Write(*,'(A,A)') ' Reading UAV thrust schedule from ', Trim(uav_thrust_file)
 
     Open(newunit=unit_in, file=Trim(uav_thrust_file), status='old', action='read', iostat=ios)
-    If ( ios /= 0 ) Stop 'ERROR: cannot open uav_thrust_file'
+    If ( ios /= 0 ) Then
+       Write(*,'(A)') 'ERROR: cannot open uav_thrust_file'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
 
     n_thrust = 0
     Do
