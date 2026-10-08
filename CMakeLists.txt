@@ -207,6 +207,7 @@ endif()
 list(APPEND SRCS
     src/projection.f90
     src/mom_recon.f90
+    src/vof_mg.f90
     src/vof_pressure.f90
     src/vof_state.f90
     src/vof_curv.f90
@@ -451,7 +452,7 @@ set(CPU_REFERENCE_MPIRUN "" CACHE FILEPATH "mpirun matching CPU_REFERENCE_EXE (d
 set(TEST_LD_LIBRARY_PATH "" CACHE STRING "LD_LIBRARY_PATH prepended for parity tests (e.g. a matching user-space libcuda)")
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small rsb_small)
+    foreach(case tgv_small chan_small chan_les_small duct_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_mg_small rsb_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE} --fields --field-tol 1e-8)

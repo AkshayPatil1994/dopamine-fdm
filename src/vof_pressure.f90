@@ -19,6 +19,7 @@ Module vof_pressure
   Use vof_plic
   Use vof_advect, Only : vof_reconstruct, vof_mx, vof_my, vof_mz, vof_al
   Use halo_pad, Only : pad_field
+  Use vof_mg, Only : mg_init, mg_set_coef, mg_precond
 
   Implicit None
 
@@ -89,6 +90,7 @@ Contains
        End Do
     End Do
     Call MPI_Allreduce(wl, vp_wsum, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    If ( pcg_precond >= 1 ) Call mg_init(ihi, jhi, khi)
 
   End Subroutine vp_init
 
@@ -116,8 +118,36 @@ Contains
 
     Call vp_init
     vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
+    If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
+    If ( pcg_precond == 2 ) Call vp_selftest_mg
 
   End Subroutine vp_init_masked
+
+
+  !> pcg_precond = 2: symmetry (a.Mb - b.Ma) and sign (a.Ma < 0) of the multigrid preconditioner for rough zero-mean vectors
+  Subroutine vp_selftest_mg
+
+    Real(Int64), Allocatable :: a(:,:,:), b(:,:,:), Ma(:,:,:), Mb(:,:,:)
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: sab, sba, saa, sbb
+
+    Allocate( a(nxg,nyg,nzg), b(nxg,nyg,nzg), Ma(nxg,nyg,nzg), Mb(nxg,nyg,nzg) )
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             a(i,j,k) = Sin(1.7d0*i + 0.3d0*j*k + 2d0*myid) + Cos(0.9d0*k*i + j)
+             b(i,j,k) = Cos(2.3d0*i*j + 0.7d0*k) + Sin(0.4d0*j + 1.1d0*k + myid)
+          End Do
+       End Do
+    End Do
+    a = a*vp_w/Max(vp_w, 1d-300);  b = b*vp_w/Max(vp_w, 1d-300)
+    Call vp_remove_mean(a);  Call vp_remove_mean(b)
+    Call vp_precond(a, Ma);  Call vp_precond(b, Mb)
+    sab = vp_dot(a, Mb);  sba = vp_dot(b, Ma);  saa = vp_dot(a, Ma);  sbb = vp_dot(b, Mb)
+    If ( myid == 0 ) Write(*,'(A,4ES14.5)') '   GMG selftest a.Mb, b.Ma, a.Ma, b.Mb = ', sab, sba, saa, sbb
+    Deallocate( a, b, Ma, Mb )
+
+  End Subroutine vp_selftest_mg
 
 
   !> Projection of the single-phase velocity with an immersed body (ibm_method = 1): the fast solver cannot honour the closed faces, so
@@ -302,6 +332,7 @@ Contains
        vp_bu = vp_bu*vp_mu;  vp_bv = vp_bv*vp_mv;  vp_bw = vp_bw*vp_mw
     End If
     If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Call layer_coefficients
+    If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
 
   End Subroutine vp_set_density
 
@@ -547,17 +578,21 @@ Contains
     Real(Int64), Intent(In)  :: r(nxg,nyg,nzg)
     Real(Int64), Intent(Out) :: z(nxg,nyg,nzg)
 
-    z = 0d0
-    If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Then
-       rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)
-       pois_layered = .True.
-       Call solve_poisson_equation(skip_p_save=.True.)
-       pois_layered = .False.
+    If ( pcg_precond >= 1 ) Then
+       Call mg_precond(r, z)
     Else
-       rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)/vp_beta0
-       Call solve_poisson_equation(skip_p_save=.True.)
+       z = 0d0
+       If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Then
+          rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)
+          pois_layered = .True.
+          Call solve_poisson_equation(skip_p_save=.True.)
+          pois_layered = .False.
+       Else
+          rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)/vp_beta0
+          Call solve_poisson_equation(skip_p_save=.True.)
+       End If
+       z(2:nxg,2:nyg-1,2:nzg) = rhs_p(2:nxg,2:nyg-1,2:nzg)
     End If
-    z(2:nxg,2:nyg-1,2:nzg) = rhs_p(2:nxg,2:nyg-1,2:nzg)
     ! the fast solver knows nothing of the body: keep the correction out of the solid cells (rows of the operator are empty there)
     If ( vp_masked ) z = z*vp_act(1:nxg,1:nyg,1:nzg)
     Call vp_remove_mean(z)

@@ -38,7 +38,7 @@ Contains
                        rotation_active, Omega_x
 
     Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, &
-                        cfl_adaptive, cfl_target, cfl_safety, dt_min, dt_max
+                        cfl_adaptive, cfl_target, cfl_safety, dt_min, dt_max, pcg_precond
 
     Namelist /BOUNDARY_CONDITIONS/ bc_face_ylo, bc_face_yhi, x_bc_type, y_bc_type, z_bc_type
 
@@ -536,6 +536,7 @@ Contains
 
     Call Mpi_bcast ( ibm_input_mode,       1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_method,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( pcg_precond,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_sdf_file,  Len(ibm_sdf_file),  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_objid_file, Len(ibm_objid_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_wall_model_flag,  1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
