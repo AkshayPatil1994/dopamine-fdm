@@ -72,7 +72,7 @@ Contains
 
     ! Fallback safety net inside IBM solid cells; apply_ghost_cell_ibm_scalar (ibm.f90) enforces the actual physical wall condition
     If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
-       Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) <= 0d0 )
+       Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) < 0d0 )
           T_(2:nxg-1, 2:nyg-1, 2:nzg-1) = T_ref
        End Where
     End If

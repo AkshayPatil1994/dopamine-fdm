@@ -323,11 +323,11 @@ Contains
     ! derived from phi, so the rounded geometry is what the ghost-cell lists actually see
     Call smooth_ibm_corners(is_first_x, is_last_x)
 
-    ! Derive Umask_cc from sign of phi (positive = fluid)
+    ! Derive Umask_cc from sign of phi (phi >= 0 is fluid)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
-             If ( phi(i,j,k) > 0d0 ) Then
+             If ( phi(i,j,k) >= 0d0 ) Then
                 Umask_cc(i,j,k) = 1d0
              Else
                 Umask_cc(i,j,k) = 0d0
@@ -1603,7 +1603,7 @@ Contains
 
     Allocate( phie(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E), Umaske(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E) )
     Call pad_field( phi, nxg, nyg, nzg, .False., .False., ibm_E, phie )
-    Where ( phie > 0d0 )
+    Where ( phie >= 0d0 )
        Umaske = 1d0
     Elsewhere
        Umaske = 0d0

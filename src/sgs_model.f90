@@ -176,7 +176,7 @@ Contains
              inv_dy_j  = 1d0 / dy_c
 
              Do i = 2, nxg-1
-                If ( phi(i,j,k) <= 0d0 ) Cycle   ! solid cell: zeroed in post-processing
+                If ( phi(i,j,k) < 0d0 ) Cycle   ! solid cell: zeroed in post-processing
 
                 ! Re-evaluate gradients; then apply one-sided corrections where needed
                 a11 = ( U_(i,j,k)   - U_(i-1,j,k)   ) * inv_dx

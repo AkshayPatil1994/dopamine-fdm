@@ -998,7 +998,7 @@ Contains
 
     ! Zero temperature perturbation inside IBM solid cells so the IC never persists inside solid and pollutes adjacent fluid via diffusion
     If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
-       Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) <= 0d0 )
+       Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) < 0d0 )
           Tscal(2:nxg-1, 2:nyg-1, 2:nzg-1) = T_ref
        End Where
        Tscal_o = Tscal

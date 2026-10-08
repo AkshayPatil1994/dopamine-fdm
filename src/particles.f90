@@ -622,7 +622,7 @@ Contains
   !> IBM/SDF collision handling (Phase 3, ibm_input_mode>=1 only): phi/Umask_cc/ibm_obj_id
   !  (global.f90, populated by ibm.f90's setup_ibm) are read directly -- no `Use ibm` needed,
   !  which keeps particles.f90 usable by dopamine-ESEM (which never compiles ibm.f90).
-  !  phi<=0 means the particle has penetrated a solid; the surface normal is the (finite-
+  !  phi<0 means the particle has penetrated a solid; the surface normal is the (finite-
   !  difference) gradient of the interpolated phi field, and the particle is pushed back out
   !  along it by approximately its own penetration depth (phi is a signed distance field).
   !  Per-object BC (particle_ibm_bc, global.f90) selects absorb/reflect/deposit_resuspend;
@@ -639,7 +639,7 @@ Contains
     do_remove = .False.
 
     phi_c = interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i), p_z(i))
-    If ( phi_c > 0d0 ) Return   ! still on the fluid side, nothing to do
+    If ( phi_c >= 0d0 ) Return   ! still on the fluid side, nothing to do
 
     eps = 0.5d0*dxmin
     gx = interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i)+eps, p_y(i), p_z(i)) - &

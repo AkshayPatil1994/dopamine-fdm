@@ -680,6 +680,10 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME ibm_stair_fence
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_fence/check_fence.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+    # SDF cells at exactly phi = 0 are fluid in every mask (solid is phi < 0)
+    add_test(NAME ibm_phi_zero
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_phi_zero/check_phi_zero.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
     # Staircase IBM wall stress: the per-object roughness of a closed face does not depend on the orientation of the stream
     add_test(NAME ibm_stair_ids
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_ids/check_ids.py
