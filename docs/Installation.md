@@ -72,11 +72,11 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
 **Scope — read before using**:
 - **Multi-GPU (`nprocs>1`)**: supported for every GPU-supported BC combination, pencil-decomposed
   like the CPU build (`p_row`/`p_col`): periodic/wall `y`, periodic (FFT) or inflow/outflow
-  (`x_bc_type=1`, DCT-IV) `x`, periodic `z`, and the 4-wall duct (`y_bc_type=1`, `z_bc_type=1`,
+  (`x_bc_type=1`, DCT-IV) `x`, periodic `z`, a spanwise wall alone (`z_bc_type=1`, `y_bc_type=0`, `x_bc_type=0`), and the 4-wall duct (`y_bc_type=1`, `z_bc_type=1`,
   `x_bc_type=0`; `p_col=1` is forced, `x` is split). Wall models, SGS, scalars etc. work as on
   one GPU, including the ghost-cell IBM and point particles (results match the CPU build and every rank layout; see
   [[Decomposition Consistency|Decomposition-Consistency]]). The IBM needs a few interior cells per rank in x and z (checked at start-up).
-- **CPU-only**: a spanwise wall alone (`z_bc_type=1`, `y_bc_type=0`), or a duct with
+- **CPU-only**: a duct with
   `x_bc_type=1`. A runtime guard `Stop`s immediately on unsupported combinations.
 
 Put the NVHPC SDK's `nvfortran` and bundled MPI on your `PATH`/`LD_LIBRARY_PATH` first,
@@ -105,7 +105,7 @@ touched is still being generated for the GPU.
 1. Edit `input_parameters` to set domain size, grid type, physics, and IC options — see
    the [[Input Parameters Reference|Input-Parameters]] for every field. For the GPU
    build, check the scope rules in "Building (GPU ...)" above (multi-GPU supports the
-   combinations listed there; a spanwise wall alone, or a duct with `x_bc_type=1`, is CPU-only).
+   combinations listed there; a duct with `x_bc_type=1`, is CPU-only).
 2. Create the required output directories (adjust paths to match your `fileout` and
    `rsb_fileout` settings):
    ```bash

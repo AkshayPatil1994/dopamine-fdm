@@ -6,7 +6,7 @@ Module poisson_gpu
   Use cusparse
   Use mpi, Only : MPI_COMM_WORLD
   Use decomp, Only : decomp_poisson, decomp_spec, transpose_x_to_y, transpose_y_to_x, transpose_y_to_z, transpose_z_to_y
-  Use global, Only : nxp_global, nzp_global, nyg, rhs_p, Dyy, kxx, kyy, kzz, x_bc_type, y_bc_type, pi, &
+  Use global, Only : nxp_global, nzp_global, nyg, rhs_p, Dyy, Dzz, kxx, kyy, kzz, x_bc_type, y_bc_type, pi, &
                      z_bc_type, nzm_global, Qz, sqrt_w_z, lambda_z, &
                      poisson_y_r, poisson_x_r, poisson_x_c, poisson_y_c, poisson_z_c
 
@@ -41,6 +41,9 @@ Module poisson_gpu
   Real(Int64), Allocatable :: Qz_gpu(:,:), sqrt_w_z_gpu(:), lambda_z_gpu(:)
   Real(Int64) :: lambda_z_tol
 
+  ! Spanwise wall alone (z_bc_type==1, y periodic): y-FFT in the y-pencil, then one z-tridiagonal cuSPARSE solve per (kx,ky) mode in the z-pencil
+  Logical :: zwall_only = .False.
+
 Contains
 
   !> Abort every rank (a bare Stop on one rank leaves the others hung in a collective and exits with status 0)
@@ -65,13 +68,9 @@ Contains
     !$acc enter data create(kxx,kzz)
     !$acc update device(kxx,kzz)
 
-    If ( z_bc_type == 1 ) Then
-       ! Case (a), 4-wall duct only; case (b) (z wall alone, y periodic) is not yet
-       ! GPU-ported -- guarded at init time already (initialization.f90), Stop here
-       ! too as a defensive check against this module being reached any other way
-       If ( y_bc_type /= 1 .Or. x_bc_type /= 0 ) &
-            Call gpu_abort('ERROR: GPU_POISSON z_bc_type=1 only implemented for y_bc_type=1, x_bc_type=0 (4-wall duct, periodic x)')
-    End If
+    zwall_only = z_bc_type == 1 .And. y_bc_type == 0
+    If ( z_bc_type == 1 .And. x_bc_type /= 0 ) &
+         Call gpu_abort('ERROR: GPU_POISSON z_bc_type=1 needs x_bc_type=0 (periodic x)')
 
     ! kyy only exists (is Allocated) in the periodic-y case
     If ( y_bc_type == 0 ) Then
@@ -84,7 +83,7 @@ Contains
     ! (rhs_p y-index nyg-1) is restored by a plain copy in projection.f90.
     nyp_l = decomp_poisson%ysz(2) - 1
     !$acc enter data create(poisson_y_r,poisson_x_r,poisson_x_c,poisson_y_c)
-    If ( z_bc_type == 0 ) Then
+    If ( z_bc_type == 0 .Or. zwall_only ) Then
        !$acc enter data create(poisson_z_c)
     End If
 
@@ -117,7 +116,7 @@ Contains
     End If
     If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil plan creation failed')
 
-    If ( z_bc_type == 1 ) Then
+    If ( z_bc_type == 1 .And. .Not. zwall_only ) Then
        Allocate( duct_c(decomp_spec%ysz(1), decomp_spec%ysz(2), decomp_spec%ysz(3)) )
        !$acc enter data create(duct_c)
        ! Qz/sqrt_w_z/lambda_z are built once on the host in initialization.f90 -- just upload them here
@@ -385,9 +384,14 @@ Contains
     Integer :: ierr
     Integer(Int64) :: bufsize
 
-    gtsv_m     = nyg - 2
-    ! one system per (kx,kz) mode (or (kx,z-eigenmode) for the duct) this rank owns in its y-pencil
-    gtsv_batch = decomp_spec%ysz(1) * decomp_spec%ysz(3)
+    If ( zwall_only ) Then
+       gtsv_m     = decomp_spec%zsz(3)
+       gtsv_batch = decomp_spec%zsz(1) * decomp_spec%zsz(2)
+    Else
+       gtsv_m     = nyg - 2
+       ! one system per (kx,kz) mode (or (kx,z-eigenmode) for the duct) this rank owns in its y-pencil
+       gtsv_batch = decomp_spec%ysz(1) * decomp_spec%ysz(3)
+    End If
 
     Allocate( gtsv_dl(gtsv_m*gtsv_batch), gtsv_d(gtsv_m*gtsv_batch), &
               gtsv_du(gtsv_m*gtsv_batch), gtsv_x(gtsv_m*gtsv_batch) )
@@ -576,5 +580,109 @@ Contains
     !$acc end data
 
   End Subroutine gpu_solve_duct_pencil
+
+  !> Spanwise-wall solve (y periodic): y-FFT in the y-pencil, batched cuSPARSE z-tridiagonal solve per (kx,ky) mode in the z-pencil with Dzz, inverse y-FFT; the padding y-slot is solved as the identity so it stays finite
+  Subroutine gpu_solve_zwall_pencil
+
+    Integer :: i, j, k, ii, kz, idx, b, ierr, n1, n2, nyp, n1y, n3y, zst1, zst2, i_global, j_global
+    Real(Int64) :: inv_nyp
+
+    If ( .Not. gtsv_created ) Call gpu_gtsv_init
+
+    n1y  = decomp_spec%ysz(1)
+    n3y  = decomp_spec%ysz(3)
+    nyp  = decomp_spec%ysz(2) - 1
+    inv_nyp = 1d0 / Real(nyp,Int64)
+    n1   = decomp_spec%zsz(1)
+    n2   = decomp_spec%zsz(2)
+    zst1 = decomp_spec%zst(1)
+    zst2 = decomp_spec%zst(2)
+
+    Do k = 1, n3y
+       !$acc host_data use_device(poisson_y_c)
+       ierr = cufftExecZ2Z( plan_p3_y, poisson_y_c(:,:,k), poisson_y_c(:,:,k), CUFFT_FORWARD )
+       !$acc end host_data
+       If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil y forward exec failed')
+    End Do
+
+    Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_spec )
+
+    !$acc data present(Dzz,kxx,kyy,poisson_z_c,gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
+
+    !$acc parallel loop collapse(2) present(Dzz,kxx,kyy,poisson_z_c,gtsv_dl,gtsv_d,gtsv_du,gtsv_x) &
+    !$acc& private(i_global,j_global,b,ii,kz,idx)
+    Do j = 1, n2
+       Do i = 1, n1
+          i_global = zst1 + i - 2
+          j_global = zst2 + j - 2
+          b = (j-1)*n1 + (i-1)
+          Do ii = 0, gtsv_m-1
+             kz  = ii + 2
+             idx = ii*gtsv_batch + b + 1
+             If ( j_global >= nyp ) Then
+                gtsv_d(idx)  = (1d0,0d0)
+                gtsv_dl(idx) = (0d0,0d0)
+                gtsv_du(idx) = (0d0,0d0)
+                gtsv_x(idx)  = (0d0,0d0)
+             Else
+                gtsv_d(idx) = Dzz(kz,kz) + kxx(i_global) + kyy(j_global)
+                If ( ii == 0 .And. i_global == 0 .And. j_global == 0 ) gtsv_d(idx) = 3d0/2d0*gtsv_d(idx)
+                If ( ii > 0 ) Then
+                   gtsv_dl(idx) = Dzz(kz,kz-1)
+                Else
+                   gtsv_dl(idx) = (0d0,0d0)
+                End If
+                If ( ii < gtsv_m-1 ) Then
+                   gtsv_du(idx) = Dzz(kz,kz+1)
+                Else
+                   gtsv_du(idx) = (0d0,0d0)
+                End If
+                gtsv_x(idx) = poisson_z_c(i,j,ii+1)
+             End If
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !$acc host_data use_device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x,gtsv_buf)
+    ierr = cusparseZgtsvInterleavedBatch( cusparse_h, CUSPARSE_ALG1, gtsv_m, &
+                 gtsv_dl, gtsv_d, gtsv_du, gtsv_x, gtsv_batch, gtsv_buf )
+    !$acc end host_data
+    If ( ierr /= 0 ) Call gpu_abort('ERROR: cusparseZgtsvInterleavedBatch (z wall) failed')
+
+    !$acc parallel loop collapse(2) present(poisson_z_c,gtsv_x) private(b,ii,idx)
+    Do j = 1, n2
+       Do i = 1, n1
+          b = (j-1)*n1 + (i-1)
+          Do ii = 0, gtsv_m-1
+             idx = ii*gtsv_batch + b + 1
+             poisson_z_c(i,j,ii+1) = gtsv_x(idx)
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+    !$acc end data
+
+    Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_spec )
+
+    Do k = 1, n3y
+       !$acc host_data use_device(poisson_y_c)
+       ierr = cufftExecZ2Z( plan_p3_y, poisson_y_c(:,:,k), poisson_y_c(:,:,k), CUFFT_INVERSE )
+       !$acc end host_data
+       If ( ierr /= 0 ) Call gpu_abort('ERROR: cuFFT pencil y inverse exec failed')
+    End Do
+
+    !$acc parallel loop collapse(3) present(poisson_y_c)
+    Do k = 1, n3y
+       Do j = 1, nyp
+          Do i = 1, n1y
+             poisson_y_c(i,j,k) = poisson_y_c(i,j,k) * inv_nyp
+          End Do
+       End Do
+    End Do
+    !$acc end parallel loop
+
+  End Subroutine gpu_solve_zwall_pencil
 
 End Module poisson_gpu

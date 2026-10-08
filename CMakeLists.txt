@@ -433,6 +433,7 @@ add_test(NAME vof_advect_prescribed COMMAND $<TARGET_FILE:test_vof_advect>)
 #   chan_small     periodic-x/z channel, no-slip y walls, DNS (wall-normal tridiagonal Poisson path)
 #   chan_les_small same with Vreman LES + equilibrium wall model on a stretched y grid
 #   duct_small     4-wall duct (z walls, alpha_grid_z stretched z), DNS+Vreman+EQWM (eigenmode Poisson path)
+#   zwall_small    spanwise (z) walls alone, y periodic, stretched z, Vreman+EQWM (y-FFT + z-tridiagonal Poisson path)
 #   sem_small      inflow/outflow x (DCT-IV Poisson path), uniform inflow
 #   sed_small      chan_les_small + passive settling scalar (&SEDIMENT)
 #   bouss_small    chan_les_small + Boussinesq temperature (&BOUSSINESQ)
@@ -452,7 +453,7 @@ set(CPU_REFERENCE_MPIRUN "" CACHE FILEPATH "mpirun matching CPU_REFERENCE_EXE (d
 set(TEST_LD_LIBRARY_PATH "" CACHE STRING "LD_LIBRARY_PATH prepended for parity tests (e.g. a matching user-space libcuda)")
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_mg_small rsb_small)
+    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_mg_small rsb_small)
         # ibm_stair_small (pcg_precond = 0) aborts in a GPU build; ibm_stair_mg_small covers the GPU
         if(ENABLE_GPU AND case STREQUAL "ibm_stair_small")
             continue()

@@ -137,7 +137,9 @@ Contains
 
     Call profiler_start(PROF_POISSON_TRIDIAG)
 #ifdef GPU_POISSON
-    If ( z_bc_type == 1 ) Then
+    If ( z_bc_type == 1 .And. y_bc_type == 0 ) Then
+       Call gpu_solve_zwall_pencil
+    Else If ( z_bc_type == 1 ) Then
        ! 4-wall duct: z-eigenmode transform + batched cuSPARSE solve of one y-tridiagonal system per (x-mode, z-eigenmode) pair
        Call gpu_solve_duct_pencil
     Else If ( x_bc_type == 0 .And. y_bc_type == 0 ) Then

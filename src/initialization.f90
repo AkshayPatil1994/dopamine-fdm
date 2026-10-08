@@ -100,10 +100,9 @@ Contains
     If ( x_bc_type /= 0 .And. x_bc_type /= 1 ) Call abort_input( 'ERROR: GPU_POISSON build only supports x_bc_type=0 or 1' )
     If ( y_bc_type == 0 .And. x_bc_type /= 0 ) Call abort_input( &
          'ERROR: GPU_POISSON with y_bc_type=0 (periodic y) requires x_bc_type=0 too' )
-    If ( z_bc_type == 1 .And. ( y_bc_type /= 1 .Or. x_bc_type /= 0 ) ) &
-         Call abort_input( 'ERROR: GPU_POISSON build only supports z_bc_type=1 (spanwise wall) combined with ' // &
-              'y_bc_type=1 and x_bc_type=0 (4-wall duct, periodic x); other z-wall combinations ' // &
-              '(spanwise wall alone, or duct with inflow/outflow x) need the CPU build' )
+    If ( z_bc_type == 1 .And. x_bc_type /= 0 ) &
+         Call abort_input( 'ERROR: GPU_POISSON build only supports z_bc_type=1 (spanwise wall) with x_bc_type=0 ' // &
+              '(periodic x), alone or as the 4-wall duct (y_bc_type=1); a duct with inflow/outflow x needs the CPU build' )
 #endif
 
     ! time: on restart, t_start (explicit) takes precedence over nstep_init*dt --
