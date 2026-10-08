@@ -95,19 +95,19 @@ def list_steps(fields_dir, prefix):
     return sorted(out)
 
 
-def save_gif(frames_dir, out, fps, width):
+def save_gif(frames_dir, out, fps, width, colors=96, dither="bayer:bayer_scale=5"):
     """Encode PNG frames (frame_%04d.png) into an optimised GIF via ffmpeg palette."""
     out = str(out)
     pal = str(Path(frames_dir) / "pal.png")
     vf = f"fps={fps},scale={width}:-1:flags=lanczos"
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(fps), "-i",
-                    f"{frames_dir}/frame_%04d.png", "-vf", vf + ",palettegen=max_colors=96:stats_mode=diff", pal], check=True)
+                    f"{frames_dir}/frame_%04d.png", "-vf", vf + f",palettegen=max_colors={colors}:stats_mode=diff", pal], check=True)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(fps), "-i",
                     f"{frames_dir}/frame_%04d.png", "-i", pal, "-lavfi",
-                    vf + "[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5", "-loop", "0", out], check=True)
+                    vf + f"[x];[x][1:v]paletteuse=dither={dither}", "-loop", "0", out], check=True)
 
 
-def render(frame_fn, n, out, fps=12, width=720, dpi=110, workers=8):
+def render(frame_fn, n, out, fps=12, width=720, dpi=110, workers=8, colors=96, dither="bayer:bayer_scale=5"):
     """Call frame_fn(i) -> Figure for each frame in parallel, then encode to GIF/MP4 at `out`."""
     from concurrent.futures import ProcessPoolExecutor
     tmp = tempfile.mkdtemp(prefix="anim_")
@@ -124,8 +124,26 @@ def render(frame_fn, n, out, fps=12, width=720, dpi=110, workers=8):
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(fps), "-i", f"{tmp}/frame_%04d.png",
                         "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", str(out)], check=True)
     else:
-        save_gif(tmp, out, fps, width)
+        save_gif(tmp, out, fps, width, colors, dither)
 
 
 def _run(i):
     _JOB(i)
+
+
+def read_vof_snapshot(run, n):
+    """(t, x, y, C) of the two-fluid solver's debug snapshot n (vof_debug = 1, vof_snap_dt > 0), one file or the per-rank pieces."""
+    import glob
+    files = sorted(glob.glob(f"{run}/vof_snap_{n:05d}.dat") + glob.glob(f"{run}/vof_snap_{n:05d}_r*.dat"))
+    t, rows = None, []
+    for fn in files:
+        for line in open(fn):
+            if line.startswith("#"):
+                t = float(line.split("=")[1])
+            else:
+                rows.append([float(v) for v in line.split()])
+    a = np.array(rows)
+    x, y = np.unique(np.round(a[:, 0], 9)), np.unique(np.round(a[:, 1], 9))
+    c = np.full((len(y), len(x)), np.nan)
+    c[np.searchsorted(y, np.round(a[:, 1], 9)), np.searchsorted(x, np.round(a[:, 0], 9))] = a[:, 2]
+    return t, x, y, c

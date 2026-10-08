@@ -6,6 +6,7 @@ A finite-difference Navier–Stokes solver for turbulent channel and open-channe
 |:--:|:--:|
 | <img src="docs/animations/tgv.gif" width="380"><br>**Taylor–Green vortex**, Re = 1600, 512³ DNS — vorticity magnitude | <img src="docs/animations/rbconvection.gif" width="380"><br>**Rayleigh–Bénard convection** — temperature |
 | <img src="docs/animations/wavywall.gif" width="380"><br>**Turbulent flow over a wavy wall** (ghost-cell IBM DNS) — streamwise velocity | <img src="docs/animations/chan395.gif" width="380"><br>**Wall-modelled LES**, channel Re<sub>τ</sub> = 395 — streamwise velocity and near-wall streaks |
+| <img src="docs/animations/vof_breaker.gif" width="380"><br>**Plunging breaking wave** (two-fluid PLIC-VOF, 1000:1, ak = 0.55) — liquid fraction | <img src="docs/animations/vof_zalesak.gif" width="380"><br>**Zalesak's slotted disk** (PLIC-VOF, one rotation) — liquid fraction, dashed: exact shape |
 
 ## Highlights
 
