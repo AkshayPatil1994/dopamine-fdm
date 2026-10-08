@@ -24,8 +24,10 @@ def run(tag, np_, edits):
     r = subprocess.run([a.mpirun, '--oversubscribe', '-np', str(np_), a.exe], cwd=wd, capture_output=True, text=True, timeout=900)
     if r.returncode != 0:
         print(r.stdout[-2000:], r.stderr[-2000:]); sys.exit(1)
+    csv = os.path.join(wd, 'ibm_forces.csv')
+    imp = sum(float(l.split(',')[8]) for l in open(csv).read().splitlines()[1:]) if os.path.exists(csv) else 0.0
     rows = [l.split() for l in r.stdout.splitlines() if re.match(r'^\s*\d+\s+[-\d.E+]+\s+[-\d.E+]+\s+[-\d.E+]+\s', l)]
-    return int(rows[-1][0]), float(rows[-1][1]), float(rows[-1][2])
+    return int(rows[-1][0]), float(rows[-1][1]), float(rows[-1][2]), imp
 
 
 def uplus(yp):
@@ -44,13 +46,17 @@ def u_tau(u, y, nu):
 
 
 try:
-    rough = []
-    step, t, u_np1 = run('np1', 1, rough)
-    _, _, u_np4 = run('np4', 4, rough + [(r'p_row = 0, p_col = 0', 'p_row = 2, p_col = 2')])
+    rough = [(r'ibm_method = 1,', 'ibm_method = 1, nsampling = 1,')]
+    step, t, u_np1, imp = run('np1', 1, rough)
+    _, _, u_np4, _ = run('np4', 4, rough + [(r'p_row = 0, p_col = 0', 'p_row = 2, p_col = 2')])
     ly, y_ref, nu, dt, u = 0.75, 0.5*1.0/32, 1e-6, 2e-3, 1.0
     for _ in range(step):
         u -= dt*u_tau(u, y_ref, nu)**2/ly
     ok = abs((1 - u_np1) - (1 - u)) <= a.tol*(1 - u) and abs(u_np4 - u_np1) < 1e-9
+    # the viscous load on the plate (ibm_forces.csv, wall-shear column) times dt is the momentum the fluid lost; plate area (16/17)^2
+    loss = (1 - u_np1)*ly*(16/17)**2
+    ok = ok and abs(imp*dt - loss) <= 0.03*loss
+    print('load impulse %.4e  momentum loss %.4e' % (imp*dt, loss))
     print('step %d t=%.3f  mean U: run %.6f  log-law %.6f  np4 %.6f  %s' % (step, t, u_np1, u, u_np4, 'ok' if ok else 'FAIL'))
     sys.exit(0 if ok else 1)
 finally:

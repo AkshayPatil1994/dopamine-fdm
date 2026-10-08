@@ -3,7 +3,10 @@ Module ibm_stress
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global
+  Use mpi
+  Use ieee_arithmetic, Only : ieee_value, ieee_quiet_nan
   Use wallmodel, Only : solve_u_tau_reichardt, solve_u_tau_rough
+  Use ibm, Only : dup_cell_flags
 
   Implicit None
 
@@ -133,5 +136,75 @@ Contains
     End Do
 
   End Subroutine ibm_stress_update
+
+
+  !> Loads on the staircase body (ibm_method = 1): pressure on the closed faces (linear extrapolation of the two fluid cells normal
+  !  to the face) and the wall shear on them, the log-law stress when ibm_wall_model_flag = 1 (the stress the flow receives)
+  !  else (nu + nu_t) u / (h/2); the impulse column is NaN
+  Subroutine ibm_stair_forces(U, V, W, Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc)
+
+    Real(Int64), Intent(In)  :: U(nx,nyg,nzg), V(nxg,ny,nzg), W(nxg,nyg,nz)
+    Real(Int64), Intent(Out) :: Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc
+
+    Integer(Int32) :: i, j, k, d, e, e2, sgn, ii, jj, kk, ihi, khi, de(3)
+    Real(Int64) :: lpres(3), lvisc(3), gp(3), gv(3), uc(3), area, hn, pface, p2
+    Logical :: skip_x, skip_z
+
+    Call dup_cell_flags(skip_x, skip_z)
+    ihi = nxg-1;  khi = nzg-1
+    If ( skip_x ) ihi = nxg-2
+    If ( skip_z ) khi = nzg-2
+    lpres = 0d0;  lvisc = 0d0
+
+    Do k = 2, khi
+       Do j = 2, nyg-1
+          Do i = 2, ihi
+             If ( phi(i,j,k) < 0d0 ) Cycle
+             uc(1) = 0.5d0*( U(i-1,j,k) + U(i,j,k) )
+             uc(2) = 0.5d0*( V(i,j-1,k) + V(i,j,k) )
+             uc(3) = 0.5d0*( W(i,j,k-1) + W(i,j,k) )
+             Do d = 1, 3
+                Do sgn = -1, 1, 2
+                   de = 0;  de(d) = sgn
+                   ii = i + de(1);  jj = j + de(2);  kk = k + de(3)
+                   If ( phi(ii,jj,kk) >= 0d0 ) Cycle
+                   If ( d == 1 ) Then
+                      area = (y(j)-y(j-1))*(z(k)-z(k-1));  hn = dx
+                   Else If ( d == 2 ) Then
+                      area = dx*(z(k)-z(k-1));  hn = y(j)-y(j-1)
+                   Else
+                      area = dx*(y(j)-y(j-1));  hn = z(k)-z(k-1)
+                   End If
+                   pface = P(i,j,k)
+                   ii = i - de(1);  jj = j - de(2);  kk = k - de(3)
+                   If ( jj >= 1 .And. jj <= nyg .And. ii >= 1 .And. ii <= nxg .And. kk >= 1 .And. kk <= nzg ) Then
+                      If ( phi(ii,jj,kk) >= 0d0 ) Then
+                         p2 = P(ii,jj,kk);  pface = pface + 0.5d0*( pface - p2 )
+                      End If
+                   End If
+                   lpres(d) = lpres(d) + Real(sgn,Int64)*pface*area
+                   Do e = 1, 3
+                      If ( e == d ) Cycle
+                      e2 = 6 - d - e
+                      If ( ibm_wall_model_flag == 1 ) Then
+                         lvisc(e) = lvisc(e) + area*wall_flux( uc(e), uc(e2), 0.5d0*hn, nu, &
+                              solid_id(i+de(1), j+de(2), k+de(3)), 1d0 )
+                      Else
+                         lvisc(e) = lvisc(e) + (nu + nu_t(i,j,k))*uc(e)/(0.5d0*hn)*area
+                      End If
+                   End Do
+                End Do
+             End Do
+          End Do
+       End Do
+    End Do
+
+    Fx_ibm = ieee_value(1d0, ieee_quiet_nan);  Fy_ibm = Fx_ibm;  Fz_ibm = Fx_ibm
+    Call MPI_Allreduce(lpres, gp, 3, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Call MPI_Allreduce(lvisc, gv, 3, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Fx_pres = gp(1);  Fy_pres = gp(2);  Fz_pres = gp(3)
+    Fx_visc = gv(1);  Fy_visc = gv(2);  Fz_visc = gv(3)
+
+  End Subroutine ibm_stair_forces
 
 End Module ibm_stress

@@ -13,6 +13,7 @@ Module vof_ibm
   Use ieee_arithmetic, Only : ieee_value, ieee_quiet_nan
   Use ibm, Only : U_wall, V_wall, W_wall, dup_cell_flags
   Use vof_state, Only : Cv, hy, vof_rho_ref
+  Use ibm_stress, Only : wall_flux, solid_id
 
   Implicit None
 
@@ -41,19 +42,21 @@ Contains
   !  the faces of the staircase body (closed faces between a fluid cell, phi >= 0, and a solid cell, phi < 0), the same faces on
   !  which the pressure operator has its Neumann condition, so a uniform pressure gives exactly zero and the still-water
   !  hydrostatic pressure gives the buoyancy of the staircase body. The face pressure is the linear extrapolation of the two
-  !  fluid cells normal to the face (exact for the hydrostatic gradient); the shear uses the cell-centre velocity at half a cell.
+  !  fluid cells normal to the face (exact for the hydrostatic gradient); the shear uses the cell-centre velocity at half a cell,
+!  or the log-law wall stress of the staircase wall model when ibm_wall_model_flag = 1 (the stress the flow receives).
   Subroutine vof_compute_ibm_forces(Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc)
 
     Real(Int64), Intent(Out) :: Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc
 
     Integer(Int32), Parameter :: E2 = 2
-    Integer(Int32) :: i, j, k, d, sgn, ii, jj, kk, i2, j2, k2, ihi, khi, e, de(3)
-    Real(Int64) :: lpres(3), lvisc(3), mul, mug, area, pF, pF2, pface, mu_c, hn, uc(3), cw(3)
-    Logical :: skip_x, skip_z
+    Integer(Int32) :: i, j, k, d, sgn, ii, jj, kk, i2, j2, k2, ihi, khi, e, eo, de(3)
+    Real(Int64) :: lpres(3), lvisc(3), mul, mug, area, pF, pF2, pface, mu_c, hn, uc(3), cw(3), rho_c
+    Logical :: skip_x, skip_z, ibm_wm
     Real(Int64), Allocatable :: ps(:), Ptot(:,:,:), Pp(:,:,:), Php(:,:,:), Ue(:,:,:), Ve(:,:,:), We(:,:,:)
 
     mul = vof_rho_l*vof_nu_l;  mug = vof_rho_g*vof_nu_g
     cw = (/ U_wall, V_wall, W_wall /)
+    ibm_wm = ( ibm_wall_model_flag == 1 )
 
     Allocate( ps(nyg), Ptot(nxg,nyg,nzg) )
     Call hydrostatic_reference(ps)
@@ -109,9 +112,16 @@ Contains
                    End If
                    lpres(d) = lpres(d) + Real(sgn,Int64)*pface*area
                    ! shear: the tangential velocity of the cell relative to the wall over half a cell
+                   rho_c = vof_rho_g + (vof_rho_l - vof_rho_g)*Cv(i,j,k)
                    Do e = 1, 3
                       If ( e == d ) Cycle
-                      lvisc(e) = lvisc(e) + mu_c*( uc(e) - cw(e) )/(0.5d0*hn)*area
+                      eo = 6 - d - e
+                      If ( ibm_wm ) Then
+                         lvisc(e) = lvisc(e) + rho_c*area*wall_flux( uc(e) - cw(e), uc(eo) - cw(eo), 0.5d0*hn, &
+                              ( mug + (mul - mug)*Cv(i,j,k) )/rho_c, solid_id(ii,jj,kk), 1d0 )
+                      Else
+                         lvisc(e) = lvisc(e) + mu_c*( uc(e) - cw(e) )/(0.5d0*hn)*area
+                      End If
                    End Do
                 End Do
              End Do

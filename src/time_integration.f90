@@ -11,7 +11,7 @@ Module time_integration
   Use wallmodel
   Use sgs_models
   Use ibm
-  Use ibm_stress,       Only : ibm_stress_update, nu_const
+  Use ibm_stress,       Only : ibm_stress_update, nu_const, ibm_stair_forces
   Use vof_pressure,     Only : vp_project_masked, vp_mu, vp_mv, vp_mw
   Use scalar_transport,  Only : compute_rhs_scalar, apply_scalar_bc
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
@@ -614,10 +614,14 @@ Contains
     ! ── IBM force output ─────────────────────────────────────────────
     If ( ibm_input_mode >= 1 .And. nsampling > 0 .And. Mod(istep, nsampling) == 0 ) Then
        Call profiler_start(PROF_IBM)
-       Call compute_ibm_forces(U, V, W, &
-            Fx_ibm,  Fy_ibm,  Fz_ibm, &
-            Fx_pres, Fy_pres, Fz_pres, &
-            Fx_visc, Fy_visc, Fz_visc)
+       If ( ibm_method == 1 ) Then
+          Call ibm_stair_forces(U, V, W, Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc)
+       Else
+          Call compute_ibm_forces(U, V, W, &
+               Fx_ibm,  Fy_ibm,  Fz_ibm, &
+               Fx_pres, Fy_pres, Fz_pres, &
+               Fx_visc, Fy_visc, Fz_visc)
+       End If
        Call write_force_csv(Fx_ibm,  Fy_ibm,  Fz_ibm, &
                             Fx_pres, Fy_pres, Fz_pres, &
                             Fx_visc, Fy_visc, Fz_visc)
