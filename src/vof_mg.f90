@@ -22,7 +22,8 @@ Module vof_mg
 
   Implicit None
 
-  ! storage kind of the V-cycle (the outer PCG stays in double): the preconditioner only needs ~1e-7 relative accuracy and is memory-bound
+  ! storage kind of the V-cycle (the outer PCG stays in double): the preconditioner only needs ~1e-7 relative accuracy
+  ! and is memory-bound
   Integer(Int32), Parameter :: mgk = Real32
   Integer(Int32) :: mg_mpi_t
   Integer(Int32), Parameter :: mg_maxlev = 24
