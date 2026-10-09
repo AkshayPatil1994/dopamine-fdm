@@ -129,7 +129,7 @@ Contains
 
 
   !> Projection of the single-phase velocity with an immersed body (ibm_method = 1): the fast solver cannot honour the closed faces, so
-  !  the pseudo-pressure is found by PCG on the masked operator (no flux through the body), to round-off, and the closed faces stay zero.
+  !  the pseudo-pressure is found by PCG on the masked operator (no flux through the body), to ibm_pcg_tol, and the closed faces stay zero.
   Subroutine vp_project_masked
 
     Real(Int64), Allocatable :: fd(:,:,:), ph(:,:,:), gu(:,:,:), gv(:,:,:), gw(:,:,:)
@@ -169,7 +169,7 @@ Contains
        End Do
     End Do
     Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
-    Call vp_pcg(fd, 800, 1d-13, ph, rfloor=1d-14*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
+    Call vp_pcg(fd, 800, ibm_pcg_tol, ph, rfloor=1d-14*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
     Call vp_halo(ph, .True.)
     Call vp_grad(ph, gu, gv, gw)
     Call apply_face_gradient(gu, gv, gw, 1d0)

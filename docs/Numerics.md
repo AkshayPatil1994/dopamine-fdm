@@ -335,7 +335,7 @@ The second IBM method does not interpolate. It treats the body as the set of gri
 
 $$\sum_{f} s_f\,\frac{p_{n(f)}-p_{c}}{\Delta_f}\,A_f = \frac{1}{\Delta t}\sum_{f} s_f\,u^*_f A_f ,$$
 
-   where $s_f = 0$ on closed faces and $1$ otherwise. This masked system no longer diagonalises in Fourier space, so it is solved by PCG, preconditioned by the fast Poisson solver of §4 or, with `pcg_precond = 1`, by a mask-aware geometric multigrid. The resulting velocity has zero flux through the body and is divergence-free to the solver tolerance in every fluid cell next to it.
+   where $s_f = 0$ on closed faces and $1$ otherwise. This masked system no longer diagonalises in Fourier space, so it is solved by PCG, preconditioned by the fast Poisson solver of §4 or, with `pcg_precond = 1`, by a mask-aware geometric multigrid. The resulting velocity has zero flux through the body and is divergence-free to the solver tolerance (`ibm_pcg_tol`, default $10^{-8}$ relative) in every fluid cell next to it.
 4. **Viscous stress.** The viscous flux through every edge between a fluid face and a closed face is the no-slip stencil flux, or, with `ibm_wall_model_flag = 1`, the log-law wall shear of §7.1b, with per-object roughness `ibm_z0`.
 
 Use the staircase method when the wall stress matters (wall-modelled LES of rough surfaces), when walls are thinner than two cells, or with the two-fluid solver (which always uses it). Use the ghost-cell method when a smooth, resolved wall is wanted and second-order geometry matters. The staircase method needs `ibm_input_mode >= 1`; on GPUs it needs `pcg_precond = 1`. Validation: a flat plate under a uniform stream decays as the integrated log law (`ibm_stair_plate`).

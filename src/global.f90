@@ -333,6 +333,8 @@ Module global
   ! IBM method: 0 = ghost-cell (image-point mirror), 1 = staircase (zero velocity in the solid, masked projection, wall-model stress as the
   ! flux through the edges next to closed faces, see ibm_stress); ibm_stress_on: the viscous terms read the flux overrides of ibm_stress
   Integer(Int32) :: ibm_method = 0
+  ! relative PCG residual of the masked projection (ibm_method = 1)
+  Real   (Int64) :: ibm_pcg_tol = 1d-8
   ! PCG preconditioner of vof_pressure (masked, variable-density): 0 fast Poisson solver, 1 geometric multigrid (vof_mg),
   ! -1 (default) picks 1 when the case has y walls and the build supports it, else 0
   Integer(Int32) :: pcg_precond = -1

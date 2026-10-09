@@ -128,6 +128,7 @@ Ghost-cell or staircase immersed boundaries from a precomputed signed-distance f
 |---|---|---|
 | `ibm_input_mode` | `0` | `0` no body; `1` read the cell-centre SDF `ibm_sdf_file` (solid where `phi<0`). |
 | `ibm_method` | `0` | `0` ghost-cell (image-point mirror; resolve walls with ≥2 cells); `1` staircase (zero velocity in solid, masked PCG projection keeping closed faces at zero flux, log-law stress as viscous flux with `ibm_wall_model_flag=1`; needs `ibm_input_mode≥1`, GPU needs `pcg_precond=1`; not for `vof_flow=1`, which always uses the staircase stress). |
+| `ibm_pcg_tol` | `1e-8` | Relative PCG residual of the masked projection of `ibm_method=1` (the divergence left after the projection is of this order relative to its pre-projection value; `1e-13` reaches round-off at about 1.3× the cost). |
 | `ibm_wall_model_flag` | `0` | `0` no-slip; `1` log-law EQWM on IBM surfaces. With `ibm_method=0` it only rewrites ghost velocities and carries almost no stress in near-1-D shear: use `ibm_method=1` (or `vof_flow=1`) for a wall-modelled IBM. |
 | `ibm_sdf_file` | `'SDF_in'` | Path of the SDF file. |
 | `ibm_objid_file` | `''` | Optional per-solid ID field (GenSDF `sdfp_objid.bin`) enabling per-object settings below; empty = one condition for all solids. |
