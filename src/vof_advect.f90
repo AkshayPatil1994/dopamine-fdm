@@ -45,7 +45,8 @@ Contains
   End Subroutine vof_advect_init
 
 
-  !> Plane normal and constant in every cell holding an interface (0 < C < 1), from the padded C
+  !> Plane normal and constant in every cell holding an interface (0 < C < 1), from the padded C; the other cells are left
+  !  untouched (every reader tests C against vof_eps before using the plane)
   Subroutine vof_reconstruct(Cp, n1, n2, n3, scheme)
 
     Integer(Int32), Intent(In) :: n1, n2, n3, scheme
@@ -70,11 +71,6 @@ Contains
                 vof_my(i,j,k) = m(2)
                 vof_mz(i,j,k) = m(3)
                 vof_al(i,j,k) = plic_alpha(c, m(1), m(2), m(3))
-             Else
-                vof_mx(i,j,k) = 0d0
-                vof_my(i,j,k) = 0d0
-                vof_mz(i,j,k) = 0d0
-                vof_al(i,j,k) = 0d0
              End If
           End Do
        End Do
