@@ -294,9 +294,9 @@ Contains
 
     Do isw = 1, 3
        d = order(isw)
-       Call vof_fill_pad(Cv, nxg, nyg, nzg)
-       Call vof_reconstruct(Cv, nxg, nyg, nzg, vof_normal_scheme)
-       Call vp_set_density(Cv)
+       ! Cv, its pad and the density are already current here (set above for the first sweep, by momentum_update after the
+       ! previous one); the geometric density has also reconstructed the planes
+       If ( vof_geo_density < 1 ) Call vof_reconstruct(Cv, nxg, nyg, nzg, vof_normal_scheme)
        uqu = qu/vp_rau;  uqv = qv/vp_rav;  uqw = qw/vp_raw
        rou = vp_rau;  rov = vp_rav;  row = vp_raw
        If ( d == 1 ) Then
@@ -318,8 +318,6 @@ Contains
     vof_co_max = Max(vof_co_max, co)
     vof_clip_total = vof_clip_total + cl
 
-    Call vof_fill_pad(Cv, nxg, nyg, nzg)
-    Call vp_set_density(Cv)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
@@ -403,8 +401,8 @@ Contains
     Call face_halo(Ut, Vt, Wt)
     U = Utmp;  V = Vtmp;  W = Wtmp
 
+    ! the multigrid coefficients are not restored: vof_advect_half rebuilds them in vp_set_density before the next solve
     vp_bu = sbu;  vp_bv = sbv;  vp_bw = sbw;  vp_beta0 = beta0_save;  vp_use_layered = .True.
-    If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
     Deallocate( sbu, sbv, sbw, gu, gv, gw, ph )
 
   End Subroutine make_transport_velocity_masked
