@@ -1,6 +1,6 @@
 # Two-Phase VOF Solver
 
-[← README](../README.md)
+[← Home](Home.md)
 
 A sharp-interface two-fluid (air–water) solver on the staggered grid of the single-phase code: the liquid fraction `C` is advected
 with a geometric PLIC volume-of-fluid method, the momentum is transported with the same mass fluxes that advance the density, and
@@ -16,18 +16,28 @@ Contents: [1 Method](#1-method) · [2 Running](#2-running-and-output) · [3 Vali
 
 ## 1. Method
 
+The solver integrates the incompressible two-fluid equations in conservative one-fluid form (same index notation as the
+[governing equations](Numerics.md#1-governing-equations) of the single-phase solver):
+
+$$\frac{\partial \rho}{\partial t} + \frac{\partial (\rho u_j)}{\partial x_j} = 0,\qquad
+\frac{\partial (\rho u_i)}{\partial t} + \frac{\partial (\rho u_i u_j)}{\partial x_j} = -\frac{\partial p}{\partial x_i} + \rho g_i + \frac{\partial}{\partial x_j}\left[(\mu+\mu_t)\left(\frac{\partial u_i}{\partial x_j} + \frac{\partial u_j}{\partial x_i}\right)\right] + \sigma\kappa\frac{\partial C}{\partial x_i},\qquad \frac{\partial u_i}{\partial x_i}=0,$$
+
+$$\frac{\partial C}{\partial t} + \frac{\partial (C u_j)}{\partial x_j} = 0,\qquad \rho = \rho_g + (\rho_l-\rho_g)\,C,\qquad \mu = \mu_g + (\mu_l-\mu_g)\,C,$$
+
+with $C$ the liquid volume fraction, $g_i$ gravity, $\sigma$ the surface tension and $\kappa$ the interface curvature.
+
 ### 1.1 Interface transport
 
 `C` is advanced by direction-split sweeps (Weymouth & Yue 2010) with exact geometric face fluxes of liquid volume from the PLIC
 planes of the donor cells (Youngs normals, `vof_normal_scheme = 1`, or centred-column height functions, `= 2`). The compression term
-`C̃ ∂u/∂x` makes every sweep conservative for a not-yet-divergence-free split velocity, so `C` remains in [0,1] without clipping.
+$\tilde C\,\partial u_j/\partial x_j$ makes every sweep conservative for a not-yet-divergence-free split velocity, so `C` remains in [0,1] without clipping.
 The sweep order alternates every step. The advection half-step is sub-cycled with a frozen, divergence-free transporting velocity
 (`vof_freeze_ut = 1`) until the sub-step Courant number is below `vof_co_sub` (0.12; 0.03 above density ratio 2000).
 
 ### 1.2 Consistent mass–momentum transport
 
-The momentum `ρu` on each staggered control volume (CV) is advanced inside every sweep with the **same** mass flux that advanced the
-density: the flux of `ρu_i` through a CV face is (CV-face mass flux) × (one face value of `u_i`). The mass flux of a CV is the mean of
+The momentum $\rho u_i$ on each staggered control volume (CV) is advanced inside every sweep with the **same** mass flux that advanced the
+density: the flux of $\rho u_i$ through a CV face is (CV-face mass flux) × (one face value of `u_i`). The mass flux of a CV is the mean of
 the two cell fluxes it spans, plus the `ρ̃ · (volume-flux divergence)` correction of the split scheme. This is the construction of
 Rudman (1998), Vaudor et al. (2017) and Pal, Fuster & Zaleski (2021); it avoids the spurious momentum production that occurs when
 the density is advected by the interface method and the momentum by an independent scheme at 1000:1.
@@ -47,7 +57,7 @@ the density is advected by the interface method and the momentum by an independe
 * The staggered face density is the **geometric** one: the liquid fraction of each half cell is taken from the cell's PLIC plane
   (`vof_geo_density = 1`). Pressure gradient and gravity use this density, so a flat interface at any sub-cell position is
   hydrostatically exact. Transport uses the arithmetic mean of the two cell densities.
-* `∇·(1/ρ ∇p) = ∇·u*/Δt` is solved by PCG, preconditioned with the constant-coefficient fast Poisson solver of the single-phase
+* $\dfrac{\partial}{\partial x_i}\!\left(\dfrac{1}{\rho}\dfrac{\partial p}{\partial x_i}\right) = \dfrac{1}{\Delta t}\dfrac{\partial u^*_i}{\partial x_i}$ is solved by PCG, preconditioned with the constant-coefficient fast Poisson solver of the single-phase
   code, to a relative residual `vof_pcg_tol = 0.2` (at most `vof_pcg_iters = 30`; a tighter tolerance gives the same physics,
   `vof_pcg_tol = 0.3, 0.1, 0.01` agree to three digits at 40 / 65 / 93 iterations per step for a 1000:1 standing wave).
   After each advection half-step the transporting velocity is projected with `vof_adv_iters` iterations.
@@ -78,7 +88,7 @@ stream over a flat plate decays as the integrated log law, independent of the de
 
 ### 1.5 Surface tension
 
-`vof_sigma > 0` adds the balanced-force term `σ κ ∇C / ρ_f` on the faces with the curvature from **height functions** (9-cell
+`vof_sigma > 0` adds the balanced-force term $\sigma\kappa\,(\partial C/\partial x_i)/\rho_f$ on the faces with the curvature from **height functions** (9-cell
 columns in a 3×3 stencil, `vof_curv.f90`; cells whose columns do not end in a full and an empty cell take the mean of their
 neighbours' valid curvatures, else zero, and are counted in column 30 of `vof_diag.dat`). The explicit time-step limit `Δt < √((ρ_l + ρ_g) h³ / (4π σ))` is folded into the acceleration CFL.
 The same acceleration CFL carries the gravity-wave limit of the shortest resolvable wave (`k = π/h`, `ω² = g k + σ k³/(ρ_l + ρ_g)`,

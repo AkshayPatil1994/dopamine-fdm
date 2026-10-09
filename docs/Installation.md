@@ -1,6 +1,6 @@
 # Installation & Running
 
-[← README](../README.md)
+[← Home](Home.md)
 
 ## Dependencies
 

@@ -1,6 +1,6 @@
 # Examples
 
-[← README](../README.md)
+[← Home](Home.md)
 
 Several runnable cases live under `examples/`, each a self-contained `input_parameters`
 (and, for the IBM case, a geometry). Copy a case's directory contents next to the

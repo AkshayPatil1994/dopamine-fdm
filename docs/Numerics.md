@@ -1,6 +1,6 @@
 # Numerics & Governing Equations
 
-[← README](../README.md)
+[← Home](Home.md)
 
 `dopamine-fdm` integrates the incompressible Navier–Stokes equations on distributed-memory
 systems via MPI (2decomp&fft 2-D pencil decomposition, auto-preferring a 1-D z-slab split
@@ -306,7 +306,7 @@ No-slip ($U_\text{wall} = 0$) is the default; moving-wall BCs can be set by chan
 > **Reference (`GenSDF` implementation):** Patil, A., Paranjothi, U.C.K. &
 > García-Sánchez, C. (2025). *GenSDF: An MPI-Fortran based signed-distance-field
 > generator for computational fluid dynamics applications*. SoftwareX 30, 102117. See
-> [Contributing § Citing this solver](../README.md#citing-this-solver) and
+> [Citing this solver](https://github.com/AkshayPatil1994/dopamine-fdm#citing-this-solver) and
 > [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf).
 
 ### 6.3 Validation — turbulent flow over a wavy wall
@@ -695,12 +695,12 @@ Configured via `&INITIAL_CONDITIONS` — see
 With `vof_active = 1`, `vof_flow = 1` the solver advances a liquid fraction $C$ and solves the incompressible two-fluid equations
 in conservative one-fluid form,
 
-$$\frac{\partial \rho}{\partial t} + \nabla\!\cdot(\rho\mathbf{u}) = 0,\qquad
-\frac{\partial \rho\mathbf{u}}{\partial t} + \nabla\!\cdot(\rho\mathbf{u}\otimes\mathbf{u}) = -\nabla p + \rho\mathbf{g} + \nabla\!\cdot\!\big[\mu(\nabla\mathbf{u}+\nabla\mathbf{u}^T)\big] + \sigma\kappa\nabla C,\qquad \nabla\!\cdot\mathbf{u}=0,$$
+$$\frac{\partial \rho}{\partial t} + \frac{\partial (\rho u_j)}{\partial x_j} = 0,\qquad
+\frac{\partial (\rho u_i)}{\partial t} + \frac{\partial (\rho u_i u_j)}{\partial x_j} = -\frac{\partial p}{\partial x_i} + \rho g_i + \frac{\partial}{\partial x_j}\left[(\mu+\mu_t)\left(\frac{\partial u_i}{\partial x_j} + \frac{\partial u_j}{\partial x_i}\right)\right] + \sigma\kappa\frac{\partial C}{\partial x_i},\qquad \frac{\partial u_i}{\partial x_i}=0,$$
 
-with $\rho = \rho_g + (\rho_l-\rho_g)C$. The interface is advected by direction-split PLIC sweeps with exact geometric fluxes; the momentum
+with $\rho = \rho_g + (\rho_l-\rho_g)C$, $\mu = \mu_g + (\mu_l-\mu_g)C$ and $\mu_t = \rho\nu_t$ the SGS viscosity of the mixture ($g_i$ is the gravitational acceleration, $\sigma$ the surface tension, $\kappa$ the interface curvature). The interface is advected by direction-split PLIC sweeps with exact geometric fluxes; the momentum
 on every staggered control volume is advanced with the *same* mass fluxes (WENO5-Z face values, pseudo-time SSP-RK3 inside each
 sweep, refill-Courant blend to upwind), so density and momentum stay consistent at density ratios of 1000. The pressure equation
-$\nabla\!\cdot(\rho_f^{-1}\nabla p)=\nabla\!\cdot\mathbf{u}^*/\Delta t$ uses the geometric half-cell face density and is solved by PCG
+$\dfrac{\partial}{\partial x_i}\!\left(\dfrac{1}{\rho_f}\dfrac{\partial p}{\partial x_i}\right)=\dfrac{1}{\Delta t}\dfrac{\partial u^*_i}{\partial x_i}$ uses the geometric half-cell face density and is solved by PCG
 preconditioned with the constant-coefficient fast Poisson solver of §4. The single-phase solver of §§1–12 is untouched when
 `vof_active = 0`. Full description, validation and limits: [Two-Phase VOF](Two-Phase-VOF.md).
