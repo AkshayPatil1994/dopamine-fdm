@@ -182,7 +182,7 @@ Contains
     ! pseudo-time RK3 of the momentum needs less than half of a control volume's mass to leave in one sweep, which fails for
     ! density ratios above a few thousand (drop in a uniform stream, 1e4 .. 1e6): forward Euler with small sub-steps there
     If ( vof_rk_nth <= 0 ) vof_rk_nth = 1
-    If ( vof_rho_l/vof_rho_g >= 2d3 .And. vof_rk_mom == 1 ) Then
+    If ( vof_rho_l/vof_rho_g >= 2d3 .And. vof_rk_mom >= 1 ) Then
        vof_rk_mom = 0;  vof_co_sub = Min(vof_co_sub, 3d-2)
     End If
 
@@ -484,7 +484,7 @@ Contains
 
   !> Momentum update of the sweep along d with the exact mass fluxes Md of the geometric sweep. The staggered density moves
   !  linearly from rou (before) to vp_rau (after) along the sweep pseudo-time theta, so the momentum ODE
-  !  dq/dtheta = tendency(q/rho(theta)) is integrated by forward Euler (vof_rk_mom = 0) or SSP-RK3 (1; theta = 0, 1, 1/2)
+  !  dq/dtheta = tendency(q/rho(theta)) is integrated by forward Euler (vof_rk_mom = 0) SSP-RK3 (1; theta = 0, 1, 1/2) or SSP-RK2 (2; theta = 0, 1)
   !  with the same fluxes at every stage; vof_rk_nth > 1 splits the pseudo-time into equal segments (a stage may step
   !  past the end of the density path, which needs less than half of a control volume's mass to leave in one segment)
   Subroutine momentum_update(d)
@@ -496,7 +496,7 @@ Contains
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     rmu = Min(rou, vp_rau);  rmv = Min(rov, vp_rav);  rmw = Min(row, vp_raw)
-    nst = Merge(3, 1, vof_rk_mom == 1)
+    nst = Merge(3, Merge(2, 1, vof_rk_mom == 2), vof_rk_mom == 1)
     Do seg = 1, vof_rk_nth
        q0u = qu;  q0v = qv;  q0w = qw
        Do stage = 1, nst
@@ -507,7 +507,7 @@ Contains
           End If
           Call pad_transported
           Call momentum_tendency(d)
-          a0 = Merge(0d0, Merge(0.75d0, 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
+          a0 = Merge(0d0, Merge(Merge(0.5d0, 0.75d0, vof_rk_mom == 2), 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
           qu = a0*q0u + a1*( qu + dqu/vof_rk_nth );  qv = a0*q0v + a1*( qv + dqv/vof_rk_nth )
           qw = a0*q0w + a1*( qw + dqw/vof_rk_nth )
        End Do
