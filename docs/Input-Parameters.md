@@ -303,6 +303,7 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_freeze_ut` | `1` | Project the transporting velocity once per half-step. |
 | `vof_pcg_iters, vof_pcg_tol` | `30`, `0.2` | Force-stage pressure PCG: iteration cap and relative residual (`0` = always the cap). |
 | `vof_adv_iters, vof_adv_tol` | `3`, `1e-8` | Projection after each advection half-step. |
+| `vof_tr_floor` | `1e-14` | Stopping floor of the transporting-velocity projection (with an immersed body), as a fraction of the largest velocity. `1e-12` saves ~15% of the PCG iterations; the liquid volume then drifts at ~1e-14 instead of ~1e-16. |
 | `vof_div_tol` | `0.0` | `>0`: stop every pressure solve once `dt·max\|div u\|` is below this. |
 | `vof_layered_precond` | `0` | `1` row-mean-density PCG preconditioner (CPU, y walls). |
 | `vof_cfl_max` | `0.4` | Courant limit of the advection step. |

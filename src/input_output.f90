@@ -102,6 +102,7 @@ Contains
                    vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_sigma, &
                    vof_pcg_iters, vof_pcg_tol, vof_mom_scheme, vof_mom_cm0, vof_mom_cm1, &
                    vof_rk_mom, vof_rk_nth, vof_co_sub, vof_nsub, vof_freeze_ut, vof_adv_iters, vof_adv_tol, &
+                   vof_tr_floor, &
                    vof_div_tol, vof_cfl_max, &
                    vof_u0, vof_wave_amp, vof_wave_lambda, vof_wave_stokes, vof_tgv, vof_shear, vof_prescribed, vof_presc_T, &
                    vof_selftest, vof_frozen, vof_smooth_w, vof_hsplit, vof_debug, vof_snap_dt
@@ -803,6 +804,7 @@ Contains
     Call Mpi_bcast ( vof_u0,                1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_adv_iters,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_adv_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( vof_tr_floor,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_div_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_wave_amp,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_wave_lambda,       1, MPI_real8,   0, MPI_COMM_WORLD, ierr )

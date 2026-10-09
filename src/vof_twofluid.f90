@@ -385,7 +385,7 @@ Contains
     ! already nearly divergence free, and PCG then amplifies noise)
     umax = Max( MaxVal(Abs(U)), MaxVal(Abs(V)), MaxVal(Abs(W)) )
     Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
-    Call vp_pcg(fdiv, 800, 1d-13, ph, rfloor=1d-14*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
+    Call vp_pcg(fdiv, 800, 1d-13, ph, rfloor=vof_tr_floor*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
     ! Ut must be solenoidal for the liquid volume to be conserved: report a solve that hit the cap or broke down at the start
     If ( ( vp_iters_last >= 800 .And. vp_res_last > 1d-6 ) .Or. ( vp_iters_last == 0 .And. MaxVal(Abs(fdiv)) > 0d0 ) ) Then
        vf_tr_warn = vf_tr_warn + 1

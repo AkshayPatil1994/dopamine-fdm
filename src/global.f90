@@ -779,6 +779,8 @@ Module global
   Real   (Int64) :: vof_pcg_tol       = 2d-1
   Integer(Int32) :: vof_adv_iters     = 3
   Real   (Int64) :: vof_adv_tol       = 1d-8
+  ! transporting-velocity projection (once per half-step): stop at residual vof_tr_floor * (largest velocity), the divergence left in the liquid volume
+  Real   (Int64) :: vof_tr_floor      = 1d-14
   ! > 0: every pressure solve stops once dt*max|div u| (the CG residual is the divergence left after the correction) is below
   ! this value, instead of the relative tests above; the iteration caps still apply
   Real   (Int64) :: vof_div_tol       = 0d0
