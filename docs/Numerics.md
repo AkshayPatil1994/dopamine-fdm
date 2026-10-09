@@ -1,6 +1,6 @@
 # Numerics & Governing Equations
 
-← [[Home|Home]]
+[← README](../README.md)
 
 `dopamine-fdm` integrates the incompressible Navier–Stokes equations on distributed-memory
 systems via MPI (2decomp&fft 2-D pencil decomposition, auto-preferring a 1-D z-slab split
@@ -25,7 +25,7 @@ where $\omega_x = 2\pi / T_{\mathrm{wave},x}$ and $\omega_z = 2\pi / T_{\mathrm{
 are derived from the user-supplied wave periods, and $\varphi_x$, $\varphi_z$ are
 optional phase offsets (radians, default 0). Setting $T_{\mathrm{wave},x} = 0$ (or
 $T_{\mathrm{wave},z} = 0$) disables oscillation in that direction, recovering steady
-forcing. Configured via `&PHYSICS` — see [[Input Parameters|Input-Parameters#physics]].
+forcing. Configured via `&PHYSICS` — see [Input Parameters](Input-Parameters.md#physics).
 
 Alternatively, `flow_forcing_mode = 1` (constant mass flux, CMFR) replaces the
 prescribed-`dPdx` forcing above with a bulk-velocity constraint: after each RK
@@ -48,7 +48,7 @@ $$f_v = 2\Omega_x w + \Omega_x^2 (y - y_0), \qquad f_w = -2\Omega_x v + \Omega_x
 
 where $(y_0, z_0)$ is the domain centreline ($L_y/2$, $L_z/2$), fixed rather than
 user-configurable. Configured via `&PHYSICS` — see
-[[Input Parameters § PHYSICS|Input-Parameters#physics]].
+[Input Parameters § PHYSICS](Input-Parameters.md#physics).
 
 ## 2. Spatial discretisation
 
@@ -68,14 +68,14 @@ The grid is always **uniform** in the streamwise $x$ direction (spacing $\Delta 
 **non-uniform** in the wall-normal $y$ direction. Seven vertical-grid options are
 provided (uniform, symmetric/single-sided hyperbolic tangent stretching, and
 roughness-sublayer variants), configured via `grid_type` and `alpha_grid` — see
-[[Input Parameters § DOMAIN|Input-Parameters#domain]].
+[Input Parameters § DOMAIN](Input-Parameters.md#domain).
 
 The spanwise $z$ direction is uniform (spacing $\Delta z$) when periodic (`z_bc_type =
 0`, the default — required, since periodic $z$ uses a spectral FFT that needs uniform
 spacing), but may optionally be stretched, symmetric tanh clustering at both walls
 (mirroring `grid_type = 2`'s $y$ formula), when $z$ is instead wall-bounded (`z_bc_type =
 1`) via `alpha_grid_z > 0` — see [§4.1](#41-spectral-poisson-solver) below for how the
-pressure solve adapts, and [[Input Parameters § BOUNDARY_CONDITIONS|Input-Parameters#boundary_conditions]].
+pressure solve adapts, and [Input Parameters § BOUNDARY_CONDITIONS](Input-Parameters.md#boundary_conditions).
 
 ### 2.2 Finite differences
 
@@ -132,7 +132,7 @@ available:
 
 These two switches are independent: `nsteps` and `nsave` can each be positive or
 negative in any combination. Configured via `&NUMERICS` — see
-[[Input Parameters|Input-Parameters#numerics]].
+[Input Parameters](Input-Parameters.md#numerics).
 
 ## 4. Pressure projection (fractional step method)
 
@@ -191,8 +191,7 @@ $D_{zz}$'s eigenvalues; a $\sqrt{\Delta z_k}$ weighting on the forward/inverse t
 recovers $D_{zz}$'s own (generally non-orthogonal) eigenvectors from $S$'s orthonormal
 ones, reducing to the plain unweighted uniform-grid case when $\Delta z_k$ is constant.
 This combination requires `p_col = 1` (decompose only in $x$, via `p_row`), since the
-coupled solve needs $z$ fully local to every rank — see [[Input Parameters §
-DOMAIN|Input-Parameters#domain]]. **GPU build**: supported, via a batched cuSPARSE
+coupled solve needs $z$ fully local to every rank — see [Input Parameters](Input-Parameters.md#domain). **GPU build**: supported, via a batched cuSPARSE
 eigenmode transform + tridiagonal solve (the device analogue of the host `Zgtsv`
 machinery above), but only combined with `x_bc_type = 0` (periodic streamwise; `p_col = 1` is
 forced and $x$ may be split over `p_row` ranks); the spanwise-wall-alone case (`y_bc_type = 0`) above is not yet ported to
@@ -218,7 +217,7 @@ benchmark data. The dissipation rate can be calculated using two methods, (a) ex
 > — the maintained fork of the original 2DECOMP&FFT library (Li, N. & Laizet, S. (2010).
 > *2DECOMP&FFT – a highly scalable 2D decomposition library for FFT-based
 > simulations*, Cray User Group 2010). Vendored at `v2.1.0` — see
-> [[Installation § Dependencies|Installation#dependencies]].
+> [Installation § Dependencies](Installation.md#dependencies).
 
 > **Reference (fractional step):** Kim, J. & Moin, P. (1985). *Application of a
 > fractional-step method to incompressible Navier–Stokes equations*. J. Comput. Phys.
@@ -239,7 +238,7 @@ and $c_V = 2.5 C_s^2$.
 
 All velocity gradients are evaluated at cell centres by second-order central
 differences; off-diagonal gradients are averaged from the two adjacent face-point
-values. Configured via `&PHYSICS` — see [[Input Parameters|Input-Parameters#physics]].
+values. Configured via `&PHYSICS` — see [Input Parameters](Input-Parameters.md#physics).
 
 ### 5.1 Validation — turbulent channel flow 
 
@@ -268,7 +267,7 @@ boundary conditions.
 The solver itself does **not** compute the SDF — it must be generated ahead of time by
 the `GenSDF` preprocessing tool in `preProcessing/GenSDF/` (which performs the
 fast-sweep distance computation of Zhao et al. (2005) internally) from an OBJ/STL
-geometry — see [[Pre- and Post-Processing Tools § GenSDF|Tools#gensdf]].
+geometry — see [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf).
 
 > **Note:** older solver versions accepted a binary face-point mask (`Umask_in`,
 > `ibm_input_mode = 1` in that scheme) and computed the SDF via fast-sweep at solver
@@ -292,7 +291,7 @@ $$U(G) = 2 U_\text{wall} - U(I)$$
 
 No-slip ($U_\text{wall} = 0$) is the default; moving-wall BCs can be set by changing
 `U_wall`, `V_wall`, `W_wall` in `ibm.f90`. Configured via `&IBM` — see
-[[Input Parameters|Input-Parameters#ibm-optional]].
+[Input Parameters](Input-Parameters.md#ibm).
 
 > **Reference:** Tseng, Y.-H. & Ferziger, J.H. (2003). *A ghost-cell immersed boundary
 > method for flow in complex geometry*. J. Comput. Phys. 192(2), 593–623. DOI:
@@ -307,13 +306,13 @@ No-slip ($U_\text{wall} = 0$) is the default; moving-wall BCs can be set by chan
 > **Reference (`GenSDF` implementation):** Patil, A., Paranjothi, U.C.K. &
 > García-Sánchez, C. (2025). *GenSDF: An MPI-Fortran based signed-distance-field
 > generator for computational fluid dynamics applications*. SoftwareX 30, 102117. See
-> [[Contributing § Citing this solver|Contributing#citing-this-solver]] and
-> [[Pre- and Post-Processing Tools § GenSDF|Tools#gensdf]].
+> [Contributing § Citing this solver](../README.md#citing-this-solver) and
+> [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf).
 
 ### 6.3 Validation — turbulent flow over a wavy wall
 
 The IBM is validated on the `dns_ibm_wavyWall` example (ERCOFTAC Classic Collection
-Case 076, [[Examples § dns_ibm_wavyWall|Examples#dns_ibm_wavywall]]; $Re_H = U_b
+Case 076, [Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywall); $Re_H = U_b
 H/\nu = 6760$), a sinusoidal wavy bottom wall of wavelength $\lambda = 1$,
 amplitude-to-wavelength ratio $a/\lambda = 0.05$, tiled four times over the streamwise
 domain $L_x = 4$. The wall is represented as a precomputed cell-centre SDF
@@ -330,7 +329,7 @@ agree closely with the reference DNS:
 > **Reference (DNS comparison data):** Maaß, C. & Schumann, U. *Direct numerical
 > simulation of separated turbulent flow over a wavy boundary*, as used in the
 > ERCOFTAC Classic Collection Case 076 specification (see
-> [[Examples § dns_ibm_wavyWall|Examples#dns_ibm_wavywall]] for the primary case
+> [Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywall) for the primary case
 > citation).
 
 ## 7. Wall models
@@ -472,7 +471,7 @@ and diffusive flux divergences are normalised by the **local cell width** (the
 face-to-face spacing $x_{i}-x_{i-1}$, $y_{j}-y_{j-1}$, $z_{k}-z_{k-1}$), which
 guarantees discrete conservation on the stretched wall-normal grid and is consistent
 with the momentum solver. Configured via `&SEDIMENT` — see
-[[Input Parameters|Input-Parameters#sediment-optional--omit-to-disable]].
+[Input Parameters](Input-Parameters.md#sediment).
 
 ### 8.1 Advection — van Leer slope-limited MUSCL
 
@@ -542,13 +541,13 @@ IBM surfaces support per-object adiabatic/isothermal conditions. The Reynolds st
 budget module (§9) additionally reports the buoyancy production term $\beta_T g \langle
 v'T'\rangle$ when both `&STATISTICS` and `&BOUSSINESQ` are active. Configured via
 `&BOUSSINESQ` — see
-[[Input Parameters § BOUSSINESQ|Input-Parameters#boussinesq-optional--omit-to-disable]].
+[Input Parameters § BOUSSINESQ](Input-Parameters.md#boussinesq).
 
 > **Note:** this is independent of the suspended-sediment scalar (§8.1–8.2) — the two can
 > be enabled together, each with its own transport equation, but only $T$ couples back
 > into the momentum equation.
 
-### 8.1 Validation - Rayleigh–Bénard convection
+### 8.4 Validation — Rayleigh–Bénard convection
 
 The Boussinesq implementation is validated against a standard turbulent Rayleigh–Bénard convection case corresponding to the work by Kunnen, Geurts, and Clercx, (2009). 
 
@@ -576,7 +575,7 @@ time. Homogeneous spatial averaging (configurable over $x$, $z$, or both) reduce
 output to 1-D profiles for canonical channel flows. Output files are little-endian
 float64, appended each window for restart continuity. Configured via `&STATISTICS` —
 full output-file layout in
-[[Input Parameters § STATISTICS|Input-Parameters#statistics-optional--omit-to-disable]].
+[Input Parameters § STATISTICS](Input-Parameters.md#statistics).
 
 > **Reference:** Pope, S.B. (2000). *Turbulent Flows*. Cambridge University Press. ISBN:
 > 978-0-521-59886-6. DOI:
@@ -587,7 +586,7 @@ full output-file layout in
 The domain is decomposed with **[2decomp&fft](https://github.com/2decomp-fft/2decomp-fft)**'s
 2-D pencil decomposition: the MPI rank grid is `p_row × p_col` (`p_row` splitting $x$,
 `p_col` splitting $z$; $y$ is always fully local to a rank), configured via `p_row`/
-`p_col` in `&DOMAIN` — see [[Input Parameters § DOMAIN|Input-Parameters#domain]]. With
+`p_col` in `&DOMAIN` — see [Input Parameters § DOMAIN](Input-Parameters.md#domain). With
 the default `p_row = 0, p_col = 0` the solver auto-picks: a **pure z-slab split**
 (`p_row = 1`, each rank owning the full $(x,y)$ extent and a contiguous range of
 $z$-planes) whenever that alone gives every rank at least 2 interior $z$-cells — this is
@@ -616,7 +615,7 @@ velocity is imposed at the inlet ($x=0$) and a convective condition advects the 
 at $x=L_x$. The pressure Poisson solve switches from a periodic FFT to a DCT-IV
 transform in $x$ (§4.1), consistent with the non-periodic velocity BC. Configured via
 `&BOUNDARY_CONDITIONS` and `&INFLOW` — see
-[[Input Parameters|Input-Parameters#inflow-optional--used-only-when-x_bc_type--1]].
+[Input Parameters](Input-Parameters.md#inflow).
 
 ### 11.1 Inlet — constant or synthetic eddy method
 
@@ -656,18 +655,17 @@ which discretises $\partial F/\partial t + U_c\\,\partial F/\partial x = 0$ by
 first-order upwinding; clamping $C$ to $[0,1]$ keeps the update stable and avoids
 pulling from outside the domain under local backflow.
 
-### 11.3 In-situ TI-profile rescaling (`ti_rescale_active = 1`)
+### 11.3 Inflow Reynolds-stress optimisation (`&INFLOW_OPT`)
 
-Because the ESEM inlet Reynolds-stress profile decays/adjusts as it convects downstream
-before reaching equilibrium, an optional feedback loop samples the resolved turbulence
-intensity at a station `ti_rescale_x` downstream and nudges the *injected* target
-profile so the resolved profile matches the intended one at that station. Every
-`ti_rescale_freq` steps, raw velocity moments accumulated since the last window are
-reduced across ranks, converted to variances, and used to scale $R_{11}, R_{22}, R_{33}$
-multiplicatively (damped by exponent `ti_rescale_relax`, clipped per-window to
-`[1/ti_rescale_clip, ti_rescale_clip]`), with an additional anti-windup clamp
-(`ti_rescale_abs_clip`) bounding the cumulative drift of the injected profile relative to
-its original target.
+The ESEM inlet Reynolds-stress profile adjusts as it convects downstream, so the statistics at a measurement station differ from the wind-tunnel target. An optional online realisation of Lamberti et al. (2018, JWEIA **177**, 32–44, §5–6.1) fits Bezier control points on the inflow $v'^2$ and $w'^2$ profiles (`n_bezier`; end points fixed to the target) so that the resolved statistics at `inflow_opt_x` match the target. It runs as a phase machine:
+
+1. **step0**: baseline, inflow = target, measured over `inflow_opt_window` steps;
+2. **step1**: inflow $v'^2$ and $w'^2$ doubled together (the paper's combined perturbation), measured over the same window;
+3. **correction 1**: a per-control-point scalar secant Newton step, independent for $v'^2$ and $w'^2$, applied and then verified. If the verification measures worse than the baseline, the profile reverts to the baseline.
+
+$v'^2$ and $w'^2$ are corrected independently rather than by the paper's coupled two-variable weighted least-squares fit (Eq. 5): in practice that solve can be ill-conditioned (the two variables tend to move all three downstream statistics together, so their sensitivities are nearly collinear at some heights) and amplifies measurement noise into unstable corrections. The scalar secant needs no matrix inversion. Control points within `inflow_opt_wall_exclude` times the no-slip wall taper length are excluded from the correction and the residual check, since the injected variance there is suppressed toward zero regardless of the target. `inflow_opt_trust` bounds each applied step to $\pm$ that fraction of the target value, because a slope estimated from one short online window can be noisy enough to blow up the raw Newton step.
+
+With the default `inflow_opt_max_iter = 1` the profile freezes after the single verify measurement, which is what the paper validates (it lists further iteration and an automatic stopping criterion as future work). `inflow_opt_max_iter > 1` is this code's own experimental extension: it secant-refines the slopes after each applied correction with a Robbins–Monro decaying step (`inflow_opt_relax` / iteration), stops at `inflow_opt_tol` (worst relative residual over $u'^2, v'^2, w'^2$ and all interior control points), at `inflow_opt_max_iter`, or on a stalled residual, and reverts to the best measured iterate. Check the printed per-iteration residuals. Parameters: [Input Parameters](Input-Parameters.md#inflow_opt).
 
 ## 12. Initial conditions
 
@@ -685,7 +683,7 @@ The Reichardt (1951) profile for IC type 4:
 $$U^+(y^+) = \frac{1}{\kappa}\ln(1 + \kappa y^+) + 7.8\left[1 - e^{-y^+/11} - \frac{y^+}{11}e^{-0.33 y^+}\right]$$
 
 Configured via `&INITIAL_CONDITIONS` — see
-[[Input Parameters|Input-Parameters#initial_conditions]].
+[Input Parameters](Input-Parameters.md#initial_conditions).
 
 > **Reference:** Reichardt, H. (1951). *Vollständige Darstellung der turbulenten
 > Geschwindigkeitsverteilung in glatten Leitungen*. Z. Angew. Math. Mech. 31(7), 208–219.
@@ -705,4 +703,4 @@ on every staggered control volume is advanced with the *same* mass fluxes (WENO5
 sweep, refill-Courant blend to upwind), so density and momentum stay consistent at density ratios of 1000. The pressure equation
 $\nabla\!\cdot(\rho_f^{-1}\nabla p)=\nabla\!\cdot\mathbf{u}^*/\Delta t$ uses the geometric half-cell face density and is solved by PCG
 preconditioned with the constant-coefficient fast Poisson solver of §4. The single-phase solver of §§1–12 is untouched when
-`vof_active = 0`. Full description, validation and limits: [[Two-Phase VOF|Two-Phase-VOF]].
+`vof_active = 0`. Full description, validation and limits: [Two-Phase VOF](Two-Phase-VOF.md).

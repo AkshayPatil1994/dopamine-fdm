@@ -1,6 +1,6 @@
 # Installation & Running
 
-← [[Home|Home]]
+[← README](../README.md)
 
 ## Dependencies
 
@@ -9,7 +9,7 @@
 | gfortran or ifort | GFortran ≥ 9 / Intel ≥ 2019 | Fortran compiler |
 | MPI | any standard MPI-3 | Domain decomposition |
 | FFTW3 | 3.3 (serial double-precision) | Local single-rank transforms/DCT, and the transform engine inside 2decomp&fft |
-| [2decomp&fft](https://github.com/2decomp-fft/2decomp-fft) | `v2.1.0` | 2-D pencil domain decomposition and inter-rank transposes for the MPI-parallel pressure Poisson solve — see [[Numerics § MPI parallelism|Numerics#10-mpi-parallelism]] |
+| [2decomp&fft](https://github.com/2decomp-fft/2decomp-fft) | `v2.1.0` | 2-D pencil domain decomposition and inter-rank transposes for the MPI-parallel pressure Poisson solve — see [Numerics § MPI parallelism](Numerics.md#10-mpi-parallelism) |
 | LAPACK / BLAS | any | Linear algebra |
 | CMake | 3.20 | Build system |
 | git | any | Required at first configure to fetch 2decomp&fft (see below) |
@@ -75,7 +75,7 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
   (`x_bc_type=1`, DCT-IV) `x`, periodic `z`, a spanwise wall alone (`z_bc_type=1`, `y_bc_type=0`, `x_bc_type=0`), and the 4-wall duct (`y_bc_type=1`, `z_bc_type=1`,
   `x_bc_type=0`; `p_col=1` is forced, `x` is split). Wall models, SGS, scalars etc. work as on
   one GPU, including the ghost-cell IBM and point particles (results match the CPU build and every rank layout; see
-  [[Decomposition Consistency|Decomposition-Consistency]]). The IBM needs a few interior cells per rank in x and z (checked at start-up).
+  [Decomposition Consistency](Development.md#decomposition-consistency-cpu--multi-cpu--gpu--multi-gpu)). The IBM needs a few interior cells per rank in x and z (checked at start-up).
 - **CPU-only**: a duct with
   `x_bc_type=1`. A runtime guard `Stop`s immediately on unsupported combinations.
 
@@ -102,8 +102,8 @@ touched is still being generated for the GPU.
 
 ## Running
 
-1. Edit `input_parameters` to set domain size, grid type, physics, and IC options — see
-   the [[Input Parameters Reference|Input-Parameters]] for every field. For the GPU
+1. Edit `input_parameters` (the bare file; `input_parameters_with_comments` is the annotated copy) to set domain size, grid type, physics, and IC options — see
+   the [Input Parameters Reference](Input-Parameters.md) for every field. For the GPU
    build, check the scope rules in "Building (GPU ...)" above (multi-GPU supports the
    combinations listed there; a duct with `x_bc_type=1` is CPU-only).
 2. Create the required output directories (adjust paths to match your `fileout` and
@@ -148,7 +148,7 @@ ctest --test-dir build_gpu
 **Layout independence**: results are independent of the rank count and pencil layout (np=1, 2, 3, 2x2, 4x1, ...) and agree
 between the CPU and GPU builds, for LES, IBM, Boussinesq, scalars, UAV, inflow/outflow and point particles; restart reproduces an
 uninterrupted run. Details, the debugging tools (`DOPAMINE_TRACE_DIR`, `tests/regression/trace_case.sh`) and what was fixed are in
-[[Decomposition Consistency|Decomposition-Consistency]]. Known gaps: recycled precursor inflow (`inflow_type=2`) is not under test,
+[Decomposition Consistency](Development.md#decomposition-consistency-cpu--multi-cpu--gpu--multi-gpu). Known gaps: recycled precursor inflow (`inflow_type=2`) is not under test,
 and Brownian motion / the SGS Langevin particle closure use per-rank random streams (statistically, not bitwise, layout independent).
 Run 4-rank GPU tests on 2 GPUs one at a time (`ctest` without `-j`).
 
@@ -158,7 +158,7 @@ Run 4-rank GPU tests on 2 GPUs one at a time (`ctest` without `-j`).
 |----------|---------|--------|
 | `fields/` | Velocity (U, V, W), pressure (P), and — when `sgs_model /= 0` — SGS turbulent viscosity (ν_t) snapshots, written every `nsave` steps (or every `tsave` time units if `nsave < 0`) | Big-endian float64 stream |
 | `restart/` | Hot-restart fields | Big-endian float64 stream |
-| `stats/` | Monitor statistics (text) and, if enabled, RSB budget files (little-endian float64) | See [[Input Parameters Reference § STATISTICS|Input-Parameters#statistics-optional--omit-to-disable]] |
+| `stats/` | Monitor statistics (text) and, if enabled, RSB budget files (little-endian float64) | See [Input Parameters Reference § STATISTICS](Input-Parameters.md#statistics) |
 
 Field snapshots are Fortran stream unformatted, big-endian float64 (no record markers).
 Each field block is preceded by a 3-integer size header. The layout is:
@@ -181,7 +181,7 @@ data = np.fromfile("fields/channel_test.1", dtype=">f8")
 
 `dopamine_post.fields.FieldSnapshot.read(...)` (`pip install -e postProcessing/` once,
 then `import dopamine_post as dp`) handles this layout (grid parsing, ghost-cell
-stripping) automatically — see [[Pre- and Post-Processing Tools|Tools#dopamine_postfields]].
+stripping) automatically — see [Pre- and Post-Processing Tools](Tools.md#dopamine_postfields).
 
 ### XDMF / ParaView post-processing
 
@@ -194,4 +194,4 @@ pip install -e postProcessing/
 dopamine-post fields xmf --case-dir .
 ```
 
-See [[Pre- and Post-Processing Tools|Tools]] for the full library reference.
+See [Pre- and Post-Processing Tools](Tools.md) for the full library reference.

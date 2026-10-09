@@ -1,13 +1,13 @@
 # Two-Phase VOF Solver
 
-← [[Home|Home]]
+[← README](../README.md)
 
 A sharp-interface two-fluid (air–water) solver on the staggered grid of the single-phase code: the liquid fraction `C` is advected
 with a geometric PLIC volume-of-fluid method, the momentum is transported with the same mass fluxes that advance the density, and
 the variable-density pressure equation is solved by preconditioned CG whose preconditioner is the existing FFT Poisson solver.
 Nothing is clipped, damped or capped: `C` stays in [0,1] and the liquid volume is conserved to round-off by construction.
 
-The solver is selected by `vof_active = 1`, `vof_flow = 1` in [[`&VOF`|Input-Parameters#vof-optional--omit-to-disable]]. With
+The solver is selected by `vof_active = 1`, `vof_flow = 1` in [`&VOF`](Input-Parameters.md#vof). With
 `vof_active = 0` (the default) none of it runs: the output is bit-for-bit that of the single-phase solver and the run time is
 unchanged (checked on the regression suite against the commit the branch started from).
 
@@ -115,7 +115,7 @@ extrapolated to the face. The load faces are the faces closed in the solver. The
 
 ### 1.7 Waves, inlet and relaxation zones
 
-For a numerical wave flume use `x_bc_type = 1` (inlet at x = 0, convective outlet), `inflow_type = 3` and the [[`&WAVES`|Input-Parameters#waves-optional--used-with-vof_flow1-x_bc_type1-inflow_type3]]
+For a numerical wave flume use `x_bc_type = 1` (inlet at x = 0, convective outlet), `inflow_type = 3` and the [`&WAVES`](Input-Parameters.md#waves)
 namelist. `waves.f90` provides the target elevation and velocity of a long-crested wave travelling in +x over the still-water depth
 `vof_level`: `wave_type = 1` linear (Airy), `2` Rienecker–Fenton stream function (`wave_sf_n` Fourier terms), `3` JONSWAP sum of
 `wave_nfreq` linear components with seeded random phases, finite-depth dispersion and Wheeler stretching. The inlet is a Dirichlet
@@ -132,7 +132,7 @@ boundaries is tallied separately (columns 22 and 23 of `vof_diag.dat`) so that t
 
 Use `vof_flow = 1` with `cfl_adaptive = 1` for flows; the step is limited by the convective, viscous, acceleration (gravity and
 capillary) and advection Courant numbers. Example input files: `tests/regression/vof_*_small/input_parameters` (see
-[[Examples|Examples#two-phase-vof-cases]]).
+[Examples](Examples.md#two-phase-vof-cases)).
 
 `vof_diag.dat` (named header, written every `nmonitor` steps):
 
@@ -277,5 +277,5 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
 
 ## 5. References
 
-See [[References|References]]: Weymouth & Yue (2010), Rudman (1998), Vaudor et al. (2017), Pal, Fuster & Zaleski (2021),
+See [References](References.md): Weymouth & Yue (2010), Rudman (1998), Vaudor et al. (2017), Pal, Fuster & Zaleski (2021),
 Jiang & Shu (1996) / Borges et al. (2008) for WENO5-Z, Brackbill et al. (1992) for the surface-tension time-step limit.

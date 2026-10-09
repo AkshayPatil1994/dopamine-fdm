@@ -1,6 +1,6 @@
 # dopamine-fdm
 
-A finite-difference Navier–Stokes solver for turbulent channel and open-channel flows, with immersed-boundary (IBM) rough walls, wall models, SGS modelling, an exact Reynolds-stress budget module, and a UAV actuator-disk rotor model. MPI-parallel (2decomp&fft pencils), with an optional single- or multi-GPU OpenACC build.
+A parallel finite-difference solver for the 3-D incompressible Navier–Stokes equations, aimed at turbulent channel and open-channel flows. It combines rough-wall immersed boundaries, wall models, LES, an exact Reynolds-stress budget, a UAV actuator-disk rotor and an optional two-fluid (air–water, 1000:1) VOF solver. MPI-parallel (2decomp&fft pencils), with an optional single- or multi-GPU OpenACC build.
 
 |  |  |
 |:--:|:--:|
@@ -10,11 +10,13 @@ A finite-difference Navier–Stokes solver for turbulent channel and open-channe
 
 ## Highlights
 
-- Fractional-step projection on a staggered MAC grid, RK3 time stepping, spectral pressure solver
-- Periodic, wall (DNS no-slip or EQWM) and inflow/outflow boundaries; stretched wall-normal (and spanwise) grids
-- Ghost-cell IBM from precomputed signed-distance fields; flat-wall and IBM equilibrium wall models
-- Vreman SGS model, Boussinesq temperature, suspended-sediment transport, synthetic-eddy inflow
-- Reynolds-stress budget statistics, line/slice probes, UAV actuator disk
+- **Numerics**: staggered MAC grid, second-order central differences, low-storage RK3, fractional-step projection with a spectral pressure solver (FFTW3 + 2decomp&fft transposes); stretched wall-normal and spanwise grids.
+- **Boundaries**: periodic, no-slip or free-slip walls, 4-wall ducts, inflow/outflow with constant, synthetic-eddy (ESEM) or recycled-precursor inflow.
+- **Walls and turbulence**: DNS, Vreman LES, flat-wall and IBM equilibrium wall models (smooth and rough), ghost-cell or staircase IBM from precomputed signed-distance fields.
+- **Physics modules**: Boussinesq temperature, suspended sediment, Lagrangian particles, rotation, oscillatory forcing, UAV actuator disk (static or path-following).
+- **Two-phase flow**: PLIC-VOF, consistent momentum transport (WENO5-Z), surface tension, wave-flume inlet and relaxation zones; off by default and then a strict no-op.
+- **Diagnostics**: full Pope §7.4 Reynolds-stress budget, line/slice probes, per-stage profiler.
+- **Parallel**: results are independent of rank count and layout and agree between CPU and GPU builds (checked by the regression suite).
 
 ## Quick start
 
@@ -23,20 +25,25 @@ sudo apt install gfortran libopenmpi-dev libfftw3-dev liblapack-dev libblas-dev 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
 mkdir -p fields restart stats
 mpirun -np 4 ./build/dopamine        # reads ./input_parameters
+ctest --test-dir build               # optional: regression suite
 ```
+
+`input_parameters` is the bare namelist; `input_parameters_with_comments` is the same file with every option explained. Parameters, defaults and recipes: [docs/Input-Parameters.md](docs/Input-Parameters.md).
 
 ## Documentation
 
-| | |
+| Page | Content |
 |---|---|
-| [Installation & Running](docs/Installation.md) | dependencies, CPU/GPU builds, output layout |
-| [Input Parameters](docs/Input-Parameters.md) | every namelist variable |
-| [Numerics](docs/Numerics.md) | governing equations and discretisation |
+| [Installation](docs/Installation.md) | dependencies, CPU/GPU builds, running, testing, output layout |
+| [Input Parameters](docs/Input-Parameters.md) | every namelist variable with default and usage |
+| [Numerics](docs/Numerics.md) | governing equations, discretisation, solvers, models, validation |
+| [Two-Phase VOF](docs/Two-Phase-VOF.md) | the air–water solver: method, waves, validation, limits |
 | [Examples](docs/Examples.md) | bundled example cases |
-| [Tools](docs/Tools.md) | GenSDF and the `dopamine_post` post-processing library |
-| [Showcase Animations](docs/Animations.md) | how the animations above are made |
-| [Code Structure](docs/Code-Structure.md) | repository layout |
-| [References](docs/References.md) | methods implemented |
+| [Tools](docs/Tools.md) | GenSDF, `dopamine_post`, dopamine-ESEM, and the scripts behind the animations above |
+| [Development](docs/Development.md) | code structure, CPU/GPU consistency tools, contributing |
+| [References](docs/References.md) | published methods implemented |
+
+> **Note on LLM-assisted code review:** this repository has undergone an LLM-assisted code cleanup and bug-fixing pass, including performance-related changes and code optimisations, as recorded transparently in the Git commit history.
 
 ## License
 

@@ -1,0 +1,360 @@
+! ================================================================
+! dopamine-fdm input file (Fortran namelist) -- annotated version.
+! input_parameters is the same file without comments.
+! Full parameter tables and defaults: docs/Input-Parameters.md
+!
+! Required groups: &DOMAIN &PHYSICS &NUMERICS &INITIAL_CONDITIONS &IO
+! Optional groups (omit = feature off): everything else. Optional groups
+! that are off in this example are written as commented-out blocks
+! (remove the leading "!" on every line of a block to enable it).
+! ================================================================
+
+! nx,ny,nz: face points (interior cells = n-1).
+! grid_type (y grid): 1 uniform | 2 tanh, fine at both walls | 3 tanh, fine at bottom
+!   | 4 tanh, fine at top | 5 uniform sublayer [0,ks] (nks cells, set in &IBM) then
+!   tanh, fine at interface and top | 6 same, coarse at top | 7 same, coarse at interface.
+! alpha_grid: stretching strength (grid_type 2-7). alpha_grid_z>0: tanh clustering at
+!   both z walls (needs z_bc_type=1).
+! p_row,p_col: MPI pencil grid (p_row splits x, p_col splits z; product = ranks).
+!   0,0 = automatic (a 4-wall duct forces p_row=nprocs, p_col=1).
+&DOMAIN
+  nx           = 514,
+  ny           = 129,
+  nz           = 258,
+  Lx           = 0.6292,
+  Ly           = 0.1,
+  Lz           = 0.31460,
+  alpha_grid   = 2.08,
+  alpha_grid_z = 0.0,
+  grid_type    = 1,
+  p_row        = 0,
+  p_col        = 0,
+/
+
+! Forcing: dP/dx(t) = dPdx + Ub_x*w_x*cos(w_x*t + phi_x), w_x = 2*pi/T_wave_x
+! (same in z). T_wave_* = 0 disables the oscillation.
+! flow_forcing_mode: 0 prescribed dPdx | 1 constant mass flux at Ub_target
+!   (needs x_bc_type=0, no T_wave_x).
+! advection_scheme: 0 skew-symmetric (recommended) | 1 pure central divergence form.
+! flat_wall_model_flag (flat y walls, and z walls if z_bc_type=1): 0 no-slip |
+!   1 smooth log-law EQWM | 2 rough-z0 EQWM (y walls only; needs z0_ylo/yhi>0).
+! rotation_active=1: rigid rotation Omega_x about the x axis through the domain centreline.
+&PHYSICS
+  nu                   = 1.0e-6,
+  dPdx                 = 1.225e-4,
+  dPdz                 = 0.0,
+  Ub_x                 = 0.0,
+  Ub_z                 = 0.0,
+  T_wave_x             = 0.0,
+  T_wave_z             = 0.0,
+  phi_wave_x           = 0.0,     ! phase offset [rad]
+  phi_wave_z           = 0.0,
+  sgs_model            = 0,       ! 0=DNS, 1=Vreman
+  Cs_vreman            = 0.17,
+  flat_wall_model_flag = 0,
+  z0_ylo               = 0.0,     ! momentum roughness [m], flat_wall_model_flag=2
+  z0_yhi               = 0.0,
+  z0h_ylo              = 0.0,     ! thermal roughness [m], needs &BOUSSINESQ T_bc_*=2
+  z0h_yhi              = 0.0,
+  flow_forcing_mode    = 0,
+  Ub_target            = 0.068,   ! flow_forcing_mode=1 only
+  advection_scheme     = 0,
+  rotation_active      = 0,
+  Omega_x              = 0.0,     ! [rad/s]
+/
+
+&NUMERICS
+  dt           = 5.0e-3,
+  nsteps       = 10,      ! >0: run nsteps steps | <0: run until t>=sim_end_time
+  nsave        = 10,      ! >0: snapshot every nsave steps | <0: every tsave time units
+  nmonitor     = 1,
+  sim_end_time = 1.0e30,
+  tsave        = 1.0e30,
+  cfl_adaptive = 0,       ! 1: adapt dt to cfl_target
+  cfl_target   = 0.5,
+  cfl_safety   = 0.9,
+  dt_min       = 1.0e-8,
+  dt_max       = 1.0e10,
+  ! pcg_precond = -1,     ! masked/variable-density PCG: 0 fast Poisson | 1 multigrid | -1 auto
+/
+
+! bc_face_ylo/yhi: 1 no-slip | 2 free-slip.
+! x_bc_type: 0 periodic | 1 inflow (&INFLOW) / convective outflow.
+! y_bc_type: 0 periodic (needs grid_type=1) | 1 walls.
+! z_bc_type: 0 periodic | 1 walls (no-slip or smooth EQWM; with y_bc_type=1 a 4-wall
+!   duct, which needs p_col=1).
+! GPU build: x_bc_type 0|1; y periodic or z walls only with x_bc_type=0.
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 1,
+  bc_face_yhi = 1,
+  x_bc_type   = 0,
+  y_bc_type   = 1,
+  z_bc_type   = 0,
+/
+
+! Only read when x_bc_type=1.
+! inflow_type: 0 uniform inflow_Uconst | 1 synthetic eddy method (SEM) |
+!   2 recycled precursor slice | 3 wave inlet (&WAVES).
+! inflow_profile_file (type 1): rows "y U V W uu vv ww uv [uw vw]", sorted by y,
+!   '#' lines skipped; only y,U,uu,vv,ww,uv are used.
+! sem_use_esem: 1 Ensemble SEM (recommended) | 0 classical SEM.
+! sem_sigma_file: optional 10-column inhomogeneous length scales
+!   (y sigma_ux..sigma_wz); empty = homogeneous sem_length_scale.
+! Type 2: the donor writes a slice with &STATISTICS (slice_dir='x', slice_comps='UVW'
+!   plus T/C if used, slice_fileout='fields/recycle_slice'); set inflow_recycle_file to
+!   the same base name. Details: docs/Input-Parameters.md, docs/Numerics.md section 11.
+&INFLOW
+  inflow_type          = 0,
+  inflow_Uconst        = 0.068,
+  inflow_profile_file  = 'inflow_profile.dat',
+  sem_profile_format   = 0,    ! 0 Reynolds-stress file | 1 wind-tunnel z U Iu Iv Iw file
+  sem_Lscale_ratio_y   = 0.3,  ! sem_profile_format=1 length-scale fallbacks
+  sem_Lscale_ratio_z   = 0.2,
+  sem_n_eddies         = 200,
+  sem_length_scale     = 0.01, ! [m]
+  sem_seed             = 12345,
+  sem_ensemble_samples = 100,
+  sem_ensemble_periods = 8,
+  sem_sigma_file       = '',
+  sem_eddy_placement   = 0,    ! 0 uniform | 1 PDF-weighted (needs sem_sigma_file)
+  sem_use_esem         = 1,
+  sem_divergence_free  = 0,    ! 1: divergence-free curl construction (needs sem_use_esem=1)
+  sem_wall_damping       = 0,  ! 1: Van Driest near-wall eddy-size damping
+  sem_wall_damping_Aplus = 25.0,
+  inflow_temperature_file = '',  ! optional (y T) profile, needs boussinesq_flag=1
+  ! inflow_recycle_file     = 'fields/recycle_slice',   ! inflow_type=2 only
+  ! inflow_recycle_loop     = 1,      ! 1 wrap around the donor record | 0 clamp
+  ! inflow_recycle_t_offset = 0.0,    ! donor time = t + offset
+  ! inflow_recycle_shift_z  = 1,      ! random z-shift at each wrap
+  ! inflow_recycle_seed     = 12345,
+/
+
+! Immersed boundary (omit if no body). SDF made with GenSDF (docs/Tools.md).
+! ibm_input_mode: 0 none | 1 SDF-based IBM.
+! ibm_method: 0 ghost-cell | 1 staircase with masked projection (needed for a real
+!   wall-modelled IBM).
+! ibm_wall_model_flag: 0 no-slip | 1 log-law EQWM.
+! ibm_objid_file: optional per-solid ID field; ibm_T_bc_type/ibm_T_wall/ibm_z0 are
+!   indexed by solid ID 0..15 (0 = the single/default condition).
+! ks,nks: roughness sublayer, only for grid_type 5-7.
+&IBM
+  ibm_input_mode      = 0,
+  ibm_wall_model_flag = 0,
+  ibm_sdf_file        = 'SDF_in',
+  ibm_objid_file      = '',
+  ks                  = 0.00242,
+  nks                 = 20,
+  nsampling           = 0,   ! IBM force output interval (0=off)
+  ibm_surface_nsampling = 0, ! surface field dump interval (0=off)
+  ibm_T_bc_type(0)    = 0,   ! 0 adiabatic | 1 isothermal (needs boussinesq_flag=1)
+  ibm_T_wall(0)       = 0.0, ! [K]
+  ibm_z0(0)           = 0.0, ! [m]; 0 = smooth log law
+  ! ibm_method        = 0,
+  ! smooth_ibm        = 0,   ! SDF corner-rounding passes
+  ! ibm_T_bc_type(1)  = 1,   ! example: solid ID 1 isothermal
+  ! ibm_T_wall(1)     = 350.0,
+  ! ibm_z0(1)         = 0.001,
+/
+
+! ic_type: 1 log law + noise | 2 linear/tent + noise | 3 zero + noise |
+!   4 Reichardt channel profile + structured waves | 5 inverse-linear + noise |
+!   6 Taylor-Green vortex of amplitude Utarget (needs x_bc_type=0, y_bc_type=0) |
+!   7 two-mode perturbation on uniform Utarget.
+! noise_percent: noise amplitude, % of Utarget.
+! t_start: restart time [s]; -1 = nstep_init*dt (set it with cfl_adaptive=1).
+! scalar_restart: 0 = re-initialise C even when restart=1.
+&INITIAL_CONDITIONS
+  Utarget      = 0.068,
+  ic_type      = 1,
+  noise_percent  = 5.0,
+  nstep_init     = 0,
+  restart        = 0,       ! 1: hot-start from filein
+  t_start        = -1.0,
+  scalar_restart = 1,
+/
+
+&IO
+  filein  = 'restart/channel_test.1',
+  fileout = 'channel_test',
+/
+
+! UAV actuator disk. Thrust is kinematic (physical thrust / density) [m^4/s^2].
+! uav_path_file rows "t x y z"; uav_thrust_file rows "t T" (sorted by t, '#' lines
+! skipped, Catmull-Rom interpolation). uav_tilt_active needs uav_path_active=1.
+! Keep the disk uav_kernel_ncell cells away from a periodic edge.
+!&UAV
+!  uav_active        = 1,
+!  uav_xc            = 0.3,
+!  uav_yc            = 0.5,
+!  uav_zc            = 0.15,
+!  uav_disk_radius   = 0.15,
+!  uav_n_r           = 15,
+!  uav_n_theta       = 24,
+!  uav_hover_thrust  = 4.0,
+!  uav_kernel_ncell  = 2,
+!  uav_path_active   = 0,
+!  uav_path_file     = '',
+!  uav_thrust_active = 0,
+!  uav_thrust_file   = '',
+!  uav_load_profile  = 0,     ! 0 uniform | 1 parabolic tip taper
+!  uav_tilt_active   = 0,
+!  uav_tilt_tau      = 0.2,
+!  uav_grav          = 9.81,
+!  uav_swirl_frac    = 0.0,
+!/
+
+! Statistics. rsb_hom_dir: homogeneous averaging directions ('', 'x', 'z', 'x,z').
+! Output files and layout: docs/Input-Parameters.md ("RSB output files").
+! Probes (up to 8 each): slice_comps/line_comps = any of U V W P T C.
+&STATISTICS
+  rsb_active  = 0,
+  rsb_freq    = 100,
+  rsb_nstart  = 5000,
+  rsb_hom_dir = 'x,z',
+  rsb_fileout = 'stats/rsb',
+  ! n_slices = 2,
+  ! slice_freq = 50,
+  ! slice_dir(1) = 'z',  slice_pos(1) = 0.5,  slice_comps(1) = 'UVW',  slice_fileout(1) = 'slices/z05',
+  ! slice_dir(2) = 'y',  slice_pos(2) = 1.0,  slice_comps(2) = 'UVWP', slice_fileout(2) = 'slices/y10',
+  ! n_lines = 1,
+  ! line_freq = 50,
+  ! line_dir(1) = 'y',  line_pos1(1) = 0.5, line_pos2(1) = 0.5,
+  ! line_start(1) = 0.0, line_end(1) = 2.0,
+  ! line_comps(1) = 'UVW',  line_fileout(1) = 'lines/centerline',
+/
+
+! Suspended sediment (Soulsby settling velocity). sed_bc_bot: 0 zero flux | 1 C=C_ref.
+! C_ic_type: 0 uniform C_ref | 1 Rouse | 2 linear ramp | 3 slab below C_ic_height.
+! grav is shared with &BOUSSINESQ and inertial &PARTICLES.
+&SEDIMENT
+  sediment_flag = 0,
+  d_s           = 1.0e-4,
+  rho_s         = 2650.0,
+  rho_f         = 1000.0,
+  grav          = 9.81,
+  Sc            = 1.0,
+  Sc_t          = 0.7,
+  C_ref         = 0.0,
+  sed_bc_bot    = 0,
+  C_ic_type     = 0,
+  C_ic_height   = 0.0,
+/
+
+! Boussinesq buoyancy (gravity along -y).
+! T_bc_bot/top: 0 adiabatic | 1 isothermal at T_wall_* | 2 rough-EQWM flux with
+!   stability coupling (needs flat_wall_model_flag=2 and z0h_*>0).
+! T_ic_type: 0 uniform T_ref | 1 linear gradient T_ic_grad [K/m].
+&BOUSSINESQ
+  boussinesq_flag = 0,
+  beta_T          = 0.0,
+  T_ref           = 0.0,
+  grav            = 9.81,
+  Pr              = 0.7,
+  Pr_t            = 0.85,
+  T_bc_bot        = 0,
+  T_bc_top        = 0,
+  T_wall_bot      = 0.0,
+  T_wall_top      = 0.0,
+  T_ic_type       = 0,
+  T_ic_grad       = 0.0,
+/
+
+! SEM inflow Reynolds-stress optimisation (inflow_type=1 only; Lamberti et al. 2018).
+! Fits Bezier control points on the inflow v'^2, w'^2 so the statistics at the
+! station inflow_opt_x match the target. nstart/window <0 = automatic.
+! inflow_opt_max_iter=1 is the validated single corrected step; >1 is experimental.
+&INFLOW_OPT
+  inflow_opt_active = 0,
+  inflow_opt_x      = 20.0,
+  inflow_opt_nstart = -1,
+  inflow_opt_window = -1,
+  n_bezier          = 8,
+  inflow_opt_wall_exclude = 1.0,
+  inflow_opt_trust     = 0.5,
+  inflow_opt_max_iter = 1,
+  inflow_opt_relax    = 0.7,
+  inflow_opt_tol      = 0.1,
+/
+
+! Lagrangian point particles (not with vof_flow=1).
+! bc_particle_*: -1 auto | 0 periodic | 1 exit | 2 reflect | 3 absorb.
+! particle_mode: 0 tracer | 1 inertial (Schiller-Naumann drag + gravity from grav).
+! particle_ibm_bc(id): 1 absorb | 2 reflect | 3 reflect above particle_resuspend_ucrit.
+!&PARTICLES
+!  particles_active = 1,
+!  n_particles_init = 10000,
+!  particle_seed_xmin = 0.0, particle_seed_xmax = -1.0,   ! xmax<0 = domain length
+!  particle_seed_ymin = 0.0, particle_seed_ymax = -1.0,
+!  particle_seed_zmin = 0.0, particle_seed_zmax = -1.0,
+!  particle_seed_seed = 987654,
+!  bc_particle_x = -1, bc_particle_y = -1, bc_particle_z = -1,
+!  particle_reinit_on_exit = 0,
+!  particle_max_age = 1.0e30,
+!  particle_restart_file = 'particles_restart',
+!  particle_restart_load = 1,
+!  particle_mode = 0,
+!  particle_diam = 1.0e-4,
+!  particle_rho = 2650.0,
+!  particle_rho_f = 1000.0,
+!  particle_added_mass = 0,
+!  particle_brownian = 0,
+!  particle_temp_abs = 293.0,
+!  particle_ibm_bc(0) = 2,
+!  particle_ibm_tau_crit = 1.0e-3,
+!  particle_resuspend_ucrit = 1.0e30,
+!  particle_boussinesq_coupling = 0,
+!  particle_deposit_file = 'particle_deposit_x.csv',
+!  particle_deposit_freq = 10,
+!  sgs_particle_model = 0,          ! 1: Langevin SGS dispersion for LES
+!  particle_langevin_C0 = 2.1,
+!/
+
+! Target waves for the numerical wave flume (vof_flow=1, x_bc_type=1, inflow_type=3).
+! wave_type: 0 off | 1 linear | 2 stream function | 3 JONSWAP.
+! current_type: 0 none | 1 uniform | 2 log law | 3 power law (needs wave_type>0).
+! wave_turb=1 adds precursor turbulence from inflow_recycle_file.
+!&WAVES
+!  wave_type = 1,
+!  wave_height = 0.1, wave_period = 1.5, wave_phase = 0.0,
+!  wave_sf_n = 16,
+!  wave_current_mode = 1,           ! 1 zero mean volume flux | 2 zero mean Eulerian velocity
+!  wave_Hs = 0.0, wave_Tp = 1.0, wave_gamma = 3.3, wave_nfreq = 200, wave_seed = 12345,
+!  wave_gen_len = 2.0, wave_abs_len = 3.0, wave_relax_rate = 20.0,
+!  wave_ramp_time = 2.0,
+!  current_type = 0, current_U = 0.0, current_z0 = 1.0e-3, current_n = 7.0,
+!  wave_turb = 0,
+!  wave_gauge_x(1) = 5.0,
+!/
+
+! Two-phase VOF (docs/Two-Phase-VOF.md). vof_flow: 0 passive | 1 two-fluid.
+! vof_ic_type: 1 plane | 2 sphere | 3 gas bubble | 4 wave | 5 dam-break box |
+!   6 disk | 7 Zalesak slotted disk.
+! vof_method: 1 PLIC | 2 THINC (vof_beta). vof_mom_scheme: 0 central | 1 upwind |
+!   2 Koren | 4 QUICK | 5 central 4th | 6 WENO5-Z. vof_sigma>0 enables surface tension.
+! vof_prescribed (vof_flow=0): 1 LeVeque vortex | 2 Enright deformation | 3 rigid rotation.
+! vof_flow=1 needs dPdx=dPdz=0 and no mass-flux forcing. The solver parameters below
+! are the defaults; most cases only need the first lines.
+!&VOF
+!  vof_active = 1,
+!  vof_flow = 1,
+!  vof_ic_type = 1,
+!  vof_level = 0.5,
+!  vof_center = 0.0, 0.0, 0.0,
+!  vof_radius = 0.0,
+!  vof_rho_l = 1000.0, vof_rho_g = 1.0,
+!  vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5,
+!  vof_grav = 9.81,
+!  vof_sigma = 0.0,
+!  vof_u0 = 0.0,
+!  vof_wave_amp = 0.0, vof_wave_lambda = 0.0, vof_wave_stokes = 0, vof_smooth_w = 0.0,
+!  vof_normal_scheme = 1,           ! 1 Youngs | 2 height function
+!  vof_method = 1, vof_beta = 2.0,
+!  vof_mom_scheme = 6, vof_mom_cm0 = 2.0e-3, vof_mom_cm1 = 1.0e-2,
+!  vof_geo_density = 1, vof_layered_precond = 0,
+!  vof_rk_mom = 1, vof_rk_nth = 0, vof_nsub = 0, vof_co_sub = 0.12, vof_freeze_ut = 1,
+!  vof_pcg_iters = 30, vof_pcg_tol = 0.2, vof_adv_iters = 3, vof_adv_tol = 1.0e-8,
+!  vof_div_tol = 0.0, vof_cfl_max = 0.4,
+!  vof_prescribed = 0, vof_presc_T = 8.0, vof_tgv = 0, vof_shear = 0,
+!  vof_hsplit = 0, vof_frozen = 0, vof_selftest = 0,
+!  vof_debug = 0, vof_snap_dt = 0.0,
+!/
