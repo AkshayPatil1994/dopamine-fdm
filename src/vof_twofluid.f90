@@ -541,13 +541,24 @@ Contains
 
     ec = (/ Merge(1,0,c==1), Merge(1,0,c==2), Merge(1,0,c==3) /)
     ed = (/ Merge(1,0,d==1), Merge(1,0,d==2), Merge(1,0,d==3) /)
-    Do k = k0-ed(3), k1
-       Do j = j0-ed(2), j1
-          Do i = i0-ed(1), i1
-             Fl(i,j,k) = face_flux(c, d, i, j, k)
+    If ( vof_mom_scheme == MOM_WENO5 ) Then
+       Select Case(c)
+       Case(1)
+          Call flux_rows(c, d, i0, i1, j0, j1, k0, k1, PadU, rmu)
+       Case(2)
+          Call flux_rows(c, d, i0, i1, j0, j1, k0, k1, PadV, rmv)
+       Case Default
+          Call flux_rows(c, d, i0, i1, j0, j1, k0, k1, PadW, rmw)
+       End Select
+    Else
+       Do k = k0-ed(3), k1
+          Do j = j0-ed(2), j1
+             Do i = i0-ed(1), i1
+                Fl(i,j,k) = face_flux(c, d, i, j, k)
+             End Do
           End Do
        End Do
-    End Do
+    End If
     Do k = k0, k1
        Do j = j0, j1
           Do i = i0, i1
@@ -559,6 +570,30 @@ Contains
     End Do
 
   End Subroutine tend_comp
+
+
+  !> Fl for the WENO5-Z scheme, one unit-stride row in i at a time (mom_flux_weno5z_row); same faces as the loop of face_flux
+  Subroutine flux_rows(c, d, i0, i1, j0, j1, k0, k1, pad, rm)
+
+    Integer(Int32), Intent(In) :: c, d, i0, i1, j0, j1, k0, k1
+    Real(Int64),    Intent(In) :: pad(1-EP:,1-EP:,1-EP:), rm(:,:,:)
+    Integer(Int32) :: j, k, ia, ib, n, ec1, ec2, ec3, ed1, ed2, ed3
+    Real(Int64) :: ivcv
+
+    ec1 = Merge(1,0,c==1);  ec2 = Merge(1,0,c==2);  ec3 = Merge(1,0,c==3)
+    ed1 = Merge(1,0,d==1);  ed2 = Merge(1,0,d==2);  ed3 = Merge(1,0,d==3)
+    ia = i0 - ed1;  ib = i1;  n = ib - ia + 1
+    Do k = k0-ed3, k1
+       Do j = j0-ed2, j1
+          ivcv = 1d0/( dx*Merge(yg(j+1) - yg(j), hy(j), c==2)*Merge(zg(k+1) - zg(k), hz(k), c==3) )
+          Call mom_flux_weno5z_row(n, pad(ia-2*ed1:ib-2*ed1, j-2*ed2, k-2*ed3), pad(ia-ed1:ib-ed1, j-ed2, k-ed3), &
+               pad(ia:ib, j, k), pad(ia+ed1:ib+ed1, j+ed2, k+ed3), pad(ia+2*ed1:ib+2*ed1, j+2*ed2, k+2*ed3), &
+               pad(ia+3*ed1:ib+3*ed1, j+3*ed2, k+3*ed3), Md(ia:ib, j, k), Md(ia+ec1:ib+ec1, j+ec2, k+ec3), &
+               rm(ia:ib, j, k), rm(ia+ed1:ib+ed1, j+ed2, k+ed3), ivcv, vof_mom_cm0, vof_mom_cm1, Fl(ia:ib, j, k))
+       End Do
+    End Do
+
+  End Subroutine flux_rows
 
 
   !> Momentum flux of component c through the face of its control volume on the high side in direction d (the flux through the

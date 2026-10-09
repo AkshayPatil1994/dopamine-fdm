@@ -58,6 +58,33 @@ Program test_mom_kernels
      Deallocate( u )
   End Do
 
+  ! (D) the vectorizable row kernel against mom_face + the refill-Courant blend, both flux signs and blend weights 0, (0,1), 1
+  Block
+    Integer(Int32), Parameter :: nr = 4000
+    Real(Int64) :: pad(nr+5), mda(nr), r1(nr), r2(nr), f(nr), sm(-2:3), mf, cc, up, tb, ref, err, cm0, cm1, ivcv
+    cm0 = 2d-3;  cm1 = 1d-2;  ivcv = 1d3
+    Call random_number(pad);  Call random_number(mda);  Call random_number(r1);  Call random_number(r2)
+    pad = pad + Sin( 0.05d0*[(Real(k,Int64), k = 1, nr+5)] )
+    mda = mda - 0.5d0
+    r1 = 1d0 + 999d0*Merge(1d0, 0d0, r1 > 0.9d0);  r2 = r1 + Merge(0d0, 998d0, r2 < 0.95d0)
+    Call mom_flux_weno5z_row(nr, pad(1:nr), pad(2:nr+1), pad(3:nr+2), pad(4:nr+3), pad(5:nr+4), pad(6:nr+5), &
+                             mda, mda, r1, r2, ivcv, cm0, cm1, f)
+    err = 0d0
+    Do k = 1, nr
+       sm = pad(k:k+5);  mf = mda(k)
+       cc = Abs(mf)*Abs(1d0/r1(k) - 1d0/r2(k))*ivcv
+       up = Merge(sm(0), sm(1), mf >= 0d0)
+       tb = Min(1d0, Max(0d0, (cc - cm0)/(cm1 - cm0)))
+       ref = mf*( up + (1d0 - tb*tb*(3d0 - 2d0*tb))*( mom_face(sm, mf, MOM_WENO5) - up ) )
+       err = Max(err, Abs(f(k) - ref)/Max(Abs(ref), 1d-3*Abs(mf)))
+    End Do
+    Write(*,'(/,A,ES10.2)') '(D) row kernel vs mom_face + blend, max relative difference: ', err
+    If ( err > 1d-12 ) Then
+       Write(*,'(A)') 'FAIL'
+       Stop 1
+    End If
+  End Block
+
 Contains
 
   Subroutine advect(u, n, tend, sch, cfl)
