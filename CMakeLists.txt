@@ -8,6 +8,8 @@ project(dopamine LANGUAGES Fortran)
 #------------------------------------------------------------------------------
 enable_testing()
 
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+
 #------------------------------------------------------------------------------
 # GPU (OpenACC via nvfortran) — optional, off by default; CPU build is untouched
 #------------------------------------------------------------------------------
@@ -25,7 +27,16 @@ endif()
 set(GPU_CUDA_VERSION "" CACHE STRING "CUDA toolkit version for nvfortran -gpu=cudaX.Y, e.g. 12.2 (empty = compiler default)")
 option(DECOMP2D_GPU "With ENABLE_GPU, build 2decomp&fft in its GPU (CUDA-aware transpose) mode" ON)
 if(ENABLE_GPU AND NOT CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES "86" CACHE STRING "CUDA compute capability (no dots, e.g. 86)")
+    set(CMAKE_CUDA_ARCHITECTURES "86" CACHE STRING "CUDA compute capabilities (no dots; a list such as 80;90 is allowed)")
+endif()
+if(ENABLE_GPU)
+    if(NOT CMAKE_CUDA_ARCHITECTURES MATCHES "^[0-9]+(;[0-9]+)*$")
+        message(FATAL_ERROR "CMAKE_CUDA_ARCHITECTURES='${CMAKE_CUDA_ARCHITECTURES}': give compute capabilities without dots, e.g. 80 or 80;90")
+    endif()
+    message(STATUS "GPU compute capability: ${CMAKE_CUDA_ARCHITECTURES} (override with -DCMAKE_CUDA_ARCHITECTURES=<cc>)")
+    set(_gpu_cc "${CMAKE_CUDA_ARCHITECTURES}")
+    list(TRANSFORM _gpu_cc PREPEND cc)
+    list(JOIN _gpu_cc "," _gpu_cc)
 endif()
 
 #------------------------------------------------------------------------------
@@ -63,14 +74,52 @@ set(DECOMP2D_SRC_DIR    "${CMAKE_BINARY_DIR}/_deps/2decomp_fft-src")
 set(DECOMP2D_BIN_DIR    "${CMAKE_BINARY_DIR}/_deps/2decomp_fft-build")
 set(DECOMP2D_INSTALL_DIR "${CMAKE_BINARY_DIR}/_deps/2decomp_fft-install")
 
+set(DECOMP2D_SRC "" CACHE PATH "Existing 2decomp&fft source tree to use instead of cloning it (for hosts without internet access)")
+
 if(NOT EXISTS "${DECOMP2D_SRC_DIR}/CMakeLists.txt")
-    execute_process(
-        COMMAND git clone --branch ${DECOMP2D_TAG} --depth 1
-                https://github.com/2decomp-fft/2decomp-fft.git "${DECOMP2D_SRC_DIR}"
-        RESULT_VARIABLE _d2d_clone_result
-    )
-    if(_d2d_clone_result)
-        message(FATAL_ERROR "Failed to clone 2decomp&fft ${DECOMP2D_TAG}")
+    file(REMOVE_RECURSE "${DECOMP2D_SRC_DIR}")
+    if(DECOMP2D_SRC)
+        file(COPY "${DECOMP2D_SRC}/" DESTINATION "${DECOMP2D_SRC_DIR}")
+    else()
+        execute_process(
+            COMMAND git clone --branch ${DECOMP2D_TAG} --depth 1
+                    https://github.com/2decomp-fft/2decomp-fft.git "${DECOMP2D_SRC_DIR}"
+            RESULT_VARIABLE _d2d_clone_result
+        )
+        if(_d2d_clone_result)
+            file(REMOVE_RECURSE "${DECOMP2D_SRC_DIR}")
+            message(FATAL_ERROR "Failed to clone 2decomp&fft ${DECOMP2D_TAG}. On a host without internet access, clone it elsewhere "
+                                "and configure with -DDECOMP2D_SRC=<path to the clone>.")
+        endif()
+    endif()
+    if(NOT EXISTS "${DECOMP2D_SRC_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "DECOMP2D_SRC=${DECOMP2D_SRC} is not a 2decomp&fft source tree")
+    endif()
+endif()
+
+# 2decomp&fft's fft.cmake git-clones a FindFFTW.cmake from GitHub at configure time, but our own
+# cmake/FindFFTW.cmake precedes it on CMAKE_MODULE_PATH and is the one used; drop the download so the
+# sub-build needs no network access.
+file(READ "${DECOMP2D_SRC_DIR}/cmake/fft/fft.cmake" _d2d_fft_cmake)
+string(FIND "${_d2d_fft_cmake}" "configure_file(\${CMAKE_SOURCE_DIR}/cmake/fft/downloadFindFFTW" _d2d_dl_begin)
+set(_d2d_dl_end_marker "set(CMAKE_MODULE_PATH \${CMAKE_MODULE_PATH} \"\${findFFTW_DIR}\")")
+string(FIND "${_d2d_fft_cmake}" "${_d2d_dl_end_marker}" _d2d_dl_end)
+if(NOT _d2d_dl_begin EQUAL -1 AND NOT _d2d_dl_end EQUAL -1)
+    string(LENGTH "${_d2d_dl_end_marker}" _d2d_dl_end_len)
+    math(EXPR _d2d_dl_end "${_d2d_dl_end} + ${_d2d_dl_end_len}")
+    string(SUBSTRING "${_d2d_fft_cmake}" 0 ${_d2d_dl_begin} _d2d_fft_head)
+    string(SUBSTRING "${_d2d_fft_cmake}" ${_d2d_dl_end} -1 _d2d_fft_tail)
+    file(WRITE "${DECOMP2D_SRC_DIR}/cmake/fft/fft.cmake" "${_d2d_fft_head}${_d2d_fft_tail}")
+endif()
+
+# A sub-build from a different compiler/MPI/GPU/build-type configuration must not be reused.
+set(_d2d_stamp_file "${CMAKE_BINARY_DIR}/_deps/2decomp_fft.stamp")
+set(_d2d_stamp "${DECOMP2D_TAG}|${CMAKE_Fortran_COMPILER}|${CMAKE_Fortran_COMPILER_VERSION}|${MPI_Fortran_COMPILER}|${CMAKE_BUILD_TYPE}|${ENABLE_GPU}|${DECOMP2D_GPU}|${GPU_CUDA_VERSION}|${CMAKE_CUDA_ARCHITECTURES}|${FFTW_LIBRARIES}")
+if(EXISTS "${_d2d_stamp_file}")
+    file(READ "${_d2d_stamp_file}" _d2d_stamp_old)
+    if(NOT _d2d_stamp_old STREQUAL _d2d_stamp)
+        message(STATUS "2decomp&fft configuration changed: rebuilding it")
+        file(REMOVE_RECURSE "${DECOMP2D_BIN_DIR}" "${DECOMP2D_INSTALL_DIR}")
     endif()
 endif()
 
@@ -86,7 +135,7 @@ if(NOT EXISTS "${DECOMP2D_INSTALL_DIR}/lib/decomp2d/decomp2d-config.cmake")
     set(_d2d_fc "${CMAKE_Fortran_COMPILER}")
     if(ENABLE_GPU AND DECOMP2D_GPU)
         set(_d2d_target_args -DBUILD_TARGET=gpu -DENABLE_CUDA=ON -DFFT_Choice=fftw
-                              -DCMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES})
+                              "-DCMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
         # 2decomp&fft replaces CMAKE_Fortran_FLAGS with its own D2D_FFLAGS, so extra
         # -gpu options can't be passed as flags; inject them via a compiler wrapper.
         # rdc must match this project's own -gpu=...,rdc: a non-rdc lib linked into an
@@ -100,6 +149,20 @@ if(NOT EXISTS "${DECOMP2D_INSTALL_DIR}/lib/decomp2d/decomp2d-config.cmake")
         file(CHMOD "${_d2d_fc_wrapper}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
         set(_d2d_fc "${_d2d_fc_wrapper}")
     endif()
+    # User search paths and toolchain are not inherited by the independent sub-build
+    set(_d2d_fwd_args "")
+    foreach(_v FFTW_ROOT CMAKE_PREFIX_PATH CMAKE_TOOLCHAIN_FILE)
+        if(${_v})
+            list(APPEND _d2d_fwd_args "-D${_v}=${${_v}}")
+        endif()
+    endforeach()
+    include(ProcessorCount)
+    ProcessorCount(_d2d_jobs)
+    if(DEFINED ENV{CMAKE_BUILD_PARALLEL_LEVEL})
+        set(_d2d_jobs $ENV{CMAKE_BUILD_PARALLEL_LEVEL})
+    elseif(_d2d_jobs EQUAL 0 OR _d2d_jobs GREATER 8)
+        set(_d2d_jobs 8)
+    endif()
     execute_process(
         COMMAND ${CMAKE_COMMAND}
                 -S "${DECOMP2D_SRC_DIR}" -B "${DECOMP2D_BIN_DIR}"
@@ -109,19 +172,22 @@ if(NOT EXISTS "${DECOMP2D_INSTALL_DIR}/lib/decomp2d/decomp2d-config.cmake")
                 -DMPI_Fortran_COMPILER=${MPI_Fortran_COMPILER}
                 ${_d2d_target_args} -DBUILD_TESTING=OFF
                 -DCMAKE_MODULE_PATH=${CMAKE_CURRENT_SOURCE_DIR}/cmake
+                -DCMAKE_INSTALL_LIBDIR=lib
+                ${_d2d_fwd_args}
         RESULT_VARIABLE _d2d_cfg_result
     )
     if(_d2d_cfg_result)
         message(FATAL_ERROR "2decomp&fft configure failed")
     endif()
     execute_process(
-        COMMAND ${CMAKE_COMMAND} --build "${DECOMP2D_BIN_DIR}" --target install -j${CMAKE_BUILD_PARALLEL_LEVEL}
+        COMMAND ${CMAKE_COMMAND} --build "${DECOMP2D_BIN_DIR}" --target install -j ${_d2d_jobs}
         RESULT_VARIABLE _d2d_build_result
     )
     if(_d2d_build_result)
         message(FATAL_ERROR "2decomp&fft build/install failed")
     endif()
 endif()
+file(WRITE "${_d2d_stamp_file}" "${_d2d_stamp}")
 
 find_package(decomp2d REQUIRED CONFIG
     PATHS "${DECOMP2D_INSTALL_DIR}/lib/decomp2d"
@@ -131,10 +197,27 @@ find_package(decomp2d REQUIRED CONFIG
 #------------------------------------------------------------------------------
 # Compiler flags
 #------------------------------------------------------------------------------
+option(ENABLE_NATIVE_ARCH "Tune for the build machine's CPU (-march=native / -xHost); turn OFF when the login and compute nodes differ" ON)
+set(_native_flag "")
+if(ENABLE_NATIVE_ARCH)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64")
+        set(_native_flag "-mcpu=native")
+    else()
+        set(_native_flag "-march=native")
+    endif()
+endif()
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -cpp -O3 -march=native -funroll-loops -std=gnu -fallow-argument-mismatch -fconvert=big-endian")
+    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -cpp -O3 ${_native_flag} -funroll-loops -std=gnu -fconvert=big-endian")
+    # the mpif.h calls pass mixed types to the same argument; the flag exists from GCC 10 on
+    if(CMAKE_Fortran_COMPILER_VERSION VERSION_GREATER_EQUAL 10)
+        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fallow-argument-mismatch")
+    endif()
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -O3 -xHost -ipo -convert big_endian")
+    set(_intel_native "")
+    if(ENABLE_NATIVE_ARCH)
+        set(_intel_native "-xHost")
+    endif()
+    set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fpp -O3 ${_intel_native} -ipo -convert big_endian")
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
     set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -cpp -O3 -Mbyteswapio")
     if(ENABLE_GPU)
@@ -151,7 +234,16 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
         if(GPU_CUDA_VERSION)
             set(_gpu_cuda_flag "cuda${GPU_CUDA_VERSION},")
         endif()
-        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -acc ${_gpu_cuda_lang_flag}-gpu=${_gpu_cuda_flag}cc${CMAKE_CUDA_ARCHITECTURES},rdc -Minfo=accel -DGPU_POISSON -cudalib=cufft,cusparse")
+        set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -acc ${_gpu_cuda_lang_flag}-gpu=${_gpu_cuda_flag}${_gpu_cc},rdc -Minfo=accel -DGPU_POISSON -cudalib=cufft,cusparse")
+    endif()
+endif()
+
+if(NOT CMAKE_Fortran_COMPILER_ID MATCHES "GNU|Intel|NVHPC")
+    option(ALLOW_UNSUPPORTED_COMPILER "Build with an untested Fortran compiler; CMAKE_Fortran_FLAGS must then provide preprocessing and big-endian unformatted I/O" OFF)
+    if(NOT ALLOW_UNSUPPORTED_COMPILER)
+        message(FATAL_ERROR "Fortran compiler '${CMAKE_Fortran_COMPILER_ID}' is not supported: the sources need the C preprocessor and "
+                            "big-endian unformatted I/O (gfortran -cpp -fconvert=big-endian). Use GNU, Intel or NVHPC, or pass "
+                            "-DALLOW_UNSUPPORTED_COMPILER=ON with the equivalent flags in CMAKE_Fortran_FLAGS.")
     endif()
 endif()
 
@@ -452,6 +544,21 @@ set(CPU_REFERENCE_EXE "" CACHE FILEPATH "CPU-build dopamine executable to compar
 set(CPU_REFERENCE_MPIRUN "" CACHE FILEPATH "mpirun matching CPU_REFERENCE_EXE (default: this build's mpiexec)")
 set(TEST_LD_LIBRARY_PATH "" CACHE STRING "LD_LIBRARY_PATH prepended for parity tests (e.g. a matching user-space libcuda)")
 find_package(Python3 COMPONENTS Interpreter)
+# The regression scripts launch up to 4 ranks and some pass --oversubscribe: Open MPI needs it on nodes with fewer slots,
+# MPICH/Intel MPI/Cray reject it. This wrapper adds the flag exactly where the launcher supports it.
+set(TEST_MPIRUN "" CACHE FILEPATH "MPI launcher used by the regression scripts (default: generated wrapper around mpiexec)")
+if(NOT TEST_MPIRUN)
+    set(TEST_MPIRUN "${CMAKE_BINARY_DIR}/mpirun_wrapper.sh")
+    file(WRITE "${TEST_MPIRUN}" "#!/bin/sh
+real='${MPIEXEC_EXECUTABLE}'
+os=
+if \"$real\" --help 2>&1 | grep -q oversubscribe; then os=--oversubscribe; fi
+n=$#
+while [ $n -gt 0 ]; do a=$1; shift; n=$((n-1)); [ \"$a\" = --oversubscribe ] || set -- \"$@\" \"$a\"; done
+exec \"$real\" $os \"$@\"
+")
+    file(CHMOD "${TEST_MPIRUN}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+endif()
 if(Python3_Interpreter_FOUND)
     foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_mg_small rsb_small)
         # ibm_stair_small (pcg_precond = 0) aborts in a GPU build; ibm_stair_mg_small covers the GPU
@@ -460,7 +567,7 @@ if(Python3_Interpreter_FOUND)
         endif()
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
-                 --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE} --fields --field-tol 1e-8)
+                 --case-dir ${_case_dir} --mpirun ${TEST_MPIRUN} --fields --field-tol 1e-8)
         set(_kind cpu)
         if(ENABLE_GPU)
             set(_kind gpu)
@@ -498,7 +605,7 @@ if(Python3_Interpreter_FOUND)
                 endif()
             endif()
             if(ENABLE_GPU AND CPU_REFERENCE_EXE)
-                set(_ref_mpirun_l ${MPIEXEC_EXECUTABLE})
+                set(_ref_mpirun_l ${TEST_MPIRUN})
                 if(CPU_REFERENCE_MPIRUN)
                     set(_ref_mpirun_l ${CPU_REFERENCE_MPIRUN})
                 endif()
@@ -506,7 +613,7 @@ if(Python3_Interpreter_FOUND)
                     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                             --case-dir ${_case_dir} --fields --field-tol 1e-8 ${_extra} --p-grid ${_lay}
                             --mpirun ${_ref_mpirun_l} --exe-a ${CPU_REFERENCE_EXE} --np-a 4
-                            --mpirun-b ${MPIEXEC_EXECUTABLE} --exe-b $<TARGET_FILE:dopamine> --np-b 4
+                            --mpirun-b ${TEST_MPIRUN} --exe-b $<TARGET_FILE:dopamine> --np-b 4
                             --label-a cpu-${_laytag} --label-b gpu-${_laytag})
                 if(TEST_LD_LIBRARY_PATH)
                     set_tests_properties(${case}_cpu_vs_gpu_np4_${_laytag} PROPERTIES
@@ -520,7 +627,7 @@ if(Python3_Interpreter_FOUND)
             set(_rtol 1e-12)
             add_test(NAME ${case}_${_kind}_restart_np${_np}
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
-                        --case-dir ${_case_dir} --mpirun ${MPIEXEC_EXECUTABLE} --exe $<TARGET_FILE:dopamine> --np ${_np}
+                        --case-dir ${_case_dir} --mpirun ${TEST_MPIRUN} --exe $<TARGET_FILE:dopamine> --np ${_np}
                         --tol ${_rtol})
             if(TEST_LD_LIBRARY_PATH)
                 set_tests_properties(${case}_${_kind}_restart_np${_np} PROPERTIES
@@ -528,7 +635,7 @@ if(Python3_Interpreter_FOUND)
             endif()
         endforeach()
         if(ENABLE_GPU AND CPU_REFERENCE_EXE)
-            set(_ref_mpirun ${MPIEXEC_EXECUTABLE})
+            set(_ref_mpirun ${TEST_MPIRUN})
             if(CPU_REFERENCE_MPIRUN)
                 set(_ref_mpirun ${CPU_REFERENCE_MPIRUN})
             endif()
@@ -537,7 +644,7 @@ if(Python3_Interpreter_FOUND)
                     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                             --case-dir ${_case_dir}
                             --mpirun ${_ref_mpirun} --exe-a ${CPU_REFERENCE_EXE} --np-a ${_np}
-                            --mpirun-b ${MPIEXEC_EXECUTABLE} --exe-b $<TARGET_FILE:dopamine> --np-b ${_np}
+                            --mpirun-b ${TEST_MPIRUN} --exe-b $<TARGET_FILE:dopamine> --np-b ${_np}
                             --label-a cpu-np${_np} --label-b gpu-np${_np})
                 if(TEST_LD_LIBRARY_PATH)
                     set_tests_properties(${case}_cpu_vs_gpu_np${_np} PROPERTIES
@@ -558,7 +665,7 @@ if(Python3_Interpreter_FOUND)
     foreach(_pc ${_particle_cases})
         set(_pdir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_pc})
         set(_pcmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
-                  --case-dir ${_pdir} --mpirun ${MPIEXEC_EXECUTABLE} --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine>)
+                  --case-dir ${_pdir} --mpirun ${TEST_MPIRUN} --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine>)
         foreach(_lay "2:" "3:" "4:2,2" "4:4,1")
             string(REPLACE ":" ";" _lparts "${_lay}")
             list(GET _lparts 0 _lnp)
@@ -581,7 +688,7 @@ if(Python3_Interpreter_FOUND)
             endif()
         endforeach()
         if(ENABLE_GPU AND CPU_REFERENCE_EXE)
-            set(_pref_mpirun ${MPIEXEC_EXECUTABLE})
+            set(_pref_mpirun ${TEST_MPIRUN})
             if(CPU_REFERENCE_MPIRUN)
                 set(_pref_mpirun ${CPU_REFERENCE_MPIRUN})
             endif()
@@ -589,7 +696,7 @@ if(Python3_Interpreter_FOUND)
                 add_test(NAME ${_pc}_cpu_vs_gpu_np${_pn}
                     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
                             --case-dir ${_pdir} --mpirun ${_pref_mpirun} --exe-a ${CPU_REFERENCE_EXE} --np-a ${_pn}
-                            --mpirun-b ${MPIEXEC_EXECUTABLE} --exe-b $<TARGET_FILE:dopamine> --np-b ${_pn}
+                            --mpirun-b ${TEST_MPIRUN} --exe-b $<TARGET_FILE:dopamine> --np-b ${_pn}
                             --label-a cpu --label-b gpu)
                 if(TEST_LD_LIBRARY_PATH)
                     set_tests_properties(${_pc}_cpu_vs_gpu_np${_pn} PROPERTIES
@@ -605,7 +712,7 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME ibm_small_ghost_counts_np1_vs_${_lay}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_ghost_counts.py
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_small
-                    --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --layout-a 1 --layout-b ${_lay})
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --layout-a 1 --layout-b ${_lay})
         if(TEST_LD_LIBRARY_PATH)
             set_tests_properties(ibm_small_ghost_counts_np1_vs_${_lay} PROPERTIES
                 ENVIRONMENT "LD_LIBRARY_PATH=${TEST_LD_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}")
@@ -621,81 +728,81 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME vof_drop_small_laplace
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_drop_small --exe $<TARGET_FILE:dopamine>
-                --mpirun ${MPIEXEC_EXECUTABLE} --limit 29:3.96:4.04 --limit 16:0:3e-5)
+                --mpirun ${TEST_MPIRUN} --limit 29:3.96:4.04 --limit 16:0:3e-5)
     add_test(NAME vof_capwave_small_frequency
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_capwave_small --exe $<TARGET_FILE:dopamine>
-                --mpirun ${MPIEXEC_EXECUTABLE} --freq 15:2.22206:0.01)
+                --mpirun ${TEST_MPIRUN} --freq 15:2.22206:0.01)
     add_test(NAME vof_slosh_small_frequency
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_slosh_small --exe $<TARGET_FILE:dopamine>
-                --mpirun ${MPIEXEC_EXECUTABLE} --freq 15:7.8290:0.01 --rowmax 16:0.4)
+                --mpirun ${TEST_MPIRUN} --freq 15:7.8290:0.01 --rowmax 16:0.4)
     # Variable-density steep wave: x rank seams cut the interface obliquely (np1 vs the x-split layout, tight PCG tolerance so only round-off remains)
     add_test(NAME vof_break_small_np1_vs_np4_4x1
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_break_small --exe $<TARGET_FILE:dopamine>
-                --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 4,1 --same-tol 1e-9
+                --mpirun ${TEST_MPIRUN} --np-a 1 --np-b 4 --p-grid 4,1 --same-tol 1e-9
                 --same-cols 4,5,6,7,11,12,13,16,26,27,29,32)
     # Snapshot pressure identical for np1 and a 2x2 layout, seam planes included
     add_test(NAME vof_pressure_seams_np1_vs_2x2
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_p_seam/check_pressure.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Immersed body with a free surface: still water must stay at rest with the liquid of the fluid region conserved (1 vs 2x2 ranks),
     # and the IBM load output of a submerged sphere must be the buoyancy (1 and 4 ranks)
     add_test(NAME vof_ibm_still_np1_vs_np4_2x2
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_still --exe $<TARGET_FILE:dopamine>
-                --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 2,2 --max-dvol 1e-12
+                --mpirun ${TEST_MPIRUN} --np-a 1 --np-b 4 --p-grid 2,2 --max-dvol 1e-12
                 --rowmax 16:1e-8 --rowmax 17:1e-8 --same-cols 4,5,6,7)
     add_test(NAME vof_ibm_slosh_np1_vs_np4_2x2
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_slosh --exe $<TARGET_FILE:dopamine>
-                --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 2,2 --max-dvol 1e-12 --same-tol 1e-7
+                --mpirun ${TEST_MPIRUN} --np-a 1 --np-b 4 --p-grid 2,2 --max-dvol 1e-12 --same-tol 1e-7
                 --same-cols 4,5,6,7,11,12,13,14,16,17,18,28,32)
     foreach(_np 1 4)
         add_test(NAME vof_ibm_buoyancy_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_buoy/check_buoyancy.py
-                    --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --np ${_np})
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
     endforeach()
     # Hot-start restart of the two-fluid solver reproduces an uninterrupted run (pressure history, liquid fraction, time-dependent wave
     # inlet and relaxation zones, LES): the static drop to round-off, the wave flume to the PCG tolerance
     foreach(_np 1 4)
         add_test(NAME vof_restart_small_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
-                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_small --mpirun ${MPIEXEC_EXECUTABLE}
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_small --mpirun ${TEST_MPIRUN}
                     --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-12)
         add_test(NAME vof_restart_flume_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
-                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_flume --mpirun ${MPIEXEC_EXECUTABLE}
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_flume --mpirun ${TEST_MPIRUN}
                     --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-7)
     endforeach()
     # Unsupported feature combinations must abort at input
     add_test(NAME vof_input_aborts
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_input_checks/check_aborts.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Single-phase staircase IBM (ibm_method = 1) on a flat plate: stream decay by the log-law stress, round-off divergence, same on 1 and 4 ranks
     add_test(NAME ibm_stair_plate
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_plate/check_stair_plate.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Staircase IBM: walls one cell thick close their faces like thicker ones (fences of 1, 2, 3 cells)
     add_test(NAME ibm_stair_fence
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_fence/check_fence.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # SDF cells at exactly phi = 0 are fluid in every mask (solid is phi < 0)
     add_test(NAME ibm_phi_zero
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_phi_zero/check_phi_zero.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Staircase IBM wall stress: the per-object roughness of a closed face does not depend on the orientation of the stream
     add_test(NAME ibm_stair_ids
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_ids/check_ids.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Single-phase flat-wall EQWM: a uniform stream between two modelled walls decays by the log-law wall stress, same on 1 and 4 ranks
     add_test(NAME wm_stream
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream/check_wm_stream.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     add_test(NAME wm_stream_rough
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream/check_wm_stream.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --rough 1e-4 --tol 0.08)
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --rough 1e-4 --tol 0.08)
     # Same for the spanwise (z) walls and the 4-wall duct: stream decay by the log-law stress, same on 1 and 4 ranks; rough EQWM refused with z walls
     # (zv, zdiag: streams along y and the diagonal; zprof, zprof_stretch: unequal non-uniform (U,V) profile, uniform and stretched z, z split over ranks)
     foreach(wmz IN ITEMS "wm_stream_z|" "wm_stream_duct|--duct" "wm_stream_z_rough_rejected|--reject-rough" "wm_stream_zv|--mode=v"
@@ -705,40 +812,40 @@ if(Python3_Interpreter_FOUND)
         list(GET wmz_l 1 wmz_arg)
         add_test(NAME ${wmz_name}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream_z/check_wm_stream_z.py
-                    --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} ${wmz_arg})
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} ${wmz_arg})
     endforeach()
     # Rough-wall MOST heat flux (T_bc = 2): the heat the column gains equals u_tau*theta_tau of the matching-height state, same on 1 and 4 ranks
     add_test(NAME wm_thermal
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_thermal/check_wm_thermal.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Wall-modelled bed (smooth log law) under a uniform stream: wall stress rho u_tau^2, density independent, same on 1 and 4 ranks
     add_test(NAME vof_wm_stream
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wm_stream/check_wm_stream.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     add_test(NAME vof_wm_stream_rough
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wm_stream/check_wm_stream.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE} --rough 1e-4 --tol 0.08)
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --rough 1e-4 --tol 0.08)
     # IBM wall model on the staircase faces of a flat plate: stream decay by the log-law stress, density independent, same on 1 and 4 ranks
     add_test(NAME vof_ibm_wm_plate
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_ibm_wm_plate/check_wm_plate.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Recycled-precursor turbulence at the wave inlet (synthetic donor slice), masked above the free surface
     add_test(NAME vof_wave_turb_inlet
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wave_turb_inlet/check_turb_inlet.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Mean log-law current plus a small wave through the wave inlet and the relaxation zones
     add_test(NAME vof_current_flume
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_current_flume/check_current.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Mirror symmetry of the wall padding of the momentum stencils (free-slip Taylor-Green vortex, ratio 1)
     add_test(NAME vof_tgv_mirror_symmetry
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_tgv_mirror/check_mirror.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${MPIEXEC_EXECUTABLE})
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # LES (Vreman) + no-slip bed + wave inlet and relaxation zones: decomposition independence including the pressure checksums
     add_test(NAME vof_les_flume_small_np1_vs_np4_4x1
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_les_flume_small --exe $<TARGET_FILE:dopamine>
-                --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid 4,1 --max-dvol 1e-3 --same-tol 1e-9
+                --mpirun ${TEST_MPIRUN} --np-a 1 --np-b 4 --p-grid 4,1 --max-dvol 1e-3 --same-tol 1e-9
                 --same-cols 4,5,6,7,11,12,13,16,29,31,32)
     set(_vof_cases "vof_vortex_small|1.7e-4" "vof_deform_small|1.5e-2" "vof_translate_small|-1" "vof_ibm_small|-1" "vof_ibm_wm_small|-1")
     foreach(_vc ${_vof_cases})
@@ -750,10 +857,12 @@ if(Python3_Interpreter_FOUND)
             add_test(NAME ${_vname}_np1_vs_np4_${_laytag}
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                         --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vname} --exe $<TARGET_FILE:dopamine>
-                        --mpirun ${MPIEXEC_EXECUTABLE} --np-a 1 --np-b 4 --p-grid ${_lay} --max-l1 ${_vl1}
+                        --mpirun ${TEST_MPIRUN} --np-a 1 --np-b 4 --p-grid ${_lay} --max-l1 ${_vl1}
                         --same-cols 4,5,6,7,11,12,13,14,16,17,18,28,32)
         endforeach()
     endforeach()
+else()
+    message(STATUS "Python3 not found: the regression tests (ctest) that need it are not defined")
 endif()
 
 #------------------------------------------------------------------------------

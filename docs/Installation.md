@@ -37,8 +37,16 @@ The executable `dopamine` is placed in `build/`.
 > `FFT_Choice=fftw`), and installs it under `build/_deps/2decomp_fft-install`. This needs
 > `git` and network access the first time you configure the CMake build for a given build
 > directory; once installed there, subsequent `cmake`/`cmake --build` calls reuse it
-> without re-fetching. If you're on an offline/air-gapped build host, pre-populate
-> `build/_deps/2decomp_fft-src` with a clone of the pinned tag before running `cmake -S`.
+> without re-fetching (it is rebuilt automatically if the compiler, MPI, build type or GPU
+> settings change). On an offline/air-gapped host, clone the pinned tag elsewhere and
+> configure with `-DDECOMP2D_SRC=<path to the clone>`; nothing else is downloaded.
+
+> **Portability options**: `-DENABLE_NATIVE_ARCH=OFF` drops `-march=native`/`-xHost` (use it when the
+> login and compute nodes have different CPUs); `-DFFTW_ROOT=<prefix>` (or the `FFTW_ROOT`,
+> `EBROOTFFTW`, Cray `FFTW_DIR`/`FFTW_INC` variables) locates FFTW, which must provide `fftw3.f03`.
+> GNU, Intel and NVHPC compilers are supported; any other compiler is refused unless
+> `-DALLOW_UNSUPPORTED_COMPILER=ON` with preprocessing and big-endian I/O flags in `CMAKE_Fortran_FLAGS`.
+> `-DCMAKE_CUDA_ARCHITECTURES` takes one or several compute capabilities (`80` or `80;90`).
 
 > **Note**: The solver uses `-fconvert=big-endian` globally so that field snapshots are
 > big-endian. Reynolds stress budget output uses `CONVERT='little_endian'` on the file
