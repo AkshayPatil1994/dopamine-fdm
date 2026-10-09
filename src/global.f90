@@ -335,6 +335,8 @@ Module global
   Integer(Int32) :: ibm_method = 0
   ! relative PCG residual of the masked projection (ibm_method = 1)
   Real   (Int64) :: ibm_pcg_tol = 1d-8
+  ! staircase projection: 0 = masked PCG (closed faces at exactly zero flux), 1 = whole-box fast Poisson solve, then the closed faces are zeroed
+  Integer(Int32) :: ibm_projection = 0
   ! PCG preconditioner of vof_pressure (masked, variable-density): 0 fast Poisson solver, 1 geometric multigrid (vof_mg),
   ! -1 (default) picks 1 when the case has y walls and the build supports it, else 0
   Integer(Int32) :: pcg_precond = -1

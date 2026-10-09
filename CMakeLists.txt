@@ -560,7 +560,7 @@ exec \"$real\" $os \"$@\"
     file(CHMOD "${TEST_MPIRUN}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 endif()
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_mg_small rsb_small)
+    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_mg_small ibm_stair_fast_small rsb_small)
         # ibm_stair_small (pcg_precond = 0) aborts in a GPU build; ibm_stair_mg_small covers the GPU
         if(ENABLE_GPU AND case STREQUAL "ibm_stair_small")
             continue()

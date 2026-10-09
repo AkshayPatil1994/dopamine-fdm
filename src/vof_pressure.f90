@@ -15,7 +15,7 @@ Module vof_pressure
   Use boundary_conditions, Only : update_ghost_interior_planes_x, update_ghost_interior_planes, &
                                   apply_periodic_bc_x, apply_periodic_bc_z
   Use scalar_transport, Only : finish_scalar_halos
-  Use projection, Only : solve_poisson_equation, pois_layered, pois_bf, pois_bh, poisson_layered_supported
+  Use projection, Only : compute_projection_step, solve_poisson_equation, pois_layered, pois_bf, pois_bh, poisson_layered_supported
   Use vof_plic
   Use vof_advect, Only : vof_reconstruct, vof_mx, vof_my, vof_mz, vof_al
   Use halo_pad, Only : pad_field
@@ -137,6 +137,16 @@ Contains
     Logical :: is_first_p, is_last_p
     Integer(Int32) :: partner_p, i, j, k
 
+    If ( ibm_projection == 1 ) Then
+       !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
+       U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
+       !$acc end kernels
+       Call compute_projection_step
+       !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
+       U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
+       !$acc end kernels
+       Return
+    End If
     Allocate( fd(nxg,nyg,nzg), ph(nxg,nyg,nzg), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
     !$acc enter data create(fd,ph,gu,gv,gw) if(vp_dev)
     !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)

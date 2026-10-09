@@ -51,7 +51,7 @@ Contains
                        inflow_recycle_file, inflow_recycle_loop, inflow_recycle_t_offset, &
                        inflow_recycle_shift_z, inflow_recycle_seed
 
-    Namelist /IBM/ ibm_input_mode, ibm_method, ibm_pcg_tol, ibm_wall_model_flag, &
+    Namelist /IBM/ ibm_input_mode, ibm_method, ibm_pcg_tol, ibm_projection, ibm_wall_model_flag, &
                    ibm_sdf_file, ibm_objid_file, ks, nks, nsampling, ibm_surface_nsampling, &
                    ibm_T_bc_type, ibm_T_wall, ibm_z0, smooth_ibm
 
@@ -170,6 +170,7 @@ Contains
           ibm_input_mode      = 0
           ibm_method          = 0
           ibm_pcg_tol         = 1d-8
+          ibm_projection      = 0
           ibm_wall_model_flag = 0
           ibm_sdf_file        = 'SDF_in'
           ks                  = 0d0
@@ -285,6 +286,10 @@ Contains
        If ( ibm_method < 0 .Or. ibm_method > 1 ) &
             Call abort_input( 'ERROR: ibm_method must be 0 (ghost-cell) or 1 (staircase)' )
        If ( ibm_pcg_tol <= 0d0 ) Call abort_input( 'ERROR: ibm_pcg_tol must be > 0' )
+       If ( ibm_projection < 0 .Or. ibm_projection > 1 ) &
+            Call abort_input( 'ERROR: ibm_projection must be 0 (masked PCG) or 1 (fast whole-box solve)' )
+       If ( ibm_projection == 1 .And. ibm_method /= 1 ) &
+            Call abort_input( 'ERROR: ibm_projection = 1 needs the staircase method (ibm_method = 1)' )
        If ( ibm_method == 1 .And. ibm_input_mode < 1 ) &
             Call abort_input( 'ERROR: ibm_method=1 needs an immersed body (ibm_input_mode >= 1)' )
 #ifdef GPU_POISSON
@@ -456,6 +461,7 @@ Contains
        Write(*,'(A,I2)')     '   ibm_input_mode              = ', ibm_input_mode
        Write(*,'(A,I2)')     '   ibm_method (0 ghost-cell, 1 staircase) = ', ibm_method
        Write(*,'(A,ES10.2)') '   ibm_pcg_tol (masked projection)       = ', ibm_pcg_tol
+       Write(*,'(A,I2)')     '   ibm_projection (0 masked PCG, 1 fast)  = ', ibm_projection
        Write(*,'(A,I2)')     '   ibm_wall_model_flag         = ', ibm_wall_model_flag
        Write(*,'(A,I4)')     '   smooth_ibm (SDF corner-rounding passes, 0=off) = ', smooth_ibm
        Write(*,'(A,I8)')     '   nsampling                   = ', nsampling
@@ -551,6 +557,7 @@ Contains
     Call Mpi_bcast ( ibm_input_mode,       1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_method,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_pcg_tol,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( ibm_projection,       1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( pcg_precond,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_sdf_file,  Len(ibm_sdf_file),  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_objid_file, Len(ibm_objid_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
