@@ -155,7 +155,7 @@ ctest --test-dir build_gpu
 
 **Layout independence**: results are independent of the rank count and pencil layout (np=1, 2, 3, 2x2, 4x1, ...) and agree
 between the CPU and GPU builds, for LES, IBM, Boussinesq, scalars, UAV, inflow/outflow and point particles; restart reproduces an
-uninterrupted run. Details, the debugging tools (`DOPAMINE_TRACE_DIR`, `tests/regression/trace_case.sh`) and what was fixed are in
+uninterrupted run. The debugging tools (`DOPAMINE_TRACE_DIR`, `tests/regression/trace_case.sh`) are described in
 [Decomposition Consistency](Development.md#decomposition-consistency-cpu--multi-cpu--gpu--multi-gpu). Known gaps: recycled precursor inflow (`inflow_type=2`) is not under test,
 and Brownian motion / the SGS Langevin particle closure use per-rank random streams (statistically, not bitwise, layout independent).
 Run 4-rank GPU tests on 2 GPUs one at a time (`ctest` without `-j`).

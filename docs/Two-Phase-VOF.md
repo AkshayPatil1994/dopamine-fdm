@@ -57,7 +57,7 @@ the density is advected by the interface method and the momentum by an independe
 * The staggered face density is the **geometric** one: the liquid fraction of each half cell is taken from the cell's PLIC plane
   (`vof_geo_density = 1`). Pressure gradient and gravity use this density, so a flat interface at any sub-cell position is
   hydrostatically exact. Transport uses the arithmetic mean of the two cell densities.
-* $\dfrac{\partial}{\partial x_i}\!\left(\dfrac{1}{\rho}\dfrac{\partial p}{\partial x_i}\right) = \dfrac{1}{\Delta t}\dfrac{\partial u^*_i}{\partial x_i}$ is solved by PCG, preconditioned with the constant-coefficient fast Poisson solver of the single-phase
+* $\dfrac{\partial}{\partial x_i}\left(\dfrac{1}{\rho}\dfrac{\partial p}{\partial x_i}\right) = \dfrac{1}{\Delta t}\dfrac{\partial u^*_i}{\partial x_i}$ is solved by PCG, preconditioned with the constant-coefficient fast Poisson solver of the single-phase
   code, to a relative residual `vof_pcg_tol = 0.2` (at most `vof_pcg_iters = 30`; a tighter tolerance gives the same physics,
   `vof_pcg_tol = 0.3, 0.1, 0.01` agree to three digits at 40 / 65 / 93 iterations per step for a 1000:1 standing wave).
   After each advection half-step the transporting velocity is projected with `vof_adv_iters` iterations.
@@ -148,11 +148,11 @@ capillary) and advection Courant numbers. Example input files: `tests/regression
 
 | Column | Quantity | Column | Quantity |
 |--------|----------|--------|----------|
-| 1, 2, 3 | step, `t`, `dt` | 16–18 | `max |U|`, `max |V|`, `max |W|` (true absolute maxima) |
+| 1, 2, 3 | step, `t`, `dt` | 16–18 | `max\|U\|`, `max\|V\|`, `max\|W\|` (true absolute maxima) |
 | 4, 5 | liquid volume, relative drift | 19, 20 | PCG iterations in the step, last relative residual |
 | 6, 7 | `C_min`, `C_max` | 21 | advection sub-steps per half-step |
 | 8 | interface cells | 22, 23 | liquid volume through the boundaries / added by the relaxation zones (cumulative) |
-| 9 | liquid volume removed by clamping (always 0) | 24, 25 | location (x, y) of `max |U|` |
+| 9 | liquid volume removed by clamping (always 0) | 24, 25 | location (x, y) of `max\|U\|` |
 | 10 | advection Courant number | 26, 27 | kinetic energy of the liquid / of the gas |
 | 11–13 | liquid centroid | 28 | `L1(C − C_init)` (reversal tests) |
 | 14, 15 | `∫C(1−C)`, cos-moment | 29, 30 | mean pressure of liquid − gas cells (Laplace jump); height-function fallback cells |
@@ -202,8 +202,8 @@ resolutions. The height-function normal option (`vof_normal_scheme = 2`) gives t
 
 A static drop of radius R = 0.25 in a periodic box, density ratio 1000, σ = 1, ν = 1e-3 (both fluids), no gravity:
 
-| Case | N | Pressure jump (exact) | Error | Parasitic `max |U|` |
-|------|---|------------------------|-------|---------------------|
+| Case | N | Pressure jump (exact) | Error | Parasitic max velocity |
+|------|---|------------------------|-------|-------------------------|
 | 2-D disk | 32 | 4.033 (4) | 0.8 % | 8.4e-6 |
 | 2-D disk | 64 | 4.008 (4) | 0.2 % | 4.5e-7 |
 | 3-D sphere | 24 | 8.083 (8) | 1.0 % | 1.6e-4 |

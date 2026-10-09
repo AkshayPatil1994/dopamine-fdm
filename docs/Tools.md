@@ -7,8 +7,7 @@
 `preProcessing/GenSDF/` is a standalone MPI-Fortran signed-distance-field (SDF)
 generator used to build the cell-centre SDF the solver's IBM reads via `ibm_sdf_file`
 (`&IBM` namelist — see [Input Parameters](Input-Parameters.md#ibm)). The solver
-no longer accepts a face-point mask input (`Umask_in`) — `GenSDF` is the only supported
-way to produce an IBM geometry.
+reads only this SDF, so `GenSDF` is the way to produce an IBM geometry.
 
 Build:
 
@@ -52,6 +51,10 @@ in `parameters.in`, face-staggered SDFs (`sdfu`, `sdfv`, `sdfw`) are written alo
 
 > **Reference (fast-sweep):** Zhao, H., Osher, S. & Fedkiw, R. (2001/2005); Tsai, Y.-H.R.
 > (2002) — see [Numerics § IBM](Numerics.md#6-immersed-boundary-method-ibm).
+>
+> **Reference (`GenSDF`):** Patil, A., Paranjothi, U.C.K. & García-Sánchez, C. (2025).
+> *GenSDF: An MPI-Fortran based signed-distance-field generator for computational fluid
+> dynamics applications*. SoftwareX 30, 102117.
 
 ## `postProcessing/` — the `dopamine_post` library
 

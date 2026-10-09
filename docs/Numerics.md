@@ -19,7 +19,7 @@ gradient).
 
 Streamwise ($x$) and spanwise ($z$) forcing:
 
-$$f_x(t) = \frac{\mathrm{d}P}{\mathrm{d}x}\bigg|_0 + U_{b,x}\\,\omega_x\cos(\omega_x t + \varphi_x), \qquad f_z(t) = \frac{\mathrm{d}P}{\mathrm{d}z}\bigg|_0 + U_{b,z}\\,\omega_z\cos(\omega_z t + \varphi_z)$$
+$$f_x(t) = \frac{\mathrm{d}P}{\mathrm{d}x}\bigg|_0 + U_{b,x}\omega_x\cos(\omega_x t + \varphi_x), \qquad f_z(t) = \frac{\mathrm{d}P}{\mathrm{d}z}\bigg|_0 + U_{b,z}\omega_z\cos(\omega_z t + \varphi_z)$$
 
 where $\omega_x = 2\pi / T_{\mathrm{wave},x}$ and $\omega_z = 2\pi / T_{\mathrm{wave},z}$
 are derived from the user-supplied wave periods, and $\varphi_x$, $\varphi_z$ are
@@ -101,7 +101,7 @@ Time advancement uses the **three-stage, low-storage Runge–Kutta** scheme of W
 (1990) — the same scheme used in the Kim, Moin & Moser (1987) channel flow code and many
 subsequent LES solvers:
 
-$$u^{(s)} = u^{(s-1)} + \alpha_s \Delta t\\, R^{(s-1)}, \quad s = 1,2,3$$
+$$u^{(s)} = u^{(s-1)} + \alpha_s \Delta t R^{(s-1)}, \quad s = 1,2,3$$
 
 Coefficients: $\alpha_1 = 8/15$, $\alpha_2 = 5/12$, $\alpha_3 = 3/4$.
 
@@ -232,7 +232,7 @@ The SGS eddy viscosity $\nu_t$ is provided by the **Vreman (2004) model**, contr
 $$\nu_t = c_V \sqrt{\frac{B_\beta}{\alpha_{ij}\alpha_{ij}}}$$
 
 where $\alpha_{ij} = \partial u_j / \partial x_i$,
-$\beta_{mn} = \sum_l \Delta_l^2\\,\alpha_{lm}\alpha_{ln}$,
+$\beta_{mn} = \sum_l \Delta_l^2\alpha_{lm}\alpha_{ln}$,
 $B_\beta = \beta_{11}\beta_{22} - \beta_{12}^2 + \beta_{11}\beta_{33} - \beta_{13}^2 + \beta_{22}\beta_{33} - \beta_{23}^2$,
 and $c_V = 2.5 C_s^2$.
 
@@ -269,12 +269,6 @@ the `GenSDF` preprocessing tool in `preProcessing/GenSDF/` (which performs the
 fast-sweep distance computation of Zhao et al. (2005) internally) from an OBJ/STL
 geometry — see [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf).
 
-> **Note:** older solver versions accepted a binary face-point mask (`Umask_in`,
-> `ibm_input_mode = 1` in that scheme) and computed the SDF via fast-sweep at solver
-> startup, with a separate `ibm_input_mode = 2` for a precomputed SDF. That mask-input
-> path (`ibm_mask_file`/`Umask_in`) has been removed from the solver; the SDF must now
-> always be precomputed by `GenSDF`.
-
 ### 6.2 Ghost-cell interpolation
 
 For each **ghost cell** $G$ (solid cell immediately adjacent to the fluid–solid
@@ -295,18 +289,17 @@ No-slip ($U_\text{wall} = 0$) is the default; moving-wall BCs can be set by chan
 
 > **Reference:** Tseng, Y.-H. & Ferziger, J.H. (2003). *A ghost-cell immersed boundary
 > method for flow in complex geometry*. J. Comput. Phys. 192(2), 593–623. DOI:
-> [10.1016/j.jcp.2003.07.023](https://doi.org/10.1016/j.jcp.2003.07.023)
+> [10.1016/j.jcp.2003.07.024](https://doi.org/10.1016/j.jcp.2003.07.024)
 
 > **Reference (fast-sweep SDF):** Zhao, H., Osher, S. & Fedkiw, R. (2001 / 2005). *Fast
 > surface reconstruction using the level set method*. Proc. IEEE ICCV; see also Tsai,
 > Y.-H.R. (2002). *Rapid and accurate computation of the distance function using grids*.
 > J. Comput. Phys. 178, 175–195. DOI:
 > [10.1006/jcph.2002.7028](https://doi.org/10.1006/jcph.2002.7028)
-
-> **Reference (`GenSDF` implementation):** Patil, A., Paranjothi, U.C.K. &
-> García-Sánchez, C. (2025). *GenSDF: An MPI-Fortran based signed-distance-field
-> generator for computational fluid dynamics applications*. SoftwareX 30, 102117. See
-> [Citing this solver](https://github.com/AkshayPatil1994/dopamine-fdm#citing-this-solver) and
+>
+> Implemented in `GenSDF`: Patil, A., Paranjothi, U.C.K. & García-Sánchez, C. (2025).
+> *GenSDF: An MPI-Fortran based signed-distance-field generator for computational fluid
+> dynamics applications*. SoftwareX 30, 102117. See
 > [Pre- and Post-Processing Tools § GenSDF](Tools.md#gensdf).
 
 ### 6.3 Validation — turbulent flow over a wavy wall
@@ -332,6 +325,21 @@ agree closely with the reference DNS:
 > [Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywall) for the primary case
 > citation).
 
+### 6.4 Staircase method (`ibm_method = 1`)
+
+The second IBM method does not interpolate. It treats the body as the set of grid faces it blocks, so the geometry is first-order accurate (a staircase) but mass, momentum and the wall stress are handled exactly on those faces.
+
+1. **Closed faces.** A velocity face is *closed* if either of the two cells it joins has $\phi < 0$. A one-cell-thick wall therefore blocks the flow, which the ghost-cell method cannot resolve.
+2. **Velocity.** The velocity on closed faces is held at zero after every update (no penetration, no slip). No ghost values and no image-point interpolation are used.
+3. **Projection.** The pressure equation is solved only on fluid cells, with a Neumann condition at the body: the face coefficients of closed faces are zero, so no flux crosses them,
+
+$$\sum_{f} s_f\,\frac{p_{n(f)}-p_{c}}{\Delta_f}\,A_f = \frac{1}{\Delta t}\sum_{f} s_f\,u^*_f A_f ,$$
+
+   where $s_f = 0$ on closed faces and $1$ otherwise. This masked system no longer diagonalises in Fourier space, so it is solved by PCG, preconditioned by the fast Poisson solver of §4 or, with `pcg_precond = 1`, by a mask-aware geometric multigrid. The resulting velocity has zero flux through the body and is divergence-free to the solver tolerance in every fluid cell next to it.
+4. **Viscous stress.** The viscous flux through every edge between a fluid face and a closed face is the no-slip stencil flux, or, with `ibm_wall_model_flag = 1`, the log-law wall shear of §7.1b, with per-object roughness `ibm_z0`.
+
+Use the staircase method when the wall stress matters (wall-modelled LES of rough surfaces), when walls are thinner than two cells, or with the two-fluid solver (which always uses it). Use the ghost-cell method when a smooth, resolved wall is wanted and second-order geometry matters. The staircase method needs `ibm_input_mode >= 1`; on GPUs it needs `pcg_precond = 1`. Validation: a flat plate under a uniform stream decays as the integrated log law (`ibm_stair_plate`).
+
 ## 7. Wall models
 
 Both flat-wall and IBM-surface wall models use an **equilibrium wall model (EQWM)**
@@ -355,7 +363,7 @@ wall whenever the first cell is at $y^+ \gtrsim 10$, and without the floor the g
 the SGS gradient in the first cell. Free-slip walls take no stress. This applies to the $y$ walls (smooth and rough) and to the spanwise ($z$) walls of `z_bc_type = 1` (smooth only). Check: a uniform stream between two modelled walls decays as the
 integrated log law (`wm_stream`, `wm_stream_z`, `wm_stream_duct`), and a coarse channel ($Re_\tau = 395$, first cell at $y^+ \approx 25$) holds a mean wall stress equal to
 $dP/dx\,h$. The skew-symmetric convective form (`advection_scheme = 0`) is not momentum conserving on such a coarse near-wall grid (a
-spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES until that is resolved.
+spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES.
 
 ### 7.1b Wall stress on an immersed body (staircase IBM, `ibm_method = 1`)
 
@@ -391,7 +399,7 @@ interpolated at the image-point location, projected onto the surface tangent pla
 For a fully-rough surface (roughness length $z_0$), the log law has no viscous sublayer
 term and is explicit in $u_\tau$ -- no Newton iteration is needed:
 
-$$u^+ = \frac{1}{\kappa}\ln\!\left(\frac{y}{z_0}\right)
+$$u^+ = \frac{1}{\kappa}\ln\left(\frac{y}{z_0}\right)
 \quad\Longrightarrow\quad
 u_\tau = \frac{\kappa\,u_\text{ref}}{\ln(y_\text{ref}/z_0)}$$
 
@@ -477,13 +485,13 @@ with the momentum solver. Configured via `&SEDIMENT` — see
 
 Advective face values are obtained from a MUSCL reconstruction of the upwind cell,
 
-$$C_\text{face} = C_\text{up} + \sigma_\text{up}\\,\bigl(x_\text{face} - x_{g,\text{up}}\bigr),$$
+$$C_\text{face} = C_\text{up} + \sigma_\text{up}\bigl(x_\text{face} - x_{g,\text{up}}\bigr),$$
 
 where the limited cell-centred slope $\sigma_\text{up}$ uses the **van Leer (1974)
 harmonic-mean limiter** applied to the forward and backward gradients formed with the
 *actual* cell-centre distances:
 
-$$g_f = \frac{C_{m+1}-C_m}{x_{g,m+1}-x_{g,m}}, \quad g_b = \frac{C_m-C_{m-1}}{x_{g,m}-x_{g,m-1}}, \quad \sigma = \begin{cases}\dfrac{2\\,g_f g_b}{g_f+g_b}, & g_f g_b > 0,\\\\[2mm] 0, & \text{otherwise.}\end{cases}$$
+$$g_f = \frac{C_{m+1}-C_m}{x_{g,m+1}-x_{g,m}}, \quad g_b = \frac{C_m-C_{m-1}}{x_{g,m}-x_{g,m-1}}, \quad \sigma = \begin{cases}\dfrac{2g_f g_b}{g_f+g_b}, & g_f g_b > 0,\\\\[2mm] 0, & \text{otherwise.}\end{cases}$$
 
 Because real geometric distances enter both the gradients and the projection to the
 face, the scheme remains **second-order accurate and TVD on non-uniform (stretched)
@@ -505,7 +513,7 @@ falls back to first-order upwind.
 
 The particle settling velocity is computed from the Soulsby (1997) formula:
 
-$$D_* = d_s\left[\frac{(s-1)g}{\nu^2}\right]^{1/3}, \quad w_s = \frac{\nu}{d_s}\left[\sqrt{10.36^2 + 1.049\\,D_*^3} - 10.36\right]$$
+$$D_* = d_s\left[\frac{(s-1)g}{\nu^2}\right]^{1/3}, \quad w_s = \frac{\nu}{d_s}\left[\sqrt{10.36^2 + 1.049D_*^3} - 10.36\right]$$
 
 where $s = \rho_s/\rho_f$ is the specific gravity of sediment and $d_s$ is the particle
 diameter.
@@ -564,7 +572,7 @@ $$\frac{DR_{ij}}{Dt} = P_{ij} + \Pi_{ij} + D^\nu_{ij} + D^T_{ij} + \Phi^P_{ij} -
 |------|--------|-------------|
 | Production | $P_{ij}$ | $-R_{ik}\partial\langle U_j\rangle/\partial x_k - R_{jk}\partial\langle U_i\rangle/\partial x_k$ |
 | Pressure–strain | $\Pi_{ij}$ | $\langle p'(\partial u_i'/\partial x_j + \partial u_j'/\partial x_i)\rangle$ |
-| Viscous diffusion | $D^\nu_{ij}$ | $\nu\\,\nabla^2 R_{ij}$ |
+| Viscous diffusion | $D^\nu_{ij}$ | $\nu\nabla^2 R_{ij}$ |
 | Turbulent diffusion | $D^T_{ij}$ | $-\partial\langle u_i' u_j' u_k'\rangle/\partial x_k$ |
 | Pressure diffusion | $\Phi^P_{ij}$ | $-\partial(\langle p' u_i'\rangle\delta_{jk} + \langle p' u_j'\rangle\delta_{ik})/\partial x_k$ |
 | Resolved dissipation | $\varepsilon^\text{res}_{ij}$ | $2\nu\langle(\partial u_i'/\partial x_k)(\partial u_j'/\partial x_k)\rangle$ |
@@ -649,15 +657,15 @@ a divergence-free (curl-of-vector-potential) construction after Poletto, Craft &
 At the outlet face, each velocity component is relaxed toward a one-sided upwind
 extrapolation from the interior at a rate set by the local Courant number:
 
-$$F(n_\text{last}) \leftarrow F(n_\text{last}) - C\\,\bigl[F(n_\text{last}) - F(n_\text{last}-1)\bigr], \qquad C = \min\\!\bigl(\max(U_c,0),\\,1\bigr)\frac{\Delta t}{\Delta x}$$
+$$F(n_\text{last}) \leftarrow F(n_\text{last}) - C\bigl[F(n_\text{last}) - F(n_\text{last}-1)\bigr], \qquad C = \min \bigl(\max(U_c,0),1\bigr)\frac{\Delta t}{\Delta x}$$
 
-which discretises $\partial F/\partial t + U_c\\,\partial F/\partial x = 0$ by
+which discretises $\partial F/\partial t + U_c\partial F/\partial x = 0$ by
 first-order upwinding; clamping $C$ to $[0,1]$ keeps the update stable and avoids
 pulling from outside the domain under local backflow.
 
 ### 11.3 Inflow Reynolds-stress optimisation (`&INFLOW_OPT`)
 
-The ESEM inlet Reynolds-stress profile adjusts as it convects downstream, so the statistics at a measurement station differ from the wind-tunnel target. An optional online realisation of Lamberti et al. (2018, JWEIA **177**, 32–44, §5–6.1) fits Bezier control points on the inflow $v'^2$ and $w'^2$ profiles (`n_bezier`; end points fixed to the target) so that the resolved statistics at `inflow_opt_x` match the target. It runs as a phase machine:
+The ESEM inlet Reynolds-stress profile adjusts as it convects downstream, so the statistics at a measurement station differ from the wind-tunnel target. An optional online realisation of Lamberti et al. (2018, JWEIA **177**, 32–44, §5–6.1) fits Bezier control points on the inflow $v'^2$ and $w'^2$ profiles (`n_bezier`; end points fixed to the target) so that the resolved statistics at `inflow_opt_x` match the target. It runs in three stages:
 
 1. **step0**: baseline, inflow = target, measured over `inflow_opt_window` steps;
 2. **step1**: inflow $v'^2$ and $w'^2$ doubled together (the paper's combined perturbation), measured over the same window;
@@ -701,6 +709,6 @@ $$\frac{\partial \rho}{\partial t} + \frac{\partial (\rho u_j)}{\partial x_j} = 
 with $\rho = \rho_g + (\rho_l-\rho_g)C$, $\mu = \mu_g + (\mu_l-\mu_g)C$ and $\mu_t = \rho\nu_t$ the SGS viscosity of the mixture ($g_i$ is the gravitational acceleration, $\sigma$ the surface tension, $\kappa$ the interface curvature). The interface is advected by direction-split PLIC sweeps with exact geometric fluxes; the momentum
 on every staggered control volume is advanced with the *same* mass fluxes (WENO5-Z face values, pseudo-time SSP-RK3 inside each
 sweep, refill-Courant blend to upwind), so density and momentum stay consistent at density ratios of 1000. The pressure equation
-$\dfrac{\partial}{\partial x_i}\!\left(\dfrac{1}{\rho_f}\dfrac{\partial p}{\partial x_i}\right)=\dfrac{1}{\Delta t}\dfrac{\partial u^*_i}{\partial x_i}$ uses the geometric half-cell face density and is solved by PCG
+$\dfrac{\partial}{\partial x_i}\left(\dfrac{1}{\rho_f}\dfrac{\partial p}{\partial x_i}\right)=\dfrac{1}{\Delta t}\dfrac{\partial u^*_i}{\partial x_i}$ uses the geometric half-cell face density and is solved by PCG
 preconditioned with the constant-coefficient fast Poisson solver of §4. The single-phase solver of §§1–12 is untouched when
 `vof_active = 0`. Full description, validation and limits: [Two-Phase VOF](Two-Phase-VOF.md).

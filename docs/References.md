@@ -9,6 +9,7 @@ The methods implemented in this solver draw on the following published works.  P
 | Spectral Poisson solver (FFTW3) | Frigo, M. & Johnson, S.G. (2005). Proc. IEEE **93**(2), 216–231. | [10.1109/JPROC.2004.840301](https://doi.org/10.1109/JPROC.2004.840301) |
 | MPI pencil decomposition ([2decomp&fft](https://github.com/2decomp-fft/2decomp-fft)) | Li, N. & Laizet, S. (2010). *2DECOMP&FFT – A Highly Scalable 2D Decomposition Library for FFT-based Simulations*. Cray User Group 2010. | — |
 | Ghost-cell IBM | Tseng, Y.-H. & Ferziger, J.H. (2003). J. Comput. Phys. **192**(2), 593–623. | [doi:10.1016/j.jcp.2003.07.024](https://doi.org/10.1016/j.jcp.2003.07.024) |
+| Signed-distance field (fast sweep), `GenSDF` | Zhao, H., Osher, S. & Fedkiw, R. (2001). *Fast surface reconstruction using the level set method*. Proc. IEEE Workshop on Variational and Level Set Methods. Tsai, Y.-H.R. (2002). J. Comput. Phys. **178**, 175–195. Patil, A., Paranjothi, U.C.K. & García-Sánchez, C. (2025). *GenSDF*. SoftwareX **30**, 102117. | [10.1006/jcph.2002.7028](https://doi.org/10.1006/jcph.2002.7028) |
 | Vreman SGS model | Vreman, A.W. (2004). Phys. Fluids **16**(10), 3670–3681. | [10.1063/1.1785131](https://doi.org/10.1063/1.1785131) |
 | van Leer MUSCL limiter (scalar) | van Leer, B. (1974). J. Comput. Phys. **14**(4), 361–370. | [10.1016/0021-9991(74)90019-9](https://doi.org/10.1016/0021-9991(74)90019-9) |
 | Settling velocity (sediment) | Soulsby, R.L. (1997). *Dynamics of Marine Sands*. Thomas Telford. | ISBN 978-0-7277-2584-5 |
