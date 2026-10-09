@@ -38,6 +38,7 @@ Module vof_pressure
   Logical :: vp_dev = .False.   ! masked single-phase path on the GPU: the PCG vectors and coefficients are device-resident
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_mu, vp_mv, vp_mw, vp_act
   Logical :: vp_use_layered = .True.   ! .False.: the layered preconditioner is skipped (constant-coefficient solves)
+  Logical :: vp_mg_stale = .False.      ! vp_bu/bv/bw changed since the multigrid conductances were built (rebuilt by the next preconditioner call)
 
 Contains
 
@@ -354,7 +355,7 @@ Contains
        vp_bu = vp_bu*vp_mu;  vp_bv = vp_bv*vp_mv;  vp_bw = vp_bw*vp_mw
     End If
     If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Call layer_coefficients
-    If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
+    vp_mg_stale = ( pcg_precond >= 1 )
 
   End Subroutine vp_set_density
 
@@ -672,6 +673,10 @@ Contains
     Real(Int64), Intent(Out) :: z(nxg,nyg,nzg)
 
     If ( pcg_precond >= 1 ) Then
+       If ( vp_mg_stale ) Then
+          Call mg_set_coef(vp_bu, vp_bv, vp_bw)
+          vp_mg_stale = .False.
+       End If
        Call mg_precond(r, z)
     Else
        z = 0d0

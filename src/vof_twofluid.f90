@@ -29,7 +29,6 @@ Module vof_twofluid
   Use vof_advect
   Use vof_state
   Use vof_pressure
-  Use vof_mg, Only : mg_set_coef
   Use vof_curv, Only : vof_curvature
   Use mom_recon
   Use halo_pad, Only : pad_field
@@ -376,7 +375,7 @@ Contains
     Allocate( sbu(nx,nyg,nzg), sbv(nxg,ny,nzg), sbw(nxg,nyg,nz), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz), ph(nxg,nyg,nzg) )
     sbu = vp_bu;  sbv = vp_bv;  sbw = vp_bw;  beta0_save = vp_beta0
     vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
-    If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
+    vp_mg_stale = ( pcg_precond >= 1 )
 
     Utmp = U;  Vtmp = V;  Wtmp = W
     U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
@@ -401,8 +400,9 @@ Contains
     Call face_halo(Ut, Vt, Wt)
     U = Utmp;  V = Vtmp;  W = Wtmp
 
-    ! the multigrid coefficients are not restored: vof_advect_half rebuilds them in vp_set_density before the next solve
+    ! the multigrid still holds the mask coefficients: the next preconditioner call rebuilds them from the restored vp_bu..
     vp_bu = sbu;  vp_bv = sbv;  vp_bw = sbw;  vp_beta0 = beta0_save;  vp_use_layered = .True.
+    vp_mg_stale = ( pcg_precond >= 1 )
     Deallocate( sbu, sbv, sbw, gu, gv, gw, ph )
 
   End Subroutine make_transport_velocity_masked
