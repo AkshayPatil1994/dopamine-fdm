@@ -15,13 +15,16 @@
 !  (neighbour rank, periodic partner, Neumann copy or the Dirichlet reflection of the x outlet). cx(i) joins cells i and i+1.
 Module vof_mg
 
-  Use iso_fortran_env, Only : Int32, Int64
+  Use iso_fortran_env, Only : Int32, Int64, Real32
   Use global
   Use mpi
   Use decomp, Only : x_halo_neighbors, z_halo_neighbors, x_periodic_partner, z_periodic_partner
 
   Implicit None
 
+  ! storage kind of the V-cycle (the outer PCG stays in double): the preconditioner only needs ~1e-7 relative accuracy and is memory-bound
+  Integer(Int32), Parameter :: mgk = Real32
+  Integer(Int32) :: mg_mpi_t
   Integer(Int32), Parameter :: mg_maxlev = 24
   Integer(Int32) :: mg_nlev = 0, mg_deg = 3, mg_deg_coarse = 8
   Real(Int64) :: mg_ratio = 6d0, mg_ratio_coarse = 60d0, mg_cscale = 1d0, mg_eps = 1d-4
@@ -29,10 +32,10 @@ Module vof_mg
   Integer(Int32) :: mg_ni(mg_maxlev), mg_nj(mg_maxlev), mg_nk(mg_maxlev)
   Integer(Int32) :: mg_sx(mg_maxlev), mg_sy(mg_maxlev), mg_sz(mg_maxlev)   ! coarsening stride from level l to l+1
   Integer(Int32) :: mg_off(mg_maxlev+1)
-  Real(Int64), Allocatable, Dimension(:) :: mg_cx, mg_cy, mg_cz, mg_dd, mg_x, mg_b, mg_t, mg_d, mg_m, mg_iw
+  Real(mgk), Allocatable, Dimension(:) :: mg_cx, mg_cy, mg_cz, mg_dd, mg_x, mg_b, mg_t, mg_d, mg_m, mg_iw
   Real(Int64), Allocatable, Dimension(:,:) :: mg_fx, mg_fy, mg_fz   ! centre-distance ratios of the coarse faces, level l -> l+1
   Real(Int64), Allocatable, Dimension(:) :: mg_hy1, mg_hz1, mg_dcy1, mg_dcz1   ! level-1 cell sizes and centre distances
-  Real(Int64), Allocatable, Dimension(:,:) :: mg_sbx, mg_rbx, mg_sbz, mg_rbz
+  Real(mgk), Allocatable, Dimension(:,:) :: mg_sbx, mg_rbx, mg_sbz, mg_rbz
   Integer(Int32) :: mg_xup, mg_xdn, mg_zup, mg_zdn
   Logical :: mg_xself, mg_zself
   Real(Int64) :: mg_xlo_gs, mg_xhi_gs   ! ghost = gs * boundary cell where there is no neighbour
@@ -72,6 +75,7 @@ Contains
        If ( is_last ) mg_zup = partner
        mg_zself = ( is_first .And. is_last )
     End If
+    mg_mpi_t = Merge(MPI_REAL4, MPI_REAL8, mgk == Real32)
     mg_xlo_gs = 1d0;  mg_xhi_gs = 1d0
     If ( x_bc_type == 1 ) mg_xhi_gs = -1d0
 
@@ -223,7 +227,7 @@ Contains
 
     Integer(Int32), Intent(In) :: ni, nj, nk
     Real(Int64), Intent(In) :: bu(nx,nyg,nzg), bv(nxg,ny,nzg), bw(nxg,nyg,nz)
-    Real(Int64), Intent(Out) :: cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), cz(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(Out) :: cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), cz(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k, partner
     Logical :: is_first, is_last
 
@@ -266,9 +270,9 @@ Contains
   Subroutine mg_coarsen_coef(nif, njf, nkf, cxf, cyf, czf, nic, njc, nkc, sx, sy, sz, fxr, fyr, fzr, cxc, cyc, czc)
 
     Integer(Int32), Intent(In) :: nif, njf, nkf, nic, njc, nkc, sx, sy, sz
-    Real(Int64), Intent(In) :: cxf(0:nif+1,0:njf+1,0:nkf+1), cyf(0:nif+1,0:njf+1,0:nkf+1), czf(0:nif+1,0:njf+1,0:nkf+1)
+    Real(mgk), Intent(In) :: cxf(0:nif+1,0:njf+1,0:nkf+1), cyf(0:nif+1,0:njf+1,0:nkf+1), czf(0:nif+1,0:njf+1,0:nkf+1)
     Real(Int64), Intent(In) :: fxr(0:nic), fyr(0:njc), fzr(0:nkc)
-    Real(Int64), Intent(Out) :: cxc(0:nic+1,0:njc+1,0:nkc+1), cyc(0:nic+1,0:njc+1,0:nkc+1), czc(0:nic+1,0:njc+1,0:nkc+1)
+    Real(mgk), Intent(Out) :: cxc(0:nic+1,0:njc+1,0:nkc+1), cyc(0:nic+1,0:njc+1,0:nkc+1), czc(0:nic+1,0:njc+1,0:nkc+1)
     Integer(Int32) :: I, J, K, ii, jj, kk, lc
     Real(Int64) :: s
 
@@ -321,8 +325,8 @@ Contains
   Subroutine mg_factor(ni, nj, nk, cx, cy, cz, dd, m, iw)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
-    Real(Int64), Intent(In) :: cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), cz(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(Out) :: dd(0:ni+1,0:nj+1,0:nk+1), m(0:ni+1,0:nj+1,0:nk+1), iw(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), cz(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(Out) :: dd(0:ni+1,0:nj+1,0:nk+1), m(0:ni+1,0:nj+1,0:nk+1), iw(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
     Real(Int64) :: dt, w, mm
     Logical :: dirichlet_hi
@@ -332,7 +336,7 @@ Contains
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
-             dd(i,j,k) = cx(i,j,k) + cx(i-1,j,k) + cy(i,j,k) + cy(i,j-1,k) + cz(i,j,k) + cz(i,j,k-1)
+             dd(i,j,k) = 0d0 + cx(i,j,k) + cx(i-1,j,k) + cy(i,j,k) + cy(i,j-1,k) + cz(i,j,k) + cz(i,j,k-1)
           End Do
        End Do
     End Do
@@ -362,7 +366,7 @@ Contains
   Subroutine mg_halo(a, ni, nj, nk)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
-    Real(Int64), Intent(InOut) :: a(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: a(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k, n
     Real(Int64) :: glo, ghi
 
@@ -386,9 +390,9 @@ Contains
        End Do
        !$acc wait(1)
        !$acc update host(mg_sbx(1:n,1:2))
-       Call MPI_Sendrecv(mg_sbx(1,1), n, MPI_real8, mg_xup, 301, mg_rbx(1,1), n, MPI_real8, mg_xdn, 301, &
+       Call MPI_Sendrecv(mg_sbx(1,1), n, mg_mpi_t, mg_xup, 301, mg_rbx(1,1), n, mg_mpi_t, mg_xdn, 301, &
                          MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
-       Call MPI_Sendrecv(mg_sbx(1,2), n, MPI_real8, mg_xdn, 302, mg_rbx(1,2), n, MPI_real8, mg_xup, 302, &
+       Call MPI_Sendrecv(mg_sbx(1,2), n, mg_mpi_t, mg_xdn, 302, mg_rbx(1,2), n, mg_mpi_t, mg_xup, 302, &
                          MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
        !$acc update device(mg_rbx(1:n,1:2))
        glo = mg_xlo_gs;  ghi = mg_xhi_gs
@@ -424,9 +428,9 @@ Contains
        End Do
        !$acc wait(1)
        !$acc update host(mg_sbz(1:n,1:2))
-       Call MPI_Sendrecv(mg_sbz(1,1), n, MPI_real8, mg_zup, 303, mg_rbz(1,1), n, MPI_real8, mg_zdn, 303, &
+       Call MPI_Sendrecv(mg_sbz(1,1), n, mg_mpi_t, mg_zup, 303, mg_rbz(1,1), n, mg_mpi_t, mg_zdn, 303, &
                          MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
-       Call MPI_Sendrecv(mg_sbz(1,2), n, MPI_real8, mg_zdn, 304, mg_rbz(1,2), n, MPI_real8, mg_zup, 304, &
+       Call MPI_Sendrecv(mg_sbz(1,2), n, mg_mpi_t, mg_zdn, 304, mg_rbz(1,2), n, mg_mpi_t, mg_zup, 304, &
                          MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
        !$acc update device(mg_rbz(1:n,1:2))
        !$acc parallel loop collapse(2) present(a,mg_rbz) async(1)
@@ -453,9 +457,9 @@ Contains
   Subroutine mg_resid(ni, nj, nk, x, b, cx, cy, cz, dd, t)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
-    Real(Int64), Intent(In) :: x(0:ni+1,0:nj+1,0:nk+1), b(0:ni+1,0:nj+1,0:nk+1), dd(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(In) :: cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), cz(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(InOut) :: t(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: x(0:ni+1,0:nj+1,0:nk+1), b(0:ni+1,0:nj+1,0:nk+1), dd(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), cz(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: t(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
     !$acc parallel loop collapse(3) present(x,b,cx,cy,cz,dd,t) async(1)
@@ -476,8 +480,8 @@ Contains
   Subroutine mg_line(ni, nj, nk, t, cy, m, iw)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
-    Real(Int64), Intent(InOut) :: t(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(In) :: cy(0:ni+1,0:nj+1,0:nk+1), m(0:ni+1,0:nj+1,0:nk+1), iw(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: t(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: cy(0:ni+1,0:nj+1,0:nk+1), m(0:ni+1,0:nj+1,0:nk+1), iw(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
 #ifdef GPU_POISSON
@@ -520,16 +524,19 @@ Contains
   Subroutine mg_upd(ni, nj, nk, x, d, t, c1, c2, zero)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
-    Real(Int64), Intent(InOut) :: x(0:ni+1,0:nj+1,0:nk+1), d(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(In) :: t(0:ni+1,0:nj+1,0:nk+1), c1, c2
+    Real(mgk), Intent(InOut) :: x(0:ni+1,0:nj+1,0:nk+1), d(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: t(0:ni+1,0:nj+1,0:nk+1)
+    Real(Int64), Intent(In) :: c1, c2
     Logical, Intent(In) :: zero
     Integer(Int32) :: i, j, k
+    Real(mgk) :: c1s, c2s
 
+    c1s = Real(c1, mgk);  c2s = Real(c2, mgk)
     !$acc parallel loop collapse(3) present(x,d,t) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
-             d(i,j,k) = c1*d(i,j,k) + c2*t(i,j,k)
+             d(i,j,k) = c1s*d(i,j,k) + c2s*t(i,j,k)
              If ( zero ) Then
                 x(i,j,k) = d(i,j,k)
              Else
@@ -546,10 +553,11 @@ Contains
   Subroutine mg_cheb(ni, nj, nk, x, b, t, d, cx, cy, cz, dd, m, iw, deg, lo, hi, zero)
 
     Integer(Int32), Intent(In) :: ni, nj, nk, deg
-    Real(Int64), Intent(InOut) :: x(0:ni+1,0:nj+1,0:nk+1), t(0:ni+1,0:nj+1,0:nk+1), d(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(In) :: b(0:ni+1,0:nj+1,0:nk+1), cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(In) :: cz(0:ni+1,0:nj+1,0:nk+1), dd(0:ni+1,0:nj+1,0:nk+1), m(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(In) :: iw(0:ni+1,0:nj+1,0:nk+1), lo, hi
+    Real(mgk), Intent(InOut) :: x(0:ni+1,0:nj+1,0:nk+1), t(0:ni+1,0:nj+1,0:nk+1), d(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: b(0:ni+1,0:nj+1,0:nk+1), cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: cz(0:ni+1,0:nj+1,0:nk+1), dd(0:ni+1,0:nj+1,0:nk+1), m(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: iw(0:ni+1,0:nj+1,0:nk+1)
+    Real(Int64), Intent(In) :: lo, hi
     Logical, Intent(In) :: zero
     Integer(Int32) :: it
     Real(Int64) :: theta, delta, sigma, rho0, rho1
@@ -578,8 +586,8 @@ Contains
   Subroutine mg_copy(ni, nj, nk, a, c)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
-    Real(Int64), Intent(In) :: a(0:ni+1,0:nj+1,0:nk+1)
-    Real(Int64), Intent(InOut) :: c(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: a(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: c(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
     !$acc parallel loop collapse(3) present(a,c) async(1)
@@ -598,8 +606,8 @@ Contains
   Subroutine mg_restrict(nif, njf, nkf, tf, nic, njc, nkc, sx, sy, sz, bc)
 
     Integer(Int32), Intent(In) :: nif, njf, nkf, nic, njc, nkc, sx, sy, sz
-    Real(Int64), Intent(In) :: tf(0:nif+1,0:njf+1,0:nkf+1)
-    Real(Int64), Intent(InOut) :: bc(0:nic+1,0:njc+1,0:nkc+1)
+    Real(mgk), Intent(In) :: tf(0:nif+1,0:njf+1,0:nkf+1)
+    Real(mgk), Intent(InOut) :: bc(0:nic+1,0:njc+1,0:nkc+1)
     Integer(Int32) :: I, J, K, ii, jj, kk
     Real(Int64) :: s
 
@@ -626,8 +634,8 @@ Contains
   Subroutine mg_prolong(nif, njf, nkf, xf, nic, njc, nkc, sx, sy, sz, xc)
 
     Integer(Int32), Intent(In) :: nif, njf, nkf, nic, njc, nkc, sx, sy, sz
-    Real(Int64), Intent(InOut) :: xf(0:nif+1,0:njf+1,0:nkf+1)
-    Real(Int64), Intent(In) :: xc(0:nic+1,0:njc+1,0:nkc+1)
+    Real(mgk), Intent(InOut) :: xf(0:nif+1,0:njf+1,0:nkf+1)
+    Real(mgk), Intent(In) :: xc(0:nic+1,0:njc+1,0:nkc+1)
     Integer(Int32) :: i, j, k
 
     !$acc parallel loop collapse(3) present(xf,xc) async(1)
@@ -689,7 +697,7 @@ Contains
 
     Integer(Int32), Intent(In) :: ni, nj, nk
     Real(Int64), Intent(In) :: r(nxg,nyg,nzg), hy(0:nj+1), hz(0:nk+1)
-    Real(Int64), Intent(InOut) :: b(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: b(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
     !$acc parallel loop collapse(3) present(r,hy,hz,b) async(1)
@@ -707,7 +715,7 @@ Contains
   Subroutine mg_store(ni, nj, nk, x, z)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
-    Real(Int64), Intent(In) :: x(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: x(0:ni+1,0:nj+1,0:nk+1)
     Real(Int64), Intent(InOut) :: z(nxg,nyg,nzg)
     Integer(Int32) :: i, j, k
 
