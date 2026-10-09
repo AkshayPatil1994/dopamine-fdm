@@ -719,14 +719,11 @@ Contains
     Real(Int64), Intent(InOut) :: z(nxg,nyg,nzg)
     Integer(Int32) :: i, j, k
 
-    !$acc parallel loop collapse(3) present(x,z) async(1)
-    Do k = 1, nzg
-       Do j = 1, nyg
-          Do i = 1, nxg
-             z(i,j,k) = 0d0
-          End Do
-       End Do
-    End Do
+    ! only the cells outside the unknowns (ghost layers and the periodic duplicate) are not overwritten below
+    !$acc kernels present(z) async(1)
+    z(1,:,:) = 0d0;  z(nxg,:,:) = 0d0;  z(:,1,:) = 0d0;  z(:,nyg,:) = 0d0;  z(:,:,1) = 0d0;  z(:,:,nzg) = 0d0
+    z(ni+2:nxg,:,:) = 0d0;  z(:,nj+2:nyg,:) = 0d0;  z(:,:,nk+2:nzg) = 0d0
+    !$acc end kernels
     !$acc parallel loop collapse(3) present(x,z) async(1)
     Do k = 1, nk
        Do j = 1, nj

@@ -489,8 +489,9 @@ Contains
     Real(Int64) :: inv_dx2, hy, hz, ihy_hi, ihy_lo, ihz_hi, ihz_lo, fxh, fxl, fyh, fyl, fzh, fzl
 
     inv_dx2 = 1d0/(dx*dx)
+    ! the interior cells are overwritten below, only the outer shell needs to be zero
     !$acc kernels present(out) if(vp_dev)
-    out = 0d0
+    out(1,:,:) = 0d0;  out(nxg,:,:) = 0d0;  out(:,1,:) = 0d0;  out(:,nyg,:) = 0d0;  out(:,:,1) = 0d0;  out(:,:,nzg) = 0d0
     !$acc end kernels
     !$acc parallel loop collapse(3) present(phi,out,vp_bu,vp_bv,vp_bw,y,yg,z,zg) if(vp_dev)
     Do k = 2, nzg-1
@@ -524,8 +525,11 @@ Contains
     Real(Int64) :: inv_dx
 
     inv_dx = 1d0/dx
+    ! the loops below write gu(1:Min(nx,nxg-1)), gv(:,1:ny), gw(:,:,1:Min(nz,nzg-1)) completely: only a last face that is not
+    ! one of them (nx == nxg, nz == nzg) is left to zero
     !$acc kernels present(gu,gv,gw) if(vp_dev)
-    gu = 0d0;  gv = 0d0;  gw = 0d0
+    If ( nx == nxg ) gu(nx,:,:) = 0d0
+    If ( nz == nzg ) gw(:,:,nz) = 0d0
     !$acc end kernels
     !$acc parallel loop collapse(3) present(phi,gu,vp_bu) if(vp_dev)
     Do k = 1, nzg
