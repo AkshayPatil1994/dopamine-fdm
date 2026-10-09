@@ -275,6 +275,8 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
   A bed (IBM) must not reach into the wave generation zone: the inlet profile and the relaxation assume a flat bed at `y = 0` there (checked).
 * **Cost.** 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the
   WENO5-Z tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1).
+* **Speed settings.** Beyond the defaults two inputs trade a little accuracy for speed (measured on a 386 x 65 x 10 wave flume with a sill, one rank, 0.317 s/step with the defaults):
+  `vof_rk_mom = 2` (two instead of three tendency evaluations per sweep; a 4000-step standing-wave run, about 20 periods, matches the default to four digits) and `vof_tr_floor = 1e-12` (stopping floor of the transporting-velocity projection with an immersed body; the liquid volume then drifts at ~1e-14 instead of ~1e-16). Together 0.280 s/step. The sub-step Courant limit `vof_co_sub` only matters once the flow needs more than one sub-step per half step. The multigrid preconditioner runs in single precision (the outer PCG is double), which changes the iteration count by a few percent.
 * **Not supported** with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, sediment, Boussinesq buoyancy, particles, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
   non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. **GPU builds abort in `vof_init`**
   (the solver is host-only; no GPU test was possible).
