@@ -15,6 +15,8 @@ Module sgs_models
   ! Module-level halo buffers for nu_t z-exchange (avoids per-call heap allocation)
   Real(Int64), Allocatable, Dimension(:,:,:) :: sgs_snd_lo, sgs_snd_hi
   Real(Int64), Allocatable, Dimension(:,:,:) :: sgs_rcv_lo, sgs_rcv_hi
+  ! cells where the IBM pass of compute_vreman can differ from the standard one (solid neighbour or filter clamp); built on first use
+  Logical, Allocatable, Dimension(:,:,:) :: sgs_ibm_band
 
 Contains
 
@@ -38,6 +40,29 @@ Contains
     End Select
 
   End Subroutine compute_sgs_model
+
+
+  !> Cells whose Pass 2 value can differ from Pass 1: a solid cell among the six neighbours (one-sided gradients) or a distance to
+  !  the body below half the largest cell width (filter-width clamp)
+  Subroutine build_sgs_ibm_band
+
+    Integer(Int32) :: i, j, k
+    Real(Int64) :: wmax
+
+    Allocate( sgs_ibm_band(nxg,nyg,nzg) )
+    sgs_ibm_band = .True.
+    Do k = 2, nzg-1
+       Do j = 2, nyg-1
+          Do i = 2, nxg-1
+             wmax = Max(dx, y(j)-y(j-1), z(k)-z(k-1))
+             sgs_ibm_band(i,j,k) = ( 2d0*phi(i,j,k) < wmax ) .Or. &
+                  Any( (/ Umask_cc(i-1,j,k), Umask_cc(i+1,j,k), Umask_cc(i,j-1,k), Umask_cc(i,j+1,k), &
+                          Umask_cc(i,j,k-1), Umask_cc(i,j,k+1) /) < 0.5d0 )
+          End Do
+       End Do
+    End Do
+
+  End Subroutine build_sgs_ibm_band
 
 
   !> Vreman (2004) SGS model: nu_t=c_V*sqrt(B_beta/(alpha_ij alpha_ij))
@@ -162,8 +187,9 @@ Contains
     ! Pass 2, wall zeroing, x-periodicity, and MPI halo exchange below all run on host; sync Pass 1's GPU result back first
     !$acc update host(nu_t_)
 
-    ! Pass 2: IBM corrections (only when ibm_active); re-visits all fluid cells in the domain (O(volume), not O(surface)), does not affect Pass 1
+    ! Pass 2: IBM corrections (only when ibm_active); re-visits the fluid cells next to the body, the rest keeps its Pass 1 value
     If ( ibm_active ) Then
+       If ( .Not. Allocated(sgs_ibm_band) ) Call build_sgs_ibm_band
        Do k = 2, nzg-1
           Do j = 2, nyg-1
              dz_c      = z(k) - z(k-1)
@@ -177,6 +203,7 @@ Contains
 
              Do i = 2, nxg-1
                 If ( phi(i,j,k) < 0d0 ) Cycle   ! solid cell: zeroed in post-processing
+                If ( .Not. sgs_ibm_band(i,j,k) ) Cycle
 
                 ! Re-evaluate gradients; then apply one-sided corrections where needed
                 a11 = ( U_(i,j,k)   - U_(i-1,j,k)   ) * inv_dx
