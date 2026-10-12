@@ -650,7 +650,7 @@ Module global
   Real   (Int64) :: inflow_opt_tol      = 0.1d0 ! experimental extension only: stop iterating once the worst-case relative residual (|measured-target|/target, over u'^2/v'^2/w'^2 and all interior control points) drops below this
 
   ! 2-D planar slice probes: config and output file layout
-  Integer(Int32), Parameter :: MAX_PROBES = 8
+  Integer(Int32), Parameter :: MAX_PROBES = 30
 
   Integer(Int32) :: n_slices   = 0
   Integer(Int32) :: slice_freq = 100
