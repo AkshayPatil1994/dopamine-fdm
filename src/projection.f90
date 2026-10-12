@@ -198,12 +198,9 @@ Contains
          End Do
        End Block
     ElseIf ( z_bc_type == 1 ) Then
-       ! ---- spanwise wall only (y periodic): Zgtsv-in-z, one mode per (x,y)-wavenumber pair this rank owns, in the
-       ! z-pencil (fully local in z there -- reuses the same transpose the z-FFT path uses). The
-       ! z-pencil splits (x,y), unlike the y-pencil above which splits (x,z), so the y-mode's global
-       ! index needs decomp_poisson%zst(2) (mirroring i_global's use of yst(1)/zst(1) elsewhere);
-       ! poisson_y_c's untouched padding column (index nyp+1, beyond the nyp real y-DOF) rides along
-       ! through the transpose and is simply skipped here (j_global >= nyp).
+       ! Spanwise wall only (y periodic): Zgtsv-in-z, one mode per (x,y)-wavenumber pair this rank owns, in the z-pencil. That
+       ! pencil splits (x,y), so the y-mode's global index needs decomp_poisson%zst(2); poisson_y_c's padding column (index nyp+1)
+       ! rides through the transpose and is skipped (j_global >= nyp).
        Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_poisson )
        Do j = 1, decomp_poisson%zsz(2)
           j_global = decomp_poisson%zst(2) + j - 2
@@ -227,15 +224,10 @@ Contains
        End Do
        Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_poisson )
     ElseIf ( y_bc_type == 0 ) Then
-       ! Periodic y: local batched 1-D FFT along dim2 of poisson_y_c (already
-       ! fully local in y for this rank), one k-slice at a time (fftw_plan_many_dft
-       ! only batches over one stride/dist pair, here the stride-1 x-index),
-       ! then a diagonal divide by kxx+kyy+kzz per mode, then inverse FFT --
-       ! replaces the Zgtsv tridiagonal solve entirely for this branch.
-       ! nyp = decomp_poisson%ysz(2)-1: same "last cell is a redundant duplicate
-       ! of the first" convention as periodic x/z (see apply_periodic_bc_y and
-       ! the reconstruction copy below) -- only the first nyp of ysz(2) y-slots
-       ! are independent DOF for the FFT.
+       ! Periodic y: local batched 1-D FFT along dim 2 of poisson_y_c, one k-slice at a time (fftw_plan_many_dft batches one
+       ! stride/dist pair, here the x index), then a diagonal divide by kxx+kyy+kzz and the inverse FFT, replacing the Zgtsv solve.
+       ! nyp = decomp_poisson%ysz(2)-1 as for periodic x/z (last cell duplicates the first, see apply_periodic_bc_y and the
+       ! reconstruction copy below): only the first nyp y-slots are independent.
        nyp = decomp_poisson%ysz(2) - 1
        Do k = 1, decomp_poisson%ysz(3)
           Call fftw_execute_dft( plan_fy_fwd, poisson_y_c(:,1:nyp,k), poisson_y_c(:,1:nyp,k) )

@@ -1,9 +1,8 @@
-!> Hydrodynamic loads on immersed bodies in the two-fluid solver (the single-fluid routines in ibm.f90 assume unit density and a
-!  kinematic pressure), written to the same ibm_forces.csv: pressure and viscous traction summed over the faces of the staircase
-!  body (the faces on which the masked pressure operator has its Neumann condition). The IBM-impulse columns are NaN.
-!  The pressure of the two-fluid solver is the dynamic part with the still-water row-mean hydrostatic pressure removed; the load
-!  uses the total pressure P + p_s(y), p_s(y) = g * int_y^top rho_ref dy (zero at the top), so a body in still water feels
-!  buoyancy. The viscous stress uses the mixture viscosity at the image point plus the SGS part rho * nu_t.
+!> Hydrodynamic loads on immersed bodies in the two-fluid solver (ibm.f90's single-fluid routines assume unit density and
+!  kinematic pressure), written to ibm_forces.csv: pressure and viscous traction summed over the faces of the staircase body
+!  (where the masked pressure operator has its Neumann condition); the IBM-impulse columns are NaN. The solver's pressure has
+!  the still-water row-mean hydrostatic part removed, so the load uses P + p_s(y), p_s(y) = g*int_y^top rho_ref dy, and a body
+!  in still water feels buoyancy. Viscous stress uses the mixture viscosity at the image point plus the SGS part rho*nu_t.
 Module vof_ibm
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -39,11 +38,10 @@ Contains
 
 
   !> Forces on the bodies. Method 1: IBM impulse over dt (density weighted). Method 2: pressure and viscous traction summed over
-  !  the faces of the staircase body (closed faces between a fluid cell, phi >= 0, and a solid cell, phi < 0), the same faces on
-  !  which the pressure operator has its Neumann condition, so a uniform pressure gives exactly zero and the still-water
-  !  hydrostatic pressure gives the buoyancy of the staircase body. The face pressure is the linear extrapolation of the two
-  !  fluid cells normal to the face (exact for the hydrostatic gradient); the shear uses the cell-centre velocity at half a cell,
-  !  or the log-law wall stress of the staircase wall model when ibm_wall_model_flag = 1 (the stress the flow receives).
+  !  the closed faces between a fluid cell (phi >= 0) and a solid cell (phi < 0), where the pressure operator has its Neumann
+  !  condition, so uniform pressure gives zero and hydrostatic pressure gives the buoyancy of the staircase body. Face pressure is
+  !  the linear extrapolation of the two fluid cells normal to the face (exact for hydrostatics); shear uses the cell-centre
+  !  velocity at half a cell, or the staircase wall model's log-law stress when ibm_wall_model_flag = 1.
   Subroutine vof_compute_ibm_forces(Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc)
 
     Real(Int64), Intent(Out) :: Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc

@@ -124,16 +124,9 @@ Program dopamine_esem
   ! this rank's local z-slab of the donor grid (interior cell/face count), same global-index convention write_slice_n uses (kg_g = kg1_global(myid)+ka-2)
   nz_local = kg2_global(myid) - kg1_global(myid) - 1
 
-  ! ---- true per-component staggered grids (replicates initialization.f90's own
-  ! y/z/yg/zg ghost-extrapolation setup, its ~lines 190-206) instead of collapsing
-  ! every velocity component onto one shared cell-centre grid. sem_fluctuation /
-  ! build_ensemble_normalisation already key off (comp,j,k) into per-component-
-  ! shaped ens_mean/ens_std arrays (ens_mean_uV sized (ny,nzg): V's own y-face
-  ! grid; ens_mean_wW sized (nyg,nz): W's own z-face grid) -- matching ny/nyg/
-  ! nz/nzg and y/yg/z/zg here to what those really mean reproduces exactly what
-  ! apply_inflow_bc_x's live-SEM branch evaluates at each component's own
-  ! location, eliminating the half-cell index-shift approximation the old
-  ! shared-grid donor forced on inflow_type=2's consumer (sem.f90's recycle_value).
+  ! True per-component staggered grids (same y/z/yg/zg ghost extrapolation as initialization.f90), so that ens_mean_*/ens_std_*
+  ! (sized per component, e.g. ens_mean_uV (ny,nzg)) are evaluated at each component's own location, as apply_inflow_bc_x's live
+  ! SEM does. This removes the half-cell shift the old shared-grid donor forced on sem.f90's recycle_value (inflow_type=2).
   Allocate( yg_global(nym_global+2), zg_global(nzm_global+2) )
   yg_global(2:nym_global+1) = ym_global
   yg_global(1)              = ym_global(1)          - 2d0*(ym_global(1)-y_global(1))
@@ -205,13 +198,8 @@ Program dopamine_esem
 
      lbuf_U = 0d0;  lbuf_V = 0d0;  lbuf_W = 0d0
 
-     ! Only this rank's z-range (kg1_global/kg2_global) is keyed off col = Mod(myid,p_col)
-     ! (decomp_build_xz_ranges), so every rank sharing that col but a different row owns the
-     ! SAME z-slab and would compute IDENTICAL (deterministic) fluctuation values for it --
-     ! summing all of them below via Mpi_Reduce(...,MPI_SUM,...) would inflate the injected
-     ! field by a factor of p_row. Only the row==0 ranks (one per distinct z-column) compute;
-     ! everyone else leaves lbuf_* at zero, so the reduction picks up exactly one contribution
-     ! per z-index regardless of p_row.
+     ! Ranks sharing col = Mod(myid,p_col) own the same z-slab and would compute identical values; the Mpi_Reduce(MPI_SUM) below
+     ! would then inflate the field by p_row. Only row==0 ranks compute, the rest leave lbuf_* at zero.
      If ( myid/p_col == 0 ) Then
 
         ! U: cell-centred in y and z

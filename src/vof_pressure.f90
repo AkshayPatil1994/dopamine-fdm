@@ -1,11 +1,10 @@
 !> Variable-density pressure operator of the two-fluid solver: face coefficients beta = 1/rho_face from the VOF field, the
-!  operator A phi = div(beta grad phi) matching the discrete Laplacian of the fast Poisson solver when beta is constant, and a
-!  preconditioned CG whose preconditioner is that fast solver (solve_poisson_equation) with the lightest-fluid coefficient
-!  (tests/vof/spike_pressure_pcg.f90: 17/28/39 iterations to 1e-6 at density ratios 10/100/1000, independent of the grid).
-!
-!  Conventions follow the solver: cell-centred vectors have the shape (nxg,nyg,nzg) with ghost layers 1 and n; face coefficients
-!  bu(1:nx,:,:), bv(:,1:ny,:), bw(:,:,1:nz) sit on the same faces as U, V, W. The periodic duplicate cell of the last rank and the
-!  ghost cells carry zero weight in the inner products, so the CG sees exactly the distinct unknowns of the Poisson problem.
+!  operator A phi = div(beta grad phi) (equal to the fast Poisson solver's discrete Laplacian for constant beta), and a PCG
+!  preconditioned by that fast solver (solve_poisson_equation) with the lightest-fluid coefficient
+!  (tests/vof/spike_pressure_pcg.f90: 17/28/39 iterations to 1e-6 at density ratios 10/100/1000, grid independent).
+!  Cell-centred vectors have shape (nxg,nyg,nzg) with ghost layers 1 and n; face coefficients bu(1:nx,:,:), bv(:,1:ny,:),
+!  bw(:,:,1:nz) sit on the faces of U, V, W. The periodic duplicate cell of the last rank and the ghost cells have zero weight in
+!  the inner products, so the CG sees exactly the Poisson problem's distinct unknowns.
 Module vof_pressure
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -712,12 +711,11 @@ Contains
   End Subroutine vp_precond
 
 
-  !> Up to nit PCG iterations on A x = f from x = 0 (f need not have zero mean: it is removed), stopping early once the residual
-  !  falls below tol times its initial norm (tol = 0: always nit iterations). With vof_div_tol > 0 and rscale given, the stop is
-  !  instead rscale*max|r| < vof_div_tol: r is the divergence left after the correction, rscale the time scale of f.
-  !  rfloor (optional) is an absolute residual norm below which the solve stops whatever tol says: the round-off level of the
-  !  right-hand side, under which the iteration only amplifies noise. Breakdown (rz or the curvature no longer negative, both operators being negative definite) ends the loop.
-  !  Sets vp_iters_last and the final relative residual.
+  !> Up to nit PCG iterations on A x = f from x = 0 (the mean of f is removed), stopping once the residual falls below tol times
+  !  its initial norm (tol = 0: always nit). With vof_div_tol > 0 and rscale given, the stop is rscale*max|r| < vof_div_tol (r the
+  !  divergence left after the correction, rscale the time scale of f). rfloor (optional) is an absolute residual norm, the
+  !  round-off level of the right-hand side, below which the solve stops whatever tol says. Breakdown (rz or the curvature no
+  !  longer negative; both operators are negative definite) ends the loop. Sets vp_iters_last and the final relative residual.
   Subroutine vp_pcg(f, nit, tol, x, rscale, rfloor)
 
     Real(Int64),    Intent(In)  :: f(nxg,nyg,nzg), tol

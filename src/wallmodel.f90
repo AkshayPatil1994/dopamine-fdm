@@ -169,15 +169,12 @@ Contains
 
   End Subroutine most_stability_functions
 
-  !> Coupled MOST solve for (u_tau, theta_tau) and the Obukhov length L, via
-  !  fixed-point iteration of the Businger-Dyer-corrected log laws:
+  !> Coupled MOST solve for (u_tau, theta_tau) and the Obukhov length L by fixed-point iteration of the Businger-Dyer log laws:
   !    u_tau     = kappa*u_ref  / [ln(y_ref/z0 ) - psi_m(y_ref/L)]
   !    theta_tau = kappa*dtheta / [ln(y_ref/z0h) - psi_h(y_ref/L)]
   !    L         = u_tau^2 * T_ref / (kappa*grav*theta_tau)
-  !  L is seeded from the caller's persisted value (near-converged already once
-  !  the flow is quasi-steady, so this typically only needs 1-2 passes) and
-  !  updated in place. Reduces exactly to solve_u_tau_rough/solve_theta_tau_rough
-  !  in the neutral limit (psi_m=psi_h=0).
+  !  L is seeded from the caller's persisted value (typically 1-2 passes once quasi-steady) and updated in place. Reduces to
+  !  solve_u_tau_rough/solve_theta_tau_rough when neutral (psi_m=psi_h=0).
   Subroutine solve_most(u_ref, dtheta, y_ref, z0, z0h, u_tau, theta_tau, L)
     !$acc routine seq
     Real(Int64), Intent(In)    :: u_ref, dtheta, y_ref, z0, z0h
@@ -248,12 +245,9 @@ Contains
        Call compute_pseudo_pressure_bc_for_robin_bc
     End If
 
-    ! Spanwise (z) wall: smooth Reichardt EQWM only (flat_wall_model_flag==2 rough is
-    ! rejected together with z_bc_type==1 at input-read time). No pressure-BC mutation
-    ! needed here -- the wall-normal (W) Robin coefficient is always exactly 0, so Dzz's
-    ! Neumann-pressure boundary rows (built once in initialization.f90) already apply
-    ! unchanged, exactly mirroring why alpha_y==0 makes compute_pseudo_pressure_bc_for_robin_bc
-    ! a no-op for the y wall today.
+    ! Spanwise (z) wall: smooth Reichardt EQWM only (flat_wall_model_flag==2 with z_bc_type==1 is rejected at input). No
+    ! pressure-BC change: the wall-normal (W) Robin coefficient is 0, so Dzz's Neumann rows (initialization.f90) apply as they do
+    ! for alpha_y==0 at the y wall.
     If ( z_bc_type == 1 .And. flat_wall_model_flag == 1 ) Then
        Call compute_flat_wall_eqwm_z(U_, V_)
     End If
@@ -545,13 +539,10 @@ Contains
 
   End Subroutine compute_flat_wall_eqwm
 
-  !> Spanwise (z) flat-wall EQWM: smooth Reichardt log law only (flat_wall_model_flag==2
-  !  rough is rejected together with z_bc_type==1 at input-read time). U and V are the
-  !  two components tangential to a z wall; W (wall-normal) stays exact no-penetration.
-  !  The wall shear u_tau^2 along the first-cell velocity goes to tau_zu / tau_zv, which
-  !  compute_rhs_u / _v use in place of the molecular wall-edge flux (as tau_x / tau_z at
-  !  the y walls); the ghost planes stay a no-slip mirror. z is domain-decomposed (unlike
-  !  y), so only the rank(s) owning the z=0/z=Lz physical boundary compute real values.
+  !> Spanwise (z) flat-wall EQWM: smooth Reichardt log law only (flat_wall_model_flag==2 with z_bc_type==1 is rejected at input).
+  !  U and V are tangential to a z wall; W stays exact no-penetration. The wall shear u_tau^2 along the first-cell velocity goes to
+  !  tau_zu/tau_zv, which compute_rhs_u/_v use instead of the molecular wall-edge flux (as tau_x/tau_z at the y walls); the ghost
+  !  planes stay a no-slip mirror. z is decomposed, so only the rank(s) owning z=0/z=Lz compute real values.
   Subroutine compute_flat_wall_eqwm_z(U_, V_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_

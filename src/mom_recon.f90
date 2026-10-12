@@ -1,14 +1,12 @@
-!> Face reconstruction kernels for the convective flux of the transported velocity. Pure functions with no solver dependencies so they
-!  can be unit-tested (tests/vof/test_mom_kernels.f90) and shared between the staggered momentum update and any scalar transport.
-!
-!  Face between cells b1 (lower index) and c1 (upper index); stencil  a3 a2 | b1 c1 | c2 c3  ->  values (s(-2:3)) in index order
-!  s(-2)=a3 s(-1)=a2 s(0)=b1 | s(1)=c1 s(2)=c2 s(3)=c3.  mf is the mass flux through the face: its sign selects the upwind side.
-!
+!> Face reconstruction kernels for the convective flux of the transported velocity. Pure functions with no solver dependencies,
+!  so they can be unit-tested (tests/vof/test_mom_kernels.f90) and shared with scalar transport.
+!  Face between cells b1 (lower) and c1 (upper); stencil a3 a2 | b1 c1 | c2 c3 gives s(-2:3) in index order (s(-2)=a3 ... s(3)=c3).
+!  mf is the mass flux through the face: its sign selects the upwind side.
 !  Schemes (mom_scheme):
-!    0 central 2nd order            1 first-order upwind             2 Koren (bounded, TVD, 3rd order)
-!    3 WENO3-Z clipped to stencil   4 QUICK (3rd order, unbounded)   5 central 4th order
-!    6 WENO5-Z (5th order)          7 WENO5-Z clipped                8 QUICK clipped to [min,max] of the three nearest cells
-!  "clipped" = result limited to the range of the three cells nearest the face (up, down, far-up): max-principle for the velocity.
+!    0 central 2nd order        1 first-order upwind       2 Koren (bounded, TVD, 3rd order)
+!    3 WENO3-Z clipped          4 QUICK (3rd order)        5 central 4th order
+!    6 WENO5-Z                  7 WENO5-Z clipped          8 QUICK clipped
+!  "clipped" = limited to the range of the three cells nearest the face (up, down, far-up): max principle for the velocity.
 Module mom_recon
 
   Use iso_fortran_env, Only : Int32, Int64

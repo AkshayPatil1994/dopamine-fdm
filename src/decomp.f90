@@ -133,12 +133,8 @@ Contains
 
   End Subroutine decomp_init_poisson_pencil
 
-  !> Build flat-rank (0:nprocs-1) x/z ownership arrays: i1_global/i2_global/
-  !> ig1_global/ig2_global (x-split via p_row) and k1_global/k2_global/
-  !> kg1_global/kg2_global (z-split via p_col). Assumes MPI's standard
-  !> row-major Cartesian rank ordering (rank = row*p_col + col, the same
-  !> convention MPI_CART_CREATE uses with reorder=.false.) -- self-checked
-  !> against this rank's own decomp_main partition before trusting it.
+  !> Build flat-rank (0:nprocs-1) x/z ownership arrays (i1/i2/ig1/ig2_global via p_row, k1/k2/kg1/kg2_global via p_col). Assumes
+  !> MPI_CART_CREATE's row-major rank order (rank = row*p_col + col, reorder=.false.), self-checked against decomp_main.
   Subroutine decomp_build_xz_ranges
 
     Integer(Int32) :: r, row, col

@@ -477,17 +477,10 @@ Contains
 
     End If
 
-    ! Wall-normal (y) periodicity (y_bc_type==0): local batched complex 1-D FFT
-    ! in y, dimension 2 (fully local in the y-pencil -- y is never MPI-split).
-    ! Same "last interior cell is a redundant duplicate of the first" convention
-    ! as the periodic x/z directions (nxp_global=nxm_global-1): the periodic FFT
-    ! length is nyp = decomp_poisson%ysz(2)-1 = nym_global-1, NOT the full
-    ! nym_global -- the excluded last cell (index nyg-1) is reconstructed by a
-    ! plain copy from index 2 after the solve (see solve_poisson_equation),
-    ! exactly mirroring apply_periodic_xz_pressure's rhs_p(nxg-1,:,:)=rhs_p(2,:,:).
-    ! Batched over the stride-1 x-index only (dim1); the z-index (dim3) is
-    ! looped over at execute time in solve_poisson_equation, since
-    ! fftw_plan_many_dft can only batch over one additional stride/dist pair.
+    ! Periodic y (y_bc_type==0): local batched complex 1-D FFT along dim 2 (y is never MPI-split). As for periodic x/z the last
+    ! interior cell duplicates the first, so the FFT length is nyp = decomp_poisson%ysz(2)-1 = nym_global-1; cell nyg-1 is copied
+    ! from index 2 after the solve (cf. apply_periodic_xz_pressure). The plan batches over the stride-1 x index only; the
+    ! z index is looped at execute time (fftw_plan_many_dft batches one stride/dist pair).
     If ( y_bc_type == 0 ) Then
 
        plan_fy_fwd = fftw_plan_many_dft( 1_C_INT, [Int(decomp_poisson%ysz(2)-1,C_INT)],                      &
@@ -563,12 +556,8 @@ Contains
     Dyy(nyg-1,nyg-2) = c
     coef_bc_2        = a
 
-    ! Persistently device-resident (GPU_POISSON): Dyy is later updated in-place
-    ! by wallmodel.f90's compute_pseudo_pressure_bc_for_robin_bc as the wall
-    ! model's Robin-BC coefficients evolve, which pushes just those changed
-    ! elements with a targeted !$acc update device -- must be registered here,
-    ! before the time loop's first call to that routine, or that update has no
-    ! device copy to target yet.
+    ! Device-resident (GPU_POISSON): wallmodel.f90's compute_pseudo_pressure_bc_for_robin_bc updates Dyy in place with a targeted
+    ! update device, so it must be registered before the first call to that routine.
     !$acc enter data create(Dyy)
     !$acc update device(Dyy)
 
@@ -611,18 +600,10 @@ Contains
 
     End If
 
-    ! 4-wall duct (y_bc_type==1 .And. z_bc_type==1): the 2D (y,z) pressure problem doesn't
-    ! separate via FFT in either direction, so instead diagonalise Dzz's interior tridiagonal
-    ! part via LAPACK's symmetric-tridiagonal eigensolver. Dzz itself is symmetric only for a
-    ! uniform z grid (a==c at every row, confirmed by construction above); a stretched z
-    ! (alpha_grid_z>0) breaks that, so we diagonalise the similarity-transformed, exactly
-    ! symmetric S = W^(1/2) Dzz W^(-1/2) instead (W = diag(cell widths) -- see global.f90's
-    ! lambda_z/Qz/sqrt_w_z comment for the full derivation). S shares Dzz's eigenvalues; the
-    ! sqrt_w_z weighting recovers Dzz's own eigenvectors at the point of use in
-    ! solve_poisson_equation. Reduces to the plain (unweighted) uniform-grid case when
-    ! sqrt_w_z is constant. Each resulting z-eigenmode then reduces the coupled problem to an
-    ! independent 1D y-tridiagonal solve, exactly like the periodic-z case's kzz, but using
-    ! lambda_z(m) instead of a closed-form wavenumber.
+    ! 4-wall duct: the (y,z) pressure problem does not separate by FFT, so Dzz's interior tridiagonal part is diagonalised with
+    ! LAPACK's symmetric-tridiagonal eigensolver, via the symmetrised S = W^(1/2) Dzz W^(-1/2) on stretched z (see lambda_z/Qz/
+    ! sqrt_w_z in global.f90). Each z-mode then gives an independent y-tridiagonal solve with lambda_z(m) in place of the
+    ! periodic-z wavenumber kzz.
     If ( y_bc_type == 1 .And. z_bc_type == 1 ) Then
 
        Allocate ( lambda_z(nzm_global), Qz(nzm_global,nzm_global), sqrt_w_z(nzm_global) )
@@ -850,23 +831,16 @@ Contains
        !$acc update device(Cscal,Cscal_o)
     End If
 #ifdef GPU_POISSON
-    ! (rhs_p_hat is no longer used by the GPU Poisson path -- the pencil solve works in place on poisson_y_c)
-    ! P itself is host-only (only ever touched at rk_step==3, 1-in-3 RK substages),
-    ! but solve_poisson_equation's ghost/periodic-BC fill for it reuses the same
-    ! apply_periodic_bc_x/z routines the device-resident U/V/W use, which assume
-    ! their argument is already present on device -- register P here so that
-    ! shared !$acc kernels code doesn't fail, and round-trip it via a targeted
-    ! update device/host pair around just that fill (see projection.f90)
+    ! rhs_p_hat is unused by the GPU Poisson path (the pencil solve works in place on poisson_y_c). P stays host-only (touched
+    ! at rk_step==3), but the periodic-BC fill in solve_poisson_equation reuses the device apply_periodic_bc_x/z routines, which
+    ! need P present on device: register it and round-trip it with a targeted update around that fill (see projection.f90).
     !$acc enter data create(P)
     !$acc update device(P)
 #endif
 
-    ! Fill the rank-seam halos and periodic wraps of the initial U,V,W once: the IC (and a restart file's
-    ! unwritten ghost layers) leave the z/x ghost planes unset, so step 1 saw zeros there -- at the rank seam
-    ! for np>1 but at the periodic edge for np=1, which made the first step, and hence everything after it,
-    ! depend on the rank count. (Wall/inflow BCs are left to the per-step application: they depend on
-    ! wall-model coefficients that do not exist yet, and outflow relaxation is not idempotent.)
-    ! Fresh starts only: a restart file already holds the previous step's fully filled state.
+    ! Fill the rank-seam halos and periodic wraps of the initial U,V,W once: the IC (and a restart file's unwritten ghosts) leave
+    ! them unset, which made step 1 depend on the rank count. Wall/inflow BCs are left to the per-step application (they need
+    ! wall-model coefficients that do not exist yet, and outflow relaxation is not idempotent). Fresh starts only.
     If ( restart == 0 ) Then
        Call exchange_velocity_halos
        If ( x_bc_type == 0 ) Then

@@ -14,12 +14,10 @@ Module poisson_gpu
 
   Logical :: plans_created = .False.
 
-  ! Genuine 3D periodic cuFFT transform (y_bc_type==0 AND x_bc_type==0 only)
-  ! (pencil-decomposed: batched 1-D cuFFT plans, one per pencil orientation, wired between
-  ! 2decomp&fft's GPU (CUDA-aware) transposes exactly like projection.f90's CPU FFTW path)
-  ! plan_p3_x: real-to-complex (D2Z) forward x transform, plan_p3_xi: its complex-to-real (Z2D) inverse; the
-  ! spectral arrays (poisson_x_c/y_c/z_c) hold only the nxp/2+1 non-redundant kx modes (decomp_spec), halving
-  ! the data moved by the y<->z pencil transposes
+  ! 3D periodic cuFFT transform (y_bc_type==0 AND x_bc_type==0 only): batched 1-D cuFFT plans, one per pencil orientation,
+  ! wired between 2decomp&fft's CUDA-aware transposes like projection.f90's CPU FFTW path. plan_p3_x is the D2Z forward x
+  ! transform, plan_p3_xi its Z2D inverse; the spectral arrays (poisson_x_c/y_c/z_c) hold only the nxp/2+1 non-redundant kx modes
+  ! (decomp_spec), halving the data moved by the y<->z transposes.
   Integer :: plan_p3_x, plan_p3_xi, plan_p3_y, plan_p3_z
 
   ! DCT-IV (x_bc_type==1) state: zero-padded 4N-point Z2Z FFT of every x-line of this rank's x-pencil + twiddle
@@ -404,10 +402,8 @@ Contains
     ierr = cusparseCreate( cusparse_h )
     If ( ierr /= 0 ) Call gpu_abort('ERROR: cusparseCreate failed')
 
-    ! gtsv_dl/d/du/x are pure per-call scratch (fully overwritten before being
-    ! read each call in gpu_solve_tridiagonal_batched), so a one-time device
-    ! allocation here -- instead of create/destroy on every call -- is safe;
-    ! the placeholder values only need to be on-device for this sizing query.
+    ! gtsv_dl/d/du/x are per-call scratch, fully overwritten before use in gpu_solve_tridiagonal_batched, so one device allocation
+    ! here (the placeholder values only serve the sizing query) replaces create/destroy on every call.
     !$acc enter data create(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
     !$acc update device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
     !$acc host_data use_device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)

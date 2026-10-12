@@ -1,12 +1,9 @@
-!> Host-side padded copies of a decomposed field: E extra planes beyond the one ghost plane the solver arrays carry, in x and z.
-!  The single ghost plane is enough for the stencils of the solver itself, but not for anything that samples the field at
-!  displaced points (a particle's RK stages, the image points of ghost-cell IBM, finite differences of the SDF); with only the
-!  ghost plane such a sample near a rank seam clamps, and the result depends on the rank layout.
-!
-!  Plane rules follow apply_periodic_bc_x/z. Across a rank seam the extra planes come from the neighbour: the high side from its
-!  planes 3..2+E, the low side from its planes n-1-E..n-2 (n = the neighbour's own plane count). Across the periodic wrap the
-!  first rank supplies planes 4..3+E (cell-centred) or 3..2+E (face-located) and the last rank planes n-2-E..n-3 (cell-centred)
-!  or n-1-E..n-2 (face-located). At a non-periodic domain edge the extra planes repeat the edge plane.
+!> Host-side padded copies of a decomposed field: E extra planes beyond the one ghost plane, in x and z. Needed by anything
+!  that samples at displaced points (particle RK stages, IBM image points, SDF differences), which would clamp near a rank
+!  seam and make the result depend on the rank layout.
+!  Plane rules follow apply_periodic_bc_x/z. Across a seam the high side takes the neighbour's planes 3..2+E, the low side its
+!  planes n-1-E..n-2 (n = its plane count). Across the periodic wrap the first rank supplies planes 4..3+E (cell-centred) or
+!  3..2+E (face-located), the last rank n-2-E..n-3 or n-1-E..n-2. At a non-periodic edge the edge plane is repeated.
 Module halo_pad
 
   Use iso_fortran_env, Only : Int32, Int64

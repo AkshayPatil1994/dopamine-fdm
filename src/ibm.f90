@@ -294,13 +294,9 @@ Contains
 
     Call read_distributed_scalar_field(ibm_sdf_file, phi)
 
-    ! Ghost BCs for phi at domain boundaries: true periodic wrap when x_bc_type/z_bc_type
-    ! select periodic (matches solve_poisson_equation's treatment of P, projection.f90),
-    ! Neumann (zero-gradient) otherwise. x=1/nxg (resp. z=1/nzg) is an inter-rank seam
-    ! (already correctly populated straight from the global file slice) on any rank that
-    ! doesn't own the true global domain edge, so the Neumann branch skips it there.
-    ! is_first_x/is_last_x are needed below regardless of branch (passed to
-    ! smooth_ibm_corners), so resolve them unconditionally -- cheap, no communication.
+    ! phi ghost BCs at domain boundaries: periodic wrap for periodic x/z, zero-gradient otherwise. Index 1/nxg (1/nzg) is a
+    ! rank seam, already filled from the global file slice, so the Neumann branch skips it there. is_first_x/is_last_x are
+    ! needed by smooth_ibm_corners in either branch.
     Call x_periodic_partner(is_first_x, is_last_x, partner_x)
     If ( x_bc_type == 0 ) Then
        Call phi_wrap_x_host
@@ -356,14 +352,9 @@ Contains
 
   End Subroutine read_phi_from_sdf_file
 
-  !> Round sharp SDF corners by smooth_ibm passes of 6-point Jacobi averaging on phi (no-op
-  !> when smooth_ibm<=0, the default -- exact original sharp geometry). At a sharp corner the
-  !> ghost-cell surface normal (compute_normal_at_cc/_face_*) is discontinuous, and the
-  !> resulting rough near-body reconstruction has nothing to damp it once injected into the
-  !> (non-dissipative) skew-symmetric advection scheme, which is what produces Gibbs-like
-  !> ringing there. Smoothing phi directly blunts the corner by ~smooth_ibm grid cells, giving
-  !> the ghost-cell method a continuous normal to work with at the cost of that much geometric
-  !> fidelity right at the corner.
+  !> Round sharp SDF corners with smooth_ibm Jacobi passes (6-point average) on phi; no-op for smooth_ibm<=0 (default). At a
+  !> sharp corner the ghost-cell normal is discontinuous and the non-dissipative skew-symmetric advection rings (Gibbs-like);
+  !> smoothing blunts the corner by ~smooth_ibm cells at the cost of that much geometric fidelity.
   Subroutine smooth_ibm_corners(is_first_x, is_last_x)
 
     Logical, Intent(In) :: is_first_x, is_last_x
@@ -1621,14 +1612,9 @@ Contains
 
   End Subroutine setup_ibm_ext
 
-  !  Find lower-left cell-centre index (ii,jj,kk) such that
-  !  xg(ii) <= xp < xg(ii+1) etc. — trilinear stencil anchor.
-  !  Search range is the full [1,Ng-1] the single MPI ghost/halo plane on each
-  !  side actually supports (not [2,Ng-2]): an image point near a rank's own
-  !  z-seam can legitimately anchor in that halo plane, and restricting the
-  !  search to the interior silently mis-resolves it to the wrong index
-  !  (previously observed as ghost cells dropped/misclassified differently
-  !  depending on MPI rank count for cells near a z-decomposition seam).
+  ! Lower-left cell-centre index (ii,jj,kk) with xg(ii) <= xp < xg(ii+1): trilinear stencil anchor. The search spans the full
+  ! [1,Ng-1] that the ghost plane supports, not [2,Ng-2]: an image point near a z-seam can anchor in the halo plane, and
+  ! restricting to the interior misclassified ghost cells depending on the rank count.
   Subroutine find_stencil_centre(xp, yp, zp, ii, jj, kk)
     Real   (Int64), Intent(In)  :: xp, yp, zp
     Integer(Int32), Intent(Out) :: ii, jj, kk

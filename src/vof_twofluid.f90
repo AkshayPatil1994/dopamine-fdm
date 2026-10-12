@@ -1,4 +1,5 @@
-!> Two-fluid time step on the staggered grid (VOF liquid fraction C, one-fluid momentum). Validated design from tests/vof/spike_c_momentum.f90:
+!> Two-fluid time step on the staggered grid (VOF liquid fraction C, one-fluid momentum); design validated in
+!> tests/vof/spike_c_momentum.f90:
 !>
 !>   Strang step:  A(dt/2) - project - RK3(forces, frozen density) - A(dt/2) - project
 !>
@@ -6,11 +7,11 @@
 !>           transported consistently (uniform velocity is reproduced exactly at any density ratio); the c-tilde*div(u) term of
 !>           the C update enters the momentum update with rho-tilde. Central face interpolation of the transported velocity.
 !>   RK3     Wray stages with the solver's coefficients: viscous stress (variable viscosity), gravity with the still-water
-!>           hydrostatic part removed, and the pressure as an explicit predictor (previous stage) plus an increment from a few PCG
-!>           iterations preconditioned by the constant-coefficient fast solver (vof_pressure).
+!>           hydrostatic part removed, and the pressure as an explicit predictor (previous stage) plus an increment from a few
+!>           PCG iterations preconditioned by the fast solver (vof_pressure).
 !>
-!>  Supported: DNS/LES without wall model, periodic or wall boundaries, ghost-cell IBM (velocity condition), wave inlet and relaxation
-!>  zones; not scalars, particles, UAV or the wall models (checked at input).
+!> Supported: DNS/LES without wall model, periodic or wall boundaries, ghost-cell IBM (velocity condition), wave inlet and
+!> relaxation zones. Not supported (checked at input): scalars, particles, UAV, wall models.
 Module vof_twofluid
 
   Use iso_fortran_env, Only : Int32, Int64

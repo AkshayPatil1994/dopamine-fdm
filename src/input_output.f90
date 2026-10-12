@@ -1141,12 +1141,9 @@ Contains
     If ( myid == 0 ) Then
        Read(unit_no) nn
 
-       ! nn is the field's global (nx1,nx2,nx3) block shape as written; cross-check
-       ! against what this call expects (x/z face-vs-ghost count per is_x_face/
-       ! is_z_face, y always the caller's own full local extent since y is never
-       ! MPI-decomposed) instead of trusting it blindly -- a mismatch here would
-       ! otherwise only surface later as an out-of-bounds/shape-mismatch crash (or,
-       ! worse, silently wrong data) inside the ix1:ix2,:,iz1:iz2 slice below.
+       ! nn is the field's global (nx1,nx2,nx3) block shape as written; cross-check it against what this call expects (x/z face vs
+       ! ghost count per is_x_face/is_z_face, y the caller's full local extent) rather than risk a shape-mismatch crash or silently
+       ! wrong data in the ix1:ix2,:,iz1:iz2 slice below.
        expect_n1 = Merge(nx_global, nxg_global, is_x_face)
        expect_n3 = Merge(nz_global, nzg_global, is_z_face)
        If ( nn(1) /= expect_n1 .Or. nn(2) /= Size(field_local,2) .Or. nn(3) /= expect_n3 ) Then
@@ -1181,12 +1178,9 @@ Contains
 
   End Subroutine read_distributed_field_block
 
-  !> Skip past one x/z-decomposed field block on a stream unit open on rank 0 only,
-  !  without reading its payload into memory or distributing it over MPI -- used by
-  !  read_scalar_restart/read_temperature_restart to fast-forward past the U/V/W/P
-  !  blocks already consumed by read_input_data, which this restart pass doesn't need.
-  !  dim2_size/is_x_face/is_z_face as in read_distributed_field_block (dim2_size is
-  !  that routine's Size(field_local,2), since there's no local array here to ask).
+  !> Skip one x/z-decomposed field block on a stream unit open on rank 0 only, without reading or distributing the payload; used
+  !  by read_scalar_restart/read_temperature_restart to pass the U/V/W/P blocks already consumed by read_input_data. Arguments
+  !  as in read_distributed_field_block (dim2_size = its Size(field_local,2)).
   Subroutine skip_distributed_field_block(unit_no, dim2_size, is_x_face, is_z_face)
 
     Integer(Int32), Intent(In) :: unit_no, dim2_size
@@ -1337,12 +1331,9 @@ Contains
           Call write_distributed_field_block(1, Cvof_io, nxg_global, nyg_global, nzg_global, .False., .False.)
        End If
 
-       ! Particle positions/state (src/particles.f90): separate restart file (latest state
-       ! only, gather/scatter I/O), plus a timestamped snapshot for ParaView visualization
-       ! (postProcessing/generate_particles_xmf.py) alongside the field snapshot above.
-       ! ext (above) is only ever assigned inside the myid==0 block, so pext/pfname are
-       ! recomputed here identically on every rank -- write_particle_snapshot is a
-       ! collective call and every rank must agree on the filename.
+       ! Particle state (src/particles.f90): separate latest-state restart file plus a timestamped snapshot for ParaView
+       ! (postProcessing/generate_particles_xmf.py). ext is assigned on rank 0 only, so pext/pfname are recomputed on every rank:
+       ! write_particle_snapshot is collective and all ranks must agree on the filename.
        If ( particles_active >= 1 ) Then
           Call write_particle_restart
           Write(pext,'(I8)') istep + nstep_init

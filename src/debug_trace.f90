@@ -1,14 +1,9 @@
-!> Debug-only decomposition tracing: dumps every field at named points of the time step, assembled by global
-!  index on rank 0, and checks each rank's ghost cells against the owning rank's interior value.
-!
-!  Enabled by the environment variable DOPAMINE_TRACE_DIR (unset = one cheap logical test per call, nothing else).
-!  DOPAMINE_TRACE_STEPS (default 2) is the number of steps traced, starting at step DOPAMINE_TRACE_START (default 1).
-!
-!  Outputs, per trace point and field:
-!    <dir>/<seq>_<tag>.<field>   3 int32 (n1,n2,n3) + float64 global array, ghost cells included
-!    <dir>/seam.log              one line per point/field: largest |ghost - owner interior| and where
-!  Run the same case at two rank counts and compare the dump directories with tests/regression/trace_compare.py
-!  to find the first point/field/cell at which the decomposition changes the result.
+!> Debug-only decomposition tracing: dumps every field at named points of the time step, assembled by global index on rank 0,
+!  and checks each rank's ghost cells against the owning rank's interior value.
+!  Enabled by DOPAMINE_TRACE_DIR (unset = one logical test per call); DOPAMINE_TRACE_STEPS (default 2) steps are traced from
+!  DOPAMINE_TRACE_START (default 1). Per point and field: <dir>/<seq>_<tag>.<field> (3 int32 n1,n2,n3 + float64 global array,
+!  ghosts included) and one line in <dir>/seam.log (largest |ghost - owner interior| and where). Compare two rank counts with
+!  tests/regression/trace_compare.py.
 Module debug_trace
 
   Use iso_fortran_env, Only : Int32, Int64

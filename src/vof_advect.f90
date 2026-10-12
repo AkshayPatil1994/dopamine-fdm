@@ -1,11 +1,9 @@
-!> Geometric PLIC advection of the liquid volume fraction on the staggered Cartesian grid: Weymouth & Yue (2010) directional sweeps,
-!  each face flux being the exact liquid volume in the slab |u| dt upstream of the face.
-!
-!  Array conventions follow the solver: cell-centred C lives on a padded array Cp(0:n1+1,0:n2+1,0:n3+1) whose interior cells are
-!  2..n-1 (1 and n are ghost cells, 0 and n+1 the second layer needed for the donor cell's normal); face velocities U(1:n1-1,:,:),
-!  V(:,1:n2-1,:), W(:,:,1:n3-1) sit on the upper face of cell i (U(i) between cells i and i+1). Cell widths are h1(1:n1), h2(1:n2),
-!  h3(1:n3), so stretched directions are allowed. The velocity must be discretely divergence-free for the update to stay bounded
-!  and conservative; no module here depends on MPI, the solver globals or the I/O.
+!> Geometric PLIC advection of the liquid volume fraction on the staggered Cartesian grid: Weymouth & Yue (2010) directional
+!  sweeps, each face flux being the exact liquid volume in the slab |u| dt upstream of the face.
+!  Conventions: C lives on a padded Cp(0:n1+1,0:n2+1,0:n3+1) with interior 2..n-1 (1 and n ghost, 0 and n+1 the second layer
+!  for the donor cell's normal); face velocities U(1:n1-1,:,:), V(:,1:n2-1,:), W(:,:,1:n3-1) sit on the upper face of cell i.
+!  Cell widths h1,h2,h3 allow stretching. The velocity must be discretely divergence-free for boundedness and conservation.
+!  No dependence on MPI, solver globals or I/O.
 Module vof_advect
 
   Use iso_fortran_env, Only : Int32, Int64

@@ -1,15 +1,15 @@
-!> Wave generation for the two-fluid solver: target free-surface elevation and velocity of a long-crested wave travelling in +x over
-!  the still-water depth d = vof_level (the bed is y = 0), used for the Dirichlet inlet and the relaxation zones.
+!> Wave generation for the two-fluid solver: target free-surface elevation and velocity of a long-crested wave travelling in +x
+!  over the still-water depth d = vof_level (bed at y = 0), used for the Dirichlet inlet and the relaxation zones.
 !
 !    wave_type 1  linear (Airy) wave of height wave_height and period wave_period
 !    wave_type 2  Rienecker-Fenton stream-function wave of the same height and period (nonlinear)
-!    wave_type 3  JONSWAP spectrum (wave_Hs, wave_Tp, wave_gamma) as a sum of wave_nfreq linear components with seeded random
-!                 phases, finite-depth dispersion and Wheeler stretching of the velocity profile
+!    wave_type 3  JONSWAP spectrum (wave_Hs, wave_Tp, wave_gamma) as wave_nfreq linear components with seeded random phases,
+!                 finite-depth dispersion and Wheeler stretching of the velocity profile
 !
-!  A mean current (current_type, throughflow) adds to the water velocity; the air then still returns only the wave's flux.
-!  Above the surface the water velocity is not defined; the air carries the uniform return flow that makes the inlet flux zero (a
-!  closed flume): u_air = -Q/(Ly - d - eta), Q the volume flux of the water column. All setup (dispersion roots, spectrum, phases,
-!  the stream-function solve) runs on every rank from the same inputs and the same seed, so no communication is needed.
+!  A mean current (current_type, throughflow) adds to the water velocity. Above the surface the water velocity is undefined; the
+!  air carries the uniform return flow that makes the inlet flux zero (closed flume): u_air = -Q/(Ly - d - eta), Q the water
+!  column's volume flux. All setup (dispersion roots, spectrum, phases, stream-function solve) runs on every rank from the same
+!  inputs and seed, so no communication is needed.
 Module waves
 
   Use iso_fortran_env, Only : Int32, Int64

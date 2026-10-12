@@ -1,18 +1,17 @@
 !> Mask-aware geometric multigrid preconditioner for the masked PCG of vof_pressure (pcg_precond = 1).
 !
-!  The operator is the symmetric conductance form S = -V A of A = div(beta grad) (V the cell volumes), so that z = A^-1 r is
-!  computed as z = -S^-1 (V r) and the preconditioner is symmetric negative definite like A. Coarse cells are aggregates of
-!  2x2x2 (or fewer, see mg_coarsen) rank-local fine cells, the transfers are piecewise constant (restriction = sum = transpose
-!  of the prolongation) and the coarse conductances are the sums of the fine conductances crossing a coarse face, scaled by
-!  (fine centre distance)/(coarse centre distance) in the coarsened direction. Closed faces therefore stay closed and a coarse
-!  face is open if any fine face under it is open; solid cells and sealed pockets give empty or singular rows that the
-!  smoother leaves alone. The smoother is a Chebyshev polynomial of the y-line-Jacobi iteration (exact tridiagonal solves along
-!  the stretched y direction, which carries the grid anisotropy), the same polynomial before and after the coarse correction,
-!  so the V-cycle from a zero guess is a fixed symmetric operator.
+!  The operator is the symmetric conductance form S = -V A of A = div(beta grad) (V the cell volumes), so z = A^-1 r is
+!  z = -S^-1 (V r) and the preconditioner is symmetric negative definite like A. Coarse cells aggregate 2x2x2 (or fewer, see
+!  mg_coarsen) rank-local fine cells; transfers are piecewise constant (restriction = sum = transpose of prolongation); coarse
+!  conductances sum the fine ones crossing a coarse face, scaled by (fine centre distance)/(coarse centre distance) in the
+!  coarsened direction. Closed faces stay closed, a coarse face is open if any fine face under it is, and solid cells and sealed
+!  pockets give empty or singular rows that the smoother leaves alone. The smoother is a Chebyshev polynomial of the y-line-Jacobi
+!  iteration (exact tridiagonal solves along the stretched y direction, which carries the anisotropy), the same before and after
+!  the coarse correction, so the V-cycle from a zero guess is a fixed symmetric operator.
 !
 !  Level arrays are flat 1D storage with one offset per level, indexed (0:ni+1,0:nj+1,0:nk+1) through explicit-shape dummies:
-!  cells 1:n are the distinct unknowns (the periodic duplicate cell of the last rank is not one), 0 and n+1 the ghost layer
-!  (neighbour rank, periodic partner, Neumann copy or the Dirichlet reflection of the x outlet). cx(i) joins cells i and i+1.
+!  cells 1:n are the distinct unknowns (not the periodic duplicate cell of the last rank), 0 and n+1 the ghost layer (neighbour
+!  rank, periodic partner, Neumann copy or the Dirichlet reflection of the x outlet). cx(i) joins cells i and i+1.
 Module vof_mg
 
   Use iso_fortran_env, Only : Int32, Int64, Real32

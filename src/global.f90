@@ -241,19 +241,11 @@ Module global
   Complex (Int64), Dimension(:,:), Allocatable :: Dyy
   Complex (Int64), Dimension(:,:), Allocatable :: Dzz   ! spanwise (z) wall pressure operator (z_bc_type==1 only), global extent -- see Dyy
 
-  ! 4-wall duct (y_bc_type==1 .And. z_bc_type==1 only): eigendecomposition of the z-wall operator's
-  ! interior tridiagonal part, used to decouple z from the coupled 2D (y,z) pressure Poisson
-  ! problem into nzm_global independent 1D y-tridiagonal solves, one per z-eigenmode, each
-  ! reusing the same Zgtsv-in-y machinery as the y_bc_type==1/z periodic case (just adding
-  ! lambda_z(m) to the diagonal instead of kzz). See solve_poisson_equation.
-  !
-  ! Dzz itself is symmetric only for a UNIFORM z grid; a stretched z (alpha_grid_z>0) makes it
-  ! non-symmetric, so we diagonalise the similarity-transformed S = W^(1/2) Dzz W^(-1/2) instead
-  ! (W = diag(cell widths) -- a standard finite-volume trick: W*Dzz is exactly symmetric by
-  ! construction, so S is too), which shares Dzz's eigenvalues and has orthonormal eigenvectors
-  ! Qz. Dzz's own (non-orthogonal in general) eigenvectors are V = W^(-1/2)*Qz, so the forward/
-  ! inverse transforms in solve_poisson_equation pre/post-multiply by sqrt_w_z = sqrt(diag(W)).
-  ! Reduces exactly to the plain uniform-grid case when sqrt_w_z is constant (cancels out).
+  ! 4-wall duct (y_bc_type==1 .And. z_bc_type==1): eigendecomposition of the z-wall operator's interior tridiagonal part, which
+  ! decouples the (y,z) pressure problem into nzm_global 1D y-tridiagonal solves (one per z-mode, lambda_z(m) added to the
+  ! diagonal). Dzz is symmetric only on a uniform z grid, so S = W^(1/2) Dzz W^(-1/2) (W = diag(cell widths)) is diagonalised
+  ! instead: same eigenvalues, orthonormal Qz, and Dzz's eigenvectors are W^(-1/2) Qz, hence the sqrt_w_z pre/post-multiplication
+  ! in solve_poisson_equation.
   Real (Int64), Dimension(:),   Allocatable :: lambda_z    ! eigenvalues, ascending, length nzm_global
   Real (Int64), Dimension(:,:), Allocatable :: Qz          ! orthonormal eigenvectors of S, nzm_global x nzm_global
   Real (Int64), Dimension(:),   Allocatable :: sqrt_w_z    ! sqrt(cell width), length nzm_global
@@ -422,12 +414,8 @@ Module global
   Real(Int64), Allocatable, Dimension(:) :: ghost_v_dGB   ! (n_ghost_v)
   Real(Int64), Allocatable, Dimension(:) :: ghost_w_dGB   ! (n_ghost_w)
 
-  ! Distance from ghost cell G to image point I along the wall normal:
-  ! Max(2*dGB, n_image_layers*dymin), clamped up from the mirror distance 2*dGB
-  ! when the true dGB is small compared to the local grid spacing (small/thin
-  ! features on a coarse grid) so I reliably lands outside G's own grid cell.
-  ! Ghost reconstruction uses the general two-point form with r = dGB/dGI
-  ! (reduces to the textbook r=0.5 mirror when dGI is not clamped).
+  ! Ghost-to-image distance along the wall normal: Max(2*dGB, n_image_layers*dymin), so I lands outside G's own cell when dGB is
+  ! small against the grid spacing. Ghost reconstruction uses the two-point form with r = dGB/dGI (r=0.5 mirror when unclamped).
   Real(Int64), Allocatable, Dimension(:) :: ghost_u_dGI   ! (n_ghost_u)
   Real(Int64), Allocatable, Dimension(:) :: ghost_v_dGI   ! (n_ghost_v)
   Real(Int64), Allocatable, Dimension(:) :: ghost_w_dGI   ! (n_ghost_w)
@@ -516,26 +504,17 @@ Module global
   Integer(Int32), Parameter :: max_ibm_objects = 15
   Integer(Int32) :: ibm_T_bc_type(0:max_ibm_objects) = 0
   Real   (Int64) :: ibm_T_wall   (0:max_ibm_objects) = 0d0
-  ! Per-object IBM momentum roughness length [m] (0 = smooth Reichardt EQWM, the
-  ! default); only consumed when ibm_wall_model_flag=1. Independent thermal
-  ! roughness (ibm_z0h) is not yet wired into the IBM thermal ghost-cell BC --
-  ! see apply_ghost_cell_ibm_scalar's plain adiabatic/isothermal mirror, which
-  ! would need its own reference-cell EQWM infrastructure (like ghost_u_ref/yref)
-  ! to support a flux-consistent rough BC; deferred.
+  ! Per-object IBM momentum roughness length [m] (0 = smooth Reichardt EQWM); used only when ibm_wall_model_flag=1. A thermal
+  ! roughness (ibm_z0h) is not wired into apply_ghost_cell_ibm_scalar, whose plain adiabatic/isothermal mirror would need its own
+  ! reference-cell EQWM.
   Real   (Int64) :: ibm_z0(0:max_ibm_objects) = 0d0
   !$acc declare create(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,ibm_T_bc_type,ibm_T_wall,ibm_z0)
 
-  ! UAV actuator disk (src/uav_actuator.f90): a disk with uniform loading,
-  ! applying a purely vertical (y) reaction force to the fluid; static or
-  ! path-following, with a fixed or scheduled thrust. Horizontal force
-  ! components are not modelled.
-  ! uav_active:        0=off (default), 1=on
-  ! uav_hover_thrust:  disk thrust in this solver's KINEMATIC convention,
-  !                    i.e. (physical thrust)/(fluid density) [m^4/s^2] --
-  !                    matches dPdx's kinematic convention (this solver
-  !                    tracks P/rho, not P; there is no explicit rho anywhere)
-  ! uav_kernel_ncell:  regularized-delta (Gaussian) kernel support radius, in
-  !                    grid cells, used to spread each marker's force
+  ! UAV actuator disk (src/uav_actuator.f90): uniform loading, purely vertical (y) reaction force, static or path-following,
+  ! fixed or scheduled thrust.
+  ! uav_active:       0=off (default), 1=on
+  ! uav_hover_thrust: kinematic thrust (physical thrust)/(fluid density) [m^4/s^2], as for dPdx (the solver tracks P/rho)
+  ! uav_kernel_ncell: support radius of the Gaussian delta kernel spreading each marker's force, in grid cells
   Integer(Int32) :: uav_active        = 0
   Real   (Int64) :: uav_xc            = 0d0
   Real   (Int64) :: uav_yc            = 0d0
@@ -545,43 +524,21 @@ Module global
   Integer(Int32) :: uav_n_theta       = 24
   Real   (Int64) :: uav_hover_thrust  = 0d0
   Integer(Int32) :: uav_kernel_ncell  = 2
-  ! Phase 2: path-following disk (still horizontal/untilted -- orientation
-  ! tilt for cruise segments is a later phase, see design doc). When
-  ! uav_path_active=0 (default) the disk stays at the fixed (uav_xc,uav_yc,
-  ! uav_zc) above; when 1, its centre instead follows uav_path_file (rows
-  ! "t x y z", monotonically increasing t) via cubic Hermite (Catmull-Rom
-  ! tangent) interpolation, clamped to the first/last waypoint outside the
-  ! file's time range.
+  ! Path-following disk (untilted): with uav_path_active=1 the centre follows uav_path_file (rows "t x y z", increasing t) by
+  ! cubic Hermite (Catmull-Rom tangent) interpolation, clamped to the end waypoints; otherwise it stays at (uav_xc,uav_yc,uav_zc).
   Integer(Int32) :: uav_path_active   = 0
   Character(200) :: uav_path_file     = ''
-  ! Time-varying thrust schedule: when uav_thrust_active=0 (default), the
-  ! disk uses the fixed uav_hover_thrust above for its whole run; when 1,
-  ! it instead uses uav_thrust_file (rows "t T", same interpolation as the
-  ! path) -- e.g. a takeoff surge above hover thrust, a reduced-thrust
-  ! controlled descent, and a landing flare, all as a function of time
-  ! (equivalently of position, since position is itself a function of time
-  ! along uav_path_file).
+  ! Thrust schedule: with uav_thrust_active=1 the thrust follows uav_thrust_file (rows "t T", interpolated like the path) instead
+  ! of the fixed uav_hover_thrust, e.g. takeoff surge, controlled descent, landing flare.
   Integer(Int32) :: uav_thrust_active = 0
   Character(200) :: uav_thrust_file   = ''
-  ! uav_load_profile:  0=uniform disk loading (default), 1=parabolic tip-taper
-  !                    (marker share weighted by 1-(r/R)^2, renormalized to
-  !                    still sum to 1) -- a drop-in reweighting of the marker
-  !                    table, no change to the force-application code path.
-  ! uav_tilt_active:   0=disk stays horizontal (default, i.e. identical to
-  !                    the untilted model above); 1=disk normal is derived
-  !                    automatically each step from the path's own kinematic
-  !                    acceleration (differentially-flat point-mass tilt:
-  !                    n ~ (ax, grav+ay, az)), low-pass filtered with time
-  !                    constant uav_tilt_tau to tame the Catmull-Rom path's
-  !                    knot-to-knot acceleration discontinuities. Requires
-  !                    uav_path_active=1 to have any effect (a static disk's
-  !                    path acceleration is identically zero).
-  ! uav_tilt_tau:      low-pass time constant [s] for the tilt filter above.
-  ! uav_swirl_frac:    0=no swirl (default); tangential (in-plane) reaction
-  !                    force per marker as a fraction of that marker's own
-  !                    thrust share, representing rotor torque reaction.
-  !                    Rotation sense is an arbitrary modelling choice, not
-  !                    derived from any tracked rotor RPM/direction.
+  ! uav_load_profile: 0=uniform (default), 1=parabolic tip taper (marker share weighted 1-(r/R)^2, renormalised to sum to 1)
+  ! uav_tilt_active:  1=disk normal from the path's kinematic acceleration (differentially-flat point mass: n ~ (ax, grav+ay, az)),
+  !                   low-pass filtered with uav_tilt_tau to smooth the Catmull-Rom knot-to-knot acceleration jumps; needs
+  !                   uav_path_active=1 (a static disk has zero path acceleration). 0=horizontal (default)
+  ! uav_tilt_tau:     tilt filter time constant [s]
+  ! uav_swirl_frac:   tangential in-plane force per marker as a fraction of its thrust share (rotor torque reaction, 0=none);
+  !                   the rotation sense is an arbitrary modelling choice
   Integer(Int32) :: uav_load_profile  = 0
   Integer(Int32) :: uav_tilt_active   = 0
   Real   (Int64) :: uav_tilt_tau      = 0.2d0
@@ -602,47 +559,25 @@ Module global
   Character(200) :: rsb_hom_dir = 'x,z'
   Character(200) :: rsb_fileout = 'rsb'
 
-  ! Bezier-parametrized SEM inflow Reynolds-stress optimization: a single-run (online) realization
-  ! of Lamberti et al. 2018 (JWEIA 177:32-44) Sections 5-6.1. Matches the downstream v'^2/w'^2
-  ! profiles at a station to the wind-tunnel target by fitting Bezier control points: step0
-  ! (baseline) plus step1 (v'^2 AND w'^2 doubled together at the inflow, their Section 6.1 combined
-  ! perturbation) give a per-control-point scalar secant slope for each decision variable, then ONE
-  ! corrected profile is applied and verified. v'^2 and w'^2 are corrected independently (a real
-  ! run showed the paper's coupled 2-variable weighted least-squares fit, Eq. 5, can be dangerously
-  ! ill-conditioned: the two decision variables tend to move all three downstream stats in the same
-  ! direction, so their Jacobian columns can be nearly collinear at some heights, and even Tikhonov
-  ! regularization on the 2x2 solve wasn't enough to tame the resulting instability under real
-  ! turbulent measurement noise -- a decoupled scalar secant per component needs no matrix
-  ! inversion at all, so there is no collinearity to be unstable about). By default
-  ! (inflow_opt_max_iter=1) the algorithm stops after that one corrected step: the paper itself
-  ! only ever validates a single corrected step (Section 6.1) and explicitly lists further
-  ! iteration and an automatic stopping criterion as unsolved future work (Section 7) -- so this is
-  ! not an arbitrary simplification, it's matching what was actually shown to work. Continuing past
-  ! that single step (inflow_opt_max_iter>1) is this codebase's own, unvalidated-by-the-paper
-  ! extension: it secant-refines the slopes and keeps correcting with a Robbins-Monro-style step
-  ! size (inflow_opt_relax/iter, decaying so noisy sequential online measurements average out
-  ! instead of being chased), guarded by the same best-iterate/stall safety net either way. u'^2,
-  ! shear stress and the mean profile are not decision variables (per the paper) and are left
-  ! untouched. See docs/design-notes/sem.md.
+  ! Bezier-parametrised SEM inflow Reynolds-stress optimisation: single-run (online) version of Lamberti et al. 2018
+  ! (JWEIA 177:32-44) Sections 5-6.1. step0 (baseline) and step1 (v'^2 and w'^2 doubled together) give a scalar secant slope per
+  ! control point and component, then ONE corrected profile is applied and verified. v'^2 and w'^2 are corrected independently:
+  ! the paper's coupled 2x2 fit (Eq. 5) was ill-conditioned in practice (nearly collinear Jacobian columns, unstable under
+  ! measurement noise even with Tikhonov). inflow_opt_max_iter=1 (default) stops after the one step the paper validates;
+  ! inflow_opt_max_iter>1 is this code's own extension: secant-refined slopes and a Robbins-Monro step size inflow_opt_relax/iter,
+  ! with the same best-iterate/stall safeguard. u'^2, shear stress and the mean are not decision variables.
+  ! See docs/design-notes/sem.md.
   Integer(Int32) :: inflow_opt_active = 0
   Real   (Int64) :: inflow_opt_x      = 0d0
   Integer(Int32) :: inflow_opt_nstart = -1     ! <0: auto-tuned from advection time and wall-shear timescale
   Integer(Int32) :: inflow_opt_window = -1     ! <=0: auto-tuned from the SEM eddy turnover time; steps averaged per measurement phase
   Integer(Int32) :: n_bezier          = 8      ! Bezier control points spanning prof_y; endpoints fixed to the target
-  ! A control point within wall_exclude_factor*wall_Ltaper_{lo,hi} of an active no-slip wall sits
-  ! inside sem_fluctuation's own taper zone (see sem.f90), which deterministically suppresses the
-  ! injected Reynolds stress toward zero there regardless of the Bezier target -- no correction can
-  ! close that gap since it isn't a response-model error, it's the no-slip enforcement working as
-  ! designed. Such control points are excluded from both the correction and the residual check.
-  ! This has no counterpart in the paper (its offline runs were reviewed by eye), but is needed
-  ! for an unattended online run to avoid chasing a structurally unfixable control point.
+  ! Control points within wall_exclude_factor*wall_Ltaper_{lo,hi} of a no-slip wall lie in sem_fluctuation's taper zone, which
+  ! suppresses the injected stress there whatever the target; no correction can close that gap, so they are excluded from the
+  ! correction and the residual check (no counterpart in the paper, needed for an unattended run).
   Real   (Int64) :: inflow_opt_wall_exclude = 1d0
-  ! A secant slope estimated from ONE fast online measurement window can be small/noisy at some
-  ! control points (near-zero measured response between step0 and step1, unlike the paper's fully
-  ! time-converged, independently-restarted offline perturbation runs), which blows up the Newton
-  ! step dx=-(measured-target)/slope regardless of whether v'^2/w'^2 are solved jointly or (as
-  ! here) independently -- a real run showed corrections up to ~30x target from this alone. This
-  ! is a numerical-robustness safeguard, not a paper-fidelity choice: it caps the applied step to
+  ! A secant slope from one short online window can be near zero at some control points, which blows up the Newton step
+  ! dx=-(measured-target)/slope (corrections up to ~30x target were seen). Robustness safeguard: the applied step is capped at
   ! +-inflow_opt_trust of the target value at each control point.
   Real   (Int64) :: inflow_opt_trust    = 0.5d0
   Integer(Int32) :: inflow_opt_max_iter = 1    ! 1 (default): the paper's validated single corrected step. >1: this codebase's own experimental extension (see above)
@@ -660,12 +595,9 @@ Module global
   Character(8)   :: slice_comps  (MAX_PROBES) = 'UVW'
   Character(200) :: slice_fileout(MAX_PROBES) = 'slice'
 
-  ! Lagrangian point-particle tracking (src/particles.f90): particles_active 0=off,1=on.
-  ! Per-direction particle BC codes (bc_particle_x/y/z): -1=auto (periodic if the matching
-  ! fluid x_bc_type/y_bc_type/z_bc_type==0, else exit(x)/reflect(y,z)); explicit override
-  ! 0=periodic,1=exit(inflow/outflow),2=reflect(wall),3=absorb(wall, no bounce).
-  ! particle_reinit_on_exit: 0=none (population decays as particles exit), 1=inflow
-  ! (replace an outflow exit with a new particle at the inflow plane).
+  ! Lagrangian particle tracking (src/particles.f90): particles_active 0=off, 1=on. bc_particle_x/y/z: -1=auto (periodic if the
+  ! fluid BC is periodic, else exit(x)/reflect(y,z)), 0=periodic, 1=exit, 2=reflect, 3=absorb (no bounce).
+  ! particle_reinit_on_exit: 0=none, 1=re-seed an exited particle at the inflow plane.
   Integer(Int32) :: particles_active       = 0
   Integer(Int32) :: n_particles_init       = 0
   Real   (Int64) :: particle_seed_xmin = 0d0, particle_seed_xmax = -1d0   ! <0 (xmax): resolved to the full domain once Lx is known
@@ -682,13 +614,9 @@ Module global
   ! same idea as scalar_restart for C.
   Integer(Int32) :: particle_restart_load  = 1
 
-  ! Phase 2: inertial force model. particle_mode: 0=tracer (dx/dt=u_fluid, Phase 1
-  ! behaviour, default), 1=inertial (independent particle velocity, Maxey-Riley-reduced
-  ! ODE: nonlinear (Schiller-Naumann) drag + gravity, both always on in this mode; a
-  ! small-Stokes-number inertial particle already reproduces settling/tracer-like
-  ! behaviour on its own, so there is no separate "settling_tracer" mode). Saffman-Mei
-  ! lift is deferred to Phase 3 (its usual near-wall gating needs the IBM SDF wall
-  ! distance that Phase 3 introduces).
+  ! particle_mode: 0=tracer (dx/dt=u_fluid, default), 1=inertial (Maxey-Riley-reduced ODE with Schiller-Naumann drag and gravity,
+  ! always both on; a small-Stokes inertial particle already reduces to settling/tracer behaviour). Saffman-Mei lift is not
+  ! implemented (its near-wall gating needs the IBM wall distance).
   Integer(Int32) :: particle_mode        = 0
   Real   (Int64) :: particle_diam        = 1d-4    ! d_p [m]
   Real   (Int64) :: particle_rho         = 2650d0  ! rho_p [kg/m^3]
@@ -697,13 +625,10 @@ Module global
   Integer(Int32) :: particle_brownian    = 0       ! 0=off (default), 1=on: isotropic Stokes-Einstein Brownian kick
   Real   (Int64) :: particle_temp_abs    = 293d0   ! [K], particle_brownian==1 only
 
-  ! Phase 3: IBM/SDF collision (ibm_input_mode>=1 only). Per-object BC by solid ID (same
-  ! 0..max_ibm_objects convention as ibm_T_bc_type/ibm_z0): 1=absorb (deposit, removed),
-  ! 2=reflect (default), 3=deposit_resuspend (reflect if the local relative speed exceeds
-  ! particle_resuspend_ucrit, else absorb -- a simplified proxy for a full Shields/van Rijn
-  ! pickup function). Reflection uses a simple Stokes-number-dependent restitution heuristic
-  ! e=Min(1,tau_p/particle_ibm_tau_crit) (documented simplification, not a validated closed
-  ! form) -- see particles.f90's apply_ibm_collision.
+  ! IBM/SDF collision (ibm_input_mode>=1), per-object BC by solid ID (as ibm_T_bc_type/ibm_z0): 1=absorb, 2=reflect (default),
+  ! 3=deposit_resuspend (reflect if the relative speed exceeds particle_resuspend_ucrit, else absorb; a simple proxy for a
+  ! Shields/van Rijn pickup function). Reflection restitution is the heuristic e=Min(1,tau_p/particle_ibm_tau_crit), not a
+  ! validated model (see apply_ibm_collision in particles.f90).
   Integer(Int32) :: particle_ibm_bc(0:max_ibm_objects) = 2
   Real   (Int64) :: particle_ibm_tau_crit    = 1d-3
   Real   (Int64) :: particle_resuspend_ucrit = 1d30   ! effectively "always deposits" until set

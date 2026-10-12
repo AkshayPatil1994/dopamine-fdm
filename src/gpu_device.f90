@@ -1,11 +1,7 @@
-!> Rank-to-GPU binding for multi-GPU runs: each MPI rank on a node picks a
-!> distinct physical GPU by node-local rank, modulo the GPU count on that
-!> node, before any device memory is allocated or any cuFFT/cuSPARSE plan is
-!> created. The binding is made BEFORE MPI_Init when the launcher exports the
-!> node-local rank (Open MPI/MVAPICH2/Slurm/PMI): a CUDA-aware MPI otherwise
-!> initialises its CUDA context on device 0 for every rank first, wasting
-!> memory there and breaking peer/IPC transfers between ranks. Compiled only in ENABLE_GPU builds (CMakeLists.txt sets
-!> -DGPU_POISSON); see initialization.f90's call right after MPI_Init.
+!> Rank-to-GPU binding for multi-GPU runs: each rank picks a GPU by node-local rank modulo the node's GPU count, before any
+!> device allocation or cuFFT/cuSPARSE plan. Bound BEFORE MPI_Init when the launcher exports the node-local rank (Open MPI/
+!> MVAPICH2/Slurm/PMI), since a CUDA-aware MPI otherwise creates its context on device 0 for every rank and breaks peer/IPC
+!> transfers. Compiled only with ENABLE_GPU (-DGPU_POISSON); called right after MPI_Init in initialization.f90.
 Module gpu_device
 
   Use iso_fortran_env, Only : Int32

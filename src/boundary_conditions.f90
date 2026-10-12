@@ -945,12 +945,8 @@ Contains
     n2 = Size(F,2)
     n3 = Size(F,3)
 
-    ! buffer_bcx{s,r}{1,2} are sized to the largest (n2,n3) this routine is ever
-    ! called with (nyg,nzg); the full persistent array is always sent/received
-    ! (see Mpi_isend/irecv counts below) so the actual argument stays contiguous
-    ! -- required since these buffers must remain valid until Mpi_waitall, and a
-    ! non-contiguous array-section argument could otherwise be copied into a
-    ! compiler temporary that doesn't outlive the call.
+    ! buffer_bcx* hold the largest (n2,n3) this routine sees and are sent/received whole: they must stay contiguous and valid
+    ! until Mpi_waitall, which an array-section argument copied into a compiler temporary would not.
     If ( id == 1 ) Then
        ! F defined at x faces (U): interior faces are 2..nx-1
        buffer_bcxs1(1:n2,1:n3) = F(nx-1,:,:) ! send buffer, towards +x

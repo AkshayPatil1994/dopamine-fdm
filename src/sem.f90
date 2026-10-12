@@ -72,12 +72,9 @@ Module synthetic_eddy_method
   !$acc declare create(sem_norm)
   !$acc declare create(wall_active_lo, wall_active_hi, wall_y_lo, wall_y_hi, wall_Ltaper_lo, wall_Ltaper_hi)
 
-  ! Bezier-parametrized SEM inflow Reynolds-stress optimization (inflow_opt_active==1): host-only
-  ! bookkeeping. Phase machine: 0=idle, 1=step0 (baseline) measurement, 2=step1 (v'^2 AND w'^2
-  ! doubled together, per the paper's Section 6.1) measurement -- builds the per-point scalar
-  ! secant slopes and applies the single correction the paper validates, 3=verify (default:
-  ! freezes here after one measurement; inflow_opt_max_iter>1 instead continues iterating as this
-  ! codebase's own experimental extension -- see the comment in global.f90), 4=done (frozen).
+  ! Bezier SEM inflow optimisation (inflow_opt_active==1), host-only bookkeeping. Phases: 0=idle, 1=step0 (baseline)
+  ! measurement, 2=step1 (v'^2 and w'^2 doubled) measurement, which builds the secant slopes and applies the single correction,
+  ! 3=verify (default: freeze here; inflow_opt_max_iter>1 continues as this code's own extension, see global.f90), 4=done.
   Integer(Int32) :: inflow_opt_phase      = 0
   Integer(Int32) :: inflow_opt_step_count = 0
   Integer(Int32) :: inflow_opt_iter       = 0   ! number of correction steps applied so far
@@ -99,30 +96,19 @@ Module synthetic_eddy_method
   ! stats_step0 also doubles as "iterate 0" for best-iterate tracking below
   Real   (Int64), Allocatable :: stats_step0(:,:), stats_step1(:,:)   ! (3,n_bezier)
 
-  ! per-control-point scalar secant slopes d(v'^2_b)/d(v'^2_i) and d(w'^2_b)/d(w'^2_i), built once
-  ! from the step0/step1 pair (v'^2 and w'^2 doubled together in step1, per the paper). v'^2 and
-  ! w'^2 are corrected independently (a real run showed the coupled 2-variable Gauss-Newton normal
-  ! equations can be dangerously ill-conditioned -- the two decision variables tend to move all
-  ! three downstream stats in the same direction, making their Jacobian columns nearly collinear
-  ! at some heights, so ordinary measurement noise got amplified into wild, unstable corrections
-  ! even with ridge regularization); a decoupled scalar secant per component needs no matrix
-  ! inversion at all, so there is no collinearity to be ill-conditioned about. u'^2 is measured for
-  ! the residual check but was never a decision variable (per the paper) and has no slope here.
-  ! x_prev_R22/R33 and stats_prev are the control-point values and measured stats from immediately
-  ! before the most recently applied correction; only needed by the experimental iter>1
-  ! extension's secant refinement (see secant_update_slopes), unused for the default single-step run.
+  ! Per-control-point scalar secant slopes d(v'^2_b)/d(v'^2_i) and d(w'^2_b)/d(w'^2_i) from the step0/step1 pair. v'^2 and w'^2 are
+  ! corrected independently: the coupled Gauss-Newton form had nearly collinear Jacobian columns and amplified measurement noise
+  ! even with ridge regularisation. u'^2 is measured for the residual check but is not a decision variable (no slope).
+  ! x_prev_R22/R33 and stats_prev are the control-point values and stats just before the last correction, used only by the
+  ! iter>1 secant refinement (secant_update_slopes).
   Real   (Int64), Allocatable :: slope_v(:), slope_w(:)             ! (n_bezier)
   Real   (Int64), Allocatable :: x_prev_R22(:), x_prev_R33(:)       ! (n_bezier)
   Real   (Int64), Allocatable :: stats_prev(:,:)                    ! (3,n_bezier)
 
-  ! Nothing stops a Gauss-Newton step from making the residual worse (the Jacobian is only ever a
-  ! local/secant estimate), so the single mandatory verify measurement -- and every measurement in
-  ! the experimental iter>1 extension -- is checked against the best (lowest-residual) iterate seen
-  ! so far -- including "iterate 0", the uncorrected target itself -- and the profile is frozen at
-  ! that best iterate rather than whatever the last measurement happened to produce. The extension
-  ! also stops early (before inflow_opt_max_iter) if the residual fails to improve for
-  ! inflow_opt_stall_patience consecutive corrections, since continuing to iterate on a worsening
-  ! trend just injects more extreme (and no more trustworthy) profiles into the flow.
+  ! A Gauss-Newton step can worsen the residual (the Jacobian is only a secant estimate), so every measurement after a correction
+  ! is compared with the best iterate so far (including iterate 0, the uncorrected target) and the profile is frozen at that best
+  ! iterate. The iter>1 extension also stops after inflow_opt_stall_patience corrections without improvement, since a worsening
+  ! trend only injects more extreme profiles.
   Integer(Int32), Parameter :: inflow_opt_stall_patience = 2
   Real   (Int64) :: best_resid = Huge(1d0)
   Real   (Int64), Allocatable :: best_x_cp_R22(:), best_x_cp_R33(:)   ! (n_bezier)
@@ -131,14 +117,9 @@ Module synthetic_eddy_method
   ! persisted phase-machine + control-point state for restart (see write/read_inflow_opt_restart)
   Character(*), Parameter :: inflow_opt_restart_file = 'fields/inflow_opt_data.dat'
 
-  ! ---- recycled precursor inflow (inflow_type==2) ------------------------
-  ! rec_active is only .True. on the rank owning the x=1 face (row==0 in the
-  ! p_row/p_col grid); every other rank leaves it .False. and every routine
-  ! below is a no-op there. Can't tell this apart from rec_unit's sign alone:
-  ! Open(newunit=...) always hands back a negative unit (the standard's
-  ! reserved range), so "rec_unit<0" is true both before AND after a
-  ! successful open -- that previously made update_inflow_recycle return
-  ! before ever reading a donor frame, on every rank, every call.
+  ! Recycled precursor inflow (inflow_type==2). rec_active is .True. only on the rank owning the x=1 face (row==0); every
+  ! routine below is a no-op elsewhere. rec_unit's sign cannot tell open from closed: Open(newunit=...) always returns a
+  ! negative unit, so "rec_unit<0" held both before and after a successful open and no donor frame was ever read.
   Logical        :: rec_active  = .False.
   Integer(Int32) :: rec_unit    = -1
   Integer(Int32) :: rec_ncomp   = 0
@@ -203,12 +184,9 @@ Contains
 
   End Subroutine max_grid_spacing_xyz
 
-  !> Maximum grid spacing over the whole domain (x,y,z faces): the resolvability floor for
-  !> sem_length_scale needs THIS, not min_grid_spacing() -- an eddy's footprint is ~2*sem_length_scale
-  !> in every direction (homogeneous mode: eddy_sig is isotropic, see place_eddies), so what matters is
-  !> whether the COARSEST relevant spacing (typically the streamwise spacing, or a wall-clustered grid's
-  !> mid-channel y-spacing) can resolve it; min_grid_spacing() is dominated by the tiny near-wall cell,
-  !> which an eddy doesn't need to fit inside and so is far too permissive a floor on its own.
+  !> Maximum grid spacing over the domain (x,y,z faces): the resolvability floor for sem_length_scale needs this rather than
+  !> min_grid_spacing(). An eddy spans ~2*sem_length_scale in every direction (eddy_sig is isotropic in homogeneous mode), so the
+  !> coarsest relevant spacing matters, not the tiny near-wall cell.
   Real(Int64) Function max_grid_spacing() Result(dmax)
 
     Real(Int64) :: dx_max, dy_max, dz_max
@@ -280,19 +258,11 @@ Contains
 
   End Subroutine refine_sem_length_scale
 
-  !> Unconditional resolvability floor on sem_length_scale, applied regardless of whether it was
-  !> auto-tuned or set explicitly in the namelist: an eddy's footprint is ~2*sem_length_scale in every
-  !> direction (homogeneous mode: eddy_sig is isotropic, see place_eddies), so a value narrower than a
-  !> few grid cells cannot be represented by the mesh and is destroyed by advection/pressure-projection
-  !> within the first cell or two of the domain -- observed in practice as injected Reynolds stresses
-  !> collapsing right at the inflow even though the target statistics (verified offline, e.g. via
-  !> postProcessing/check_inflow_donor.py) were exact. The auto-tune path (geometric_length_scale_estimate/
-  !> refine_sem_length_scale) already has its own internal floor, but that one is keyed off
-  !> min_grid_spacing() -- dominated by the smallest cell anywhere in the domain, almost always a
-  !> wall-clustered near-wall cell an eddy never needs to fit inside, so it under-floors whenever the
-  !> coarsest *relevant* direction (typically streamwise) is far coarser than the finest one. This uses
-  !> max_grid_spacing() instead, which tracks the actual bottleneck. A user-supplied value had no floor
-  !> at all before this -- only the auto-tune path was ever checked.
+  !> Unconditional resolvability floor on sem_length_scale, auto-tuned or user-set: an eddy spans ~2*sem_length_scale in every
+  !> direction (isotropic eddy_sig in homogeneous mode), and one narrower than a few cells is destroyed by advection/projection
+  !> within the first cells, collapsing the injected stresses at the inflow although the target statistics were exact. Keyed off
+  !> max_grid_spacing(), not min_grid_spacing() as the auto-tune's own floor is, which a wall-clustered near-wall cell makes too
+  !> permissive when the streamwise spacing is much coarser.
   Subroutine enforce_sem_length_scale_floor
 
     Real(Int64) :: Lfloor
@@ -309,16 +279,11 @@ Contains
 
   End Subroutine enforce_sem_length_scale_floor
 
-  !> Per-direction resolvability floor on the inhomogeneous eddy length-scale profile (sem_sigma_file,
-  !> or sem_profile_format=1's derived sig_* -- see read_sigma_profile/derive_mixing_length/
-  !> fill_length_scale), mirroring enforce_sem_length_scale_floor above for the homogeneous case: no-op
-  !> when n_sigma==0 (homogeneous mode, already covered by enforce_sem_length_scale_floor). sigma_ij sets
-  !> eddy component i's footprint in direction j (see place_eddies/unified_kernel), so unlike the isotropic
-  !> sem_length_scale floor, each of the 9 profiles is floored against the spacing in ITS OWN direction --
-  !> sig_*x vs the streamwise spacing, sig_*y vs the (possibly wall-clustered) y-spacing, sig_*z vs the
-  !> spanwise spacing -- rather than one shared value, so a fine z-grid can't be diluted by a coarse y-grid
-  !> or vice versa. Clamps in place; warns once per profile (not once per point) when at least one node
-  !> needed raising, reporting that profile's pre-clamp minimum against the floor it was raised to.
+  !> Per-direction resolvability floor on the inhomogeneous eddy length-scale profile (sem_sigma_file, or sem_profile_format=1's
+  !> derived sig_*), the counterpart of enforce_sem_length_scale_floor; no-op when n_sigma==0. sigma_ij is eddy component i's
+  !> footprint in direction j (see place_eddies/unified_kernel), so each of the 9 profiles is floored against the spacing in its own
+  !> direction (sig_*x streamwise, sig_*y y, sig_*z spanwise). Clamps in place and warns once per profile (pre-clamp minimum
+  !> vs floor).
   Subroutine enforce_sigma_floor
 
     Real(Int64) :: dx_max, dy_max, dz_max, Lfloor_x, Lfloor_y, Lfloor_z
@@ -492,15 +457,10 @@ Contains
 
   End Subroutine init_inflow
 
-  !> Parse a recycled-inflow donor's <inflow_recycle_file>_meta.txt. Two donor formats are
-  !> accepted: (1) the per-component-native-grid format written by dopamine-ESEM, which
-  !> carries an explicit 'n1_V' key (V's own native y-face count, ny_global) alongside the
-  !> shared U/W/T/C native n1 (cell-centre y, nym_global); (2) the older/generic format
-  !> written by probe_output.f90's x-normal slice output (e.g. examples/precursor_successor),
-  !> which cell-centre-interpolates V onto the same nym_global grid as U/W and has no 'n1_V'
-  !> key -- for that format n1_v is defaulted to n1 and v_native returned .False., so the
-  !> caller (init_inflow_recycle) and recycle_value read/index V using the same cell-centre
-  !> convention as U/W instead of V's true (unavailable) face grid.
+  !> Parse a recycled-inflow donor's <inflow_recycle_file>_meta.txt. Two formats: (1) dopamine-ESEM's per-component native grids,
+  !> with an explicit 'n1_V' key (V's y-face count, ny_global) next to the shared U/W/T/C n1 (nym_global); (2) the generic format
+  !> of probe_output.f90's x-normal slice output (e.g. examples/precursor_successor), with V cell-centre interpolated onto the
+  !> U/W grid and no 'n1_V'. For (2) n1_v defaults to n1 and v_native is returned .False., so V is read like U/W.
   Subroutine read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native)
 
     Integer(Int32), Intent(Out) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC
@@ -1468,13 +1428,10 @@ Contains
        y_r = box_y_lo + (box_y_hi-box_y_lo)*u1
     End If
 
-    ! Inhomogeneous mode: keep eddy k statistically anchored to the
-    ! wall-normal region its size class (eddy_sig, fixed at place_eddies
-    ! from placement height eddy_y0(k)) was calibrated for. Without this,
-    ! the draw above is independent of k's own size, so an outer-layer-sized
-    ! eddy can be re-realized at the wall (injecting an oversized fluctuation
-    ! there and biasing the mean profile) while a wall-sized eddy is wasted
-    ! out in the free stream (under-populating outer-layer variance). Also needed under sem_wall_damping alone (n_sigma==0), since place_eddies gives each eddy a per-eddy-damped eddy_sig/eddy_smax there too.
+    ! Inhomogeneous mode: keep eddy k anchored to the wall-normal region its size class (eddy_sig, fixed in place_eddies from
+    ! eddy_y0(k)) was calibrated for; otherwise an outer-layer-sized eddy can be re-realised at the wall (oversized fluctuation,
+    ! biased mean) and a wall-sized one wasted in the free stream. Also needed under sem_wall_damping alone (n_sigma==0), where
+    ! place_eddies gives each eddy a damped eddy_sig/eddy_smax.
     If ( n_sigma > 0 .Or. sem_wall_damping == 1 ) Then
        band = sem_placement_band_factor * eddy_smax(2,k)
        y_r  = Min( Max( y_r, eddy_y0(k)-band ), eddy_y0(k)+band )
@@ -1912,12 +1869,8 @@ Contains
     R11 = interp_profile(prof_R11,yc); R22 = interp_profile(prof_R22,yc)
     R33 = interp_profile(prof_R33,yc); R12 = interp_profile(prof_R12,yc)
 
-    ! Force no-slip on the injected fluctuation at literal solid walls,
-    ! independent of whether the user-supplied Reynolds-stress profile
-    ! itself decays to zero there: linterp clamps to the profile's
-    ! endpoint value outside its data range, so a profile that doesn't
-    ! extend flush to the wall would otherwise hold a non-decaying,
-    ! nonzero R_ii right up to the wall face.
+    ! Force no-slip on the injected fluctuation at solid walls even if the user's Reynolds-stress profile does not decay there:
+    ! linterp clamps to the profile endpoint outside its range, which would leave a nonzero R_ii right up to the wall face.
     taper = 1d0
     If ( wall_active_lo == 1 ) taper = taper * wall_taper( yc-wall_y_lo, wall_Ltaper_lo )
     If ( wall_active_hi == 1 ) taper = taper * wall_taper( wall_y_hi-yc, wall_Ltaper_hi )
@@ -2124,15 +2077,11 @@ Contains
 
   End Subroutine init_inflow_opt
 
-  !> One-time setup of the Bezier control-point state (heights + target values), called from
-  !> init_inflow_opt. Places n_bezier control-point heights y_cp spanning [prof_y(1),
-  !> prof_y(n_profile)], clustered toward the wall (quadratic in the normalized coordinate) since
-  !> that's where the profiles vary fastest -- mirrors the paper's denser control-point placement
-  !> below 0.5m. Control-point target values are sampled directly from the originally-read inflow
-  !> profile (not a least-squares Bezier fit): the resulting curve smooths rather than interpolates
-  !> the target between control points, which is the expected cost of the dimensionality
-  !> reduction, not a bug. Split out from init_inflow_opt so it can be exercised in isolation
-  !> (verify_inflow_opt) without also needing the full grid/SEM setup init_inflow_opt requires.
+  !> One-time setup of the Bezier control points, called from init_inflow_opt. The n_bezier heights y_cp span
+  !> [prof_y(1),prof_y(n_profile)] clustered toward the wall (quadratic in the normalised coordinate, as the paper's denser
+  !> placement below 0.5 m). Target values are sampled from the inflow profile, not least-squares fitted, so the curve smooths
+  !> rather than interpolates between control points (expected cost of the dimension reduction). Split out so verify_inflow_opt
+  !> can call it without the full grid/SEM setup.
   Subroutine init_bezier_control_points
 
     Integer(Int32) :: i
@@ -2262,12 +2211,9 @@ Contains
 
   End Subroutine rebuild_bezier_profile
 
-  !> True if y_cp(m) sits within inflow_opt_wall_exclude*wall_Ltaper of an active no-slip wall --
-  !> i.e. inside sem_fluctuation's own taper zone, which deterministically suppresses the injected
-  !> Reynolds stress toward zero there regardless of the Bezier target (see the taper comment at
-  !> its use site). No correction algorithm can close that gap: it isn't a response-model error,
-  !> it's the no-slip enforcement working as designed, so such control points are excluded from
-  !> both the correction and the residual check rather than chased with an ever-larger target.
+  !> True if y_cp(m) lies within inflow_opt_wall_exclude*wall_Ltaper of an active no-slip wall, i.e. inside sem_fluctuation's
+  !> taper zone, which suppresses the injected stress there whatever the Bezier target. Such points are excluded from the
+  !> correction and the residual check rather than chased.
   Logical Function inflow_opt_wall_excluded( m ) Result(excluded)
 
     Integer(Int32), Intent(In) :: m
@@ -2345,12 +2291,9 @@ Contains
 
   End Subroutine build_initial_slopes
 
-  !> Secant refinement of slope_v/slope_w at each interior control point, from the most recently
-  !> applied correction (Delta_x = current x_cp - x_prev_*) and its measured downstream response
-  !> (Delta_y = stats_now - stats_prev): slope <- Delta_y/Delta_x, independently for v'^2 and
-  !> w'^2. Used only by the experimental iter>1 extension (see advance_inflow_opt): the paper's
-  !> own validated procedure never goes past one correction, so this refinement has no counterpart
-  !> there. Left unchanged at a control point whose last step was ~0 (degenerate secant direction).
+  !> Secant refinement of slope_v/slope_w at each interior control point from the last applied correction (Delta_x = x_cp -
+  !> x_prev_*) and its measured response (Delta_y = stats_now - stats_prev), independently for v'^2 and w'^2. Used only by the
+  !> iter>1 extension (advance_inflow_opt). A point whose last step was ~0 keeps its slope (degenerate secant).
   Subroutine secant_update_slopes( stats_now )
 
     Real(Int64), Intent(In) :: stats_now(3,n_bezier)
@@ -2374,17 +2317,10 @@ Contains
 
   End Subroutine secant_update_slopes
 
-  !> Applies the paper's correction independently at each interior, non-wall-excluded Bezier
-  !> control point, as a scalar Newton update x_new = x_current + scale*dx (x_current being
-  !> whatever control-point value produced stats_ref), with dx = -(measured-target)/slope. v'^2
-  !> and w'^2 are corrected independently (no coupled 2x2 solve, so no cross-term for a
-  !> collinear-Jacobian instability to hide in -- see the comment on slope_v/slope_w above; u'^2
-  !> is measured for the residual check but was never a decision variable, per the paper).
-  !> scale=1 for the paper's single mandatory correction; the experimental iter>1 extension passes
-  !> a decaying Robbins-Monro-style scale (inflow_opt_relax/iter) instead of a trust-region cap,
-  !> since a fixed magnitude cap has no counterpart in the paper -- a shrinking step size is the
-  !> standard way to let sequential noisy online measurements average out rather than get chased.
-  !> Endpoints (m=1, m=n_bezier) and wall-excluded interior points stay pinned to the target.
+  !> Scalar Newton update x_new = x_current + scale*dx, dx = -(measured-target)/slope, at each interior non-wall-excluded control
+  !> point (x_current produced stats_ref); v'^2 and w'^2 independently (see slope_v/slope_w), u'^2 only in the residual check.
+  !> scale=1 is the paper's single correction; the iter>1 extension passes a decaying Robbins-Monro scale (inflow_opt_relax/iter),
+  !> which lets noisy sequential measurements average out. Endpoints (m=1, m=n_bezier) and wall-excluded points stay at the target.
   Subroutine scalar_correction_step( stats_ref, scale )
 
     Real(Int64), Intent(In) :: stats_ref(3,n_bezier)
@@ -2428,18 +2364,11 @@ Contains
 
   End Subroutine scalar_correction_step
 
-  !> Drives the phase machine forward once a full measurement window has been accumulated:
-  !> step0 (baseline) -> step1 (v'^2 AND w'^2 doubled together, per the paper's Section 6.1) ->
-  !> builds the per-point scalar secant slopes and applies ONE correction (the paper's validated
-  !> procedure) -> phase 3 verifies it. By default (inflow_opt_max_iter=1) the profile freezes
-  !> there regardless of the residual, reverting to the uncorrected baseline if the single
-  !> correction measured worse than it -- matching what the paper actually demonstrated, not
-  !> chasing a tolerance it never claimed to guarantee. inflow_opt_max_iter>1 instead continues,
-  !> secant-refining the slopes and taking further Robbins-Monro-decayed corrections until the
-  !> residual drops below inflow_opt_tol, inflow_opt_max_iter is reached, or the residual stalls
-  !> -- this is this codebase's own experimental extension beyond the paper (see the comment in
-  !> global.f90). No-op unless inflow_opt_active==1, a measurement/iteration phase is in progress,
-  !> and istep>=inflow_opt_nstart.
+  !> Advance the phase machine once a measurement window is complete: step0 -> step1 (v'^2 and w'^2 doubled) -> build slopes,
+  !> apply ONE correction -> phase 3 verifies it. By default (inflow_opt_max_iter=1) the profile freezes there, reverting to the
+  !> baseline if the correction measured worse. inflow_opt_max_iter>1 continues with secant-refined slopes and decaying corrections
+  !> until the residual falls below inflow_opt_tol, the iteration cap is hit or the residual stalls (this code's own extension,
+  !> see global.f90). No-op unless inflow_opt_active==1, a measurement phase is running and istep>=inflow_opt_nstart.
   Subroutine advance_inflow_opt
 
     Real(Int64) :: stats_now(3,n_bezier), resid, scale

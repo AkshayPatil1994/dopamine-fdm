@@ -319,15 +319,10 @@ Contains
        !$acc end parallel loop
     End If
 
-    ! Acceleration-CFL: source terms (Boussinesq buoyancy, rigid-body rotation, UAV
-    ! actuator thrust) feed rhs_v/rhs_w but were previously invisible to the adaptive-dt
-    ! estimate above, which only sees advection/diffusion -- a run that starts with weak
-    ! flow but strong stratification/thrust can be unstable while cfl_conv/cfl_visc still
-    ! report "safe". Gravity-wave-type limiter dt*sqrt(2*|a|/dy), analogous in form to the
-    ! convective/viscous terms above; kept as separate acc regions (not merged into the
-    ! loops above) so Tscal/W are only touched -- and only need to be device-present --
-    ! when their owning pathway is actually active, matching the Boussinesq/rotation
-    ! source terms' own separate acc regions in equations.f90.
+    ! Acceleration CFL: source terms (Boussinesq buoyancy, rotation, UAV thrust) feed rhs_v/rhs_w but are invisible to the
+    ! advection/diffusion estimate above, so a weak flow with strong stratification/thrust could be unstable while cfl_conv/cfl_visc
+    ! look safe. Gravity-wave-type limiter dt*sqrt(2*|a|/dy). Separate acc regions keep Tscal/W off the device unless their pathway
+    ! is active, as for the source terms in equations.f90.
     If ( boussinesq_flag >= 1 ) Then
        !$acc parallel loop collapse(3) present(Tscal,y) reduction(max:local_accel)
        Do k = 2, nzg-1

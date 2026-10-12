@@ -1,11 +1,7 @@
-!> Lagrangian point-particle tracking (Phase 1: tracer, one-way, full boundary handling).
-!  Particle ownership follows the pencil (a rank owns a particle whose (x,z) falls in its
-!  own cell-centre interior range, extended to +/-infinity at the true global x/z edges --
-!  see owns_particle); y is never decomposed, so no y-ownership test is needed. Advances
-!  once per full RK3 step against the frozen, already-consistent post-step U/V/W (see
-!  advance_particles's caller in time_integration.f90), using a self-contained classical
-!  RK3 for the tracer ODE dx/dt = u(x). Migration is a two-pass (x-then-z) dimension-split
-!  exchange reusing decomp.f90's existing halo-neighbour/periodic-partner topology.
+!> Lagrangian point-particle tracking. A rank owns a particle whose (x,z) lies in its cell-centre interior range, extended to
+!  +-infinity at the true global x/z edges (owns_particle); y is never decomposed. Particles advance once per RK3 step against
+!  the frozen post-step U/V/W (caller: time_integration.f90) with a self-contained RK3 for the tracer ODE dx/dt = u(x).
+!  Migration is a two-pass (x then z) exchange over decomp.f90's halo-neighbour/periodic-partner topology.
 Module particles
 
   Use iso_fortran_env, Only : error_unit, Int32, Int64
@@ -27,13 +23,9 @@ Module particles
   Integer(Int32), Allocatable :: p_id(:)
   Real   (Int64), Allocatable :: p_x(:), p_y(:), p_z(:)
   Real   (Int64), Allocatable :: p_u(:), p_v(:), p_w(:)
-  ! Per-step acceleration: inertial mode (advance_particle_inertial) stores the exact total
-  ! (drag+gravity+added-mass) acceleration fed into its exponential integrator; tracer mode
-  ! (advance_particles) stores (k3-k1)/dt, the central difference of the RK3 sub-stage fluid-
-  ! velocity samples at t0 and t0+dt -- 2nd-order accurate in dt, not 3rd, since it is a
-  ! derivative reconstructed from 3 function samples rather than the integral those samples
-  ! give the position update. The persistent SGS fluctuation (p_sgs_u/v/w below), when active,
-  ! is added identically to all 3 RK stages, so it cancels exactly in this difference.
+  ! Per-step acceleration: inertial mode stores the exact total (drag+gravity+added-mass) acceleration of its exponential
+  ! integrator; tracer mode stores (k3-k1)/dt from the RK3 stage velocity samples (2nd order in dt). The persistent SGS
+  ! fluctuation (p_sgs_u/v/w) is added identically to all 3 stages, so it cancels in that difference.
   Real   (Int64), Allocatable :: p_ax(:), p_ay(:), p_az(:)
   Real   (Int64), Allocatable :: p_age(:)
   ! Phase 5 (sgs_particle_model==1 only): persistent SGS velocity fluctuation state, evolved
@@ -60,12 +52,9 @@ Module particles
   ! Phase 2 (particle_mode==1 only): Stokes response time, computed once in setup_particles
   Real(Int64) :: tau_p_stokes
 
-  ! Phase 4: per-rank streamwise deposition-rate accumulator, sized nxg_global (indexed by
-  ! GLOBAL cell-centre index via bracket_index against xg_global -- see apply_ibm_collision).
-  ! Every rank's array only ever gets incremented at indices inside its own owned x-range, so
-  ! summing all ranks' copies (report_deposit_profile) gives the correct combined profile with
-  ! no double-counting. Reset to 0 after each write, so the written value is a RATE per
-  ! particle_deposit_freq*nmonitor steps, not a running total.
+  ! Per-rank streamwise deposition-rate accumulator, sized nxg_global and indexed by global cell-centre index (bracket_index on
+  ! xg_global, see apply_ibm_collision). Each rank increments only its own x-range, so summing over ranks gives the profile
+  ! without double counting. Reset after each write: the output is a RATE per particle_deposit_freq*nmonitor steps.
   Real(Int64), Allocatable :: particle_deposit_x(:)
 
   ! Padded copies of U, V, W with one extra plane on each x and z side (local indices 0 and n+1, filled from the neighbouring
@@ -168,17 +157,11 @@ Contains
 
   End Subroutine seed_particles_fresh
 
-  !> True if this rank owns (xp,zp): the half-open range [xg(2),xg(nxg))/[zg(2),zg(nzg)),
-  !  extended to +/-infinity at the true global x/z edges (is_first/is_last) so seeding/
-  !  restart never drops an out-of-domain point. The upper bound is the GHOST coordinate
-  !  (nxg/nzg), not the last true-interior one (nxg-1/nzg-1): local xg(nxg) on rank A is
-  !  exactly the same physical point as local xg(2) on A's right neighbour (both slice
-  !  xg_global via kg1/kg2_global, decomp.f90 -- kg2_global(A)=kg1_global(A_right)+1, so
-  !  A's ghost coordinate and the neighbour's first interior coordinate coincide). Using
-  !  the last-true-interior point as an exclusive bound instead leaves a one-grid-cell-wide
-  !  band at every internal seam that neither rank claims -- caught empirically: a 4-rank
-  !  z-split smoke test lost ~11% of seeded particles (~1 cell out of ~8 per rank at each
-  !  of 3 seams) before this fix.
+  !> True if this rank owns (xp,zp): the half-open range [xg(2),xg(nxg))/[zg(2),zg(nzg)), extended to +-infinity at the true
+  !  global edges (is_first/is_last) so seeding/restart never drops an out-of-domain point. The upper bound is the ghost
+  !  coordinate (nxg/nzg), which coincides with the right neighbour's first interior coordinate (kg2_global(A) =
+  !  kg1_global(A_right)+1); using the last interior point instead leaves a one-cell band at each internal seam that no rank
+  !  claims.
   Logical Function owns_particle(xp, zp) Result(owns)
 
     Real(Int64), Intent(In) :: xp, zp
@@ -290,14 +273,10 @@ Contains
 
   End Subroutine interpolate_velocity
 
-  !> Advance local particle i one step under the inertial (Maxey-Riley-reduced) model:
-  !  dv/dt = (u_f-v)/tau_eff + a_other, with u_f, tau_eff (nonlinear Schiller-Naumann drag
-  !  correction) and a_other (gravity + optional added-mass) all frozen at their start-of-
-  !  step values -- this makes the ODE linear over the step, so it has an EXACT exponential
-  !  solution with no sub-cycling needed even for tau_eff << dt (small-Stokes-number
-  !  particles). Optional Brownian motion (particle_brownian==1) is added as an independent
-  !  random walk on top of this deterministic update. Saffman-Mei lift is deferred to
-  !  Phase 3 (needs the IBM wall-distance field to gate it near-wall).
+  !> Advance local particle i one step with the inertial (Maxey-Riley-reduced) model dv/dt = (u_f-v)/tau_eff + a_other. With u_f,
+  !  tau_eff (Schiller-Naumann drag correction) and a_other (gravity + optional added mass) frozen at the step start the ODE is
+  !  linear, so the exponential solution is exact with no sub-cycling even for tau_eff << dt. Optional Brownian motion
+  !  (particle_brownian==1) is added as an independent random walk. Saffman-Mei lift is not implemented.
   Subroutine advance_particle_inertial(i)
 
     Integer(Int32), Intent(In) :: i
@@ -619,16 +598,10 @@ Contains
 
   End Function apply_particle_bc
 
-  !> IBM/SDF collision handling (Phase 3, ibm_input_mode>=1 only): phi/Umask_cc/ibm_obj_id
-  !  (global.f90, populated by ibm.f90's setup_ibm) are read directly -- no `Use ibm` needed,
-  !  which keeps particles.f90 usable by dopamine-ESEM (which never compiles ibm.f90).
-  !  phi<0 means the particle has penetrated a solid; the surface normal is the (finite-
-  !  difference) gradient of the interpolated phi field, and the particle is pushed back out
-  !  along it by approximately its own penetration depth (phi is a signed distance field).
-  !  Per-object BC (particle_ibm_bc, global.f90) selects absorb/reflect/deposit_resuspend;
-  !  reflect uses a simple Stokes-number-dependent restitution heuristic (see global.f90's
-  !  comment on particle_ibm_tau_crit -- a documented simplification, not a validated
-  !  closed-form model). Returns .True. if the particle should be removed (absorbed/deposited).
+  !> IBM/SDF collision (ibm_input_mode>=1). Reads phi/Umask_cc/ibm_obj_id from global.f90 directly (no `Use ibm`), so
+  !  particles.f90 stays usable by dopamine-ESEM, which never compiles ibm.f90. phi<0 means penetration: the particle is pushed
+  !  out along the interpolated phi gradient by about its penetration depth. particle_ibm_bc selects absorb/reflect/
+  !  deposit_resuspend (restitution heuristic: see particle_ibm_tau_crit in global.f90). Returns .True. if the particle is removed.
   Logical Function apply_ibm_collision(i) Result(do_remove)
 
     Integer(Int32), Intent(In) :: i
@@ -686,12 +659,9 @@ Contains
 
   End Function apply_ibm_collision
 
-  !> Advance every local particle one full step against the already-consistent post-
-  !  projection U/V/W (frozen for the step), apply boundary handling, migrate, and (at
-  !  the monitor cadence) report counters. Called once per step from time_integration.f90's
-  !  compute_time_step_RK3, after the final host U/V/W sync. particle_mode==0 (tracer):
-  !  classical 3-stage RK on dx/dt=u_fluid(x), Phase 1 behaviour. particle_mode==1
-  !  (inertial): see advance_particle_inertial.
+  !> Advance every local particle one step against the frozen post-projection U/V/W, apply boundary handling, migrate, and
+  !  report counters at the monitor cadence. Called once per step from compute_time_step_RK3 (time_integration.f90) after the
+  !  final host U/V/W sync. particle_mode==0: classical RK3 on dx/dt=u_fluid(x); ==1: see advance_particle_inertial.
   Subroutine advance_particles
 
     Integer(Int32) :: i
@@ -769,14 +739,10 @@ Contains
 
   End Subroutine migrate_particles
 
-  !> Two-directional (up/down) non-blocking-free (Mpi_sendrecv) particle exchange along one
-  !  axis. On the true global edge (is_first/is_last), the "missing" neighbour side (which
-  !  x_halo_neighbors/z_halo_neighbors report as MPI_PROC_NULL) is only used at all when that
-  !  direction is periodic, in which case it IS the periodic partner and the crossing
-  !  particle's coordinate is unwrapped (+/- domain length) at hand-off -- this makes the true
-  !  global edge a same-rank-count "6th neighbour" for exactly the ranks that touch it, with
-  !  no relay/multi-hop needed. Non-periodic true-edge crossings never reach here: they were
-  !  already resolved (exit/absorb/reflect) by apply_particle_bc.
+  !> Two-directional particle exchange (Mpi_sendrecv) along one axis. At a true global edge the "missing" neighbour
+  !  (MPI_PROC_NULL from x/z_halo_neighbors) is used only when that direction is periodic, where it is the periodic partner and
+  !  the coordinate is unwrapped by the domain length at hand-off, so no multi-hop relay is needed. Non-periodic edge crossings
+  !  were already resolved (exit/absorb/reflect) by apply_particle_bc.
   Subroutine exchange_particles_1d(dir)
 
     Integer(Int32), Intent(In) :: dir
@@ -1151,12 +1117,9 @@ Contains
 
   End Subroutine gather_all_particles
 
-  !> Write a flat particle-restart file (rank-0 gather, per the repo's own rank-0-centric
-  !  restart I/O convention, input_output.f90): a global count header, then that many
-  !  (id, x,y,z,u,v,w,ax,ay,az,age) records. Overwrites particle_restart_file every call (a
-  !  single latest-state snapshot for hot-restart, NOT a time series -- see
-  !  write_particle_snapshot for the visualization time series). Called from output_data at
-  !  the field-snapshot cadence.
+  !> Write a flat particle-restart file (rank-0 gather): a global count header, then (id, x,y,z,u,v,w,ax,ay,az,age) records.
+  !  Overwrites particle_restart_file on every call (latest state for hot restart; the time series is write_particle_snapshot).
+  !  Called from output_data at the field-snapshot cadence.
   Subroutine write_particle_restart
 
     Integer(Int32) :: total, funit
