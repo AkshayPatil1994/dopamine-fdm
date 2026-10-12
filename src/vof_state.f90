@@ -826,7 +826,7 @@ Contains
   Subroutine vof_write_gauges
 
     Integer(Int32) :: ig, i, j, k, ng, ihi, khi
-    Real(Int64) :: loc(8), glb(8), cnt_loc(8), cnt(8), col
+    Real(Int64) :: loc(MAX_WAVEGAUGES), glb(MAX_WAVEGAUGES), cnt_loc(MAX_WAVEGAUGES), cnt(MAX_WAVEGAUGES), col
     Logical :: is_first, is_last
     Integer(Int32) :: partner
 
@@ -854,16 +854,16 @@ Contains
           End If
        End Do
     End Do
-    Call MPI_Allreduce(loc, glb, 8, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Call MPI_Allreduce(cnt_loc, cnt, 8, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Call MPI_Allreduce(loc, glb, MAX_WAVEGAUGES, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
+    Call MPI_Allreduce(cnt_loc, cnt, MAX_WAVEGAUGES, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     If ( myid == 0 ) Then
        If ( .Not. gauge_unit_open ) Then
           gauge_unit_open = .True.
           Open(newunit=gauge_unit, file='vof_gauges.dat', status=Merge('unknown','replace',restart==1), &
                position=Merge('append','rewind',restart==1), action='write')
-          Write(gauge_unit,'(A,8ES12.4)') '# t eta(x_g) at x =', wave_gauge_x(1:ng)
+          Write(gauge_unit,'(A,*(ES12.4))') '# t eta(x_g) at x =', wave_gauge_x(1:ng)
        End If
-       Write(gauge_unit,'(ES16.8,8ES14.6)') t, (glb(ig)/Max(cnt(ig), 1d0), ig = 1, ng)
+       Write(gauge_unit,'(ES16.8,*(ES14.6))') t, (glb(ig)/Max(cnt(ig), 1d0), ig = 1, ng)
        Flush(gauge_unit)
     End If
 

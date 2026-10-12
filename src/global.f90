@@ -651,6 +651,7 @@ Module global
 
   ! 2-D planar slice probes: config and output file layout
   Integer(Int32), Parameter :: MAX_PROBES = 30
+  Integer(Int32), Parameter :: MAX_WAVEGAUGES = 32
 
   Integer(Int32) :: n_slices   = 0
   Integer(Int32) :: slice_freq = 100
@@ -832,7 +833,7 @@ Module global
   Real   (Int64) :: current_U         = 0d0
   Real   (Int64) :: current_z0        = 1d-3
   Real   (Int64) :: current_n         = 7d0
-  Real   (Int64) :: wave_gauge_x(8)   = -1d0   ! x positions of surface-elevation gauges written to vof_gauges.dat (<0 unused)
+  Real   (Int64) :: wave_gauge_x(MAX_WAVEGAUGES) = -1d0   ! x positions of surface-elevation gauges written to vof_gauges.dat (<0 unused)
 
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0

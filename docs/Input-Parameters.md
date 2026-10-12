@@ -339,7 +339,7 @@ Numerical wave flume: Dirichlet wave inlet plus relaxation zones. Needs `vof_flo
 | `current_z0` | `1e-3` | Bed roughness of the log-law current [m]. |
 | `current_n` | `7` | Power-law exponent denominator, `u ~ (y/d)^(1/n)`. |
 | `wave_turb` | `0` | `1` add the turbulence of a recycled precursor slice (`inflow_recycle_file`, same `ny, nz` as `inflow_type=2`): donor fluctuation × water fraction × ramp, V and W from the donor. Run the precursor with the same bed wall model and set `current_U`/`current_z0` to its mean profile. |
-| `wave_gauge_x(8)` | `-1` | Surface-elevation gauge positions, written to `vof_gauges.dat` (`<0` unused). |
+| `wave_gauge_x(32)` | `-1` | Surface-elevation gauge positions, written to `vof_gauges.dat` (`<0` unused). |
 
 ## Recipes
 

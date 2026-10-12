@@ -773,7 +773,7 @@ Contains
     Call Mpi_bcast ( wave_gen_len,      1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_abs_len,      1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_relax_rate,   1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( wave_gauge_x,      8, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_gauge_x,      MAX_WAVEGAUGES, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_ramp_time,    1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_type,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_turb,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
