@@ -211,7 +211,7 @@ Contains
     Do k = 1, nzg
        Do j = 1, ny
           Do i = 1, nxg
-             gz(i,j,k) = -vof_grav*( vp_rfv(i,j,k) - rsf(j) )/vp_rfv(i,j,k)
+             gz(i,j,k) = -vof_grav*( vp_rfv(i,j,k) - rsf(j) )/vp_riv(i,j,k)
           End Do
        End Do
     End Do
@@ -912,7 +912,7 @@ Contains
                 If ( ovr_u(i,j,k,4) < ovr_none ) fz2 = ovr_u(i,j,k,4)*vp_rfu(i,j,k)
              End If
              Fu(i,j,k) = ( 2d0*inv_dx2*( mx2*( U(i+1,j,k) - U(i,j,k) ) - mx1*( U(i,j,k) - U(i-1,j,k) ) )              &
-                  + ihy*( fy2 - fy1 ) + ihz*( fz2 - fz1 ) )/vp_rfu(i,j,k)
+                  + ihy*( fy2 - fy1 ) + ihz*( fz2 - fz1 ) )/vp_riu(i,j,k)
           End Do
        End Do
     End Do
@@ -944,7 +944,7 @@ Contains
              End If
              Fv(i,j,k) = ( inv_dx*( fx2 - fx1 )                                                                       &
                   + 2d0/dyc*( my2*( V(i,j+1,k) - V(i,j,k) )/dy2 - my1*( V(i,j,k) - V(i,j-1,k) )/dy1 )                 &
-                  + ihz*( fz2 - fz1 ) )/vp_rfv(i,j,k)
+                  + ihz*( fz2 - fz1 ) )/vp_riv(i,j,k)
           End Do
        End Do
     End Do
@@ -979,7 +979,7 @@ Contains
              Fw(i,j,k) = ( inv_dx*( fx2 - fx1 )                                                                       &
                   + ihy*( fy2 - fy1 )  &
                   + 2d0/dzc*( mz2*( W(i,j,k+1) - W(i,j,k) )/dz2 - mz1*( W(i,j,k) - W(i,j,k-1) )/dz1 )                 &
-                  )/vp_rfw(i,j,k)
+                  )/vp_riw(i,j,k)
           End Do
        End Do
     End Do
@@ -997,7 +997,7 @@ Contains
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
-             Fx(i,j,k) = Fx(i,j,k) + vof_sigma*face_kappa(i,j,k, i+1,j,k)*( Cv(i+1,j,k) - Cv(i,j,k) )/( dx*vp_rfu(i,j,k) )
+             Fx(i,j,k) = Fx(i,j,k) + vof_sigma*face_kappa(i,j,k, i+1,j,k)*( Cv(i+1,j,k) - Cv(i,j,k) )/( dx*vp_riu(i,j,k) )
           End Do
        End Do
     End Do
@@ -1005,7 +1005,7 @@ Contains
        Do j = 2, ny-1
           Do i = 2, nxg-1
              Fy(i,j,k) = Fy(i,j,k) + vof_sigma*face_kappa(i,j,k, i,j+1,k)*( Cv(i,j+1,k) - Cv(i,j,k) ) &
-                         /( ( yg(j+1) - yg(j) )*vp_rfv(i,j,k) )
+                         /( ( yg(j+1) - yg(j) )*vp_riv(i,j,k) )
           End Do
        End Do
     End Do
@@ -1013,7 +1013,7 @@ Contains
        Do j = 2, nyg-1
           Do i = 2, nxg-1
              Fz(i,j,k) = Fz(i,j,k) + vof_sigma*face_kappa(i,j,k, i,j,k+1)*( Cv(i,j,k+1) - Cv(i,j,k) ) &
-                         /( ( zg(k+1) - zg(k) )*vp_rfw(i,j,k) )
+                         /( ( zg(k+1) - zg(k) )*vp_riw(i,j,k) )
           End Do
        End Do
     End Do
@@ -1062,7 +1062,7 @@ Contains
           Do k = 2, nzg-1
              Do j = 2, ny-1
                 Do i = 2, nxg-1
-                   Fv_(i,j,k) = Fv_(i,j,k) - vof_grav*( vp_rfv(i,j,k) - rsf(j) )/vp_rfv(i,j,k)
+                   Fv_(i,j,k) = Fv_(i,j,k) - vof_grav*( vp_rfv(i,j,k) - rsf(j) )/vp_riv(i,j,k)
                 End Do
              End Do
           End Do
@@ -1070,7 +1070,7 @@ Contains
           Do k = 2, nzg-1
              Do j = 2, nyg-1
                 Do i = 2, nx-1
-                   Fu_(i,j,k) = Fu_(i,j,k) + vof_grav*( yg(j) - vof_level )*( vp_rho(i+1,j,k) - vp_rho(i,j,k) )/( dx*vp_rfu(i,j,k) )
+                   Fu_(i,j,k) = Fu_(i,j,k) + vof_grav*( yg(j) - vof_level )*( vp_rho(i+1,j,k) - vp_rho(i,j,k) )/( dx*vp_riu(i,j,k) )
                 End Do
              End Do
           End Do
@@ -1078,7 +1078,7 @@ Contains
              Do j = 2, ny-1
                 Do i = 2, nxg-1
                    Fv_(i,j,k) = Fv_(i,j,k) + vof_grav*( y(j) - vof_level )*( vp_rho(i,j+1,k) - vp_rho(i,j,k) ) &
-                                /( ( yg(j+1) - yg(j) )*vp_rfv(i,j,k) )
+                                /( ( yg(j+1) - yg(j) )*vp_riv(i,j,k) )
                 End Do
              End Do
           End Do
@@ -1086,7 +1086,7 @@ Contains
              Do j = 2, nyg-1
                 Do i = 2, nxg-1
                    Fw_(i,j,k) = Fw_(i,j,k) + vof_grav*( yg(j) - vof_level )*( vp_rho(i,j,k+1) - vp_rho(i,j,k) ) &
-                                /( ( zg(k+1) - zg(k) )*vp_rfw(i,j,k) )
+                                /( ( zg(k+1) - zg(k) )*vp_riw(i,j,k) )
                 End Do
              End Do
           End Do

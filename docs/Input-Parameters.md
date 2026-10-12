@@ -297,6 +297,7 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_mom_scheme` | `6` | Momentum face value: `0` central, `1` upwind, `2` Koren, `4` QUICK, `5` central 4th order, `6` WENO5-Z. |
 | `vof_mom_cm0, vof_mom_cm1` | `2e-3`, `1e-2` | Refill-Courant range over which the face value blends from high order to upwind. |
 | `vof_geo_density` | `1` | `1` face density from the reconstructed planes (hydrostatically exact); `0` arithmetic mean. |
+| `vof_inertia` | `0` | `1` pressure operator and forces act on the transported (arithmetic) control-volume mass, weight and stresses stay geometric; stops the gas-current runaway at breaking waves, costs a little frequency accuracy (capillary wave −0.46 → −0.84 %). |
 | `vof_rk_mom` | `1` | `1` pseudo-time SSP-RK3 with frozen mass fluxes (auto 0 above density ratio 2000); `2` pseudo-time SSP-RK2 (two tendency evaluations instead of three); `0` forward Euler. |
 | `vof_rk_nth` | `0` | RK3 pseudo-time segments (`0` = 1). |
 | `vof_nsub, vof_co_sub` | `0`, `0.12` | Advection sub-steps; `0` picks them so the sub-step Courant number stays below `vof_co_sub` (0.03 for Euler). |

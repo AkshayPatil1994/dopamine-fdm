@@ -24,6 +24,7 @@ Module vof_pressure
   Implicit None
 
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_rho, vp_bu, vp_bv, vp_bw, vp_w, vp_rfu, vp_rfv, vp_rfw, vp_rau, vp_rav, vp_raw
+  Real(Int64), Allocatable, Dimension(:,:,:) :: vp_riu, vp_riv, vp_riw
   Real(Int64), Allocatable, Dimension(:) :: vp_hy
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_r, vp_z, vp_d, vp_ap
   Real(Int64) :: vp_beta0 = 1d0, vp_wsum = 1d0
@@ -53,6 +54,8 @@ Contains
     Allocate( vp_r(nxg,nyg,nzg), vp_z(nxg,nyg,nzg), vp_d(nxg,nyg,nzg), vp_ap(nxg,nyg,nzg) )
     Allocate( vp_rfu(nx,nyg,nzg), vp_rfv(nxg,ny,nzg), vp_rfw(nxg,nyg,nz), vp_hy(nyg) )
     Allocate( vp_rau(nx,nyg,nzg), vp_rav(nxg,ny,nzg), vp_raw(nxg,nyg,nz) )
+    Allocate( vp_riu(nx,nyg,nzg), vp_riv(nxg,ny,nzg), vp_riw(nxg,nyg,nz) )
+    vp_riu = vof_rho_g;  vp_riv = vof_rho_g;  vp_riw = vof_rho_g
     vp_rau = vof_rho_g;  vp_rav = vof_rho_g;  vp_raw = vof_rho_g
     vp_rfu = vof_rho_g;  vp_rfv = vof_rho_g;  vp_rfw = vof_rho_g
     Allocate( pois_bf(nyg), pois_bh(nyg) )
@@ -350,7 +353,12 @@ Contains
     Else
        vp_rfu = vp_rau;  vp_rfv = vp_rav;  vp_rfw = vp_raw
     End If
-    vp_bu = 1d0/vp_rfu;  vp_bv = 1d0/vp_rfv;  vp_bw = 1d0/vp_rfw
+    If ( vof_inertia >= 1 ) Then
+       vp_riu = vp_rau;  vp_riv = vp_rav;  vp_riw = vp_raw
+    Else
+       vp_riu = vp_rfu;  vp_riv = vp_rfv;  vp_riw = vp_rfw
+    End If
+    vp_bu = 1d0/vp_riu;  vp_bv = 1d0/vp_riv;  vp_bw = 1d0/vp_riw
     If ( vp_masked ) Then
        vp_bu = vp_bu*vp_mu;  vp_bv = vp_bv*vp_mv;  vp_bw = vp_bw*vp_mw
     End If

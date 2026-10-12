@@ -764,6 +764,9 @@ Module global
   ! vof_geo_density 1: face densities from the reconstructed planes in the half cells of each staggered control volume (default;
   ! 0 = arithmetic mean, hydrostatically wrong at 1000:1)
   Integer(Int32) :: vof_geo_density   = 1
+  ! vof_inertia 1: the pressure operator and every force (gravity, viscous, surface tension) act on the momentum of the staggered
+  ! control volume with the mass the transport carries (arithmetic, vp_ra*), the weight and stresses keep their geometric values
+  Integer(Int32) :: vof_inertia       = 0
   ! time integration of the momentum in each geometric sweep: 1 pseudo-time SSP-RK3 with frozen exact mass fluxes (stable to a
   ! full-step Courant number of about 0.3; switched to 0 above density ratio 2e3), 0 forward Euler; vof_rk_nth pseudo-time
   ! segments (0 = 1); the advection half-step is split into vof_nsub sub-steps (0 = so that the sub-step Courant number is
