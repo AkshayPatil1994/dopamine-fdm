@@ -61,6 +61,10 @@ the density is advected by the interface method and the momentum by an independe
   code, to a relative residual `vof_pcg_tol = 0.2` (at most `vof_pcg_iters = 30`; a tighter tolerance gives the same physics,
   `vof_pcg_tol = 0.3, 0.1, 0.01` agree to three digits at 40 / 65 / 93 iterations per step for a 1000:1 standing wave).
   After each advection half-step the transporting velocity is projected with `vof_adv_iters` iterations.
+* **Inertia option** (`vof_inertia = 1`): the pressure operator and every force (gravity, viscous, surface tension) are divided by the
+  arithmetic CV mass that the transport carries, not by the geometric face density; the weight and the stresses themselves keep their
+  geometric values. Pressure and forces then accelerate the same mass that the momentum transport moves, which stops the gas-current
+  runaway seen at breaking waves with the default. The price is a slightly less accurate frequency (capillary wave −0.46 → −0.84 %).
 * The same pressure machinery serves the Laplace/capillary problems of §1.5.
 
 ### 1.4 Viscous and SGS terms
@@ -165,6 +169,25 @@ Regression tests (`ctest -R vof_`, serial driver `tests/regression/vof_check.py`
 (Laplace jump, parasitic currents), capillary-wave and sloshing frequencies, translating drop, drop in an IBM-resolved flow, a
 steep variable-density wave, and each of these across rank layouts.
 
+### 2.1 Cost and speed settings
+
+Cost: 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the WENO5-Z
+tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1). Two inputs trade a little accuracy for speed (measured on a
+386 × 65 × 10 wave flume with a sill, one rank, 0.317 s/step with the defaults; 0.280 s/step with both):
+
+* `vof_rk_mom = 2`: two instead of three tendency evaluations per sweep; a 4000-step standing-wave run (about 20 periods) matches the default to four digits.
+* `vof_tr_floor = 1e-12`: stopping floor of the transporting-velocity projection with an immersed body; the liquid volume then drifts at ~1e-14 instead of ~1e-16.
+
+The sub-step Courant limit `vof_co_sub` only matters once the flow needs more than one sub-step per half step. The multigrid
+preconditioner runs in single precision (the outer PCG is double), which changes the iteration count by a few percent.
+
+### 2.2 Restart
+
+The restart file has no block flags: it must be read with the same `sgs_model`, `sediment_flag` and `boussinesq_flag` as it was
+written. With adaptive `dt` give `t_start` (the clock `nstep_init*dt` is wrong otherwise; waves and `nsave < 0` runs abort without it). The
+hydrostatic reference density is rebuilt from the initial-condition input, so keep that input unchanged. The ledger columns restart at zero.
+A bed (IBM) must not reach into the wave generation zone: the inlet profile and the relaxation assume a flat bed at `y = 0` there (checked).
+
 ## 3. Validation
 
 All runs use `C` ∈ [0,1] without clipping and show liquid-volume drift ≤ 3e-15 unless noted.
@@ -251,7 +274,17 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
 
 ![Plunging breaker](vof_breaker.png)
 
-### 3.6 Rank-layout independence
+### 3.6 Wave flume
+
+Wave flume (`vof_flume_small` geometry, 6 m, 4 ranks, t = 8 s): the stream-function wave (`wave_type = 2`, H = 0.04) reaches the
+gauges with amplitude 0.0195–0.021 (target 0.02) and the JONSWAP sea state (`wave_type = 3`, Hs = 0.03, 60 components) is
+generated and absorbed stably; the volume ledger closes to 7e-7 and 3e-7. Only the linear wave is in the regression suite;
+1-rank and 4-rank gauges agree to 0.1 % of the amplitude before the wave reaches the gauges (longer comparison not made).
+
+Breaking-wave cases at N = 192 and 256 run on 4 ranks (and at N = 256 on one rank) through the jet formation; longer runs and
+convergence of the plunge geometry with N have not been done.
+
+### 3.7 Rank-layout independence
 
 * Ratio-1 flows (translation, reversal, drop in an IBM-resolved flow) are identical to round-off (1e-15) for np = 1 and every
   `p_row × p_col` layout (tests `vof_*_np1_vs_np4_*`).
@@ -262,6 +295,8 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
 
 ## 4. Limits and known issues
 
+### 4.1 Method limits
+
 * **Interface-cell velocity.** A CV that holds both phases has one mass-weighted velocity, so the first gas row above a moving
   interface carries an O(1) relative error that does **not** converge with N (the bulk gas error converges at first order); peak
   velocities in the one-to-two cells around the interface are 1.5–2.5 × the wave orbital velocity and sensitive to round-off. This
@@ -269,23 +304,12 @@ clipping or damping is used. 2-D without turbulence, so only the geometry and th
 * **Density ratio ≥ 1e5.** Forward Euler with small sub-steps is used; a uniform stream through a drop stays clean to 1e-12 for 1e3
   and 1e4, but at ≥ 1e5 the error grows slowly (1e-12 → 1e-10 over ≈ 10 s).
 * **Thin sheets** (thinner than a cell): the geometric density and the PLIC reconstruction are not valid there (Enright test).
-* **Restart.** The restart file has no block flags: it must be read with the same `sgs_model`, `sediment_flag` and `boussinesq_flag` as it was
-  written. With adaptive `dt` give `t_start` (the clock `nstep_init*dt` is wrong otherwise; waves and `nsave < 0` runs abort without it). The
-  hydrostatic reference density is rebuilt from the initial-condition input, so keep that input unchanged. The ledger columns restart at zero.
-  A bed (IBM) must not reach into the wave generation zone: the inlet profile and the relaxation assume a flat bed at `y = 0` there (checked).
-* **Cost.** 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the
-  WENO5-Z tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1).
-* **Speed settings.** Beyond the defaults two inputs trade a little accuracy for speed (measured on a 386 x 65 x 10 wave flume with a sill, one rank, 0.317 s/step with the defaults):
-  `vof_rk_mom = 2` (two instead of three tendency evaluations per sweep; a 4000-step standing-wave run, about 20 periods, matches the default to four digits) and `vof_tr_floor = 1e-12` (stopping floor of the transporting-velocity projection with an immersed body; the liquid volume then drifts at ~1e-14 instead of ~1e-16). Together 0.280 s/step. The sub-step Courant limit `vof_co_sub` only matters once the flow needs more than one sub-step per half step. The multigrid preconditioner runs in single precision (the outer PCG is double), which changes the iteration count by a few percent.
-* **Not supported** with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, sediment, Boussinesq buoyancy, particles, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
-  non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. **GPU builds abort in `vof_init`**
-  (the solver is host-only; no GPU test was possible).
-* Wave flume (`vof_flume_small` geometry, 6 m, 4 ranks, t = 8 s): the stream-function wave (`wave_type = 2`, H = 0.04) reaches the
-  gauges with amplitude 0.0195–0.021 (target 0.02) and the JONSWAP sea state (`wave_type = 3`, Hs = 0.03, 60 components) is
-  generated and absorbed stably; the volume ledger closes to 7e-7 and 3e-7. Only the linear wave is in the regression suite;
-  1-rank and 4-rank gauges agree to 0.1 % of the amplitude before the wave reaches the gauges (longer comparison not made).
-* Breaking-wave cases at N = 192 and 256 run on 4 ranks (and at N = 256 on one rank) through the jet formation; longer runs and
-  convergence of the plunge geometry with N have not been done.
+
+### 4.2 Not supported
+
+Not supported with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, sediment, Boussinesq buoyancy, particles, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
+non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. **GPU builds abort in `vof_init`**
+(the solver is host-only; no GPU test was possible).
 
 ## 5. References
 

@@ -702,15 +702,7 @@ Configured via `&INITIAL_CONDITIONS` — see
 
 ## 13. Two-phase flow (`vof_flow = 1`)
 
-With `vof_active = 1`, `vof_flow = 1` the solver advances a liquid fraction $C$ and solves the incompressible two-fluid equations
-in conservative one-fluid form,
-
-$$\frac{\partial \rho}{\partial t} + \frac{\partial (\rho u_j)}{\partial x_j} = 0,\qquad
-\frac{\partial (\rho u_i)}{\partial t} + \frac{\partial (\rho u_i u_j)}{\partial x_j} = -\frac{\partial p}{\partial x_i} + \rho g_i + \frac{\partial}{\partial x_j}\left[(\mu+\mu_t)\left(\frac{\partial u_i}{\partial x_j} + \frac{\partial u_j}{\partial x_i}\right)\right] + \sigma\kappa\frac{\partial C}{\partial x_i},\qquad \frac{\partial u_i}{\partial x_i}=0,$$
-
-with $\rho = \rho_g + (\rho_l-\rho_g)C$, $\mu = \mu_g + (\mu_l-\mu_g)C$ and $\mu_t = \rho\nu_t$ the SGS viscosity of the mixture ($g_i$ is the gravitational acceleration, $\sigma$ the surface tension, $\kappa$ the interface curvature). The interface is advected by direction-split PLIC sweeps with exact geometric fluxes; the momentum
-on every staggered control volume is advanced with the *same* mass fluxes (WENO5-Z face values, pseudo-time SSP-RK3 inside each
-sweep, refill-Courant blend to upwind), so density and momentum stay consistent at density ratios of 1000. The pressure equation
-$\dfrac{\partial}{\partial x_i}\left(\dfrac{1}{\rho_f}\dfrac{\partial p}{\partial x_i}\right)=\dfrac{1}{\Delta t}\dfrac{\partial u^*_i}{\partial x_i}$ uses the geometric half-cell face density and is solved by PCG
-preconditioned with the constant-coefficient fast Poisson solver of §4. The single-phase solver of §§1–12 is untouched when
-`vof_active = 0`. Full description, validation and limits: [Two-Phase VOF](Two-Phase-VOF.md).
+With `vof_active = 1`, `vof_flow = 1` the code solves the incompressible two-fluid equations in conservative one-fluid form: a liquid
+fraction $C$ is advected by geometric PLIC sweeps, the momentum is transported with the same mass fluxes as the density, and the
+variable-density pressure equation is solved by PCG preconditioned with the fast Poisson solver of §4. The single-phase solver of
+§§1–12 is untouched when `vof_active = 0`. Equations, method, validation and limits: [Two-Phase VOF](Two-Phase-VOF.md).
