@@ -387,11 +387,11 @@ Contains
   !  liquid or momentum crosses the body, and the divergence-free field is exact in every fluid cell.
   Subroutine make_transport_velocity_masked
 
-    Real(Int64), Allocatable :: sbu(:,:,:), sbv(:,:,:), sbw(:,:,:), gu(:,:,:), gv(:,:,:), gw(:,:,:), ph(:,:,:)
+    Real(Int64), Allocatable :: gu(:,:,:), gv(:,:,:), gw(:,:,:), ph(:,:,:)
     Real(Int64) :: beta0_save, umax
 
-    Allocate( sbu(nx,nyg,nzg), sbv(nxg,ny,nzg), sbw(nxg,nyg,nz), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz), ph(nxg,nyg,nzg) )
-    sbu = vp_bu;  sbv = vp_bv;  sbw = vp_bw;  beta0_save = vp_beta0
+    Allocate( gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz), ph(nxg,nyg,nzg) )
+    beta0_save = vp_beta0
     vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
     vp_mg_stale = ( pcg_precond >= 1 )
 
@@ -422,10 +422,10 @@ Contains
     Call face_halo(Ut, Vt, Wt)
     U = Utmp;  V = Vtmp;  W = Wtmp
 
-    ! the multigrid still holds the mask coefficients: the next preconditioner call rebuilds them from the restored vp_bu..
-    vp_bu = sbu;  vp_bv = sbv;  vp_bw = sbw;  vp_beta0 = beta0_save;  vp_use_layered = .True.
+    ! vp_bu.. keep the mask coefficients: every solve with the density coefficients starts with a full vp_set_density
+    vp_beta0 = beta0_save;  vp_use_layered = .True.
     vp_mg_stale = ( pcg_precond >= 1 )
-    Deallocate( sbu, sbv, sbw, gu, gv, gw, ph )
+    Deallocate( gu, gv, gw, ph )
 
   End Subroutine make_transport_velocity_masked
 
