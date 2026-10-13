@@ -38,7 +38,7 @@ Contains
                        rotation_active, Omega_x
 
     Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, &
-                        cfl_adaptive, cfl_target, cfl_safety, dt_min, dt_max, pcg_precond
+                        cfl_adaptive, cfl_target, cfl_safety, dt_min, dt_max, pcg_precond, mg_cycle, mg_smooth_deg
 
     Namelist /BOUNDARY_CONDITIONS/ bc_face_ylo, bc_face_yhi, x_bc_type, y_bc_type, z_bc_type
 
@@ -277,6 +277,8 @@ Contains
        Call check_vof_inputs
        If ( pcg_precond < -1 .Or. pcg_precond > 1 ) &
             Call abort_input( 'ERROR: pcg_precond must be 0 (fast Poisson solver), 1 (multigrid) or -1 (automatic)' )
+       If ( mg_cycle < 1 .Or. mg_cycle > 3 ) Call abort_input( 'ERROR: mg_cycle must be 1 (V), 2 (W) or 3' )
+       If ( mg_smooth_deg < 1 ) Call abort_input( 'ERROR: mg_smooth_deg must be >= 1' )
        If ( pcg_precond < 0 ) Then
           pcg_precond = 0
           If ( y_bc_type /= 0 ) pcg_precond = 1
@@ -560,6 +562,8 @@ Contains
     Call Mpi_bcast ( ibm_pcg_tol,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_projection,       1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( pcg_precond,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( mg_cycle,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( mg_smooth_deg,        1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_sdf_file,  Len(ibm_sdf_file),  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_objid_file, Len(ibm_objid_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_wall_model_flag,  1, MPI_integer,   0, MPI_COMM_WORLD, ierr )

@@ -332,6 +332,8 @@ Module global
   ! PCG preconditioner of vof_pressure (masked, variable-density): 0 fast Poisson solver, 1 geometric multigrid (vof_mg),
   ! -1 (default) picks 1 when the case has y walls and the build supports it, else 0
   Integer(Int32) :: pcg_precond = -1
+  Integer(Int32) :: mg_cycle = 2        ! multigrid cycle of the PCG preconditioner: 1 V, 2 W, 3 three coarse visits per level
+  Integer(Int32) :: mg_smooth_deg = 4  ! degree of the Chebyshev smoother on every level but the coarsest
   Logical        :: ibm_stress_on = .False.
   !$acc declare create(ibm_stress_on)
 

@@ -60,6 +60,8 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `cfl_safety` | `0.9` | Safety factor on the `dt` update (adaptive). |
 | `dt_min, dt_max` | `1e-10`, `1e10` | Bounds on `dt` (adaptive). |
 | `pcg_precond` | `-1` | Preconditioner of the masked / variable-density PCG (`ibm_method=1`, `vof_flow≥1`): `0` fast Poisson solver, `1` mask-aware multigrid (needs y walls), `-1` automatic (1 with y walls, else 0; 0 for `vof_flow≥1` on GPU). GPU: `ibm_method=1` needs 1; `vof_flow≥1` cannot use 1. |
+| `mg_cycle` | `2` | Multigrid cycle of the `pcg_precond=1` preconditioner: `1` V-cycle, `2` W-cycle (the coarse level is visited twice; 3–6× fewer PCG iterations for ~15 % more work per cycle), `3` three visits. |
+| `mg_smooth_deg` | `4` | Degree of the Chebyshev smoother of the multigrid on every level but the coarsest. |
 
 ## BOUNDARY_CONDITIONS
 

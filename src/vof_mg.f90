@@ -32,7 +32,7 @@ Module vof_mg
   Integer(Int32) :: mg_ni(mg_maxlev), mg_nj(mg_maxlev), mg_nk(mg_maxlev)
   Integer(Int32) :: mg_sx(mg_maxlev), mg_sy(mg_maxlev), mg_sz(mg_maxlev)   ! coarsening stride from level l to l+1
   Integer(Int32) :: mg_off(mg_maxlev+1)
-  Real(mgk), Allocatable, Dimension(:) :: mg_cx, mg_cy, mg_cz, mg_dd, mg_x, mg_b, mg_t, mg_d, mg_m, mg_iw
+  Real(mgk), Allocatable, Dimension(:) :: mg_cx, mg_cy, mg_cz, mg_dd, mg_x, mg_b, mg_t, mg_d, mg_m, mg_iw, mg_s
   Real(Int64), Allocatable, Dimension(:,:) :: mg_fx, mg_fy, mg_fz   ! centre-distance ratios of the coarse faces, level l -> l+1
   Real(Int64), Allocatable, Dimension(:) :: mg_hy1, mg_hz1, mg_dcy1, mg_dcz1   ! level-1 cell sizes and centre distances
   Real(mgk), Allocatable, Dimension(:,:) :: mg_sbx, mg_rbx, mg_sbz, mg_rbz
@@ -132,12 +132,13 @@ Contains
     Deallocate( hx, hy, hz, dcx, dcy, dcz )
 
     Allocate( mg_cx(ntot), mg_cy(ntot), mg_cz(ntot), mg_dd(ntot), mg_x(ntot), mg_b(ntot), mg_t(ntot), mg_d(ntot), &
-              mg_m(ntot), mg_iw(ntot) )
+              mg_m(ntot), mg_iw(ntot), mg_s(ntot) )
     mg_cx = 0d0;  mg_cy = 0d0;  mg_cz = 0d0;  mg_dd = 0d0;  mg_x = 0d0;  mg_b = 0d0;  mg_t = 0d0;  mg_d = 0d0
-    mg_m = 0d0;  mg_iw = 0d0
+    mg_m = 0d0;  mg_iw = 0d0;  mg_s = 0d0
+    mg_deg = mg_smooth_deg
     Allocate( mg_sbx((mg_nj(1)+2)*(mg_nk(1)+2),2), mg_rbx((mg_nj(1)+2)*(mg_nk(1)+2),2) )
     Allocate( mg_sbz((mg_ni(1)+2)*(mg_nj(1)+2),2), mg_rbz((mg_ni(1)+2)*(mg_nj(1)+2),2) )
-    !$acc enter data copyin(mg_cx,mg_cy,mg_cz,mg_dd,mg_x,mg_b,mg_t,mg_d,mg_m,mg_iw)
+    !$acc enter data copyin(mg_cx,mg_cy,mg_cz,mg_dd,mg_x,mg_b,mg_t,mg_d,mg_m,mg_iw,mg_s)
     !$acc enter data create(mg_sbx,mg_rbx,mg_sbz,mg_rbz)
     !$acc enter data copyin(mg_hy1,mg_hz1)
     mg_ready = .True.
@@ -650,33 +651,74 @@ Contains
   End Subroutine mg_prolong
 
 
-  !> One symmetric V-cycle from a zero guess on the level-1 right-hand side mg_b
+  !> One symmetric cycle from a zero guess on the level-1 right-hand side mg_b (V-cycle for mg_cycle = 1, W-cycle for 2)
   Subroutine mg_vcycle
 
-    Integer(Int32) :: l, o, oc
-    Real(Int64), Parameter :: hi = 2d0
-
-    Do l = 1, mg_nlev-1
-       o = mg_off(l) + 1;  oc = mg_off(l+1) + 1
-       Call mg_cheb(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_t(o), mg_d(o), mg_cx(o), mg_cy(o), mg_cz(o), &
-                    mg_dd(o), mg_m(o), mg_iw(o), mg_deg, hi/mg_ratio, hi, .True.)
-       Call mg_halo(mg_x(o), mg_ni(l), mg_nj(l), mg_nk(l))
-       Call mg_resid(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_cx(o), mg_cy(o), mg_cz(o), mg_dd(o), mg_t(o))
-       Call mg_restrict(mg_ni(l), mg_nj(l), mg_nk(l), mg_t(o), mg_ni(l+1), mg_nj(l+1), mg_nk(l+1), &
-                        mg_sx(l), mg_sy(l), mg_sz(l), mg_b(oc))
-    End Do
-    l = mg_nlev;  o = mg_off(l) + 1
-    Call mg_cheb(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_t(o), mg_d(o), mg_cx(o), mg_cy(o), mg_cz(o), &
-                 mg_dd(o), mg_m(o), mg_iw(o), mg_deg_coarse, hi/mg_ratio_coarse, hi, .True.)
-    Do l = mg_nlev-1, 1, -1
-       o = mg_off(l) + 1;  oc = mg_off(l+1) + 1
-       Call mg_prolong(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_ni(l+1), mg_nj(l+1), mg_nk(l+1), &
-                       mg_sx(l), mg_sy(l), mg_sz(l), mg_x(oc))
-       Call mg_cheb(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_t(o), mg_d(o), mg_cx(o), mg_cy(o), mg_cz(o), &
-                    mg_dd(o), mg_m(o), mg_iw(o), mg_deg, hi/mg_ratio, hi, .False.)
-    End Do
+    Call mg_level(1)
 
   End Subroutine mg_vcycle
+
+
+  !> Cycle on level l from a zero guess: smooth, restrict the residual, mg_cycle visits of the coarse level (each one on the
+  !  residual left by the previous ones, their corrections added), prolong, smooth. Every visit is a fixed symmetric operator,
+  !  so the result is too
+  Recursive Subroutine mg_level(l)
+
+    Integer(Int32), Intent(In) :: l
+    Integer(Int32) :: o, oc, g, ni, nj, nk
+    Real(Int64), Parameter :: hi = 2d0
+
+    o = mg_off(l) + 1
+    If ( l == mg_nlev ) Then
+       Call mg_cheb(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_t(o), mg_d(o), mg_cx(o), mg_cy(o), mg_cz(o), &
+                    mg_dd(o), mg_m(o), mg_iw(o), mg_deg_coarse, hi/mg_ratio_coarse, hi, .True.)
+       Return
+    End If
+    oc = mg_off(l+1) + 1
+    ni = mg_ni(l+1);  nj = mg_nj(l+1);  nk = mg_nk(l+1)
+    Call mg_cheb(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_t(o), mg_d(o), mg_cx(o), mg_cy(o), mg_cz(o), &
+                 mg_dd(o), mg_m(o), mg_iw(o), mg_deg, hi/mg_ratio, hi, .True.)
+    Call mg_halo(mg_x(o), mg_ni(l), mg_nj(l), mg_nk(l))
+    Call mg_resid(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_cx(o), mg_cy(o), mg_cz(o), mg_dd(o), mg_t(o))
+    Call mg_restrict(mg_ni(l), mg_nj(l), mg_nk(l), mg_t(o), ni, nj, nk, mg_sx(l), mg_sy(l), mg_sz(l), mg_b(oc))
+    Do g = 1, mg_cycle
+       Call mg_level(l+1)
+       If ( mg_cycle == 1 ) Exit
+       If ( g == 1 ) Then
+          Call mg_copy(ni, nj, nk, mg_x(oc), mg_s(oc))
+       Else
+          Call mg_add(ni, nj, nk, mg_x(oc), mg_s(oc))
+       End If
+       If ( g == mg_cycle ) Exit
+       Call mg_halo(mg_x(oc), ni, nj, nk)
+       Call mg_resid(ni, nj, nk, mg_x(oc), mg_b(oc), mg_cx(oc), mg_cy(oc), mg_cz(oc), mg_dd(oc), mg_t(oc))
+       Call mg_copy(ni, nj, nk, mg_t(oc), mg_b(oc))
+    End Do
+    If ( mg_cycle > 1 ) Call mg_copy(ni, nj, nk, mg_s(oc), mg_x(oc))
+    Call mg_prolong(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), ni, nj, nk, mg_sx(l), mg_sy(l), mg_sz(l), mg_x(oc))
+    Call mg_cheb(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_t(o), mg_d(o), mg_cx(o), mg_cy(o), mg_cz(o), &
+                 mg_dd(o), mg_m(o), mg_iw(o), mg_deg, hi/mg_ratio, hi, .False.)
+
+  End Subroutine mg_level
+
+
+  Subroutine mg_add(ni, nj, nk, a, c)
+
+    Integer(Int32), Intent(In) :: ni, nj, nk
+    Real(mgk), Intent(In) :: a(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: c(0:ni+1,0:nj+1,0:nk+1)
+    Integer(Int32) :: i, j, k
+
+    !$acc parallel loop collapse(3) present(a,c) async(1)
+    Do k = 1, nk
+       Do j = 1, nj
+          Do i = 1, ni
+             c(i,j,k) = c(i,j,k) + a(i,j,k)
+          End Do
+       End Do
+    End Do
+
+  End Subroutine mg_add
 
 
   !> z = M^-1 r = -S^-1 (V r) for fine cell-centred vectors r, z of the shape (nxg,nyg,nzg)
