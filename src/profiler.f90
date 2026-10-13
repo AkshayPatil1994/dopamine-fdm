@@ -18,12 +18,19 @@ Module profiler
   Integer(Int32), Parameter :: PROF_CFL            = 10
   Integer(Int32), Parameter :: PROF_RK_UPDATE      = 11
   Integer(Int32), Parameter :: PROF_CMFR           = 12
-  Integer(Int32), Parameter :: PROF_N              = 12
+  Integer(Int32), Parameter :: PROF_VOF_TRANSPORT  = 13
+  Integer(Int32), Parameter :: PROF_VOF_ADVECT     = 14
+  Integer(Int32), Parameter :: PROF_VOF_PROJECT    = 15
+  Integer(Int32), Parameter :: PROF_VOF_FORCES     = 16
+  Integer(Int32), Parameter :: PROF_VOF_END        = 17
+  Integer(Int32), Parameter :: PROF_PCG            = 18   ! inside the VOF stages above, not added to the total
+  Integer(Int32), Parameter :: PROF_N              = 18
 
   Character(16), Dimension(PROF_N), Parameter :: prof_names = [ Character(16) :: &
        'SGS model', 'Wall model', 'RHS (equations)', 'IBM', &
        'Boundary cond.', 'Poisson FFT', 'Poisson tridiag', 'Projection', &
-       'Scalar transport', 'CFL check', 'RK update+sync', 'Const. flow rate' ]
+       'Scalar transport', 'CFL check', 'RK update+sync', 'Const. flow rate', &
+       'VOF transport', 'VOF advect', 'VOF adv. project', 'VOF forces', 'VOF end/diag', 'PCG (in VOF)' ]
 
   Real(Int64) :: prof_elapsed(PROF_N) = 0d0
   Real(Int64) :: prof_t0(PROF_N)      = 0d0
@@ -52,7 +59,7 @@ Contains
     Call MPI_Reduce(prof_elapsed, prof_max, PROF_N, MPI_real8, MPI_max, 0, MPI_COMM_WORLD, ierr)
 
     If ( myid == 0 ) Then
-       total_sum = Sum(prof_sum)
+       total_sum = Sum(prof_sum(1:PROF_PCG-1))
        Write(*,'(A)') ' '
        Write(*,'(A)') ' +====================================================================+'
        Write(*,'(A)') '  PROFILER SUMMARY (per-rank average, and slowest-rank max)'

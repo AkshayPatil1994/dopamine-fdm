@@ -30,6 +30,7 @@ Module vof_twofluid
   Use vof_advect
   Use vof_state
   Use vof_pressure
+  Use profiler
   Use vof_curv, Only : vof_curvature
   Use mom_recon
   Use halo_pad, Only : pad_field
@@ -275,10 +276,15 @@ Contains
     Real(Int64) :: co, cl
 
     If ( .Not. Present(keep_transport) ) Then
+       Call profiler_start(PROF_VOF_TRANSPORT)
        Call make_transport_velocity
+       Call profiler_stop(PROF_VOF_TRANSPORT)
     Else If ( .Not. keep_transport ) Then
+       Call profiler_start(PROF_VOF_TRANSPORT)
        Call make_transport_velocity
+       Call profiler_stop(PROF_VOF_TRANSPORT)
     End If
+    Call profiler_start(PROF_VOF_ADVECT)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     qu = vp_rau*U;  qv = vp_rav*V;  qw = vp_raw*W
@@ -342,6 +348,7 @@ Contains
 
     ! the interior was rewritten: refresh the seam and periodic ghost faces before the next sub-step rebuilds q = rho*u from them
     Call face_halo(U, V, W)
+    Call profiler_stop(PROF_VOF_ADVECT)
 
   End Subroutine vof_advect_half
 
@@ -385,7 +392,9 @@ Contains
     ! already nearly divergence free, and PCG then amplifies noise)
     umax = Max( MaxVal(Abs(U)), MaxVal(Abs(V)), MaxVal(Abs(W)) )
     Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
+    Call profiler_start(PROF_PCG)
     Call vp_pcg(fdiv, 800, 1d-13, ph, rfloor=vof_tr_floor*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
+    Call profiler_stop(PROF_PCG)
     ! Ut must be solenoidal for the liquid volume to be conserved: report a solve that hit the cap or broke down at the start
     If ( ( vp_iters_last >= 800 .And. vp_res_last > 1d-6 ) .Or. ( vp_iters_last == 0 .And. MaxVal(Abs(fdiv)) > 0d0 ) ) Then
        vf_tr_warn = vf_tr_warn + 1
@@ -737,7 +746,9 @@ Contains
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     Call vp_div(U, V, W, fdiv)
+    Call profiler_start(PROF_PCG)
     Call vp_pcg(fdiv, maxit, tol, dphi, dt)
+    Call profiler_stop(PROF_PCG)
     vf_proj_its_last = vp_iters_last
     vf_proj_its_sum = vf_proj_its_sum + vp_iters_last
     Call vp_halo(dphi, .True.)
@@ -1138,7 +1149,9 @@ Contains
        Call face_halo(U, V, W)
        Call vp_div(U, V, W, fdiv)
        fdiv = fdiv/dta
+       Call profiler_start(PROF_PCG)
        Call vp_pcg(fdiv, Max(vof_pcg_iters, 1), vof_pcg_tol, dphi, dt*dta)
+       Call profiler_stop(PROF_PCG)
        Call vp_halo(dphi, .True.)
        Call vp_grad(dphi, gu, gv, gw)
        Call apply_face_gradient(gu, gv, gw, dta)
@@ -1329,12 +1342,16 @@ Contains
        End Do
     End If
     Call apply_boundary_conditions
+    Call profiler_start(PROF_VOF_PROJECT)
     Call vof_project(vof_adv_tol, vof_adv_iters)
+    Call profiler_stop(PROF_VOF_PROJECT)
     Call apply_boundary_conditions(after_projection=.True.)
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
 
     Uo = U;  Vo = V;  Wo = W
+    Call profiler_start(PROF_VOF_FORCES)
     Call vof_forces_rk3(to)
+    Call profiler_stop(PROF_VOF_FORCES)
 
     If ( vof_frozen == 0 ) Then
        nsub = vof_nsub
@@ -1346,9 +1363,12 @@ Contains
     t = to + dt
     Call vof_relax(dt)
     Call apply_boundary_conditions
+    Call profiler_start(PROF_VOF_PROJECT)
     Call vof_project(vof_adv_tol, vof_adv_iters)
+    Call profiler_stop(PROF_VOF_PROJECT)
     Call apply_boundary_conditions(after_projection=.True.)
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
+    Call profiler_start(PROF_VOF_END)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call tally_ledger
     ! the whole array, ghost planes included: snapshots copy every rank's full local block, so a stale (zero) seam ghost plane would
@@ -1367,6 +1387,7 @@ Contains
        End Block
        ibm_sampling_now = .False.
     End If
+    Call profiler_stop(PROF_VOF_END)
     dt_step = dt
     dt = dt_presnap
 
