@@ -148,6 +148,8 @@ Contains
        Do l = 1, mg_nlev
           Write(*,'(A,I3,3I6)') '     level', l, mg_ni(l), mg_nj(l), mg_nk(l)
        End Do
+       If ( mg_nk(1) < 8 .And. nz_global > mg_nk(1) ) &
+            Write(*,'(A)') '   NOTE: fewer than 8 z-cells per rank limit the multigrid coarsening in z; p_col = 1 converges faster'
     End If
 
   End Subroutine mg_init

@@ -23,7 +23,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `grid_type` | `1` | Wall-normal (y) grid: 1 uniform; 2 tanh, fine at both walls; 3 tanh, fine at bottom; 4 tanh, fine at top; 5 uniform sublayer `[0,ks]` (`nks` cells, set in `&IBM`) then tanh fine at the interface and the top wall; 6 same, coarse at the top; 7 same, coarse at the interface and fine at the top. |
 | `alpha_grid` | `1.0` | Stretching strength for `grid_type` 2–7 (larger = stronger clustering). Ignored for type 1. |
 | `alpha_grid_z` | `0.0` | Spanwise stretching: `0` uniform, `>0` symmetric tanh clustering at both z walls. Needs `z_bc_type=1` (aborts with periodic z). |
-| `p_row, p_col` | `0, 0` | MPI pencil grid (`p_row` splits x, `p_col` splits z, y always local; product = rank count). `0,0` = automatic: pure z-slab if every rank keeps ≥2 z-cells, otherwise the factor pair closest to the x:z aspect ratio. With `y_bc_type=1` and `z_bc_type=1` (duct) auto forces `p_row=nprocs, p_col=1`; an explicit `p_col>1` there aborts. |
+| `p_row, p_col` | `0, 0` | MPI pencil grid (`p_row` splits x, `p_col` splits z, y always local; product = rank count). `0,0` = automatic: pure z-slab if every rank keeps ≥2 z-cells, otherwise the factor pair closest to the x:z aspect ratio. With `y_bc_type=1` and `z_bc_type=1` (duct) auto forces `p_row=nprocs, p_col=1`; an explicit `p_col>1` there aborts.  With the multigrid preconditioner (`pcg_precond=1`), keep at least ~12 cells per rank in z: a thin z extent per rank stops the coarsening in z early and roughly doubles the PCG iterations (tk94 flume 976×81×14 on 8 ranks: `p_row=8, p_col=1` is 1.5× faster than the automatic 4×2). |
 
 ## PHYSICS
 
