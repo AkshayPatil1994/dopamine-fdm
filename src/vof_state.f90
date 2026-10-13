@@ -24,6 +24,7 @@ Module vof_state
   Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last, vp_its_total, &
                            vp_masked, vp_act
   Use input_output, Only : read_vof_restart
+  Use restart_output, Only : file_exists_nonempty
   Use waves, Only : wave_init, wave_eta
 
   Implicit None
@@ -557,6 +558,7 @@ Contains
     Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr, pjump, pcs(2)
     Integer(Int64) :: nfail
     Integer(Int64) :: nint
+    Logical :: has_rows
 
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     serr = shape_error()
@@ -586,8 +588,10 @@ Contains
     If ( myid == 0 ) Then
        If ( .Not. vof_unit_open ) Then
           vof_unit_open = .True.
+          has_rows = ( restart == 1 .And. file_exists_nonempty('vof_diag.dat') )
           Open(newunit=vof_unit, file='vof_diag.dat', status=Merge('unknown','replace',restart==1), &
                position=Merge('append','rewind',restart==1), action='write')
+          If ( .Not. has_rows ) &
           Write(vof_unit,'(A)') '# 1 step  2 t  3 dt  4 Vliq  5 (Vliq-V0)/V0  6 Cmin  7 Cmax  8 n_interface  9 clip_loss_cum  ' // &
                '10 Co_adv_max  11 xc  12 yc  13 zc  14 int C(1-C)  15 cos-moment  16 max|U|  17 max|V|  18 max|W|  ' // &
                '19 PCG_its_step  20 last_PCG_res  21 n_sub  22 bnd_cum  23 relax_cum  24 x_of_max|U|  25 y_of_max|U|  ' // &
@@ -829,6 +833,7 @@ Contains
     Real(Int64) :: loc(MAX_WAVEGAUGES), glb(MAX_WAVEGAUGES), cnt_loc(MAX_WAVEGAUGES), cnt(MAX_WAVEGAUGES), col
     Logical :: is_first, is_last
     Integer(Int32) :: partner
+    Logical :: has_rows
 
     ng = Count(wave_gauge_x >= 0d0)
     If ( ng == 0 ) Return
@@ -859,9 +864,10 @@ Contains
     If ( myid == 0 ) Then
        If ( .Not. gauge_unit_open ) Then
           gauge_unit_open = .True.
+          has_rows = ( restart == 1 .And. file_exists_nonempty('vof_gauges.dat') )
           Open(newunit=gauge_unit, file='vof_gauges.dat', status=Merge('unknown','replace',restart==1), &
                position=Merge('append','rewind',restart==1), action='write')
-          Write(gauge_unit,'(A,*(ES12.4))') '# t eta(x_g) at x =', wave_gauge_x(1:ng)
+          If ( .Not. has_rows ) Write(gauge_unit,'(A,*(ES12.4))') '# t eta(x_g) at x =', wave_gauge_x(1:ng)
        End If
        Write(gauge_unit,'(ES16.8,*(ES14.6))') t, (glb(ig)/Max(cnt(ig), 1d0), ig = 1, ng)
        Flush(gauge_unit)

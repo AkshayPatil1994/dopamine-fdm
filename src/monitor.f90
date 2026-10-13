@@ -9,6 +9,7 @@ Module monitor
   Use ibm
   Use decomp, Only : x_periodic_partner, z_periodic_partner
   Use uav_actuator, Only : uav_current_thrust
+  Use restart_output, Only : trim_restart_file
 
   ! prevent implicit typing
   Implicit None
@@ -441,6 +442,7 @@ Contains
 
     Logical :: file_exists
     If ( myid /= 0 ) Return
+    Call trim_restart_file('ibm_forces.csv', 2)
     Inquire(file='ibm_forces.csv', exist=file_exists)
     If ( file_exists ) Then
        ! Restart: append to existing file (no new header)

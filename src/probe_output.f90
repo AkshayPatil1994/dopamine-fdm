@@ -4,6 +4,7 @@ Module probe_output
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
+  Use restart_output, Only : truncate_file, file_exists_nonempty
 
   Implicit None
   Private
@@ -38,7 +39,8 @@ Contains
   Subroutine init_probes
 
     Integer(Int32) :: n, meta_unit
-    Character(300) :: fname
+    Integer(Int64) :: nkeep
+    Character(300) :: fname, tname
     Character(4)   :: dstr
     Character(8)   :: cstr
 
@@ -69,14 +71,18 @@ Contains
 
       If (myid == 0) Then
         Write(fname,'(A,A)') Trim(slice_fileout(n)), '.bin'
+        Write(tname,'(A,A)') Trim(slice_fileout(n)), '_times.bin'
         Call ensure_dir(Trim(fname))
-        Open(newunit=sli_funit(n), file=Trim(fname), access='stream', &
-             form='unformatted', status='replace', action='write')
-
+        ! restart: keep the snapshots up to nstep_init and append to them
+        nkeep = 0
+        If ( restart == 1 .And. file_exists_nonempty(Trim(fname)) .And. file_exists_nonempty(Trim(tname)) ) Then
+          nkeep = Min( records_in(Trim(fname), 8_Int64*sli_ncomp(n)*sli_n1(n)*sli_n2(n)), records_in(Trim(tname), 8_Int64) )
+          If ( slice_freq > 0 ) nkeep = Min(nkeep, Int(nstep_init/slice_freq, Int64))
+        End If
+        sli_nwrit(n) = Int(nkeep, Int32)
+        Call open_probe_stream(sli_funit(n), Trim(fname), nkeep*8_Int64*sli_ncomp(n)*sli_n1(n)*sli_n2(n))
         ! companion time log: one Real64 sim-time appended per snapshot, same cadence as sli_funit(n)
-        Write(fname,'(A,A)') Trim(slice_fileout(n)), '_times.bin'
-        Open(newunit=sli_tunit(n), file=Trim(fname), access='stream', &
-             form='unformatted', status='replace', action='write')
+        Call open_probe_stream(sli_tunit(n), Trim(tname), nkeep*8_Int64)
 
         Write(fname,'(A,A)') Trim(slice_fileout(n)), '_meta.txt'
         Open(newunit=meta_unit, file=Trim(fname), form='formatted', status='replace')
@@ -86,7 +92,7 @@ Contains
         Write(meta_unit,'(A,A)')    'dir    = ', Trim(dstr)
         Write(meta_unit,'(A,F16.8)') 'pos   = ', slice_pos(n)
         Write(meta_unit,'(A,A)')    'comps  = ', Trim(cstr)
-        Write(meta_unit,'(A,I0)')   'nsnaps = 0'
+        Write(meta_unit,'(A,I0)')   'nsnaps = ', sli_nwrit(n)
         Write(meta_unit,'(A,A)')    'times  = ', Trim(slice_fileout(n))//'_times.bin'
         Close(meta_unit)
 
@@ -130,8 +136,13 @@ Contains
       If (myid == 0) Then
         Write(fname,'(A,A)') Trim(line_fileout(n)), '.bin'
         Call ensure_dir(Trim(fname))
-        Open(newunit=lin_funit(n), file=Trim(fname), access='stream', &
-             form='unformatted', status='replace', action='write')
+        nkeep = 0
+        If ( restart == 1 .And. file_exists_nonempty(Trim(fname)) ) Then
+          nkeep = records_in(Trim(fname), 8_Int64*lin_ncomp(n)*lin_npts(n))
+          If ( line_freq > 0 ) nkeep = Min(nkeep, Int(nstep_init/line_freq, Int64))
+        End If
+        lin_nwrit(n) = Int(nkeep, Int32)
+        Call open_probe_stream(lin_funit(n), Trim(fname), nkeep*8_Int64*lin_ncomp(n)*lin_npts(n))
 
         Write(fname,'(A,A)') Trim(line_fileout(n)), '_meta.txt'
         Open(newunit=meta_unit, file=Trim(fname), form='formatted', status='replace')
@@ -139,7 +150,7 @@ Contains
         Write(meta_unit,'(A,I0)')  'npts   = ', lin_npts(n)
         Write(meta_unit,'(A,A)')   'dir    = ', Trim(dstr)
         Write(meta_unit,'(A,A)')   'comps  = ', Trim(cstr)
-        Write(meta_unit,'(A,I0)')  'nsnaps = 0'
+        Write(meta_unit,'(A,I0)')  'nsnaps = ', lin_nwrit(n)
         Close(meta_unit)
 
         Write(*,'(A,I2,A,A,A,I6,A,I2)') &
@@ -496,6 +507,36 @@ Contains
     ncomp = Count(mask)
 
   End Subroutine parse_comps
+
+
+  !> Whole records of rec bytes in a file
+  Integer(Int64) Function records_in(fname, rec)
+
+    Character(*), Intent(In) :: fname
+    Integer(Int64), Intent(In) :: rec
+    Integer(Int64) :: sz
+
+    Inquire(file=fname, size=sz)
+    records_in = sz/rec
+
+  End Function records_in
+
+
+  !> Stream file for appending: a fresh file when nbytes = 0, else the existing one cut to nbytes (the snapshots of a restart)
+  Subroutine open_probe_stream(unit, fname, nbytes)
+
+    Integer(Int32), Intent(Out) :: unit
+    Character(*), Intent(In) :: fname
+    Integer(Int64), Intent(In) :: nbytes
+
+    If ( nbytes > 0 ) Then
+      Call truncate_file(fname, nbytes)
+      Open(newunit=unit, file=fname, access='stream', form='unformatted', status='old', position='append', action='write')
+    Else
+      Open(newunit=unit, file=fname, access='stream', form='unformatted', status='replace', action='write')
+    End If
+
+  End Subroutine open_probe_stream
 
 
   !  ensure_dir — create directory component of file path if missing.

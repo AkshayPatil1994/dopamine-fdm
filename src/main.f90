@@ -12,6 +12,7 @@ Program dopamine
   Use finalization
   Use reynolds_stress_budget
   Use probe_output
+  Use restart_output, Only : trim_restart_text_files
   Use vof_twofluid, Only : vof_flow_init, compute_time_step_vof
   Use synthetic_eddy_method, Only : accumulate_inflow_opt, advance_inflow_opt
   
@@ -28,6 +29,8 @@ Program dopamine
   Else
      Call initialize
   End If
+
+  Call trim_restart_text_files
 
   ! initialise Reynolds stress budget module (allocates accumulators)
   Call init_rsb

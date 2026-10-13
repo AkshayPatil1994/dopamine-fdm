@@ -151,6 +151,8 @@ Ghost-cell or staircase immersed boundaries from a precomputed signed-distance f
 | `restart` | `0` | `1` hot-start from `filein`. |
 | `nstep_init` | `0` | Starting step number for a restart. |
 | `t_start` | `-1.0` | Restart time [s]; `-1` uses `nstep_init·dt`. Needed with `cfl_adaptive=1`. |
+
+On `restart=1` the time-series outputs are continued, not rewritten: `vof_diag.dat`, `vof_gauges.dat` and `ibm_forces.csv` lose the rows later than the restart time and are appended to (one header), and the line/slice probe files (`n_lines`, `n_slices`) keep their first `nstep_init/line_freq` (`/slice_freq`) records and are appended to. The step counter restarts at 0, so the probe interval counts from the first step of the restarted run; `nstep_init` must be the step of the snapshot (the number in its file name) and, for the probe records, the earlier run must have started at step 0.
 | `scalar_restart` | `1` | `1` read C from the restart file; `0` re-initialise C even when `restart=1` (file has no scalar block). |
 
 ## IO
