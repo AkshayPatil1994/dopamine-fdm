@@ -132,7 +132,10 @@ touched is still being generated for the GPU.
 Every run prints a per-stage profiler summary (`src/profiler.f90`) at shutdown — wall
 time and percent-of-tracked-time for SGS, wall model, RHS, boundary conditions, Poisson
 FFT, Poisson tridiagonal solve, projection, and CFL check — useful for spotting where
-time is going on either build.
+time is going on either build. The two-fluid solver adds its own stages (transport
+projection, advection with its density/sweep/momentum sub-stages, projection, force stages, PCG
+with its preconditioner and operator parts); the indented sub-stages are part of their parent and not
+added to the total.
 
 ## Testing
 

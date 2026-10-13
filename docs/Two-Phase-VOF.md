@@ -172,11 +172,28 @@ steep variable-density wave, and each of these across rank layouts.
 ### 2.1 Cost and speed settings
 
 Cost: 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the WENO5-Z
-tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1). Two inputs trade a little accuracy for speed (measured on a
+tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1 with the former V-cycle multigrid; the W-cycle default needs about a third as many). Two inputs trade a little accuracy for speed (measured on a
 386 × 65 × 10 wave flume with a sill, one rank, 0.317 s/step with the defaults; 0.280 s/step with both):
 
 * `vof_rk_mom = 2`: two instead of three tendency evaluations per sweep; a 4000-step standing-wave run (about 20 periods) matches the default to four digits.
 * `vof_tr_floor = 1e-12`: stopping floor of the transporting-velocity projection with an immersed body; the liquid volume then drifts at ~1e-14 instead of ~1e-16.
+
+Measured on the Ting & Kirby breaker (976 × 81 × 14, immersed bed, wave generation and absorption zones, 8 ranks, restart from a breaking
+state): 1.36 s/step at the old defaults (V-cycle multigrid, automatic 4 × 2 rank layout) and 0.46 s/step now, from three changes:
+
+* The multigrid preconditioner uses a W-cycle with a degree-4 smoother (`mg_cycle = 2`, `mg_smooth_deg = 4`, the defaults): 3–6× fewer PCG
+  iterations; the V-cycle with its aggregation transfers converges slowly. A three-visit cycle (`mg_cycle = 3`) is slower again.
+* A rank layout with at least ~12 cells per rank in z (`p_col = 1`, `p_row` = number of ranks for flume grids): with 6 z-cells per rank
+  the multigrid stops coarsening in z early and needs about twice the iterations; the code prints a note at start-up in that case.
+* `vof_tr_floor = 1e-12` (optional, ~6 %) and `vof_rk_mom = 2` (optional, ~9 %). Against the default, `vof_rk_mom = 2` over 3000 steps (1.1
+  wave periods through breaking) gave wave-gauge differences of 0.12 mm rms and 1.9 mm at most for H = 125 mm, kinetic energy within 2e-4
+  and an identical liquid-volume drift; the single-cell peak velocity differs by up to 9 %.
+
+With these settings the step is no longer dominated by the pressure solve (PCG ≈ 30 %): the momentum update is about a third, the force
+stages (wall model, viscous terms) the rest. The profiler summary printed at the end of every run lists the VOF stages (transport projection,
+advection, projection, forces) with the PCG time and the sub-stages of the advection and momentum update, so the split can be checked for
+any case. The multigrid W-cycle does more work on the small coarse levels, which are latency-bound: check the step time against
+`mg_cycle = 1` when running on many (16 or more) ranks.
 
 The sub-step Courant limit `vof_co_sub` only matters once the flow needs more than one sub-step per half step. The multigrid
 preconditioner runs in single precision (the outer PCG is double), which changes the iteration count by a few percent.

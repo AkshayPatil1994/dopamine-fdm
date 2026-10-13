@@ -13,7 +13,8 @@ fdm-dopamine/
 │   └── FindFFTW.cmake       # FFTW3 finder module
 ├── src/                     # Fortran 90 source files
 │   ├── mpi.f90              # MPI setup and domain decomposition
-│   ├── profiler.f90         # Per-stage MPI_Wtime() profiler (printed at shutdown)
+│   ├── profiler.f90         # Per-stage MPI_Wtime() profiler (printed at shutdown; incl. the two-fluid stages)
+│   ├── restart_output.f90   # Restart of time-series outputs: truncate probe files, drop rows written after the restart snapshot
 │   ├── global.f90           # Shared global variables
 │   ├── decomp.f90           # 2decomp&fft pencil-decomposition bookkeeping (main + Poisson pencil grids)
 │   ├── interpolation.f90    # Velocity interpolation utilities
@@ -84,6 +85,7 @@ each case is compared at np=1 vs 2, 2x2 and 4x1 (particles also 3), restart vs u
 | `DOPAMINE_TRACE_DIR=<dir>` (+ `DOPAMINE_TRACE_STEPS`, `DOPAMINE_TRACE_START`) | `src/debug_trace.f90`: dump U,V,W,P,nu_t,T,C (and the scalar RHS) at named points of each RK stage, assembled by global index; `seam.log` lists every ghost cell that disagrees with the owning rank. Also writes the IBM ghost lists and local `phi`. Off unless the variable is set. |
 | `tests/regression/trace_case.sh <case> <exe> [layout_a] [layout_b] [steps] [tol]` | Run a case at two layouts (`2`, `2x2`, ...) and report the first trace point / field / cell that differs. |
 | `tests/regression/trace_restart.sh <case> <exe> [layout]` | Same for hot-start restart vs an uninterrupted run. |
+| `tests/regression/restart_outputs_check.py --case-dir <case> --exe <exe> [--np N]` | Stop-after-snapshot and plain restart of a VOF case: line/slice probes, `vof_diag.dat`, `vof_gauges.dat` and `ibm_forces.csv` must equal an uninterrupted run (no duplicated or lost records, one header). |
 | `tests/regression/compare_particles.py` | Final particle state by ID between two runs (layouts or CPU/GPU). |
 | `tests/regression/ibm_ghost_counts.py`, `ibm_ghost_diff.py` | IBM ghost-cell bookkeeping between layouts (counts / cell by cell). |
 

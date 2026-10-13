@@ -221,7 +221,7 @@ Reynolds-stress budget and probes. Omit to disable.
 | `line_pos1(n), line_pos2(n)` | `0.0` | Transverse coordinates: x-line (y, z); y-line (x, z); z-line (x, y). |
 | `line_start(n), line_end(n)` | `0.0`, `1e30` | Extent along the line (default full). |
 | `line_comps(n)` | `'UVW'` | Components, as for slices. |
-| `line_fileout(n)` | `'line'` | Base path; `.bin` appends `(ncomp,npts)` float64 per output, plus `_meta.txt`. |
+| `line_fileout(n)` | `'line'` | Base path; `.bin` appends `(ncomp,npts)` float64 per output, plus `_meta.txt`. On `restart=1` the files keep their first `nstep_init/line_freq` records and are appended to (`slice_*` likewise). |
 
 Example: `n_slices=1, slice_freq=50, slice_dir(1)='z', slice_pos(1)=0.5, slice_comps(1)='UVW', slice_fileout(1)='slices/z05'`.
 
