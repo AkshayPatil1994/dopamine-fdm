@@ -39,7 +39,18 @@ Module profiler
   Integer(Int32), Parameter :: PROF_DENS_RECON    = 31
   Integer(Int32), Parameter :: PROF_DENS_GEO      = 32
   Integer(Int32), Parameter :: PROF_DENS_COEF     = 33
-  Integer(Int32), Parameter :: PROF_N              = 33
+  Integer(Int32), Parameter :: PROF_F_SGS        = 34   ! inside VOF forces (this and the next five)
+  Integer(Int32), Parameter :: PROF_F_WALL        = 35
+  Integer(Int32), Parameter :: PROF_F_VISC        = 36
+  Integer(Int32), Parameter :: PROF_F_BODY        = 37
+  Integer(Int32), Parameter :: PROF_F_PRED        = 38
+  Integer(Int32), Parameter :: PROF_F_POST        = 39
+  Integer(Int32), Parameter :: PROF_PCG_PRECOND   = 40   ! inside PCG (this and the next four)
+  Integer(Int32), Parameter :: PROF_PCG_OPER      = 41
+  Integer(Int32), Parameter :: PROF_PCG_TRANSPORT = 42
+  Integer(Int32), Parameter :: PROF_PCG_PROJECT   = 43
+  Integer(Int32), Parameter :: PROF_PCG_FORCES    = 44
+  Integer(Int32), Parameter :: PROF_N              = 44
 
   Character(16), Dimension(PROF_N), Parameter :: prof_names = [ Character(16) :: &
        'SGS model', 'Wall model', 'RHS (equations)', 'IBM', &
@@ -48,7 +59,9 @@ Module profiler
        'VOF transport', 'VOF advect', 'VOF adv. project', 'VOF forces', 'VOF end/diag', 'PCG (in VOF)', &
        'adv: density', 'adv: reconstruct', 'adv: sweeps', 'adv: mass flux', 'adv: momentum', &
        'mom: density', 'mom: halo', 'mom: pad', 'mom: tendency', &
-       'mom: q prep', 'mom: q update', 'dens: rho/rau', 'dens: reconstruct', 'dens: geometric', 'dens: coeff b/ri' ]
+       'mom: q prep', 'mom: q update', 'dens: rho/rau', 'dens: reconstruct', 'dens: geometric', 'dens: coeff b/ri', &
+       'F: sgs', 'F: wall model', 'F: viscous', 'F: gravity+surf.', 'F: predictor+pre', 'F: post-solve', &
+       'PCG: precond', 'PCG: halo+A', 'PCG @ transport', 'PCG @ adv.project', 'PCG @ forces' ]
 
   Real(Int64) :: prof_elapsed(PROF_N) = 0d0
   Real(Int64) :: prof_t0(PROF_N)      = 0d0

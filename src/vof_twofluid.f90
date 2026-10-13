@@ -403,7 +403,9 @@ Contains
     umax = Max( MaxVal(Abs(U)), MaxVal(Abs(V)), MaxVal(Abs(W)) )
     Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     Call profiler_start(PROF_PCG)
+    Call profiler_start(PROF_PCG_TRANSPORT)
     Call vp_pcg(fdiv, 800, 1d-13, ph, rfloor=vof_tr_floor*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
+    Call profiler_stop(PROF_PCG_TRANSPORT)
     Call profiler_stop(PROF_PCG)
     ! Ut must be solenoidal for the liquid volume to be conserved: report a solve that hit the cap or broke down at the start
     If ( ( vp_iters_last >= 800 .And. vp_res_last > 1d-6 ) .Or. ( vp_iters_last == 0 .And. MaxVal(Abs(fdiv)) > 0d0 ) ) Then
@@ -771,7 +773,9 @@ Contains
     Call vp_set_density(Cv)
     Call vp_div(U, V, W, fdiv)
     Call profiler_start(PROF_PCG)
+    Call profiler_start(PROF_PCG_PROJECT)
     Call vp_pcg(fdiv, maxit, tol, dphi, dt)
+    Call profiler_stop(PROF_PCG_PROJECT)
     Call profiler_stop(PROF_PCG)
     vf_proj_its_last = vp_iters_last
     vf_proj_its_sum = vf_proj_its_sum + vp_iters_last
@@ -826,19 +830,39 @@ Contains
 
     Real(Int64), Parameter :: cgate = 0.05d0
     Integer(Int32) :: i, j, k
+    Real(Int64), Allocatable :: mnx(:,:,:), mxx(:,:,:), mny(:,:,:), mxy(:,:,:)
     Real(Int64) :: cmn, cmx
 
+    ! min and max over the clipped 3x3x3 window, taken one direction at a time
+    Allocate( mnx(nxg,nyg,nzg), mxx(nxg,nyg,nzg), mny(nxg,nyg,nzg), mxy(nxg,nyg,nzg) )
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
-             cmn = MinVal(Cv(Max(i-1,1):Min(i+1,nxg), Max(j-1,1):Min(j+1,nyg), Max(k-1,1):Min(k+1,nzg)))
-             cmx = MaxVal(Cv(Max(i-1,1):Min(i+1,nxg), Max(j-1,1):Min(j+1,nyg), Max(k-1,1):Min(k+1,nzg)))
+             mnx(i,j,k) = Min(Cv(i,j,k), Cv(Max(i-1,1),j,k), Cv(Min(i+1,nxg),j,k))
+             mxx(i,j,k) = Max(Cv(i,j,k), Cv(Max(i-1,1),j,k), Cv(Min(i+1,nxg),j,k))
+          End Do
+       End Do
+    End Do
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             mny(i,j,k) = Min(mnx(i,j,k), mnx(i,Max(j-1,1),k), mnx(i,Min(j+1,nyg),k))
+             mxy(i,j,k) = Max(mxx(i,j,k), mxx(i,Max(j-1,1),k), mxx(i,Min(j+1,nyg),k))
+          End Do
+       End Do
+    End Do
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             cmn = Min(mny(i,j,k), mny(i,j,Max(k-1,1)), mny(i,j,Min(k+1,nzg)))
+             cmx = Max(mxy(i,j,k), mxy(i,j,Max(k-1,1)), mxy(i,j,Min(k+1,nzg)))
              nu_cw(i,j,k) = 0d0
              If ( cmn >= 1d0 - cgate ) nu_cw(i,j,k) = vof_nu_l
              If ( cmx <= cgate ) nu_cw(i,j,k) = vof_nu_g
           End Do
        End Do
     End Do
+    Deallocate( mnx, mxx, mny, mxy )
 
   End Subroutine set_cell_phase_nu
 
@@ -1081,19 +1105,31 @@ Contains
     Allocate( bu(nx,nyg,nzg), bv(nxg,ny,nzg), bw(nxg,nyg,nz), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
+    Call profiler_start(PROF_F_BODY)
     If ( vof_sigma > 0d0 ) Call vof_curvature(kap_c)
+    Call profiler_stop(PROF_F_BODY)
+    ! Cv does not change in the force stages
+    Call profiler_start(PROF_F_WALL)
+    If ( ibm_wm_on ) Call set_cell_phase_nu
+    Call profiler_stop(PROF_F_WALL)
 
     Do s = 1, 3
        rk_step = s
+       Call profiler_start(PROF_F_SGS)
        Call compute_sgs_model(U, V, W, nu_t)
+       Call profiler_stop(PROF_F_SGS)
+       Call profiler_start(PROF_F_WALL)
        If ( ibm_wm_on ) Then
-          Call set_cell_phase_nu
           Call ibm_stress_update(U, V, W, vp_mu, vp_mv, vp_mw, nu_cw)
        End If
        Call compute_wall_model(U, V, W, nu_t)
        Call set_viscosity
        If ( flat_wall_model_flag > 0 ) Call set_wall_stress
+       Call profiler_stop(PROF_F_WALL)
+       Call profiler_start(PROF_F_VISC)
        Call viscous_accel(Fu_, Fv_, Fw_)
+       Call profiler_stop(PROF_F_VISC)
+       Call profiler_start(PROF_F_BODY)
        If ( vof_hsplit == 0 ) Then
           Do k = 2, nzg-1
              Do j = 2, ny-1
@@ -1129,7 +1165,9 @@ Contains
        End If
 
        If ( vof_sigma > 0d0 ) Call add_surface_tension(Fu_, Fv_, Fw_)
+       Call profiler_stop(PROF_F_BODY)
 
+       Call profiler_start(PROF_F_PRED)
        ass = rk_coef(s,s)
        dta = dt*ass
        ! stage predictor u* = u_o + dt sum_{j<s} a_sj H_j + dt a_ss F_s  (interior faces; seams and walls come from the BCs)
@@ -1173,9 +1211,13 @@ Contains
        Call face_halo(U, V, W)
        Call vp_div(U, V, W, fdiv)
        fdiv = fdiv/dta
+       Call profiler_stop(PROF_F_PRED)
        Call profiler_start(PROF_PCG)
+       Call profiler_start(PROF_PCG_FORCES)
        Call vp_pcg(fdiv, Max(vof_pcg_iters, 1), vof_pcg_tol, dphi, dt*dta)
+       Call profiler_stop(PROF_PCG_FORCES)
        Call profiler_stop(PROF_PCG)
+       Call profiler_start(PROF_F_POST)
        Call vp_halo(dphi, .True.)
        Call vp_grad(dphi, gu, gv, gw)
        Call apply_face_gradient(gu, gv, gw, dta)
@@ -1188,6 +1230,7 @@ Contains
        End If
        Call apply_boundary_conditions(after_projection=.True.)
        If ( ibm_input_mode >= 1 ) Call enforce_ibm
+       Call profiler_stop(PROF_F_POST)
     End Do
     outflow_relax_on = .False.
     Deallocate( bu, bv, bw, gu, gv, gw )

@@ -758,15 +758,19 @@ Contains
     If ( abs_stop ) Then
        If ( rscale*vp_maxabs(vp_r) < vof_div_tol ) Return
     End If
+    Call profiler_start(PROF_PCG_PRECOND)
     Call vp_precond(vp_r, vp_z)
+    Call profiler_stop(PROF_PCG_PRECOND)
     !$acc kernels present(vp_d,vp_z) if(vp_dev)
     vp_d = vp_z
     !$acc end kernels
     rz = vp_dot(vp_r, vp_z)
     If ( .Not. ( rz < 0d0 ) ) Return   ! the operator and the preconditioner are negative definite (Laplacians)
     Do it = 1, nit
+       Call profiler_start(PROF_PCG_OPER)
        Call vp_halo(vp_d, .True.)
        Call vp_apply_A(vp_d, vp_ap)
+       Call profiler_stop(PROF_PCG_OPER)
        den = vp_dot(vp_d, vp_ap)
        If ( .Not. ( den < 0d0 ) ) Exit
        alpha = rz/den
@@ -788,7 +792,9 @@ Contains
        Else If ( rn < tol*r0 ) Then
           Exit
        End If
+       Call profiler_start(PROF_PCG_PRECOND)
        Call vp_precond(vp_r, vp_z)
+       Call profiler_stop(PROF_PCG_PRECOND)
        rzn = vp_dot(vp_r, vp_z)
        If ( .Not. ( rzn < 0d0 ) ) Exit
        !$acc kernels present(vp_d,vp_z) if(vp_dev)
