@@ -283,9 +283,12 @@ Contains
 
   !> Cell densities (ghosts included), face densities (arithmetic in x and z, volume-weighted across the stretched y cells so
   !  that rho_face * u is the mass-consistent momentum of the staggered control volume) and beta = 1/rho_face, from the padded C
-  Subroutine vp_set_density(Cp)
+  !> Density of the cells and the faces from the liquid fraction. With sweep_only the face densities and pressure coefficients of
+  !  the forces and the projections are left alone: the geometric sweeps need only the arithmetic densities and the planes
+  Subroutine vp_set_density(Cp, sweep_only)
 
     Real(Int64), Intent(In) :: Cp(0:nxg+1,0:nyg+1,0:nzg+1)
+    Logical, Intent(In), Optional :: sweep_only
     Integer(Int32) :: i, j, k
     Real(Int64) :: dr, hl, hu
 
@@ -321,6 +324,12 @@ Contains
        End Do
     End Do
     Call profiler_stop(PROF_DENS_BASE)
+    If ( Present(sweep_only) ) Then
+       If ( sweep_only ) Then
+          If ( vof_geo_density >= 1 ) Call vof_reconstruct(Cp, nxg, nyg, nzg, vof_normal_scheme)
+          Return
+       End If
+    End If
     If ( vof_geo_density >= 1 ) Then
        ! geometric staggered-cell density (Fuster/Arrufat): the liquid in the half cells that make up the control volume of the
        ! face is taken from each cell's reconstructed plane, so that a flat interface is hydrostatically exact whatever C is

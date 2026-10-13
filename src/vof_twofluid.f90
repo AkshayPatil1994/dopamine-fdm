@@ -287,7 +287,7 @@ Contains
     Call profiler_start(PROF_VOF_ADVECT)
     Call profiler_start(PROF_ADV_DENSITY)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
-    Call vp_set_density(Cv)
+    Call vp_set_density(Cv, sweep_only=.True.)
     qu = vp_rau*U;  qv = vp_rav*V;  qw = vp_raw*W
     Call profiler_stop(PROF_ADV_DENSITY)
     vof_cc = Merge(1d0, 0d0, Cv(1:nxg,1:nyg,1:nzg) > 0.5d0)
@@ -515,7 +515,7 @@ Contains
 
     Call profiler_start(PROF_MOM_DENSITY)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
-    Call vp_set_density(Cv)
+    Call vp_set_density(Cv, sweep_only=.True.)
     Call profiler_stop(PROF_MOM_DENSITY)
     rmu = Min(rou, vp_rau);  rmv = Min(rov, vp_rav);  rmw = Min(row, vp_raw)
     nst = Merge(3, Merge(2, 1, vof_rk_mom == 2), vof_rk_mom == 1)
