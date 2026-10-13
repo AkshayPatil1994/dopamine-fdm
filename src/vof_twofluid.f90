@@ -285,9 +285,11 @@ Contains
        Call profiler_stop(PROF_VOF_TRANSPORT)
     End If
     Call profiler_start(PROF_VOF_ADVECT)
+    Call profiler_start(PROF_ADV_DENSITY)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     qu = vp_rau*U;  qv = vp_rav*V;  qw = vp_raw*W
+    Call profiler_stop(PROF_ADV_DENSITY)
     vof_cc = Merge(1d0, 0d0, Cv(1:nxg,1:nyg,1:nzg) > 0.5d0)
     rt = vof_rho_g + (vof_rho_l - vof_rho_g)*vof_cc
     co = 0d0;  cl = 0d0
@@ -302,9 +304,12 @@ Contains
        d = order(isw)
        ! Cv, its pad and the density are already current here (set above for the first sweep, by momentum_update after the
        ! previous one); the geometric density has also reconstructed the planes
+       Call profiler_start(PROF_ADV_RECON)
        If ( vof_geo_density < 1 ) Call vof_reconstruct(Cv, nxg, nyg, nzg, vof_normal_scheme)
+       Call profiler_stop(PROF_ADV_RECON)
        uqu = qu/vp_rau;  uqv = qv/vp_rav;  uqw = qw/vp_raw
        rou = vp_rau;  rov = vp_rav;  row = vp_raw
+       Call profiler_start(PROF_ADV_SWEEP)
        If ( d == 1 ) Then
           Call vof_sweep(1, Cv, nxg, nyg, nzg, Ut, hx, hy, hz, tau, co, cl)
        Else If ( d == 2 ) Then
@@ -312,13 +317,18 @@ Contains
        Else
           Call vof_sweep(3, Cv, nxg, nyg, nzg, Wt, hx, hy, hz, tau, co, cl)
        End If
+       Call profiler_stop(PROF_ADV_SWEEP)
+       Call profiler_start(PROF_ADV_MASSFLUX)
        If ( d == 1 .And. x_bc_type == 1 ) Call tally_x_boundary_flux
        Call sweep_mass_flux(d, tau)
        Call vp_halo(Md, .False.)
        Call vp_halo(Dd, .False.)
        Md(:,1,:) = 0d0;  Md(:,nyg,:) = 0d0
+       Call profiler_stop(PROF_ADV_MASSFLUX)
+       Call profiler_start(PROF_ADV_MOMENTUM)
        Call momentum_update(d)
        Call face_halo(qu, qv, qw)
+       Call profiler_stop(PROF_ADV_MOMENTUM)
     End Do
     vof_nadv = vof_nadv + 1
     vof_co_max = Max(vof_co_max, co)
@@ -503,20 +513,28 @@ Contains
     Integer(Int32) :: stage, nst, seg
     Real(Int64) :: a0, a1, th
 
+    Call profiler_start(PROF_MOM_DENSITY)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
+    Call profiler_stop(PROF_MOM_DENSITY)
     rmu = Min(rou, vp_rau);  rmv = Min(rov, vp_rav);  rmw = Min(row, vp_raw)
     nst = Merge(3, Merge(2, 1, vof_rk_mom == 2), vof_rk_mom == 1)
     Do seg = 1, vof_rk_nth
        q0u = qu;  q0v = qv;  q0w = qw
        Do stage = 1, nst
           If ( stage > 1 .Or. seg > 1 ) Then
+             Call profiler_start(PROF_MOM_HALO)
              Call face_halo(qu, qv, qw)
+             Call profiler_stop(PROF_MOM_HALO)
              th = ( Real(seg - 1, Int64) + Merge(0d0, Merge(1d0, 0.5d0, stage == 2), stage == 1) )/vof_rk_nth
              uqu = qu/( rou + th*(vp_rau - rou) );  uqv = qv/( rov + th*(vp_rav - rov) );  uqw = qw/( row + th*(vp_raw - row) )
           End If
+          Call profiler_start(PROF_MOM_PAD)
           Call pad_transported
+          Call profiler_stop(PROF_MOM_PAD)
+          Call profiler_start(PROF_MOM_TENDENCY)
           Call momentum_tendency(d)
+          Call profiler_stop(PROF_MOM_TENDENCY)
           a0 = Merge(0d0, Merge(Merge(0.5d0, 0.75d0, vof_rk_mom == 2), 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
           qu = a0*q0u + a1*( qu + dqu/vof_rk_nth );  qv = a0*q0v + a1*( qv + dqv/vof_rk_nth )
           qw = a0*q0w + a1*( qw + dqw/vof_rk_nth )

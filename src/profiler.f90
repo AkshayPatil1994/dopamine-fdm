@@ -24,13 +24,24 @@ Module profiler
   Integer(Int32), Parameter :: PROF_VOF_FORCES     = 16
   Integer(Int32), Parameter :: PROF_VOF_END        = 17
   Integer(Int32), Parameter :: PROF_PCG            = 18   ! inside the VOF stages above, not added to the total
-  Integer(Int32), Parameter :: PROF_N              = 18
+  Integer(Int32), Parameter :: PROF_ADV_DENSITY   = 19   ! inside VOF advect (this and the next four): not added to the total
+  Integer(Int32), Parameter :: PROF_ADV_RECON     = 20
+  Integer(Int32), Parameter :: PROF_ADV_SWEEP     = 21
+  Integer(Int32), Parameter :: PROF_ADV_MASSFLUX  = 22
+  Integer(Int32), Parameter :: PROF_ADV_MOMENTUM  = 23
+  Integer(Int32), Parameter :: PROF_MOM_DENSITY   = 24   ! inside the momentum update (this and the next three)
+  Integer(Int32), Parameter :: PROF_MOM_HALO      = 25
+  Integer(Int32), Parameter :: PROF_MOM_PAD       = 26
+  Integer(Int32), Parameter :: PROF_MOM_TENDENCY  = 27
+  Integer(Int32), Parameter :: PROF_N              = 27
 
   Character(16), Dimension(PROF_N), Parameter :: prof_names = [ Character(16) :: &
        'SGS model', 'Wall model', 'RHS (equations)', 'IBM', &
        'Boundary cond.', 'Poisson FFT', 'Poisson tridiag', 'Projection', &
        'Scalar transport', 'CFL check', 'RK update+sync', 'Const. flow rate', &
-       'VOF transport', 'VOF advect', 'VOF adv. project', 'VOF forces', 'VOF end/diag', 'PCG (in VOF)' ]
+       'VOF transport', 'VOF advect', 'VOF adv. project', 'VOF forces', 'VOF end/diag', 'PCG (in VOF)', &
+       'adv: density', 'adv: reconstruct', 'adv: sweeps', 'adv: mass flux', 'adv: momentum', &
+       'mom: density', 'mom: halo', 'mom: pad', 'mom: tendency' ]
 
   Real(Int64) :: prof_elapsed(PROF_N) = 0d0
   Real(Int64) :: prof_t0(PROF_N)      = 0d0
