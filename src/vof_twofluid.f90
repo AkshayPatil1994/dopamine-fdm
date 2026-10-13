@@ -520,14 +520,18 @@ Contains
     rmu = Min(rou, vp_rau);  rmv = Min(rov, vp_rav);  rmw = Min(row, vp_raw)
     nst = Merge(3, Merge(2, 1, vof_rk_mom == 2), vof_rk_mom == 1)
     Do seg = 1, vof_rk_nth
+       Call profiler_start(PROF_MOM_QPREP)
        q0u = qu;  q0v = qv;  q0w = qw
+       Call profiler_stop(PROF_MOM_QPREP)
        Do stage = 1, nst
           If ( stage > 1 .Or. seg > 1 ) Then
              Call profiler_start(PROF_MOM_HALO)
              Call face_halo(qu, qv, qw)
              Call profiler_stop(PROF_MOM_HALO)
+             Call profiler_start(PROF_MOM_QPREP)
              th = ( Real(seg - 1, Int64) + Merge(0d0, Merge(1d0, 0.5d0, stage == 2), stage == 1) )/vof_rk_nth
              uqu = qu/( rou + th*(vp_rau - rou) );  uqv = qv/( rov + th*(vp_rav - rov) );  uqw = qw/( row + th*(vp_raw - row) )
+             Call profiler_stop(PROF_MOM_QPREP)
           End If
           Call profiler_start(PROF_MOM_PAD)
           Call pad_transported
@@ -535,9 +539,11 @@ Contains
           Call profiler_start(PROF_MOM_TENDENCY)
           Call momentum_tendency(d)
           Call profiler_stop(PROF_MOM_TENDENCY)
+          Call profiler_start(PROF_MOM_UPDATE)
           a0 = Merge(0d0, Merge(Merge(0.5d0, 0.75d0, vof_rk_mom == 2), 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
           qu = a0*q0u + a1*( qu + dqu/vof_rk_nth );  qv = a0*q0v + a1*( qv + dqv/vof_rk_nth )
           qw = a0*q0w + a1*( qw + dqw/vof_rk_nth )
+          Call profiler_stop(PROF_MOM_UPDATE)
        End Do
     End Do
 

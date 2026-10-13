@@ -33,7 +33,13 @@ Module profiler
   Integer(Int32), Parameter :: PROF_MOM_HALO      = 25
   Integer(Int32), Parameter :: PROF_MOM_PAD       = 26
   Integer(Int32), Parameter :: PROF_MOM_TENDENCY  = 27
-  Integer(Int32), Parameter :: PROF_N              = 27
+  Integer(Int32), Parameter :: PROF_MOM_QPREP    = 28   ! q0 copy and transported-velocity rebuild in the stage loop
+  Integer(Int32), Parameter :: PROF_MOM_UPDATE    = 29   ! stage update of q
+  Integer(Int32), Parameter :: PROF_DENS_BASE     = 30   ! inside vp_set_density (this and the next three)
+  Integer(Int32), Parameter :: PROF_DENS_RECON    = 31
+  Integer(Int32), Parameter :: PROF_DENS_GEO      = 32
+  Integer(Int32), Parameter :: PROF_DENS_COEF     = 33
+  Integer(Int32), Parameter :: PROF_N              = 33
 
   Character(16), Dimension(PROF_N), Parameter :: prof_names = [ Character(16) :: &
        'SGS model', 'Wall model', 'RHS (equations)', 'IBM', &
@@ -41,7 +47,8 @@ Module profiler
        'Scalar transport', 'CFL check', 'RK update+sync', 'Const. flow rate', &
        'VOF transport', 'VOF advect', 'VOF adv. project', 'VOF forces', 'VOF end/diag', 'PCG (in VOF)', &
        'adv: density', 'adv: reconstruct', 'adv: sweeps', 'adv: mass flux', 'adv: momentum', &
-       'mom: density', 'mom: halo', 'mom: pad', 'mom: tendency' ]
+       'mom: density', 'mom: halo', 'mom: pad', 'mom: tendency', &
+       'mom: q prep', 'mom: q update', 'dens: rho/rau', 'dens: reconstruct', 'dens: geometric', 'dens: coeff b/ri' ]
 
   Real(Int64) :: prof_elapsed(PROF_N) = 0d0
   Real(Int64) :: prof_t0(PROF_N)      = 0d0

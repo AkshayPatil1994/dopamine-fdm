@@ -10,6 +10,7 @@ Module vof_pressure
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
+  Use profiler
   Use decomp, Only : x_periodic_partner, z_periodic_partner
   Use boundary_conditions, Only : update_ghost_interior_planes_x, update_ghost_interior_planes, &
                                   apply_periodic_bc_x, apply_periodic_bc_z
@@ -288,6 +289,7 @@ Contains
     Integer(Int32) :: i, j, k
     Real(Int64) :: dr, hl, hu
 
+    Call profiler_start(PROF_DENS_BASE)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
@@ -318,10 +320,14 @@ Contains
           End Do
        End Do
     End Do
+    Call profiler_stop(PROF_DENS_BASE)
     If ( vof_geo_density >= 1 ) Then
        ! geometric staggered-cell density (Fuster/Arrufat): the liquid in the half cells that make up the control volume of the
        ! face is taken from each cell's reconstructed plane, so that a flat interface is hydrostatically exact whatever C is
+       Call profiler_start(PROF_DENS_RECON)
        Call vof_reconstruct(Cp, nxg, nyg, nzg, vof_normal_scheme)
+       Call profiler_stop(PROF_DENS_RECON)
+       Call profiler_start(PROF_DENS_GEO)
        dr = vof_rho_l - vof_rho_g
        Do k = 1, nzg
           Do j = 1, nyg
@@ -349,9 +355,11 @@ Contains
              End Do
           End Do
        End Do
+       Call profiler_stop(PROF_DENS_GEO)
     Else
        vp_rfu = vp_rau;  vp_rfv = vp_rav;  vp_rfw = vp_raw
     End If
+    Call profiler_start(PROF_DENS_COEF)
     If ( vof_inertia >= 1 ) Then
        vp_riu = vp_rau;  vp_riv = vp_rav;  vp_riw = vp_raw
     Else
@@ -363,6 +371,7 @@ Contains
     End If
     If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Call layer_coefficients
     vp_mg_stale = ( pcg_precond >= 1 )
+    Call profiler_stop(PROF_DENS_COEF)
 
   End Subroutine vp_set_density
 
