@@ -10,6 +10,10 @@ CASES = [
     ('current without wave', r'&VOF', '&WAVES\n  current_type = 1, current_U = 0.1,\n/\n&VOF', 'current_type>0 requires wave_type>0'),
     ('turbulence without donor', r'&VOF', '&WAVES\n  wave_turb = 1,\n/\n&VOF', 'wave_turb=1 needs'),
     ('staircase IBM with vof_flow', r'&VOF', '&IBM\n  ibm_method = 1,\n/\n&VOF', 'always uses the staircase wall stress'),
+    ('Boussinesq grav mismatch', r'&VOF', '&BOUSSINESQ\n  boussinesq_flag = 1, grav = 3.0,\n/\n&VOF', 'needs grav'),
+    ('Boussinesq with vof_hsplit', r'&VOF', '&BOUSSINESQ\n  boussinesq_flag = 1, grav = 9.81,\n/\n&VOF\n  vof_hsplit = 1,', 'vof_hsplit = 0'),
+    ('particles with VOF', r'&VOF', '&PARTICLES\n  particles_active = 1,\n/\n&VOF', 'does not support particles'),
+    ('inflow_type out of range', r'&VOF', '&INFLOW\n  inflow_type = 7,\n/\n&VOF', 'inflow_type must be 0..3'),
     ('y periodic', r'y_bc_type\s*=\s*1', 'y_bc_type = 0', 'wall-bounded y only'),
     ('IBM surface dump', r'&VOF', '&IBM\n  ibm_input_mode = 1, ibm_sdf_file = \'none\', ibm_surface_nsampling = 10,\n/\n&VOF', 'IBM surface field dump'),
 ]

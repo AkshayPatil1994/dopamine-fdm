@@ -745,6 +745,16 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_scalar_slosh/check_scalar.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
     endforeach()
+    # Two-fluid Boussinesq: uniform T is a no-op (bit-identical), stratified T at rest is balanced by the pressure
+    foreach(_np 1 4)
+        add_test(NAME vof_bouss_still_identical_np${_np}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_bouss_still/check_identical.py
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
+    endforeach()
+    add_test(NAME vof_bouss_strat_rest
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_bouss_strat --exe $<TARGET_FILE:dopamine>
+                --mpirun ${TEST_MPIRUN} --max-dvol 1e-12 --rowmax 16:1e-9 --rowmax 17:1e-9)
     # Variable-density steep wave: x rank seams cut the interface obliquely (np1 vs the x-split layout, tight PCG tolerance so only round-off remains)
     add_test(NAME vof_break_small_np1_vs_np4_4x1
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
@@ -779,6 +789,10 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_small --mpirun ${TEST_MPIRUN}
                     --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-12)
+        add_test(NAME vof_restart_scalar_np${_np}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_scalar --mpirun ${TEST_MPIRUN}
+                    --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-7)
         add_test(NAME vof_restart_flume_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_flume --mpirun ${TEST_MPIRUN}

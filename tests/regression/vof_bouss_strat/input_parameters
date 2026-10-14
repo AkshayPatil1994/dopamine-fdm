@@ -1,0 +1,31 @@
+! Two-fluid Boussinesq tank at rest (flat interface, vof_wave_amp = 0): stratified T in the liquid: no spurious currents.
+! Boussinesq, and a stably or unstably stratified T in the liquid is balanced by the pressure (no spurious currents).
+&DOMAIN
+  nx = 66, ny = 65, nz = 6,
+  Lx = 1.015625, Ly = 1.0, Lz = 0.078125,
+  grid_type = 1, alpha_grid = 1.0, alpha_grid_z = 0.0, p_row = 0, p_col = 0,
+/
+&PHYSICS
+  nu = 1.0e-6, sgs_model = 0,
+/
+&NUMERICS
+  dt = 1.0e-3, nsteps = -1, nsave = 100000, nmonitor = 5, cfl_adaptive = 1, cfl_target = 0.4, cfl_safety = 0.9,
+  dt_max = 4.0e-3, sim_end_time = 0.2,
+/
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 2, bc_face_yhi = 2, x_bc_type = 0, y_bc_type = 1, z_bc_type = 0,
+/
+&INITIAL_CONDITIONS
+  Utarget = 0.0, ic_type = 3, noise_percent = 0.0, restart = 0,
+/
+&IO
+  filein = 'restart/x', fileout = 'bouss_strat',
+/
+&VOF
+  vof_active = 1, vof_flow = 1, vof_ic_type = 4, vof_level = 0.5, vof_wave_amp = 0.0, vof_wave_lambda = 1.0,
+  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 9.81,
+/
+
+&BOUSSINESQ
+  boussinesq_flag = 1, beta_T = 2.0e-4, T_ref = 20.0, grav = 9.81, Pr = 7.0, Pr_t = 0.85, T_ic_type = 1, T_ic_grad = 5.0,
+/

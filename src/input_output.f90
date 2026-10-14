@@ -912,8 +912,12 @@ Contains
        Write(*,'(A)') ' WARNING: restart with adaptive dt and no t_start: t = nstep_init*dt is not the physical time'
     End If
     If ( vof_flow >= 1 ) Then
-       If ( boussinesq_flag >= 1 .Or. particles_active >= 1 .Or. rotation_active >= 1 ) &
-            Call abort_input( 'ERROR: vof_flow=1 does not support Boussinesq, particles or rotation' )
+       If ( particles_active >= 1 .Or. rotation_active >= 1 ) &
+            Call abort_input( 'ERROR: vof_flow=1 does not support particles or rotation' )
+       If ( boussinesq_flag >= 1 .And. Abs(grav - vof_grav) > 1d-12*Max(1d0, Abs(vof_grav)) ) &
+            Call abort_input( 'ERROR: vof_flow=1 with Boussinesq needs grav (&BOUSSINESQ) equal to vof_grav (&VOF)' )
+       If ( boussinesq_flag >= 1 .And. vof_hsplit /= 0 ) &
+            Call abort_input( 'ERROR: vof_flow=1 Boussinesq buoyancy needs vof_hsplit = 0' )
        If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) &
             Call abort_input( 'ERROR: vof_flow=1 does not apply dPdx, dPdz or mass-flux forcing (set them to zero)' )
        If ( y_bc_type /= 1 ) Call abort_input( 'ERROR: vof_flow=1 supports wall-bounded y only (y_bc_type=1)' )

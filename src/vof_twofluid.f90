@@ -82,15 +82,15 @@ Contains
     Integer(Int32) :: i, j, k
     Real(Int64) :: kt(3), om
 
-    If ( boussinesq_flag >= 1 .Or. particles_active >= 1 .Or. uav_active >= 1 .Or. rotation_active >= 1 ) Then
+    If ( particles_active >= 1 .Or. uav_active >= 1 .Or. rotation_active >= 1 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support ' // &
-            'Boussinesq, particles, UAV or rotation'
+            'particles, UAV or rotation'
        If ( myid == 0 ) Write(*,'(A,7I3)') ' ibm_wall_model, sediment, boussinesq, particles, uav, flat_wall, rotation: ', &
             ibm_wall_model_flag, sediment_flag, boussinesq_flag, particles_active, uav_active, flat_wall_model_flag, rotation_active
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
 #ifdef GPU_POISSON
-    If ( sediment_flag >= 1 ) Then
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: the scalars of the two-fluid solver (sediment, temperature) are not ported to the GPU yet'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
@@ -1244,6 +1244,20 @@ Contains
           End Do
        End If
 
+       ! Boussinesq buoyancy of the liquid only; the sweeps and the pressure operator keep the unperturbed phase densities
+       If ( boussinesq_flag >= 1 ) Then
+          !$acc parallel loop collapse(3) present(Fv_,Tscal,Cv,vp_riv,weight_y_0,weight_y_1)
+          Do k = 2, nzg-1
+             Do j = 2, ny-1
+                Do i = 2, nxg-1
+                   Fv_(i,j,k) = Fv_(i,j,k) + vof_grav*beta_T*vof_rho_l &
+                        *( weight_y_0(j)*(Tscal(i,j,k) - T_ref) + weight_y_1(j)*(Tscal(i,j+1,k) - T_ref) ) &
+                        *0.5d0*( Min(1d0, Max(0d0, Cv(i,j,k))) + Min(1d0, Max(0d0, Cv(i,j+1,k))) )/vp_riv(i,j,k)
+                End Do
+             End Do
+          End Do
+       End If
+
        If ( vof_sigma > 0d0 ) Call add_surface_tension(Fu_, Fv_, Fw_)
        Call profiler_stop(PROF_F_BODY)
 
@@ -1491,7 +1505,7 @@ Contains
     Real(Int64), Intent(In) :: dts
 
     Integer(Int32) :: stage, i, j, k
-    Real(Int64) :: a0, a1, divu, kl, kg, fr
+    Real(Int64) :: a0, divu, kl, kg, fr
 
     If ( .Not. Allocated(Fsc) ) Then
        Allocate( Fsc(2:nxg-1,2:nyg-1,2:nzg-1), Vsc(nxg,ny,nzg), Csc0(nxg,nyg,nzg) )
@@ -1534,8 +1548,11 @@ Contains
              End Do
           End Do
        End Do
-       a0 = Merge(0d0, Merge(0.75d0, 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
-       Cs(2:nxg-1,2:nyg-1,2:nzg-1) = a0*Csc0(2:nxg-1,2:nyg-1,2:nzg-1) + a1*( Cs(2:nxg-1,2:nyg-1,2:nzg-1) + dts*Fsc )
+       a0 = Merge(0.75d0, 1d0/3d0, stage == 2)
+       ! written as (u + dt F) + a0 (u0 - (u + dt F)) so that a uniform field with F = 0 is reproduced exactly
+       Cs(2:nxg-1,2:nyg-1,2:nzg-1) = Cs(2:nxg-1,2:nyg-1,2:nzg-1) + dts*Fsc
+       If ( stage > 1 ) Cs(2:nxg-1,2:nyg-1,2:nzg-1) = Cs(2:nxg-1,2:nyg-1,2:nzg-1) &
+            + a0*( Csc0(2:nxg-1,2:nyg-1,2:nzg-1) - Cs(2:nxg-1,2:nyg-1,2:nzg-1) )
        If ( kind == 1 ) Then
           Call apply_scalar_bc(Cs)
           If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cs)
@@ -1561,6 +1578,8 @@ Contains
     Call compute_sgs_model(U, V, W, nu_t)
     Call compute_wall_model(U, V, W)
     Call compute_cfl(cfl_conv, cfl_visc, cfl_accel)
+    ! the temperature diffuses faster than the momentum when Pr < 1
+    If ( boussinesq_flag >= 1 .And. Pr < 1d0 ) cfl_visc = cfl_visc/Pr
     cfl_conv_last  = cfl_conv
     cfl_visc_last  = cfl_visc
     cfl_accel_last = cfl_accel
