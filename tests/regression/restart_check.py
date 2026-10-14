@@ -15,6 +15,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from compare_monitor import read_snapshot, clear_snapshots  # noqa: E402
+from compare_particles import read_particles  # noqa: E402
 
 
 def run(mpirun, exe, np, cwd, env_extra):
@@ -34,6 +35,7 @@ def main():
     p.add_argument('--exe', required=True)
     p.add_argument('--np', type=int, default=1)
     p.add_argument('--tol', type=float, default=1e-12, help='per-block max|a-b|/max|a| bound (default 1e-12)')
+    p.add_argument('--particles', action='store_true', help='also compare the particles_restart state by particle ID')
     p.add_argument('--env', action='append', default=[], help='KEY=VALUE, repeatable')
     args = p.parse_args()
     env = dict(kv.partition('=')[::2] for kv in args.env)
@@ -65,6 +67,7 @@ def main():
         write(make_input(2 * n, False))
         run(args.mpirun, args.exe, args.np, tmp, env)
         straight = read_snapshot(tmp, interior_only=True)
+        straight_p = read_particles(os.path.join(tmp, 'particles_restart')) if args.particles else None
 
         clear_snapshots(tmp)
         write(make_input(n, False))
@@ -75,6 +78,7 @@ def main():
         write(make_input(n, True))
         run(args.mpirun, args.exe, args.np, tmp, env)
         restarted = read_snapshot(tmp, interior_only=True)
+        restarted_p = read_particles(os.path.join(tmp, 'particles_restart')) if args.particles else None
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -86,6 +90,12 @@ def main():
         d = max(abs(x - y) for x, y in zip(a, b)) / scale
         print(f'  field block {i}: restart vs straight max|a-b|/max|a| = {d:.3E}')
         failed |= d > args.tol
+    if args.particles:
+        if set(straight_p) != set(restarted_p):
+            sys.exit('FAIL: the particle ID sets differ')
+        dp = max(abs(x - y) for i in straight_p for x, y in zip(straight_p[i], restarted_p[i]))
+        print(f'  particles ({len(straight_p)}): restart vs straight max|a-b| = {dp:.3E}')
+        failed |= dp > args.tol
     print('RESULT: FAIL' if failed else 'RESULT: PASS')
     sys.exit(1 if failed else 0)
 

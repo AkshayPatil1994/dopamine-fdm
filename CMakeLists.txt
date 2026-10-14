@@ -843,6 +843,12 @@ if(Python3_Interpreter_FOUND)
                         --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_scalar --mpirun ${TEST_MPIRUN}
                         --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-7)
         endif()
+        if(_np EQUAL 1 OR NOT ENABLE_GPU)
+            add_test(NAME vof_restart_particles_np${_np}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
+                        --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_restart --mpirun ${TEST_MPIRUN}
+                        --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-7 --particles)
+        endif()
         add_test(NAME vof_restart_flume_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_flume --mpirun ${TEST_MPIRUN}
