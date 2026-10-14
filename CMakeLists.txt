@@ -769,6 +769,12 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_slosh --mpirun ${TEST_MPIRUN}
                 --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine> --np-a 1 --np-b 4 --p-grid 4,1 --tol 1e-8)
+    # Feature matrix: passive / two-fluid VOF x tank / IBM body x sediment, Boussinesq, particles, all
+    foreach(_np 1 4)
+        add_test(NAME vof_combo_matrix_np${_np}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_combo/check_combo.py
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
+    endforeach()
     # Variable-density steep wave: x rank seams cut the interface obliquely (np1 vs the x-split layout, tight PCG tolerance so only round-off remains)
     add_test(NAME vof_break_small_np1_vs_np4_4x1
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py

@@ -249,7 +249,7 @@ All ranks read the path and thrust files independently (`#` and blank lines skip
 
 ## PARTICLES
 
-Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disable. Not supported with `vof_flow=1`.
+Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disable. With `vof_flow=1` the particles are liquid-only: they must be seeded below the free surface and are reflected when a step would take them into the gas.
 
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
@@ -321,7 +321,7 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_debug` | `0` | `1` write `vof_dev/prof/front/vmax.dat`. |
 | `vof_snap_dt` | `0.0` | With `vof_debug=1`: interval of mid-plane slices `vof_snap_NNNN.dat` of C, u, v. |
 
-Not supported with `vof_flow=1` (aborts): sediment, Boussinesq, particles, UAV, rotation; host-only (a GPU build aborts in `vof_init`). `dPdx` / `Ub_target` forcing is not applied; only periodic z. The ghost-cell IBM (`ibm_input_mode=1`) is supported.
+Not supported with `vof_flow=1` (aborts): UAV, rotation, SEM / recycled inflow. Sediment, Boussinesq temperature and particles are supported (see [Two-Phase-VOF](Two-Phase-VOF.md) 1.8; `grav` must equal `vof_grav` with Boussinesq or inertial particles, `particle_rho_f` must equal `vof_rho_l`); on the GPU the two-fluid flow runs on the device but these three do not yet (abort). `dPdx` / `Ub_target` forcing is not applied; only periodic z. The ghost-cell IBM (`ibm_input_mode=1`) is supported.
 
 ## WAVES
 

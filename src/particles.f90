@@ -693,6 +693,10 @@ Contains
 
     n_bad = 0
     Do i = 1, n_particles_local
+       ! a seed inside a solid body is pushed out by the IBM collision on the first step
+       If ( ibm_input_mode >= 1 ) Then
+          If ( interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i), p_z(i)) < 0d0 ) Cycle
+       End If
        If ( liquid_fraction_at(p_x(i), p_y(i), p_z(i)) < 0.5d0 ) n_bad = n_bad + 1
     End Do
     Call MPI_Allreduce(n_bad, n_bad_all, 1, MPI_integer, MPI_SUM, MPI_COMM_WORLD, ierr)

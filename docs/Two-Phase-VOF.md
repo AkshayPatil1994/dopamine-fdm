@@ -142,6 +142,14 @@ toward the target wave (generation) or still water (absorption) with weight `1 �
 boundaries is tallied separately (columns 22 and 23 of `vof_diag.dat`) so that the ledger
 `V − V₀ = bnd + relax` closes to round-off-plus-solver error. Surface-elevation gauges (`wave_gauge_x`) are written to `vof_gauges.dat`.
 
+### 1.8 Scalars, Boussinesq temperature and particles
+
+Sediment concentration (`sediment_flag`) and Boussinesq temperature (`boussinesq_flag`) are advanced once per step, after the final velocity update, by an SSP-RK3 step with that velocity: the single-phase MUSCL/van Leer fluxes in the form `-div(u s) + s div(u)`, so a uniform field stays uniform to round-off whatever divergence the velocity has, and the integral of `s dV` is conserved up to the (PCG-tolerance) divergence. Diffusivity is `nu_phase/Sc` (`/Pr`) with the phase value blended by the liquid fraction and harmonic on the faces, plus the SGS part. Sediment settles with `ws` times the liquid fraction at the face, so there is no settling in the gas. The scalars live in both phases; they are not mass-weighted (`div(rho kappa grad s)/rho` is not used). The boundary conditions are those of the single-phase solver.
+
+Boussinesq buoyancy enters as an extra liquid-only acceleration `vof_grav beta_T (T - T_ref) rho_l C_face / rho_face` on the v faces; the sweeps and the pressure operator keep the unperturbed phase densities, so uniform `T = T_ref` is a bit-identical no-op and a stratified tank at rest stays at rest (the pressure balances it). `grav` must equal `vof_grav`, and `vof_hsplit` must be 0.
+
+Particles are liquid-only (`particle_rho_f = vof_rho_l`, viscosity `vof_nu_l`); the seed box must lie in the liquid. After each step a particle whose new position has liquid fraction below 0.5 returns to its old position and its outward normal velocity is mirrored about `n = -grad(C)/|grad(C)|`. Tested by `vof_scalar_slosh`, `vof_bouss_still` / `vof_bouss_strat`, `vof_restart_scalar`, `vof_part_slosh`, `vof_part_buoy` and the feature matrix `vof_combo`.
+
 ## 2. Running and output
 
 Use `vof_flow = 1` with `cfl_adaptive = 1` for flows; the step is limited by the convective, viscous, acceleration (gravity and
@@ -324,9 +332,8 @@ convergence of the plunge geometry with N have not been done.
 
 ### 4.2 Not supported
 
-Not supported with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, sediment, Boussinesq buoyancy, particles, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
-non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. **GPU builds abort in `vof_init`**
-(the solver is host-only; no GPU test was possible).
+Not supported with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
+non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. In a **GPU build** the two-fluid flow (VOF, densities, multigrid pressure, WENO5 momentum, curvature, wall stress, wave inlet and relaxation zones) runs on the device (it needs `pcg_precond = 1`, the default for wall-bounded y); the scalars and particles of 1.8 are host-only and abort there.
 
 ## 5. References
 
