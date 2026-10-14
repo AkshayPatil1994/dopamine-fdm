@@ -36,6 +36,8 @@ def main():
     ap.add_argument('--case-dir', required=True)
     ap.add_argument('--exe', required=True)
     ap.add_argument('--mpirun', default='mpirun')
+    ap.add_argument('--exe-ref', default='', help='run A with this executable (CPU reference) instead of --exe')
+    ap.add_argument('--mpirun-ref', default='')
     ap.add_argument('--np-a', type=int, default=1)
     ap.add_argument('--np-b', type=int, default=0)
     ap.add_argument('--p-grid', default='')
@@ -49,7 +51,7 @@ def main():
     a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix='vofchk_')
     try:
-        runs = [run(a.case_dir, a.exe, a.mpirun, a.np_a, '', os.path.join(tmp, 'a'))]
+        runs = [run(a.case_dir, a.exe_ref or a.exe, a.mpirun_ref or a.mpirun, a.np_a, '', os.path.join(tmp, 'a'))]
         if a.np_b:
             runs.append(run(a.case_dir, a.exe, a.mpirun, a.np_b, a.p_grid, os.path.join(tmp, 'b')))
         allrows = runs

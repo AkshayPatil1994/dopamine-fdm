@@ -15,8 +15,9 @@ Module vof_state
   Use global
   Use mpi
   Use decomp, Only : x_periodic_partner, z_periodic_partner
-  Use halo_pad, Only : pad_field
-  Use boundary_conditions, Only : update_ghost_interior_planes_x
+  Use halo_pad, Only : pad_field, pad_field_dev
+  Use boundary_conditions, Only : update_ghost_interior_planes_x, update_ghost_interior_planes, apply_periodic_bc_x, &
+                                  apply_periodic_bc_z
   Use scalar_transport, Only : finish_scalar_halos
   Use vof_plic
   Use vof_normals
@@ -61,8 +62,10 @@ Contains
     Integer(Int32) :: wmin, wmin_g, wreq
 
 #ifdef GPU_POISSON
-    If ( myid == 0 ) Write(*,'(A)') ' ERROR: the VOF / two-fluid solver is host-only, not available in GPU builds'
-    Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    If ( vof_flow >= 1 ) Then
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: the two-fluid solver (vof_flow>=1) is not available in GPU builds yet'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
 #endif
 
     ! the padded stencils (two-fluid momentum reconstruction, height-function curvature) reach VOF_MIN_SLAB planes into the
@@ -101,6 +104,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc enter data copyin(Cv,hx,hy,hz) create(Cw,Pw,Us1,Vs1,Ws1,Us2,Vs2,Ws2,Ue,Ve,We)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vof_advect_init(nxg, nyg, nzg)
     vof_flux_scheme = vof_method - 1
@@ -124,8 +128,10 @@ Contains
     If ( restart == 1 ) Then
        Call read_vof_restart
        Cv(1:nxg,1:nyg,1:nzg) = Cvof_io
+       !$acc update device(Cv)
        Call vof_fill_pad(Cv, nxg, nyg, nzg)
     End If
+    !$acc update host(Cv)
     Cvof_io = Cv(1:nxg,1:nyg,1:nzg)
     If ( vof_prescribed > 0 ) Then
        Allocate( Cinit(nxg,nyg,nzg) )
@@ -319,17 +325,32 @@ Contains
     Logical :: is_first, is_last
     Integer(Int32) :: partner
 
+    !$acc kernels present(Cp,Cw)
     Cw = Cp(1:n1,1:n2,1:n3)
+    !$acc end kernels
     Call update_ghost_interior_planes_x(Cw, 4)
     If ( x_bc_type == 1 ) Then
        Call x_periodic_partner(is_first, is_last, partner)
        If ( is_first ) Then
+          !$acc kernels present(Cw)
           Cw(1,:,:) = Cw(2,:,:)
+          !$acc end kernels
           If ( inflow_type == 3 .And. wave_type > 0 ) Call wave_inlet_fraction
        End If
-       If ( is_last  ) Cw(n1,:,:) = Cw(n1-1,:,:)
+       If ( is_last ) Then
+          !$acc kernels present(Cw)
+          Cw(n1,:,:) = Cw(n1-1,:,:)
+          !$acc end kernels
+       End If
     End If
+#ifdef GPU_POISSON
+    If ( nprocs > 1 ) Call update_ghost_interior_planes(Cw, 4)
+    If ( x_bc_type == 0 ) Call apply_periodic_bc_x(Cw, 2)
+    Call apply_periodic_bc_z(Cw, 4)
+#else
     Call finish_scalar_halos(Cw)
+#endif
+    !$acc kernels present(Cw)
     If ( y_bc_type == 0 ) Then
        Cw(:,1,:)    = Cw(:,n2-2,:)
        Cw(:,n2-1,:) = Cw(:,2,:)
@@ -338,8 +359,10 @@ Contains
        Cw(:,1,:)  = Cw(:,2,:)
        Cw(:,n2,:) = Cw(:,n2-1,:)
     End If
+    !$acc end kernels
 
-    Call pad_field(Cw, n1, n2, n3, .False., .False., 1, Pw)
+    Call pad_field_dev(Cw, Pw, n1, n2, n3, .False., .False., 1)
+    !$acc kernels present(Cp,Pw)
     Cp(0:n1+1,1:n2,0:n3+1) = Pw
     If ( y_bc_type == 0 ) Then
        Cp(:,0,:)    = Cp(:,n2-3,:)
@@ -348,6 +371,7 @@ Contains
        Cp(:,0,:)    = Cp(:,3,:)
        Cp(:,n2+1,:) = Cp(:,n2-2,:)
     End If
+    !$acc end kernels
     If ( vp_masked ) Then
        Call fill_solid_fraction(Cp, n1, n2, n3)
        ! wall ghost rows from the filled rows, and the x/z pad layers (second ghost layer) from the neighbours' filled cells
@@ -429,12 +453,13 @@ Contains
 
     Integer(Int32), Intent(In) :: s
 
-    !$acc update host(U,V,W)
+    !$acc kernels present(U,V,W,Us1,Vs1,Ws1,Us2,Vs2,Ws2)
     If ( s == 1 ) Then
        Us1 = U;  Vs1 = V;  Ws1 = W
     Else
        Us2 = U;  Vs2 = V;  Ws2 = W
     End If
+    !$acc end kernels
 
   End Subroutine vof_save_stage
 
@@ -446,27 +471,37 @@ Contains
 
     Real(Int64) :: dts, a, cl, co
 
-    !$acc update host(U,V,W,Uo,Vo,Wo)
     Select Case(s)
     Case(1)
        dts = dt*rk_t(1)
+       a = 0d0
+       If ( vof_have_prev ) a = Min(0.8d0*dt/vof_dt_prev, 2d0)
+    Case(2)
+       dts = dt*(rk_t(2) - rk_t(1))
+       a = (0.6d0 - rk_t(1))/rk_t(1)
+    Case Default
+       dts = dt*(rk_t(3) - rk_t(2))
+       a = (5d0/6d0 - rk_t(2))/(rk_t(2) - rk_t(1))
+    End Select
+    !$acc kernels present(Uo,Vo,Wo,Us1,Vs1,Ws1,Us2,Vs2,Ws2,Ue,Ve,We)
+    Select Case(s)
+    Case(1)
        If ( vof_have_prev ) Then
-          a = Min(0.8d0*dt/vof_dt_prev, 2d0)
           Ue = Uo + a*(Uo - Us2);  Ve = Vo + a*(Vo - Vs2);  We = Wo + a*(Wo - Ws2)
        Else
           Ue = Uo;  Ve = Vo;  We = Wo
        End If
     Case(2)
-       dts = dt*(rk_t(2) - rk_t(1))
-       a = (0.6d0 - rk_t(1))/rk_t(1)
        Ue = Us1 + a*(Us1 - Uo);  Ve = Vs1 + a*(Vs1 - Vo);  We = Ws1 + a*(Ws1 - Wo)
     Case Default
-       dts = dt*(rk_t(3) - rk_t(2))
-       a = (5d0/6d0 - rk_t(2))/(rk_t(2) - rk_t(1))
        Ue = Us2 + a*(Us2 - Us1);  Ve = Vs2 + a*(Vs2 - Vs1);  We = Ws2 + a*(Ws2 - Ws1)
     End Select
+    !$acc end kernels
 
-    If ( vof_prescribed > 0 ) Call prescribed_velocity(t - 0.5d0*dts, Ue, Ve, We)
+    If ( vof_prescribed > 0 ) Then
+       Call prescribed_velocity(t - 0.5d0*dts, Ue, Ve, We)
+       !$acc update device(Ue,Ve,We)
+    End If
     Call vof_advect_step(Cv, nxg, nyg, nzg, Ue, Ve, We, hx, hy, hz, dts, vof_nadv, vof_normal_scheme, vof_fill_pad, co, cl)
     vof_nadv = vof_nadv + 1
     vof_co_max = Max(vof_co_max, co)
@@ -544,6 +579,7 @@ Contains
   !> End of step: remember stage 2 as the previous-step velocity for the next step's first sub-step
   Subroutine vof_end_step
 
+    !$acc update host(Cv)
     Cvof_io = Cv(1:nxg,1:nyg,1:nzg)
     vof_dt_prev = dt
     vof_have_prev = .True.
@@ -560,6 +596,7 @@ Contains
     Integer(Int64) :: nint
     Logical :: has_rows
 
+    !$acc update host(U,V,W)
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     serr = shape_error()
     pjump = pressure_jump()
