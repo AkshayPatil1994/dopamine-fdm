@@ -986,8 +986,6 @@ Contains
        End If
     End Do
     !$acc end parallel loop
-    ! host consumers (snapshots, restart, probes, particles) read the host copy
-    !$acc update host(T_)
 
   End Subroutine apply_ghost_cell_ibm_scalar
 
@@ -1006,7 +1004,6 @@ Contains
        C_(i,j,k) = trilinear_interp_p(Cext, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ee)
     End Do
     !$acc end parallel loop
-    !$acc update host(C_)
 
   End Subroutine apply_ghost_cell_ibm_scalar_noflux
 

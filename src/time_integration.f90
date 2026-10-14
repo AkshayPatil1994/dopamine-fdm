@@ -283,9 +283,7 @@ Contains
        !$acc kernels present(Cscal,Cscal_o,Fcs1)
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Fcs1
        !$acc end kernels
-       !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
-       !$acc update device(Cscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
        Call trace_stage('s1_C')
        Call profiler_stop(PROF_SCALAR)
@@ -297,9 +295,7 @@ Contains
        !$acc kernels present(Tscal,Tscal_o,Ft1)
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + dt*rk_coef(1,1)*Ft1
        !$acc end kernels
-       !$acc update host(Tscal)
        Call apply_temperature_bc(Tscal)
-       !$acc update device(Tscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
        Call trace_stage('s1_T')
        Call profiler_stop(PROF_SCALAR)
@@ -411,9 +407,7 @@ Contains
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(2,1)*Fcs1 + rk_coef(2,2)*Fcs2 )
        !$acc end kernels
-       !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
-       !$acc update device(Cscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
        Call trace_stage('s2_C')
        Call profiler_stop(PROF_SCALAR)
@@ -426,9 +420,7 @@ Contains
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(2,1)*Ft1 + rk_coef(2,2)*Ft2 )
        !$acc end kernels
-       !$acc update host(Tscal)
        Call apply_temperature_bc(Tscal)
-       !$acc update device(Tscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
        Call trace_stage('s2_T')
        Call profiler_stop(PROF_SCALAR)
@@ -587,9 +579,7 @@ Contains
        Cscal(2:nxg-1,2:nyg-1,2:nzg-1) = Cscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(3,1)*Fcs1 + rk_coef(3,2)*Fcs2 + rk_coef(3,3)*Fcs3 )
        !$acc end kernels
-       !$acc update host(Cscal)
        Call apply_scalar_bc(Cscal)
-       !$acc update device(Cscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
        Call trace_stage('s3_C')
        Call profiler_stop(PROF_SCALAR)
@@ -602,9 +592,7 @@ Contains
        Tscal(2:nxg-1,2:nyg-1,2:nzg-1) = Tscal_o(2:nxg-1,2:nyg-1,2:nzg-1) + &
             dt*( rk_coef(3,1)*Ft1 + rk_coef(3,2)*Ft2 + rk_coef(3,3)*Ft3 )
        !$acc end kernels
-       !$acc update host(Tscal)
        Call apply_temperature_bc(Tscal)
-       !$acc update device(Tscal)
        If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
        Call trace_stage('s3_T')
        Call profiler_stop(PROF_SCALAR)

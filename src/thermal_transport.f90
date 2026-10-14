@@ -7,7 +7,7 @@ Module thermal_transport
   Use decomp, Only : x_periodic_partner
   Use boundary_conditions, Only : update_ghost_interior_planes_x, apply_inflow_bc_scalar_x, &
                                   outflow_convection_velocity, outflow_stage_dt
-  Use scalar_transport,    Only : compute_rhs_scalar_core, finish_scalar_halos
+  Use scalar_transport,    Only : compute_rhs_scalar_core, finish_scalar_halos, finish_scalar_halos_dev, scalar_x_inflow_outflow_dev
 
   Implicit None
 
@@ -27,14 +27,50 @@ Contains
   End Subroutine compute_rhs_temperature
 
 
-  !> Apply boundary conditions to temperature T (x-periodic or SEM-inflow/convective-outflow, z-MPI halo, y-wall adiabatic/isothermal); runs host-side (caller syncs Tscal host/device around this call)
+  !> Apply boundary conditions to temperature T (x-periodic or SEM-inflow/convective-outflow, z-MPI halo, y-wall adiabatic/isothermal);
+  !  one rank works on the device copy, several ranks stage the host copy
   Subroutine apply_temperature_bc(T_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: T_
 
     Real(Int64) :: Uc, courant
+    Real(Int64) :: plane(1, nyg, nzg)
     Logical :: is_first_x, is_last_x
     Integer(Int32) :: partner_x
+    Integer(Int32) :: i, j, k
+
+    If ( nprocs == 1 ) Then
+       If ( x_bc_type == 1 ) Then
+          Call apply_inflow_bc_scalar_x(plane)
+          Call scalar_x_inflow_outflow_dev(T_, plane)
+       End If
+       Call finish_scalar_halos_dev(T_)
+       !$acc kernels present(T_)
+       If ( T_bc_bot == 1 ) Then
+          T_(:,1,:) = 2d0*T_wall_bot - T_(:,2,:)
+       Else
+          T_(:,1,:) = T_(:,2,:)
+       End If
+       If ( T_bc_top == 1 ) Then
+          T_(:,nyg,:) = 2d0*T_wall_top - T_(:,nyg-1,:)
+       Else
+          T_(:,nyg,:) = T_(:,nyg-1,:)
+       End If
+       !$acc end kernels
+       If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
+          !$acc parallel loop collapse(3) present(T_,phi)
+          Do k = 2, nzg-1
+             Do j = 2, nyg-1
+                Do i = 2, nxg-1
+                   If ( phi(i,j,k) < 0d0 ) T_(i,j,k) = T_ref
+                End Do
+             End Do
+          End Do
+       End If
+       Return
+    End If
+
+    !$acc update host(T_)
 
     ! x direction: interior-rank seam planes, then Dirichlet-SEM inflow / convective outflow (periodic wrap comes in finish_scalar_halos)
     ! the seam exchange runs on device memory in multi-GPU builds: push the host state, exchange, bring the planes back
@@ -76,6 +112,8 @@ Contains
           T_(2:nxg-1, 2:nyg-1, 2:nzg-1) = T_ref
        End Where
     End If
+
+    !$acc update device(T_)
 
   End Subroutine apply_temperature_bc
 

@@ -418,14 +418,64 @@ Contains
   End Subroutine finish_scalar_halos
 
 
-  !> Apply boundary conditions to scalar C (x-periodic or Dirichlet inflow/convective outflow, z-MPI halo, y-wall fluxes)
+  !> Single-rank counterpart of finish_scalar_halos on the device-resident C_: the periodic x and z wraps are local copies
+  Subroutine finish_scalar_halos_dev(C_)
+
+    Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
+
+    If ( x_bc_type == 0 ) Call apply_periodic_bc_x(C_, 2)
+    Call apply_periodic_bc_z(C_, 4)
+
+  End Subroutine finish_scalar_halos_dev
+
+
+  !> Single-rank x inflow and convective outflow of the device-resident C_; plane is the Dirichlet inflow plane built on the host
+  Subroutine scalar_x_inflow_outflow_dev(C_, plane)
+
+    Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
+    Real(Int64), Dimension(1, nyg, nzg),   Intent(In)    :: plane
+
+    Real(Int64) :: Uc, courant
+
+    Uc = outflow_convection_velocity()
+    courant = Min(Max(Uc,0d0)*outflow_stage_dt()/dx, 1d0)
+    !$acc kernels present(C_) copyin(plane)
+    C_(1,:,:) = plane(1,:,:)
+    C_(nxg,:,:) = C_(nxg,:,:) - courant*( C_(nxg,:,:) - C_(nxg-1,:,:) )
+    !$acc end kernels
+
+  End Subroutine scalar_x_inflow_outflow_dev
+
+
+  !> Apply boundary conditions to scalar C (x-periodic or Dirichlet inflow/convective outflow, z-MPI halo, y-wall fluxes);
+  !  one rank works on the device copy, several ranks stage the host copy
   Subroutine apply_scalar_bc(C_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
 
     Real(Int64) :: Uc, courant
+    Real(Int64) :: plane(1, nyg, nzg)
     Logical :: is_first_x, is_last_x
     Integer(Int32) :: partner_x
+
+    If ( nprocs == 1 ) Then
+       If ( x_bc_type == 1 ) Then
+          Call apply_inflow_bc_scalar_x_C(plane)
+          Call scalar_x_inflow_outflow_dev(C_, plane)
+       End If
+       Call finish_scalar_halos_dev(C_)
+       !$acc kernels present(C_)
+       If ( sed_bc_bot == 0 ) Then
+          C_(:,1,:) = C_(:,2,:)
+       Else
+          C_(:,1,:) = 2d0*C_ref - C_(:,2,:)
+       End If
+       C_(:,nyg,:) = C_(:,nyg-1,:)
+       !$acc end kernels
+       Return
+    End If
+
+    !$acc update host(C_)
 
     ! x direction: interior-rank seam planes, then Dirichlet inflow / convective outflow (periodic wrap comes in finish_scalar_halos)
     ! the seam exchange runs on device memory in multi-GPU builds: push the host state, exchange, bring the planes back
@@ -451,6 +501,8 @@ Contains
 
     ! y-top ghost
     C_(:,nyg,:) = C_(:,nyg-1,:)
+
+    !$acc update device(C_)
 
     ! IBM solid cells are deliberately not zeroed: image-point interpolation and the MUSCL stencil read them, and zeros would drain nearby fluid; the no-flux ghost fill (apply_ghost_cell_ibm_scalar_noflux) supplies the boundary condition
 

@@ -1562,14 +1562,11 @@ Contains
              End Do
           End Do
        End Do
-       ! the boundary conditions run on the host copy, as in the single-phase scalar step
-       !$acc update host(Cs)
        If ( kind == 1 ) Then
           Call apply_scalar_bc(Cs)
        Else
           Call apply_temperature_bc(Cs)
        End If
-       !$acc update device(Cs)
        If ( ibm_input_mode >= 1 ) Then
           If ( kind == 1 ) Then
              Call apply_ghost_cell_ibm_scalar_noflux(Cs)

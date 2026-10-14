@@ -416,7 +416,7 @@ Contains
 
   End Subroutine apply_inflow_bc_x
 
-  ! Dirichlet inflow for the cell-centred temperature field (x_bc_type==1, host-only: apply_temperature_bc runs host-side, see thermal_transport.f90); no fluctuation coupling; no-op except on the rank owning the x=1 boundary
+  ! Dirichlet inflow for the cell-centred temperature field (x_bc_type==1, host routine: fills a host array or the host plane apply_temperature_bc pushes to the device); no fluctuation coupling; no-op except on the rank owning the x=1 boundary
   Subroutine apply_inflow_bc_scalar_x(T_)
 
     Real(Int64), Intent(InOut) :: T_(:,:,:)
@@ -449,7 +449,7 @@ Contains
 
   End Subroutine apply_inflow_bc_scalar_x
 
-  ! Dirichlet inflow for the cell-centred sediment concentration field (x_bc_type==1, sediment_flag==1; host-only, mirrors apply_inflow_bc_scalar_x); no mean-profile file support (unlike T) -- constant C_ref fallback, or recycled donor value under inflow_type==2; no-op except on the rank owning the x=1 boundary
+  ! Dirichlet inflow for the cell-centred sediment concentration field (x_bc_type==1, sediment_flag==1; host routine, see apply_inflow_bc_scalar_x); no mean-profile file support (unlike T) -- constant C_ref fallback, or recycled donor value under inflow_type==2; no-op except on the rank owning the x=1 boundary
   Subroutine apply_inflow_bc_scalar_x_C(C_)
 
     Real(Int64), Intent(InOut) :: C_(:,:,:)
