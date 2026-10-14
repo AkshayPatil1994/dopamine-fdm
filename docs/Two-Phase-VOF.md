@@ -333,7 +333,7 @@ convergence of the plunge geometry with N have not been done.
 ### 4.2 Not supported
 
 Not supported with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
-non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. In a **GPU build** the two-fluid flow (VOF, densities, multigrid pressure, WENO5 momentum, curvature, wall stress, wave inlet and relaxation zones) runs on the device (it needs `pcg_precond = 1`, the default for wall-bounded y); the scalars and particles of 1.8 are host-only and abort there.
+non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. In a **GPU build** the two-fluid flow (VOF, densities, multigrid pressure, WENO5 momentum, curvature, wall stress, wave inlet and relaxation zones) runs on the device (it needs `pcg_precond = 1`, the default for wall-bounded y); the scalars of 1.8 are advanced on the device (their boundary conditions run on the host copy) and the particles are host code fed by a once-per-step copy of the velocity and liquid fraction; multi-rank GPU runs of these are not yet verified.
 
 ## 5. References
 

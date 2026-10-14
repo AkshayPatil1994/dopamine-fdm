@@ -280,7 +280,8 @@
   inflow_opt_tol      = 0.1,
 /
 
-! Lagrangian point particles (not with vof_flow=1).
+! Lagrangian point particles. With vof_flow=1 they are liquid-only (particle_rho_f = vof_rho_l)
+! and reflect at the free surface.
 ! bc_particle_*: -1 auto | 0 periodic | 1 exit | 2 reflect | 3 absorb.
 ! particle_mode: 0 tracer | 1 inertial (Schiller-Naumann drag + gravity from grav).
 ! particle_ibm_bc(id): 1 absorb | 2 reflect | 3 reflect above particle_resuspend_ucrit.
@@ -336,7 +337,8 @@
 ! vof_method: 1 PLIC | 2 THINC (vof_beta). vof_mom_scheme: 0 central | 1 upwind |
 !   2 Koren | 4 QUICK | 5 central 4th | 6 WENO5-Z. vof_sigma>0 enables surface tension.
 ! vof_prescribed (vof_flow=0): 1 LeVeque vortex | 2 Enright deformation | 3 rigid rotation.
-! vof_flow=1 needs dPdx=dPdz=0 and no mass-flux forcing. The solver parameters below
+! vof_flow=1 needs dPdx=dPdz=0 and no mass-flux forcing; &SEDIMENT, &BOUSSINESQ (grav = vof_grav)
+! and &PARTICLES work with it, on CPU and GPU builds. The solver parameters below
 ! are the defaults; most cases only need the first lines.
 !&VOF
 !  vof_active = 1,

@@ -59,7 +59,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `cfl_target` | `0.5` | Target CFL (adaptive). |
 | `cfl_safety` | `0.9` | Safety factor on the `dt` update (adaptive). |
 | `dt_min, dt_max` | `1e-10`, `1e10` | Bounds on `dt` (adaptive). |
-| `pcg_precond` | `-1` | Preconditioner of the masked / variable-density PCG (`ibm_method=1`, `vof_flow≥1`): `0` fast Poisson solver, `1` mask-aware multigrid (needs y walls), `-1` automatic (1 with y walls, else 0; 0 for `vof_flow≥1` on GPU). GPU: `ibm_method=1` needs 1; `vof_flow≥1` cannot use 1. |
+| `pcg_precond` | `-1` | Preconditioner of the masked / variable-density PCG (`ibm_method=1`, `vof_flow≥1`): `0` fast Poisson solver, `1` mask-aware multigrid (needs y walls), `-1` automatic (1 with y walls, else 0). GPU: `ibm_method=1` and `vof_flow≥1` need 1. |
 | `mg_cycle` | `2` | Multigrid cycle of the `pcg_precond=1` preconditioner: `1` V-cycle, `2` W-cycle (the coarse level is visited twice; 3–6× fewer PCG iterations for ~15 % more work per cycle), `3` three visits. |
 | `mg_smooth_deg` | `4` | Degree of the Chebyshev smoother of the multigrid on every level but the coarsest. |
 
@@ -321,7 +321,7 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_debug` | `0` | `1` write `vof_dev/prof/front/vmax.dat`. |
 | `vof_snap_dt` | `0.0` | With `vof_debug=1`: interval of mid-plane slices `vof_snap_NNNN.dat` of C, u, v. |
 
-Not supported with `vof_flow=1` (aborts): UAV, rotation, SEM / recycled inflow. Sediment, Boussinesq temperature and particles are supported (see [Two-Phase-VOF](Two-Phase-VOF.md) 1.8; `grav` must equal `vof_grav` with Boussinesq or inertial particles, `particle_rho_f` must equal `vof_rho_l`); on the GPU the two-fluid flow runs on the device but these three do not yet (abort). `dPdx` / `Ub_target` forcing is not applied; only periodic z. The ghost-cell IBM (`ibm_input_mode=1`) is supported.
+Not supported with `vof_flow=1` (aborts): UAV, rotation, SEM / recycled inflow. Sediment, Boussinesq temperature and particles are supported (see [Two-Phase-VOF](Two-Phase-VOF.md) 1.8; `grav` must equal `vof_grav` with Boussinesq or inertial particles, `particle_rho_f` must equal `vof_rho_l`); on the GPU the scalars run on the device, and the particles on the host with a per-step copy of U, V, W and the liquid fraction. `dPdx` / `Ub_target` forcing is not applied; only periodic z. The ghost-cell IBM (`ibm_input_mode=1`) is supported.
 
 ## WAVES
 
