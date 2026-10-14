@@ -39,6 +39,7 @@
 ! flat_wall_model_flag (flat y walls, and z walls if z_bc_type=1): 0 no-slip |
 !   1 smooth log-law EQWM | 2 rough-z0 EQWM (y walls only; needs z0_ylo/yhi>0).
 ! rotation_active=1: rigid rotation Omega_x about the x axis through the domain centreline.
+! nu is not used with vof_flow=1 (the viscosities vof_nu_l/vof_nu_g apply).
 &PHYSICS
   nu                   = 1.0e-6,
   dPdx                 = 1.225e-4,
@@ -86,6 +87,7 @@
 ! z_bc_type: 0 periodic | 1 walls (no-slip or smooth EQWM; with y_bc_type=1 a 4-wall
 !   duct, which needs p_col=1).
 ! GPU build: x_bc_type 0|1; y periodic or z walls only with x_bc_type=0.
+! The two-fluid VOF flow (vof_flow=1) also runs on the GPU (needs pcg_precond=1, the default for y walls).
 &BOUNDARY_CONDITIONS
   bc_face_ylo = 1,
   bc_face_yhi = 1,
@@ -281,7 +283,7 @@
 /
 
 ! Lagrangian point particles. With vof_flow=1 they are liquid-only (particle_rho_f = vof_rho_l)
-! and reflect at the free surface.
+! and reflect at the free surface. n_particles_init>0 with particles_active=0 prints a warning.
 ! bc_particle_*: -1 auto | 0 periodic | 1 exit | 2 reflect | 3 absorb.
 ! particle_mode: 0 tracer | 1 inertial (Schiller-Naumann drag + gravity from grav).
 ! particle_ibm_bc(id): 1 absorb | 2 reflect | 3 reflect above particle_resuspend_ucrit.
@@ -315,6 +317,7 @@
 !/
 
 ! Target waves for the numerical wave flume (vof_flow=1, x_bc_type=1, inflow_type=3).
+! wave_height/wave_Hs with wave_type=0 prints a warning (no waves are generated).
 ! wave_type: 0 off | 1 linear | 2 stream function | 3 JONSWAP.
 ! current_type: 0 none | 1 uniform | 2 log law | 3 power law (needs wave_type>0).
 ! wave_turb=1 adds precursor turbulence from inflow_recycle_file.

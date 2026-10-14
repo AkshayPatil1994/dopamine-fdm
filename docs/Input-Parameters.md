@@ -29,7 +29,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
-| `nu` | required | Kinematic viscosity [m²/s]. With `vof_flow=1` the larger of `vof_nu_l/g` replaces it for the viscous CFL limit. |
+| `nu` | required | Kinematic viscosity [m²/s]. With `vof_flow=1` it is not used (the echo says so): the two-fluid viscosities `vof_nu_l/g` apply, and the larger of them enters the viscous CFL limit. |
 | `dPdx, dPdz` | required | Mean streamwise / spanwise pressure gradient (kinematic, m/s²) that drives the flow. `dPdx` is ignored if `flow_forcing_mode=1`; `dPdx` also sets `u_tau` for `ic_type` 1 and 4. |
 | `flow_forcing_mode` | `0` | `0` drive with `dPdx`/`dPdz`; `1` constant mass flux: a uniform shift of U each step holds the bulk velocity at `Ub_target` (needs `x_bc_type=0`, no `T_wave_x`; aborts otherwise). `dPdx` then only reports the equivalent forcing. |
 | `Ub_target` | `0.0` | Target bulk streamwise velocity [m/s] for `flow_forcing_mode=1`. |
@@ -254,7 +254,7 @@ Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disa
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
 | `particles_active` | `0` | `1` enable. |
-| `n_particles_init` | `0` | Particles seeded at start. |
+| `n_particles_init` | `0` | Particles seeded at start. Setting it above 0 with `particles_active=0` prints a warning (the particles are disabled). |
 | `particle_seed_xmin, particle_seed_ymin, particle_seed_zmin` | `0.0` | Lower bound of the seeding box [m]. |
 | `particle_seed_xmax, particle_seed_ymax, particle_seed_zmax` | `-1` | Upper bound; `<0` = full domain. |
 | `particle_seed_seed` | `987654` | RNG seed. |
@@ -330,7 +330,7 @@ Numerical wave flume: Dirichlet wave inlet plus relaxation zones. Needs `vof_flo
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
 | `wave_type` | `0` | `0` off; `1` linear; `2` Rienecker–Fenton stream function; `3` JONSWAP. |
-| `wave_height, wave_period, wave_phase` | `0`, `1`, `0` | Types 1–2. |
+| `wave_height, wave_period, wave_phase` | `0`, `1`, `0` | Types 1–2. A warning is printed if `wave_height` (or `wave_Hs`) is set with `wave_type=0`. |
 | `wave_sf_n` | `16` | Fourier order (type 2). |
 | `wave_current_mode` | `1` | `1` zero mean volume flux (closed flume); `2` zero mean Eulerian velocity. |
 | `wave_Hs, wave_Tp, wave_gamma` | `0`, `1`, `3.3` | JONSWAP significant height, peak period, peak enhancement. |

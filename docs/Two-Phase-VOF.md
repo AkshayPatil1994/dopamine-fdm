@@ -148,7 +148,7 @@ Sediment concentration (`sediment_flag`) and Boussinesq temperature (`boussinesq
 
 Boussinesq buoyancy enters as an extra liquid-only acceleration `vof_grav beta_T (T - T_ref) rho_l C_face / rho_face` on the v faces; the sweeps and the pressure operator keep the unperturbed phase densities, so uniform `T = T_ref` is a bit-identical no-op and a stratified tank at rest stays at rest (the pressure balances it). `grav` must equal `vof_grav`, and `vof_hsplit` must be 0.
 
-Particles are liquid-only (`particle_rho_f = vof_rho_l`, viscosity `vof_nu_l`); the seed box must lie in the liquid. After each step a particle whose new position has liquid fraction below 0.5 returns to its old position and its outward normal velocity is mirrored about `n = -grad(C)/|grad(C)|`. Tested by `vof_scalar_slosh`, `vof_bouss_still` / `vof_bouss_strat`, `vof_restart_scalar`, `vof_part_slosh`, `vof_part_buoy` and the feature matrix `vof_combo`.
+Particles are liquid-only (`particle_rho_f = vof_rho_l`, viscosity `vof_nu_l`); the seed box must lie in the liquid. After each step a particle whose new position has liquid fraction below 0.5 returns to its old position and its outward normal velocity is mirrored about `n = -grad(C)/|grad(C)|`. Tested by `vof_scalar_slosh`, `vof_bouss_still` / `vof_bouss_strat`, `vof_restart_scalar`, `vof_restart_particles` (particle state by ID after a hot start), `vof_part_slosh`, `vof_part_buoy` and the feature matrix `vof_combo`.
 
 ## 2. Running and output
 
@@ -180,7 +180,7 @@ steep variable-density wave, and each of these across rank layouts.
 ### 2.1 Cost and speed settings
 
 Cost: 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the WENO5-Z
-tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1 with the former V-cycle multigrid; the W-cycle default needs about a third as many). Two inputs trade a little accuracy for speed (measured on a
+tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1 with a V-cycle multigrid; the W-cycle, the CPU default, needs about a third as many). Two inputs trade a little accuracy for speed (measured on a
 386 × 65 × 10 wave flume with a sill, one rank, 0.317 s/step with the defaults; 0.280 s/step with both):
 
 * `vof_rk_mom = 2`: two instead of three tendency evaluations per sweep; a 4000-step standing-wave run (about 20 periods) matches the default to four digits.
@@ -189,8 +189,9 @@ tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1 wit
 Measured on the Ting & Kirby breaker (976 × 81 × 14, immersed bed, wave generation and absorption zones, 8 ranks, restart from a breaking
 state): 1.36 s/step at the old defaults (V-cycle multigrid, automatic 4 × 2 rank layout) and 0.46 s/step now, from three changes:
 
-* The multigrid preconditioner uses a W-cycle with a degree-4 smoother (`mg_cycle = 2`, `mg_smooth_deg = 4`; `mg_cycle = -1`, the default, picks the W-cycle on CPU builds and the V-cycle on GPU builds, where the W-cycle's 2^L tiny coarse-level kernel launches make it 6× slower in wall time on a 0.9 M-cell flume): 3–6× fewer PCG
-  iterations; the V-cycle with its aggregation transfers converges slowly. A three-visit cycle (`mg_cycle = 3`) is slower again.
+* The multigrid preconditioner uses a W-cycle with a degree-4 smoother on CPU builds (`mg_cycle = 2`, `mg_smooth_deg = 4`; `mg_cycle = -1`, the default, selects it): 3–6× fewer PCG
+  iterations than the V-cycle, whose aggregation transfers converge slowly. A three-visit cycle (`mg_cycle = 3`) is slower again. GPU builds
+  select the V-cycle instead (see 4.2): there the W-cycle's 2^L launches of tiny coarse-level kernels dominate the step.
 * A rank layout with at least ~12 cells per rank in z (`p_col = 1`, `p_row` = number of ranks for flume grids): with 6 z-cells per rank
   the multigrid stops coarsening in z early and needs about twice the iterations; the code prints a note at start-up in that case.
 * `vof_tr_floor = 1e-12` (optional, ~6 %) and `vof_rk_mom = 2` (optional, ~9 %). Against the default, `vof_rk_mom = 2` over 3000 steps (1.1
@@ -201,7 +202,7 @@ With these settings the step is no longer dominated by the pressure solve (PCG �
 stages (wall model, viscous terms) the rest. The profiler summary printed at the end of every run lists the VOF stages (transport projection,
 advection, projection, forces) with the PCG time and the sub-stages of the advection and momentum update, so the split can be checked for
 any case. The multigrid W-cycle does more work on the small coarse levels, which are latency-bound: check the step time against
-`mg_cycle = 1` when running on many (16 or more) ranks.
+`mg_cycle = 1` when running on many (16 or more) CPU ranks.
 
 The sub-step Courant limit `vof_co_sub` only matters once the flow needs more than one sub-step per half step. The multigrid
 preconditioner runs in single precision (the outer PCG is double), which changes the iteration count by a few percent.
@@ -333,7 +334,7 @@ convergence of the plunge geometry with N have not been done.
 ### 4.2 Not supported
 
 Not supported with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
-non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. In a **GPU build** the two-fluid flow (VOF, densities, multigrid pressure, WENO5 momentum, curvature, wall stress, wave inlet and relaxation zones) runs on the device (it needs `pcg_precond = 1`, the default for wall-bounded y); the scalars of 1.8 are advanced on the device (their boundary conditions run on the host copy) and the particles are host code fed by a once-per-step copy of the velocity and liquid fraction; multi-rank GPU runs of these are not yet verified.
+non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. In a **GPU build** the two-fluid flow (VOF, densities, multigrid pressure, WENO5 momentum, curvature, wall stress, wave inlet and relaxation zones) runs on the device (it needs `pcg_precond = 1`, the default for wall-bounded y); the scalars of 1.8 are advanced on the device (their boundary conditions run on the host copy) and the particles are host code fed by a once-per-step copy of the velocity and liquid fraction; multi-rank GPU runs of these are not yet verified (the np4 variants of their tests are CPU-only, because the test machine has one GPU). A GPU snapshot, probe, gauge or diagnostic row copies the fields it needs to the host at that step only, so the liquid fraction is not copied every step.
 
 Measured on an RTX 3060 (FP64 at 1/64 of the FP32 rate; the multigrid runs in single precision) against one CPU core, wave flume of 0.9 M cells (770×97×12), 30 steps, default tolerances, `pcg_precond = 1`:
 

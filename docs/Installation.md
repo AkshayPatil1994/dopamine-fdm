@@ -84,6 +84,9 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
   `x_bc_type=0`; `p_col=1` is forced, `x` is split). Wall models, SGS, scalars etc. work as on
   one GPU, including the ghost-cell IBM and point particles (results match the CPU build and every rank layout; see
   [Decomposition Consistency](Development.md#decomposition-consistency-cpu--multi-cpu--gpu--multi-gpu)). The IBM needs a few interior cells per rank in x and z (checked at start-up).
+- **Two-phase VOF (`vof_flow=1`)**: the two-fluid flow, its wave inlet and relaxation zones, an immersed body, sediment, Boussinesq temperature and
+  point particles run on the GPU (it needs `pcg_precond=1`, the default for wall-bounded y; the GPU build uses the multigrid V-cycle, `mg_cycle=-1`).
+  Verified at one rank against the CPU build; multi-rank GPU runs are covered only partly (see [Two-Phase-VOF](Two-Phase-VOF.md#42-not-supported)).
 - **CPU-only**: a duct with
   `x_bc_type=1`. A runtime guard `Stop`s immediately on unsupported combinations.
 

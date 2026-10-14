@@ -87,6 +87,7 @@ each case is compared at np=1 vs 2, 2x2 and 4x1 (particles also 3), restart vs u
 | `tests/regression/trace_restart.sh <case> <exe> [layout]` | Same for hot-start restart vs an uninterrupted run. |
 | `tests/regression/restart_outputs_check.py --case-dir <case> --exe <exe> [--np N]` | Stop-after-snapshot and plain restart of a VOF case: line/slice probes, `vof_diag.dat`, `vof_gauges.dat` and `ibm_forces.csv` must equal an uninterrupted run (no duplicated or lost records, one header). |
 | `tests/regression/compare_particles.py` | Final particle state by ID between two runs (layouts or CPU/GPU). |
+| `tests/regression/restart_check.py [--particles]` | Hot-start restart vs an uninterrupted run, field by field; `--particles` also compares the particle state by ID. |
 | `tests/regression/ibm_ghost_counts.py`, `ibm_ghost_diff.py` | IBM ghost-cell bookkeeping between layouts (counts / cell by cell). |
 
 `trace_compare.py` gates on the *interior* of the global array and scales by the field spread (with a floor of 1e-8 of the
@@ -96,7 +97,8 @@ fluctuation on a large offset (Boussinesq `T` around `T_ref`).
 ### Notes
 
 - Multi-GPU needs `ibm_E` interior cells per rank in x and z (checked at setup, with a message).
-- CPU-vs-GPU comparisons use a gfortran CPU build and an nvfortran GPU build; results agree to roundoff.
+- CPU-vs-GPU comparisons use a gfortran CPU build and an nvfortran GPU build; results agree to roundoff. The two-fluid VOF cases are the exception: the GPU preconditions the pressure PCG with the multigrid V-cycle and the CPU with the W-cycle (`mg_cycle=-1`), so both reach the same PCG tolerance by different iterates and agree to about 1e-8 (the parity tests use 1e-7).
+- NVHPC compiler messages (`-Minfo=accel`) containing `Conditional loop will be executed in scalar mode` or `Accelerator serial kernel generated` mark kernels that run on one GPU thread (a multi-array `a = b` in one `kernels` region did this); use `dev_copy` (`vof_pressure.f90`) or an explicit `parallel loop`. `NV_ACC_TIME=1` prints the per-kernel device time and launch counts, `NVCOMPILER_ACC_NOTIFY=2` every host-device transfer.
 - Running several 4-rank GPU tests at once (`ctest -j`) can fail spuriously on 2 GPUs; run them sequentially.
 
 ## Contributing
