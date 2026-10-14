@@ -90,12 +90,6 @@ Contains
             ibm_wall_model_flag, sediment_flag, boussinesq_flag, particles_active, uav_active, flat_wall_model_flag, rotation_active
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
-#ifdef GPU_POISSON
-    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 ) Then
-       If ( myid == 0 ) Write(*,'(A)') ' ERROR: the scalars and particles of the two-fluid solver are not ported to the GPU yet'
-       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
-    End If
-#endif
     If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not apply dPdx, dPdz or mass-flux forcing (set them to zero)'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
@@ -224,6 +218,7 @@ Contains
        Call vof_initial_pressure
     End If
     If ( particles_active >= 1 ) Then
+       !$acc update host(Cv)
        Call particles_load_surface(Cv(1:nxg,1:nyg,1:nzg))
        Call particles_check_gas_seeds
     End If
@@ -1505,12 +1500,12 @@ Contains
   !  molecular diffusivity is nu/Sc (nu/Pr) of the phase at each cell blended by the liquid fraction, harmonic on the faces.
   Subroutine vof_scalar_rk3(Cs, kind, dts)
 
-    Real(Int64), Intent(InOut) :: Cs(:,:,:)
+    Real(Int64), Intent(InOut) :: Cs(nxg,nyg,nzg)
     Integer(Int32), Intent(In) :: kind
     Real(Int64), Intent(In) :: dts
 
     Integer(Int32) :: stage, i, j, k
-    Real(Int64) :: a0, divu, kl, kg, fr
+    Real(Int64) :: a0, divu, kl, kg, fr, cf1, cf2, wset
 
     If ( .Not. Allocated(Fsc) ) Then
        Allocate( Fsc(2:nxg-1,2:nyg-1,2:nzg-1), Vsc(nxg,ny,nzg), Csc0(nxg,nyg,nzg) )
@@ -1519,9 +1514,11 @@ Contains
           Deallocate( kfield )
        End If
        Allocate( kfield(nxg,nyg,nzg) )
-       !$acc enter data create(kfield)
+       !$acc enter data create(kfield,Fsc,Vsc,Csc0)
     End If
     kl = vof_nu_l/Merge(Sc, Pr, kind == 1);  kg = vof_nu_g/Merge(Sc, Pr, kind == 1)
+    wset = Merge(ws, 0d0, kind == 1)
+    !$acc parallel loop collapse(3) present(kfield,Cv)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
@@ -1530,40 +1527,49 @@ Contains
        End Do
     End Do
     kf_on = .True.
-    Vsc = V
-    If ( kind == 1 ) Then
-       Do k = 1, nzg
-          Do j = 1, ny
-             Do i = 1, nxg
-                fr = 0.5d0*( Min(1d0, Max(0d0, Cv(i,j,k))) + Min(1d0, Max(0d0, Cv(i,j+1,k))) )
-                Vsc(i,j,k) = V(i,j,k) - ws*fr
-             End Do
+    ! settling acts in the liquid only
+    !$acc parallel loop collapse(3) present(Vsc,V,Cv) private(cf1,cf2,fr)
+    Do k = 1, nzg
+       Do j = 1, ny
+          Do i = 1, nxg
+             cf1 = Min(1d0, Max(0d0, Cv(i,j,k)));  cf2 = Min(1d0, Max(0d0, Cv(i,j+1,k)))
+             fr = 0.5d0*( cf1 + cf2 )
+             Vsc(i,j,k) = V(i,j,k) - wset*fr
           End Do
        End Do
-    End If
+    End Do
+    !$acc kernels present(Csc0,Cs)
     Csc0 = Cs
+    !$acc end kernels
     Do stage = 1, 3
        Call compute_rhs_scalar_core(Cs, U, Vsc, W, 0d0, 0d0, Merge(1d0/Sc_t, 1d0/Pr_t, kind == 1), kind == 2, Fsc)
+       a0 = Merge(0.75d0, 1d0/3d0, stage == 2)
+       ! written as (u + dt F) + a0 (u0 - (u + dt F)) so that a uniform field with F = 0 is reproduced exactly
+       !$acc parallel loop collapse(3) present(Cs,Csc0,Fsc,U,V,W,x,y,z) private(divu)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
              Do i = 2, nxg-1
                 divu = ( U(i,j,k) - U(i-1,j,k) )/( x(i) - x(i-1) ) + ( V(i,j,k) - V(i,j-1,k) )/( y(j) - y(j-1) ) &
                      + ( W(i,j,k) - W(i,j,k-1) )/( z(k) - z(k-1) )
-                Fsc(i,j,k) = Fsc(i,j,k) + Cs(i,j,k)*divu
+                Cs(i,j,k) = Cs(i,j,k) + dts*( Fsc(i,j,k) + Cs(i,j,k)*divu )
+                If ( stage > 1 ) Cs(i,j,k) = Cs(i,j,k) + a0*( Csc0(i,j,k) - Cs(i,j,k) )
              End Do
           End Do
        End Do
-       a0 = Merge(0.75d0, 1d0/3d0, stage == 2)
-       ! written as (u + dt F) + a0 (u0 - (u + dt F)) so that a uniform field with F = 0 is reproduced exactly
-       Cs(2:nxg-1,2:nyg-1,2:nzg-1) = Cs(2:nxg-1,2:nyg-1,2:nzg-1) + dts*Fsc
-       If ( stage > 1 ) Cs(2:nxg-1,2:nyg-1,2:nzg-1) = Cs(2:nxg-1,2:nyg-1,2:nzg-1) &
-            + a0*( Csc0(2:nxg-1,2:nyg-1,2:nzg-1) - Cs(2:nxg-1,2:nyg-1,2:nzg-1) )
+       ! the boundary conditions run on the host copy, as in the single-phase scalar step
+       !$acc update host(Cs)
        If ( kind == 1 ) Then
           Call apply_scalar_bc(Cs)
-          If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cs)
        Else
           Call apply_temperature_bc(Cs)
-          If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Cs)
+       End If
+       !$acc update device(Cs)
+       If ( ibm_input_mode >= 1 ) Then
+          If ( kind == 1 ) Then
+             Call apply_ghost_cell_ibm_scalar_noflux(Cs)
+          Else
+             Call apply_ghost_cell_ibm_scalar(Cs)
+          End If
        End If
     End Do
     kf_on = .False.
@@ -1650,6 +1656,8 @@ Contains
     Call profiler_start(PROF_VOF_END)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     If ( particles_active >= 1 ) Then
+       ! the particles are host code: they read the host velocity and liquid fraction
+       !$acc update host(U,V,W,Cv)
        Call particles_load_surface(Cv(1:nxg,1:nyg,1:nzg))
        Call advance_particles
     End If

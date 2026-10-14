@@ -740,15 +740,18 @@ if(Python3_Interpreter_FOUND)
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_slosh_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${TEST_MPIRUN} --freq 15:7.8290:0.01 --rowmax 16:0.4)
     # Passive scalar of the two-fluid solver: uniform stays uniform, a slab stays bounded and conserved, np1 and np4
-    # (the scalars, buoyancy and particles of the two-fluid solver are host-only: these tests are CPU builds only)
-    if(NOT ENABLE_GPU)
-    foreach(_np 1 4)
+    # (np4 variants are CPU builds only: four ranks oversubscribe the single GPU of the test machine)
+    set(_sc_nps 1 4)
+    if(ENABLE_GPU)
+        set(_sc_nps 1)
+    endif()
+    foreach(_np ${_sc_nps})
         add_test(NAME vof_scalar_slosh_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_scalar_slosh/check_scalar.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
     endforeach()
     # Two-fluid Boussinesq: uniform T is a no-op (bit-identical), stratified T at rest is balanced by the pressure
-    foreach(_np 1 4)
+    foreach(_np ${_sc_nps})
         add_test(NAME vof_bouss_still_identical_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_bouss_still/check_identical.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
@@ -759,7 +762,7 @@ if(Python3_Interpreter_FOUND)
                 --mpirun ${TEST_MPIRUN} --max-dvol 1e-12 --rowmax 16:1e-9 --rowmax 17:1e-9)
     # Particles of the two-fluid solver are liquid-only and reflect at the free surface: tracers in a sloshing tank (np1 vs 4x1 by ID)
     # and bubbles rising to the surface of still water
-    foreach(_np 1 4)
+    foreach(_np ${_sc_nps})
         add_test(NAME vof_part_slosh_liquid_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_slosh/check_part.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
@@ -767,16 +770,38 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_buoy/check_part.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
     endforeach()
-    add_test(NAME vof_part_slosh_np1_vs_np4_4x1
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
-                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_slosh --mpirun ${TEST_MPIRUN}
-                --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine> --np-a 1 --np-b 4 --p-grid 4,1 --tol 1e-8)
+    if(NOT ENABLE_GPU)
+        add_test(NAME vof_part_slosh_np1_vs_np4_4x1
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_slosh --mpirun ${TEST_MPIRUN}
+                    --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine> --np-a 1 --np-b 4 --p-grid 4,1 --tol 1e-8)
+    endif()
     # Feature matrix: passive / two-fluid VOF x tank / IBM body x sediment, Boussinesq, particles, all
-    foreach(_np 1 4)
+    foreach(_np ${_sc_nps})
         add_test(NAME vof_combo_matrix_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_combo/check_combo.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
     endforeach()
+    if(ENABLE_GPU AND CPU_REFERENCE_EXE)
+        set(_ref_mpirun_s ${TEST_MPIRUN})
+        if(CPU_REFERENCE_MPIRUN)
+            set(_ref_mpirun_s ${CPU_REFERENCE_MPIRUN})
+        endif()
+        foreach(_vc "vof_scalar_slosh|4,5,6,7" "vof_bouss_strat|4,5,6,7,16,17")
+            string(REPLACE "|" ";" _vcl ${_vc})
+            list(GET _vcl 0 _vname)
+            list(GET _vcl 1 _vcols)
+            add_test(NAME ${_vname}_cpu_vs_gpu_np1
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                        --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vname} --exe $<TARGET_FILE:dopamine>
+                        --mpirun ${TEST_MPIRUN} --exe-ref ${CPU_REFERENCE_EXE} --mpirun-ref ${_ref_mpirun_s}
+                        --np-a 1 --np-b 1 --max-dvol 1e-10 --same-tol 1e-7 --same-cols ${_vcols})
+        endforeach()
+        add_test(NAME vof_part_buoy_cpu_vs_gpu_np1
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_buoy --mpirun ${_ref_mpirun_s}
+                    --exe-a ${CPU_REFERENCE_EXE} --mpirun-b ${TEST_MPIRUN} --exe-b $<TARGET_FILE:dopamine>
+                    --np-a 1 --np-b 1 --tol 1e-6)
     endif()
     # Variable-density steep wave: x rank seams cut the interface obliquely (np1 vs the x-split layout, tight PCG tolerance so only round-off remains)
     add_test(NAME vof_break_small_np1_vs_np4_4x1
@@ -812,7 +837,7 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_small --mpirun ${TEST_MPIRUN}
                     --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-12)
-        if(NOT ENABLE_GPU)
+        if(_np EQUAL 1 OR NOT ENABLE_GPU)
             add_test(NAME vof_restart_scalar_np${_np}
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
                         --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_scalar --mpirun ${TEST_MPIRUN}
