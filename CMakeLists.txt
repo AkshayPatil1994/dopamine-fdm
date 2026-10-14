@@ -776,6 +776,15 @@ if(Python3_Interpreter_FOUND)
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_slosh --mpirun ${TEST_MPIRUN}
                     --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine> --np-a 1 --np-b 4 --p-grid 4,1 --tol 1e-8)
     endif()
+    # Scalar boundary conditions of the two-fluid solver the other scalar cases do not reach: wave-flume inflow/outflow, wall values of
+    # sediment and temperature (np1 vs the x-split layout on CPU builds, CPU vs GPU below)
+    if(NOT ENABLE_GPU)
+        add_test(NAME vof_scalar_flume_np1_vs_np4_4x1
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_scalar_flume --mpirun ${TEST_MPIRUN}
+                    --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine> --np-a 1 --np-b 4 --p-grid 4,1 --p-grid-b-only
+                    --fields --field-tol 1e-6 --label-a np1 --label-b 4x1)
+    endif()
     # Feature matrix: passive / two-fluid VOF x tank / IBM body x sediment, Boussinesq, particles, all
     foreach(_np ${_sc_nps})
         add_test(NAME vof_combo_matrix_np${_np}
@@ -796,6 +805,15 @@ if(Python3_Interpreter_FOUND)
                         --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vname} --exe $<TARGET_FILE:dopamine>
                         --mpirun ${TEST_MPIRUN} --exe-ref ${CPU_REFERENCE_EXE} --mpirun-ref ${_ref_mpirun_s}
                         --np-a 1 --np-b 1 --max-dvol 1e-10 --same-tol 1e-7 --same-cols ${_vcols})
+        endforeach()
+        # the final snapshots (all blocks, scalars included) of the scalar boundary conditions on the device: wave-flume inflow/outflow with
+        # wall values, and the IBM body ghost fills; nsave is not a monitor step, so a stale host copy of C or T shows up
+        foreach(_vc vof_scalar_flume vof_scalar_ibm)
+            add_test(NAME ${_vc}_cpu_vs_gpu_np1
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
+                        --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vc} --fields --field-tol 1e-6
+                        --mpirun ${_ref_mpirun_s} --exe-a ${CPU_REFERENCE_EXE} --np-a 1
+                        --mpirun-b ${TEST_MPIRUN} --exe-b $<TARGET_FILE:dopamine> --np-b 1 --label-a cpu-np1 --label-b gpu-np1)
         endforeach()
         add_test(NAME vof_part_buoy_cpu_vs_gpu_np1
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_particles.py
