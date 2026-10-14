@@ -360,7 +360,11 @@ Contains
        Write(*,'(A,3F10.4)') '   Domain    (Lx,Ly,Lz)        = ', Lx, Ly, Lz
        Write(*,'(A,I2)')     '   grid_type                   = ', grid_type
        Write(*,'(A,2I4)')    '   p_row, p_col (0,0=auto)     = ', p_row, p_col
-       Write(*,'(A,E12.4)')  '   nu                          = ', nu
+       If ( vof_flow >= 1 ) Then
+          Write(*,'(A)')     '   nu                          not used (two-fluid viscosities vof_nu_l, vof_nu_g)'
+       Else
+          Write(*,'(A,E12.4)')  '   nu                          = ', nu
+       End If
        Write(*,'(A,I2)')     '   advection_scheme (0=skew-symmetric,1=pure central) = ', advection_scheme
        Write(*,'(A,I2)')     '   flow_forcing_mode (0=dPdx,1=const mass flux) = ', flow_forcing_mode
        If ( flow_forcing_mode == 1 ) Then
@@ -860,6 +864,10 @@ Contains
          Call abort_input( 'ERROR: &VOF (vof_active>=1) cannot be combined with the UAV actuator (uav_active>=1)' )
     If ( vof_flow >= 1 .And. vof_active < 1 ) &
          Call abort_input( 'ERROR: vof_flow>=1 requires vof_active=1' )
+    If ( wave_type <= 0 .And. ( wave_height > 0d0 .Or. wave_Hs > 0d0 ) ) &
+         Write(*,'(A)') ' WARNING: &WAVES wave_height/wave_Hs is set but wave_type = 0: no waves are generated'
+    If ( particles_active < 1 .And. n_particles_init > 0 ) &
+         Write(*,'(A)') ' WARNING: &PARTICLES n_particles_init > 0 but particles_active = 0: the particles are disabled'
     If ( inflow_type < 0 .Or. inflow_type > 3 ) Call abort_input( 'ERROR: &INFLOW inflow_type must be 0..3' )
     If ( wave_turb /= 0 .And. wave_turb /= 1 ) Call abort_input( 'ERROR: &WAVES wave_turb must be 0 or 1' )
     If ( wave_turb == 1 .And. ( wave_type <= 0 .Or. Len_trim(inflow_recycle_file) == 0 ) ) &

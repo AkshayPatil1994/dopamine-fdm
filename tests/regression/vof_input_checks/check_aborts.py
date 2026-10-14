@@ -19,6 +19,13 @@ CASES = [
     ('IBM surface dump', r'&VOF', '&IBM\n  ibm_input_mode = 1, ibm_sdf_file = \'none\', ibm_surface_nsampling = 10,\n/\n&VOF', 'IBM surface field dump'),
 ]
 
+# accepted inputs that carry ignored settings must say so (the run goes on for one step)
+WARNS = [
+    ('waves without wave_type', r'&VOF', '&WAVES\n  wave_height = 0.02,\n/\n&VOF', 'wave_type = 0: no waves'),
+    ('particles disabled', r'&VOF', '&PARTICLES\n  n_particles_init = 10,\n/\n&VOF', 'particles_active = 0'),
+    ('nu unused with vof_flow', r'&VOF', '&VOF', 'nu +not used'),
+]
+
 ap = argparse.ArgumentParser()
 ap.add_argument('--exe', required=True)
 ap.add_argument('--mpirun', default='mpirun')
@@ -41,6 +48,17 @@ try:
         r = subprocess.run([a.mpirun, '-np', '1', a.exe], cwd=wd, capture_output=True, text=True, timeout=120)
         out = r.stdout + r.stderr
         ok = r.returncode != 0 and re.search(msg, out) is not None
+        print('%-30s %s' % (name, 'ok' if ok else 'FAIL'))
+        bad += not ok
+    for name, pat, rep, msg in WARNS:
+        wd = os.path.join(tmp, re.sub(r'\W', '_', name))
+        shutil.copytree(src, wd)
+        os.makedirs(os.path.join(wd, 'restart'), exist_ok=True)
+        f = os.path.join(wd, 'input_parameters')
+        text = re.sub(r'nsteps\s*=\s*-?\d+', 'nsteps = 1', open(f).read())
+        open(f, 'w').write(re.sub(pat, lambda m: rep, text, count=1))
+        r = subprocess.run([a.mpirun, '-np', '1', a.exe], cwd=wd, capture_output=True, text=True, timeout=120)
+        ok = r.returncode == 0 and re.search(msg, r.stdout + r.stderr) is not None
         print('%-30s %s' % (name, 'ok' if ok else 'FAIL'))
         bad += not ok
 finally:
