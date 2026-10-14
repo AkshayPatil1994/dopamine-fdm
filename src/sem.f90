@@ -41,6 +41,12 @@ Module synthetic_eddy_method
   Real   (Int64), Allocatable :: eddy_Tperiod(:)   ! (sem_n_eddies): 2*eddy_smax(1,k)/Uconv_sem
   Real   (Int64) :: Uconv_sem = 0d0                ! eddy-box convection velocity
 
+  ! per-eddy realisation at time sem_cache_t (position along x, active flag, re-drawn y/z/sign), shared by every inlet point of a BC call
+  Integer(Int32), Allocatable :: sc_act(:)
+  Real   (Int64), Allocatable :: sc_xk(:), sc_y(:), sc_z(:), sc_eps(:,:)
+  Real   (Int64) :: sem_cache_t = -Huge(1d0)
+  !$acc declare create(sc_act, sc_xk, sc_y, sc_z, sc_eps)
+
   Real   (Int64), Parameter :: sem_placement_band_factor = 3d0  ! half-width (in units of eddy_smax(2,k)) of the y-band eddy_realize confines eddy k's re-realized position to, inhomogeneous mode only
 
   ! placement box bounds, needed at runtime (not just at init) by
@@ -567,13 +573,13 @@ Contains
 
     Call Mpi_bcast( prof_U, n_profile, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast( prof_U_fl, n_profile, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    !$acc update device(prof_U_fl)
 
   End Subroutine read_recycle_mean_profile
 
   !> One-time setup for inflow_type==2's runtime BC buffers: no-op on every rank except the one owning the x=1 face (row==0), which opens a persistent stream handle on the donor .bin and primes the bracketing time-interpolation frames (rec_lo/rec_hi) for this rank's own local z-slab only
   Subroutine init_inflow_recycle
 
-    !$acc update device(prof_U_fl)
     Integer(Int32) :: ios, u_times
     Character(300) :: fname
     ! NVFORTRAN 23.3 fails to parse "Merge(...,rec_col_T==1)"/"...,rec_col_C==1)" inline
@@ -1334,6 +1340,8 @@ Contains
 
     Allocate( eddy_x0(sem_n_eddies), eddy_y0(sem_n_eddies) )
     Allocate( eddy_sig(3,3,sem_n_eddies), eddy_smax(3,sem_n_eddies), eddy_Tperiod(sem_n_eddies) )
+    Allocate( sc_act(sem_n_eddies), sc_xk(sem_n_eddies), sc_y(sem_n_eddies), sc_z(sem_n_eddies), sc_eps(3,sem_n_eddies) )
+    sem_cache_t = -Huge(1d0)
 
     ! identical seed/sequence on every rank: eddy population is a single shared virtual field upstream of the (MPI-decomposed-in-z) inflow plane
     Call random_seed_from(sem_seed)
@@ -1635,6 +1643,97 @@ Contains
 
   End Subroutine build_analytical_normalisation
 
+  !> Realise every eddy at t_now once (position along x, cycle's y/z/sign) so the per-point sums of an inlet BC call only evaluate kernels
+  Subroutine sem_cache_refresh(t_now)
+
+    Real(Int64), Intent(In) :: t_now
+
+    Real(Int64) :: halfwidth, phase, xk, fx
+    Integer(Int32) :: kk, n_cycle
+    Logical :: homog
+
+    If ( t_now == sem_cache_t ) Return
+    sem_cache_t = t_now
+    homog = ( n_sigma == 0 .And. sem_wall_damping == 0 )
+    halfwidth = sem_length_scale
+    !$acc parallel loop default(present) private(phase,n_cycle,xk,fx)
+    Do kk = 1, sem_n_eddies
+       If ( homog ) Then
+          phase   = (eddy_x0(kk)+halfwidth) + Uconv_sem*t_now
+          n_cycle = Int( Floor( phase / (2d0*halfwidth) ), Int32 )
+          xk = -halfwidth + Modulo( phase, 2d0*halfwidth )
+          fx = tent_kernel( xk, halfwidth )
+          sc_act(kk) = Merge(0, 1, fx == 0d0)
+       Else
+          phase   = (eddy_x0(kk)+eddy_smax(1,kk)) + Uconv_sem*t_now
+          n_cycle = Int( Floor( phase / (2d0*eddy_smax(1,kk)) ), Int32 )
+          xk = -eddy_smax(1,kk) + Modulo( phase, 2d0*eddy_smax(1,kk) )
+          sc_act(kk) = Merge(0, 1, Abs(xk) >= eddy_smax(1,kk))
+       End If
+       sc_xk(kk) = xk
+       If ( sc_act(kk) == 1 ) Call eddy_realize(kk, n_cycle, sc_y(kk), sc_z(kk), sc_eps(:,kk))
+    End Do
+
+  End Subroutine sem_cache_refresh
+
+  !> raw_eddy_sum from the realisations cached by sem_cache_refresh, summing only the components component comp's fluctuation needs
+  !  (V mixes u* and v*); same terms in the same order as raw_eddy_sum
+  Subroutine raw_eddy_sum_cached(yc, zc, comp, ustar, vstar, wstar)
+    !$acc routine seq
+
+    Real(Int64), Intent(In)  :: yc, zc
+    Integer(Int32), Intent(In) :: comp
+    Real(Int64), Intent(Out) :: ustar, vstar, wstar
+
+    Real(Int64) :: fx, fy, fz, fprod, halfwidth
+    Integer(Int32) :: kk
+    Logical :: need_u, need_v, need_w
+
+    ustar = 0d0; vstar = 0d0; wstar = 0d0
+    need_u = ( comp <= 2 );  need_v = ( comp == 2 );  need_w = ( comp == 3 )
+
+    If ( n_sigma == 0 .And. sem_wall_damping == 0 ) Then
+       halfwidth = sem_length_scale
+       Do kk = 1, sem_n_eddies
+          If ( sc_act(kk) == 0 ) Cycle
+          fx = tent_kernel( sc_xk(kk), halfwidth )
+          fy = tent_kernel( yc-sc_y(kk), halfwidth )
+          If ( fy == 0d0 ) Cycle
+          fz = tent_kernel( zc-sc_z(kk), halfwidth )
+          If ( fz == 0d0 ) Cycle
+          fprod = fx*fy*fz
+          If ( need_u ) ustar = ustar + sc_eps(1,kk)*fprod
+          If ( need_v ) vstar = vstar + sc_eps(2,kk)*fprod
+          If ( need_w ) wstar = wstar + sc_eps(3,kk)*fprod
+       End Do
+    Else
+       Do kk = 1, sem_n_eddies
+          If ( sc_act(kk) == 0 ) Cycle
+          If ( Abs(yc-sc_y(kk)) >= eddy_smax(2,kk) ) Cycle
+          If ( Abs(zc-sc_z(kk)) >= eddy_smax(3,kk) ) Cycle
+          If ( need_u ) Then
+             fx = unified_kernel( sc_xk(kk),    eddy_smax(1,kk), eddy_sig(1,1,kk) )
+             fy = unified_kernel( yc-sc_y(kk), eddy_smax(2,kk), eddy_sig(1,2,kk) )
+             fz = unified_kernel( zc-sc_z(kk), eddy_smax(3,kk), eddy_sig(1,3,kk) )
+             ustar = ustar + sc_eps(1,kk)*fx*fy*fz
+          End If
+          If ( need_v ) Then
+             fx = unified_kernel( sc_xk(kk),    eddy_smax(1,kk), eddy_sig(2,1,kk) )
+             fy = unified_kernel( yc-sc_y(kk), eddy_smax(2,kk), eddy_sig(2,2,kk) )
+             fz = unified_kernel( zc-sc_z(kk), eddy_smax(3,kk), eddy_sig(2,3,kk) )
+             vstar = vstar + sc_eps(2,kk)*fx*fy*fz
+          End If
+          If ( need_w ) Then
+             fx = unified_kernel( sc_xk(kk),    eddy_smax(1,kk), eddy_sig(3,1,kk) )
+             fy = unified_kernel( yc-sc_y(kk), eddy_smax(2,kk), eddy_sig(3,2,kk) )
+             fz = unified_kernel( zc-sc_z(kk), eddy_smax(3,kk), eddy_sig(3,3,kk) )
+             wstar = wstar + sc_eps(3,kk)*fx*fy*fz
+          End If
+       End Do
+    End If
+
+  End Subroutine raw_eddy_sum_cached
+
   !> Raw eddy-kernel sum at (yc,zc,t_now), Eq. (1) of Jarrin (2006)/Schau et al. (2022); homogeneous mode uses the tent kernel, inhomogeneous mode uses the unified (cosine) shape function (Section 4.3)
   Subroutine raw_eddy_sum(yc, zc, t_now, ustar, vstar, wstar)
     !$acc routine seq
@@ -1827,12 +1926,13 @@ Contains
   End Function mean_profile_T
 
   !> Inflow velocity fluctuation at (yc,zc) for component comp (1=U,2=V,3=W): inflow_type==0 none, inflow_type==1 ESEM raw eddy sum normalised (Section 3) then Cholesky-correlated to the target Reynolds-stress tensor (R13=R23=0 assumed)
-  Subroutine sem_fluctuation(comp, j, k, yc, zc, t_now, up, vp, wp)
+  Subroutine sem_fluctuation(comp, j, k, yc, zc, t_now, up, vp, wp, use_cache)
     !$acc routine seq
 
     Integer(Int32), Intent(In)  :: comp, j, k
     Real   (Int64), Intent(In)  :: yc, zc, t_now
     Real   (Int64), Intent(Out) :: up, vp, wp
+    Logical, Intent(In)  :: use_cache   ! realisations of t_now cached by sem_cache_refresh (not for divergence-free eddies)
 
     Real(Int64) :: ustar, vstar, wstar, ui, vi, wi
     Real(Int64) :: R11, R22, R33, R12, a11, a21, a22, a33, taper
@@ -1842,7 +1942,11 @@ Contains
        Return
     End If
 
-    Call raw_eddy_sum(yc, zc, t_now, ustar, vstar, wstar)
+    If ( use_cache ) Then
+       Call raw_eddy_sum_cached(yc, zc, comp, ustar, vstar, wstar)
+    Else
+       Call raw_eddy_sum(yc, zc, t_now, ustar, vstar, wstar)
+    End If
 
     ui = 0d0; vi = 0d0; wi = 0d0
     If ( sem_use_esem == 1 ) Then

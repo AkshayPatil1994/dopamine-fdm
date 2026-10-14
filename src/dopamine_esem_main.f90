@@ -207,7 +207,7 @@ Program dopamine_esem
            kg_g = kg1_global(myid) + ka - 2
            Do ja = 2, nyg-1
               jg = ja - 1
-              Call sem_fluctuation( 1, ja, ka, yg(ja), zg(ka), t_s, up, vp, wp )
+              Call sem_fluctuation( 1, ja, ka, yg(ja), zg(ka), t_s, up, vp, wp, .False. )
               lbuf_U(jg, kg_g) = mean_profile_U( yg(ja) ) + up
            End Do
         End Do
@@ -216,7 +216,7 @@ Program dopamine_esem
         Do ka = 2, nzg-1
            kg_g = kg1_global(myid) + ka - 2
            Do jf = 1, ny
-              Call sem_fluctuation( 2, jf, ka, y(jf), zg(ka), t_s, up, vp, wp )
+              Call sem_fluctuation( 2, jf, ka, y(jf), zg(ka), t_s, up, vp, wp, .False. )
               lbuf_V(jf, kg_g) = vp
            End Do
         End Do
@@ -226,7 +226,7 @@ Program dopamine_esem
            kg_g = kg1_global(myid) + ka - 2
            Do ja = 2, nyg-1
               jg = ja - 1
-              Call sem_fluctuation( 3, ja, ka, yg(ja), z(ka), t_s, up, vp, wp )
+              Call sem_fluctuation( 3, ja, ka, yg(ja), z(ka), t_s, up, vp, wp, .False. )
               lbuf_W(jg, kg_g) = wp
            End Do
         End Do

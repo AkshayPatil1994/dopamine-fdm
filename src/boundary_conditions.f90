@@ -345,7 +345,7 @@ Contains
 
     Integer(Int32) :: j, k, n2, n3
     Real   (Int64) :: up, vp, wp, target_val
-    Logical :: is_first, is_last
+    Logical :: is_first, is_last, sem_cached
     Integer(Int32) :: partner
 
     Call x_periodic_partner(is_first, is_last, partner)
@@ -379,6 +379,9 @@ Contains
        Return
     End If
 
+    sem_cached = ( inflow_type == 1 .And. sem_divergence_free == 0 )
+    If ( sem_cached ) Call sem_cache_refresh(t)
+
     ! F's y/z coords depend on staggered-grid placement: U=(yc,zc), V=(yf,zc), W=(yc,zf); every (j,k) is independent -- sem_fluctuation/mean_profile_U/recycle_value are !$acc routine seq
     !$acc parallel loop collapse(2) present(F,y,yg,z,zg) private(up,vp,wp,target_val)
     Do k = 1, n3
@@ -395,15 +398,15 @@ Contains
                 F(1,j,k) = 2d0*target_val - F(2,j,k)             ! ghost-cell mirror
              End If
           Else If ( comp == 1 ) Then
-             Call sem_fluctuation( 1, j, k, yg(j), zg(k), t, up, vp, wp )
+             Call sem_fluctuation( 1, j, k, yg(j), zg(k), t, up, vp, wp, sem_cached )
              target_val = mean_profile_U( yg(j) ) + up
              F(1,j,k) = target_val                  ! Dirichlet face value, exact
           Else If ( comp == 2 ) Then
-             Call sem_fluctuation( 2, j, k, y(j), zg(k), t, up, vp, wp )
+             Call sem_fluctuation( 2, j, k, y(j), zg(k), t, up, vp, wp, sem_cached )
              target_val = vp
              F(1,j,k) = 2d0*target_val - F(2,j,k)    ! ghost-cell mirror
           Else
-             Call sem_fluctuation( 3, j, k, yg(j), z(k), t, up, vp, wp )
+             Call sem_fluctuation( 3, j, k, yg(j), z(k), t, up, vp, wp, sem_cached )
              target_val = wp
              F(1,j,k) = 2d0*target_val - F(2,j,k)    ! ghost-cell mirror
           End If

@@ -115,6 +115,7 @@ Contains
     If ( Allocated(eddy_sig)    ) Deallocate(eddy_sig)
     If ( Allocated(eddy_smax)   ) Deallocate(eddy_smax)
     If ( Allocated(eddy_Tperiod)) Deallocate(eddy_Tperiod)
+    If ( Allocated(sc_act)      ) Deallocate(sc_act, sc_xk, sc_y, sc_z, sc_eps)
     If ( Allocated(ens_mean_uU) ) Deallocate(ens_mean_uU, ens_std_uU)
     If ( Allocated(ens_mean_uV) ) Deallocate(ens_mean_uV, ens_std_uV)
     If ( Allocated(ens_mean_vV) ) Deallocate(ens_mean_vV, ens_std_vV)
@@ -197,11 +198,11 @@ Contains
     su=0d0; sv=0d0; sw=0d0; suu=0d0; svv=0d0; sww=0d0; suv=0d0
     Do s = 0, nsamp-1
        t0 = dt_s * Real(s,8)
-       Call sem_fluctuation(1, jc, kc, yc, zc, t0, up, vp, wp)
+       Call sem_fluctuation(1, jc, kc, yc, zc, t0, up, vp, wp, .False.)
        su = su + up; suu = suu + up*up
-       Call sem_fluctuation(2, jc, kc, yc, zc, t0, up, vp, wp)
+       Call sem_fluctuation(2, jc, kc, yc, zc, t0, up, vp, wp, .False.)
        sv = sv + vp; svv = svv + vp*vp
-       Call sem_fluctuation(3, jc, kc, yc, zc, t0, up, vp, wp)
+       Call sem_fluctuation(3, jc, kc, yc, zc, t0, up, vp, wp, .False.)
        sw = sw + wp; sww = sww + wp*wp
     End Do
 
