@@ -407,6 +407,13 @@ Contains
        a(0,:,:) = a(ni,:,:)
        a(ni+1,:,:) = a(1,:,:)
        !$acc end kernels
+    Else If ( mg_xdn == MPI_PROC_NULL .And. mg_xup == MPI_PROC_NULL ) Then
+       ! no x neighbour: fill on the device, no host staging of the send/receive planes
+       glo = mg_xlo_gs;  ghi = mg_xhi_gs
+       !$acc kernels present(a) async(1)
+       a(0,:,:) = glo*a(1,:,:)
+       a(ni+1,:,:) = ghi*a(ni,:,:)
+       !$acc end kernels
     Else
        n = (nj+2)*(nk+2)
        !$acc parallel loop collapse(2) present(a,mg_sbx) async(1)
@@ -444,6 +451,11 @@ Contains
        !$acc kernels present(a) async(1)
        a(:,:,0) = a(:,:,nk)
        a(:,:,nk+1) = a(:,:,1)
+       !$acc end kernels
+    Else If ( mg_zdn == MPI_PROC_NULL .And. mg_zup == MPI_PROC_NULL ) Then
+       !$acc kernels present(a) async(1)
+       a(:,:,0) = a(:,:,1)
+       a(:,:,nk+1) = a(:,:,nk)
        !$acc end kernels
     Else
        n = (ni+2)*(nj+2)
