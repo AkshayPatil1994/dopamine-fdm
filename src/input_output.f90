@@ -1297,6 +1297,8 @@ Contains
 
     If ( save_now ) then
 
+       If ( vof_active >= 1 ) Call vof_sync_io_hook()
+
        ! processor 0 writes the data
        If ( myid==0 ) Then
 

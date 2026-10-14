@@ -688,6 +688,7 @@ Module global
   Integer(Int32) :: vof_frozen        = 0     ! 1: density held fixed (no interface transport)
   Integer(Int32) :: vof_hsplit        = 0     ! 1: well-balanced split p = p' - rho g (y - vof_level)
   Real   (Int64) :: vof_smooth_w      = 0d0   ! vof_ic_type 4: smoothed Heaviside of this half-width (cells)
+  Procedure(), Pointer :: vof_sync_io_hook => Null()   ! set by vof_init: refreshes Cvof_io from the device just before a snapshot is written
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cvof_io   ! C without the second ghost layer, for snapshots and restart
   ! Wave generation (src/waves.f90): wave_type 0=off, 1=linear, 2=stream function, 3=JONSWAP; the inlet needs inflow_type=3.
   ! wave_current_mode: 1 zero mean volume flux (closed flume), 2 zero mean Eulerian velocity. Relaxation zones (waves2Foam style

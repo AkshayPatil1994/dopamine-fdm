@@ -124,8 +124,8 @@ Contains
        !$acc update device(Cv)
        Call vof_fill_pad(Cv, nxg, nyg, nzg)
     End If
-    !$acc update host(Cv)
-    Cvof_io = Cv(1:nxg,1:nyg,1:nzg)
+    vof_sync_io_hook => vof_sync_io
+    Call vof_sync_io
     If ( vof_prescribed > 0 ) Then
        Allocate( Cinit(nxg,nyg,nzg) )
        Cinit = Cv(1:nxg,1:nyg,1:nzg)
@@ -580,12 +580,18 @@ Contains
   !> End of step: remember stage 2 as the previous-step velocity for the next step's first sub-step
   Subroutine vof_end_step
 
-    !$acc update host(Cv)
-    Cvof_io = Cv(1:nxg,1:nyg,1:nzg)
     vof_dt_prev = dt
     vof_have_prev = .True.
 
   End Subroutine vof_end_step
+
+
+  Subroutine vof_sync_io
+
+    !$acc update host(Cv)
+    Cvof_io = Cv(1:nxg,1:nyg,1:nzg)
+
+  End Subroutine vof_sync_io
 
 
   !> Append one row to vof_diag.dat (rank 0): time, liquid volume, relative drift against the initial volume, C range, interface
@@ -597,7 +603,7 @@ Contains
     Integer(Int64) :: nint
     Logical :: has_rows
 
-    !$acc update host(U,V,W,P)
+    !$acc update host(U,V,W,P,Cv)
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     serr = shape_error()
     pjump = pressure_jump()
@@ -875,6 +881,7 @@ Contains
 
     ng = Count(wave_gauge_x >= 0d0)
     If ( ng == 0 ) Return
+    !$acc update host(Cv)
     ihi = nxg-1;  khi = nzg-1
     If ( z_bc_type == 0 ) Then
        Call z_periodic_partner(is_first, is_last, partner)
