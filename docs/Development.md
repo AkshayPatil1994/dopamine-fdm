@@ -99,6 +99,7 @@ fluctuation on a large offset (Boussinesq `T` around `T_ref`).
 - Multi-GPU needs `ibm_E` interior cells per rank in x and z (checked at setup, with a message).
 - CPU-vs-GPU comparisons use a gfortran CPU build and an nvfortran GPU build; results agree to roundoff. The two-fluid VOF cases are the exception: the GPU preconditions the pressure PCG with the multigrid V-cycle and the CPU with the W-cycle (`mg_cycle=-1`), so both reach the same PCG tolerance by different iterates and agree to about 1e-8 (the parity tests use 1e-7).
 - NVHPC compiler messages (`-Minfo=accel`) containing `Conditional loop will be executed in scalar mode` or `Accelerator serial kernel generated` mark kernels that run on one GPU thread (a multi-array `a = b` in one `kernels` region did this); use `dev_copy` (`vof_pressure.f90`) or an explicit `parallel loop`. `NV_ACC_TIME=1` prints the per-kernel device time and launch counts, `NVCOMPILER_ACC_NOTIFY=2` every host-device transfer.
+- `Cscal` and `Tscal` live on the device (their boundary conditions do not copy them to the host at one rank): a host reader must `!$acc update host(...)` first, as `output_data`, `write_probes`, `advance_particles` (Boussinesq coupling) and `accumulate_rsb` do. A stale host copy shows up only in what those readers write, and the monitor never copies the scalars; give a parity case an `nsave` that is not a multiple of `nmonitor` (`vof_scalar_flume`, `vof_scalar_ibm`).
 - Running several 4-rank GPU tests at once (`ctest -j`) can fail spuriously on 2 GPUs; run them sequentially.
 
 ## Contributing

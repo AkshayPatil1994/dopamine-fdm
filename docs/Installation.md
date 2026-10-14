@@ -87,6 +87,7 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
 - **Two-phase VOF (`vof_flow=1`)**: the two-fluid flow, its wave inlet and relaxation zones, an immersed body, sediment, Boussinesq temperature and
   point particles run on the GPU (it needs `pcg_precond=1`, the default for wall-bounded y; the GPU build uses the multigrid V-cycle, `mg_cycle=-1`).
   Verified at one rank against the CPU build; multi-rank GPU runs are covered only partly (see [Two-Phase-VOF](Two-Phase-VOF.md#42-not-supported)).
+  The scalar boundary conditions (sediment, temperature) are device-resident for one rank only; with several ranks they stage the whole field through the host every RK stage.
 - **CPU-only**: a duct with
   `x_bc_type=1`. A runtime guard `Stop`s immediately on unsupported combinations.
 
