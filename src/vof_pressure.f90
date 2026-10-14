@@ -446,6 +446,9 @@ Contains
     Real(Int64), Intent(InOut) :: F(nxg,nyg,nzg)
     Logical,     Intent(In)    :: antisym
 
+    Logical :: is_first, is_last
+    Integer(Int32) :: partner
+
     If ( vp_dev .And. nprocs == 1 ) Then
        ! one rank: the wraps of the host path below as device copies (z always wraps, as in finish_scalar_halos)
        !$acc kernels present(F)
@@ -464,8 +467,30 @@ Contains
        !$acc end kernels
        Return
     End If
+    If ( vp_dev ) Then
+       ! several ranks, all on the device: the order of vp_halo_host (x seam, x walls, z seam, periodic wraps, y)
+       Call update_ghost_interior_planes_x(F, 4)
+       If ( x_bc_type == 1 ) Then
+          Call x_periodic_partner(is_first, is_last, partner)
+          !$acc kernels present(F)
+          If ( is_first ) F(1,:,:) = F(2,:,:)
+          If ( is_last .And. antisym ) F(nxg,:,:) = -F(nxg-1,:,:)
+          If ( is_last .And. .Not. antisym ) F(nxg,:,:) = F(nxg-1,:,:)
+          !$acc end kernels
+       End If
+       Call update_ghost_interior_planes(F, 4)
+       If ( x_bc_type == 0 ) Call apply_periodic_bc_x(F, 2)
+       Call apply_periodic_bc_z(F, 4)
+       !$acc kernels present(F)
+       If ( y_bc_type == 0 ) Then
+          F(:,1,:) = F(:,nyg-2,:);  F(:,nyg-1,:) = F(:,2,:);  F(:,nyg,:) = F(:,3,:)
+       Else
+          F(:,1,:) = F(:,2,:);  F(:,nyg,:) = F(:,nyg-1,:)
+       End If
+       !$acc end kernels
+       Return
+    End If
     Call vp_halo_host(F, antisym)
-    !$acc update device(F) if(vp_dev)
 
   End Subroutine vp_halo
 
@@ -479,7 +504,6 @@ Contains
     Integer(Int32) :: partner
 
     Call update_ghost_interior_planes_x(F, 4)
-    !$acc update host(F) if(vp_dev)   ! with several ranks the GPU build exchanges the x planes on the device
     If ( x_bc_type == 1 ) Then
        Call x_periodic_partner(is_first, is_last, partner)
        If ( is_first ) F(1,:,:) = F(2,:,:)
