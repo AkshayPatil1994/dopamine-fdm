@@ -861,8 +861,8 @@ if(Python3_Interpreter_FOUND)
                         --mpirun ${TEST_MPIRUN} --np-a 1 --np-b 4 --p-grid ${_lay} --max-l1 ${_vl1}
                         --same-cols 4,5,6,7,11,12,13,14,16,17,18,28,32)
         endforeach()
-        # passive VOF only (the two-fluid solver does not run on the GPU yet): CPU reference vs GPU at one rank
-        if(ENABLE_GPU AND CPU_REFERENCE_EXE AND NOT _vname MATCHES "ibm")
+        # CPU reference vs GPU at one rank
+        if(ENABLE_GPU AND CPU_REFERENCE_EXE)
             set(_ref_mpirun_v ${TEST_MPIRUN})
             if(CPU_REFERENCE_MPIRUN)
                 set(_ref_mpirun_v ${CPU_REFERENCE_MPIRUN})
@@ -874,6 +874,23 @@ if(Python3_Interpreter_FOUND)
                         --np-a 1 --np-b 1 --max-l1 ${_vl1} --same-cols 4,5,6,7,14,16,17,18,28)
         endif()
     endforeach()
+    if(ENABLE_GPU AND CPU_REFERENCE_EXE)
+        set(_ref_mpirun_v ${TEST_MPIRUN})
+        if(CPU_REFERENCE_MPIRUN)
+            set(_ref_mpirun_v ${CPU_REFERENCE_MPIRUN})
+        endif()
+        foreach(_vc "vof_break_small|4,5,6,7,11,12,13,16,29" "vof_slosh_small|4,5,6,7,11,12,13,16" "vof_drop_small|4,5,6,7,29"
+                    "vof_ibm_still|4,5,6,7" "vof_ibm_slosh|4,5,6,7,11,12,13,16,28")
+            string(REPLACE "|" ";" _vcl ${_vc})
+            list(GET _vcl 0 _vname)
+            list(GET _vcl 1 _vcols)
+            add_test(NAME ${_vname}_cpu_vs_gpu_np1
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                        --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vname} --exe $<TARGET_FILE:dopamine>
+                        --mpirun ${TEST_MPIRUN} --exe-ref ${CPU_REFERENCE_EXE} --mpirun-ref ${_ref_mpirun_v}
+                        --np-a 1 --np-b 1 --max-dvol 1e-10 --same-cols ${_vcols})
+        endforeach()
+    endif()
 else()
     message(STATUS "Python3 not found: the regression tests (ctest) that need it are not defined")
 endif()
