@@ -172,6 +172,12 @@ Contains
     If ( n_slices > 0 .And. slice_freq > 0 ) Then
       If ( Mod(istep, slice_freq) == 0 ) Then
         !$acc update host(U,V,W,P)
+        If ( sediment_flag >= 1 ) Then
+           !$acc update host(Cscal)
+        End If
+        If ( boussinesq_flag >= 1 ) Then
+           !$acc update host(Tscal)
+        End If
         Do n = 1, n_slices
           Call write_slice_n(n)
         End Do
@@ -181,6 +187,12 @@ Contains
     If ( n_lines > 0 .And. line_freq > 0 ) Then
       If ( Mod(istep, line_freq) == 0 ) Then
         !$acc update host(U,V,W,P)
+        If ( sediment_flag >= 1 ) Then
+           !$acc update host(Cscal)
+        End If
+        If ( boussinesq_flag >= 1 ) Then
+           !$acc update host(Tscal)
+        End If
         Do n = 1, n_lines
           Call write_line_n(n)
         End Do

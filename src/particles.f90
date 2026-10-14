@@ -747,6 +747,9 @@ Contains
     If ( particles_active < 1 ) Return
 
     Call build_velocity_pads
+    If ( particle_boussinesq_coupling == 1 .And. boussinesq_flag >= 1 ) Then
+       !$acc update host(Tscal)
+    End If
 
     n_exit_outflow_local = 0
     n_exit_ids_local = 0

@@ -161,6 +161,10 @@ Contains
     If ( rsb_active /= 1 ) Return
     If ( istep < rsb_nstart ) Return
 
+    If ( boussinesq_flag >= 1 ) Then
+       !$acc update host(Tscal)
+    End If
+
     inv_dx = 1d0 / dx
 
     ! loop over interior cell centres i,j,k in [2..nxg-1]x[2..nyg-1]x[2..nzg-1]; cell-centre (i,j,k) maps to accumulator index (i-1,j-1,k-1)

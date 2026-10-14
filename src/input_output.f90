@@ -1314,6 +1314,12 @@ Contains
     If ( save_now ) then
 
        If ( vof_active >= 1 ) Call vof_sync_io_hook()
+       If ( sediment_flag >= 1 ) Then
+          !$acc update host(Cscal)
+       End If
+       If ( boussinesq_flag >= 1 ) Then
+          !$acc update host(Tscal)
+       End If
 
        ! processor 0 writes the data
        If ( myid==0 ) Then
