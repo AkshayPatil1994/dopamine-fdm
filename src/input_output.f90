@@ -412,7 +412,9 @@ Contains
                 Write(*,'(A,I2)') '   inflow_recycle_shift_z      = ', inflow_recycle_shift_z
                 If ( inflow_recycle_shift_z == 1 ) Write(*,'(A,I10)') '   inflow_recycle_seed          = ', inflow_recycle_seed
              End If
-          Else
+          Else If ( inflow_type == 3 ) Then
+             Write(*,'(A,I2)') '   inflow_type=3 (wave inlet), wave_type = ', wave_type
+          Else If ( inflow_type == 1 ) Then
              Write(*,'(A,A)')     '   inflow_type=1 (SEM), inflow_profile_file = ', Trim(inflow_profile_file)
              If ( sem_profile_format == 0 ) Then
                 Write(*,'(A)')    '   sem_profile_format=0 (y U V W uu vv ww uv Reynolds-stress file)'
@@ -835,6 +837,7 @@ Contains
          Call abort_input( 'ERROR: &VOF (vof_active>=1) cannot be combined with the UAV actuator (uav_active>=1)' )
     If ( vof_flow >= 1 .And. vof_active < 1 ) &
          Call abort_input( 'ERROR: vof_flow>=1 requires vof_active=1' )
+    If ( inflow_type < 0 .Or. inflow_type > 3 ) Call abort_input( 'ERROR: &INFLOW inflow_type must be 0..3' )
     If ( wave_turb /= 0 .And. wave_turb /= 1 ) Call abort_input( 'ERROR: &WAVES wave_turb must be 0 or 1' )
     If ( wave_turb == 1 .And. ( wave_type <= 0 .Or. Len_trim(inflow_recycle_file) == 0 ) ) &
          Call abort_input( 'ERROR: &WAVES wave_turb=1 needs wave_type>0 and inflow_recycle_file (the precursor slice)' )
