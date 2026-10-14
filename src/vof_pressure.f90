@@ -43,6 +43,25 @@ Module vof_pressure
 
 Contains
 
+  !> Whole-array copy as a parallel loop: the compiler runs a multi-array `a = b` kernels region in scalar mode (one GPU thread)
+  Subroutine dev_copy(dst, src)
+
+    Real(Int64), Intent(InOut) :: dst(:,:,:)
+    Real(Int64), Intent(In) :: src(:,:,:)
+    Integer(Int32) :: i, j, k
+
+    !$acc parallel loop collapse(3) present(dst,src)
+    Do k = 1, Size(dst,3)
+       Do j = 1, Size(dst,2)
+          Do i = 1, Size(dst,1)
+             dst(i,j,k) = src(i,j,k)
+          End Do
+       End Do
+    End Do
+
+  End Subroutine dev_copy
+
+
   Subroutine vp_init
 
     Integer(Int32) :: i, j, k, ihi, jhi, khi
@@ -397,17 +416,21 @@ Contains
        End Do
        Call profiler_stop(PROF_DENS_GEO)
     Else
-       !$acc kernels present(vp_rfu,vp_rfv,vp_rfw,vp_rau,vp_rav,vp_raw)
-       vp_rfu = vp_rau;  vp_rfv = vp_rav;  vp_rfw = vp_raw
-       !$acc end kernels
+       Call dev_copy(vp_rfu, vp_rau)
+       Call dev_copy(vp_rfv, vp_rav)
+       Call dev_copy(vp_rfw, vp_raw)
     End If
     Call profiler_start(PROF_DENS_COEF)
-    !$acc kernels present(vp_riu,vp_riv,vp_riw,vp_rau,vp_rav,vp_raw,vp_rfu,vp_rfv,vp_rfw,vp_bu,vp_bv,vp_bw)
     If ( vof_inertia >= 1 ) Then
-       vp_riu = vp_rau;  vp_riv = vp_rav;  vp_riw = vp_raw
+       Call dev_copy(vp_riu, vp_rau)
+       Call dev_copy(vp_riv, vp_rav)
+       Call dev_copy(vp_riw, vp_raw)
     Else
-       vp_riu = vp_rfu;  vp_riv = vp_rfv;  vp_riw = vp_rfw
+       Call dev_copy(vp_riu, vp_rfu)
+       Call dev_copy(vp_riv, vp_rfv)
+       Call dev_copy(vp_riw, vp_rfw)
     End If
+    !$acc kernels present(vp_riu,vp_riv,vp_riw,vp_bu,vp_bv,vp_bw)
     vp_bu = 1d0/vp_riu;  vp_bv = 1d0/vp_riv;  vp_bw = 1d0/vp_riw
     !$acc end kernels
     If ( vp_masked ) Then

@@ -344,8 +344,10 @@ Contains
        Call profiler_stop(PROF_ADV_RECON)
        !$acc kernels present(uqu,uqv,uqw,qu,qv,qw,vp_rau,vp_rav,vp_raw,rou,rov,row)
        uqu = qu/vp_rau;  uqv = qv/vp_rav;  uqw = qw/vp_raw
-       rou = vp_rau;  rov = vp_rav;  row = vp_raw
        !$acc end kernels
+       Call dev_copy(rou, vp_rau)
+       Call dev_copy(rov, vp_rav)
+       Call dev_copy(row, vp_raw)
        Call profiler_start(PROF_ADV_SWEEP)
        If ( d == 1 ) Then
           Call vof_sweep(1, Cv, nxg, nyg, nzg, Ut, hx, hy, hz, tau, co, cl)
@@ -413,19 +415,19 @@ Contains
        Call make_transport_velocity_masked
        Return
     End If
-    !$acc kernels present(Utmp,Vtmp,Wtmp,U,V,W)
-    Utmp = U;  Vtmp = V;  Wtmp = W
-    !$acc end kernels
+    Call dev_copy(Utmp, U)
+    Call dev_copy(Vtmp, V)
+    Call dev_copy(Wtmp, W)
     Call compute_pseudo_pressure_rhs
     Call solve_poisson_equation(skip_p_save=.True.)
     Call project_velocity
-    !$acc kernels present(Ut,Vt,Wt,U,V,W)
-    Ut = U;  Vt = V;  Wt = W
-    !$acc end kernels
+    Call dev_copy(Ut, U)
+    Call dev_copy(Vt, V)
+    Call dev_copy(Wt, W)
     Call face_halo(Ut, Vt, Wt)
-    !$acc kernels present(Utmp,Vtmp,Wtmp,U,V,W)
-    U = Utmp;  V = Vtmp;  W = Wtmp
-    !$acc end kernels
+    Call dev_copy(U, Utmp)
+    Call dev_copy(V, Vtmp)
+    Call dev_copy(W, Wtmp)
 
   End Subroutine make_transport_velocity
 
@@ -438,9 +440,13 @@ Contains
     Real(Int64) :: beta0_save, umax
 
     beta0_save = vp_beta0
-    !$acc kernels present(vp_bu,vp_bv,vp_bw,vp_mu,vp_mv,vp_mw,Utmp,Vtmp,Wtmp,U,V,W)
-    vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw
-    Utmp = U;  Vtmp = V;  Wtmp = W
+    Call dev_copy(vp_bu, vp_mu)
+    Call dev_copy(vp_bv, vp_mv)
+    Call dev_copy(vp_bw, vp_mw)
+    Call dev_copy(Utmp, U)
+    Call dev_copy(Vtmp, V)
+    Call dev_copy(Wtmp, W)
+    !$acc kernels present(vp_mu,vp_mv,vp_mw,U,V,W)
     U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
     !$acc end kernels
     vp_beta0 = 1d0;  vp_use_layered = .False.
@@ -468,13 +474,13 @@ Contains
     Call vp_halo(phT, .True.)
     Call vp_grad(phT, Gu_, Gv_, Gw_)
     Call apply_face_gradient(Gu_, Gv_, Gw_, 1d0)
-    !$acc kernels present(Ut,Vt,Wt,U,V,W)
-    Ut = U;  Vt = V;  Wt = W
-    !$acc end kernels
+    Call dev_copy(Ut, U)
+    Call dev_copy(Vt, V)
+    Call dev_copy(Wt, W)
     Call face_halo(Ut, Vt, Wt)
-    !$acc kernels present(Utmp,Vtmp,Wtmp,U,V,W)
-    U = Utmp;  V = Vtmp;  W = Wtmp
-    !$acc end kernels
+    Call dev_copy(U, Utmp)
+    Call dev_copy(V, Vtmp)
+    Call dev_copy(W, Wtmp)
 
     ! vp_bu.. keep the mask coefficients: every solve with the density coefficients starts with a full vp_set_density
     vp_beta0 = beta0_save;  vp_use_layered = .True.
@@ -632,9 +638,9 @@ Contains
     nst = Merge(3, Merge(2, 1, vof_rk_mom == 2), vof_rk_mom == 1)
     Do seg = 1, vof_rk_nth
        Call profiler_start(PROF_MOM_QPREP)
-       !$acc kernels present(q0u,q0v,q0w,qu,qv,qw)
-       q0u = qu;  q0v = qv;  q0w = qw
-       !$acc end kernels
+       Call dev_copy(q0u, qu)
+       Call dev_copy(q0v, qv)
+       Call dev_copy(q0w, qw)
        Call profiler_stop(PROF_MOM_QPREP)
        Do stage = 1, nst
           If ( stage > 1 .Or. seg > 1 ) Then
@@ -1631,9 +1637,9 @@ Contains
     Call apply_boundary_conditions(after_projection=.True.)
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
 
-    !$acc kernels present(Uo,Vo,Wo,U,V,W)
-    Uo = U;  Vo = V;  Wo = W
-    !$acc end kernels
+    Call dev_copy(Uo, U)
+    Call dev_copy(Vo, V)
+    Call dev_copy(Wo, W)
     Call profiler_start(PROF_VOF_FORCES)
     Call vof_forces_rk3(to)
     Call profiler_stop(PROF_VOF_FORCES)
@@ -1666,8 +1672,8 @@ Contains
     Call tally_ledger
     ! the whole array, ghost planes included: snapshots copy every rank's full local block, so a stale (zero) seam ghost plane would
     ! overwrite the neighbour's last real plane in the file, and a restart reads that file back as the pressure predictor
-    !$acc kernels present(P,ppre)
-    P = ppre
+    Call dev_copy(P, ppre)
+    !$acc kernels present(P)
     P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)
     !$acc end kernels
     Call vof_end_step

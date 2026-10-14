@@ -22,7 +22,7 @@ Module vof_state
   Use vof_plic
   Use vof_normals
   Use vof_advect
-  Use vof_pressure, Only : vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last, vp_its_total, &
+  Use vof_pressure, Only : dev_copy, vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last, vp_its_total, &
                            vp_masked, vp_act
   Use input_output, Only : read_vof_restart
   Use restart_output, Only : file_exists_nonempty
@@ -454,13 +454,15 @@ Contains
 
     Integer(Int32), Intent(In) :: s
 
-    !$acc kernels present(U,V,W,Us1,Vs1,Ws1,Us2,Vs2,Ws2)
     If ( s == 1 ) Then
-       Us1 = U;  Vs1 = V;  Ws1 = W
+       Call dev_copy(Us1, U)
+       Call dev_copy(Vs1, V)
+       Call dev_copy(Ws1, W)
     Else
-       Us2 = U;  Vs2 = V;  Ws2 = W
+       Call dev_copy(Us2, U)
+       Call dev_copy(Vs2, V)
+       Call dev_copy(Ws2, W)
     End If
-    !$acc end kernels
 
   End Subroutine vof_save_stage
 
@@ -484,20 +486,22 @@ Contains
        dts = dt*(rk_t(3) - rk_t(2))
        a = (5d0/6d0 - rk_t(2))/(rk_t(2) - rk_t(1))
     End Select
+    If ( s == 1 .And. .Not. vof_have_prev ) Then
+       Call dev_copy(Ue, Uo)
+       Call dev_copy(Ve, Vo)
+       Call dev_copy(We, Wo)
+    Else
     !$acc kernels present(Uo,Vo,Wo,Us1,Vs1,Ws1,Us2,Vs2,Ws2,Ue,Ve,We)
     Select Case(s)
     Case(1)
-       If ( vof_have_prev ) Then
-          Ue = Uo + a*(Uo - Us2);  Ve = Vo + a*(Vo - Vs2);  We = Wo + a*(Wo - Ws2)
-       Else
-          Ue = Uo;  Ve = Vo;  We = Wo
-       End If
+       Ue = Uo + a*(Uo - Us2);  Ve = Vo + a*(Vo - Vs2);  We = Wo + a*(Wo - Ws2)
     Case(2)
        Ue = Us1 + a*(Us1 - Uo);  Ve = Vs1 + a*(Vs1 - Vo);  We = Ws1 + a*(Ws1 - Wo)
     Case Default
        Ue = Us2 + a*(Us2 - Us1);  Ve = Vs2 + a*(Vs2 - Vs1);  We = Ws2 + a*(Ws2 - Ws1)
     End Select
     !$acc end kernels
+    End If
 
     If ( vof_prescribed > 0 ) Then
        Call prescribed_velocity(t - 0.5d0*dts, Ue, Ve, We)
