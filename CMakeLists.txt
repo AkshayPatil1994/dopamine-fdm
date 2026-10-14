@@ -740,6 +740,8 @@ if(Python3_Interpreter_FOUND)
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_slosh_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${TEST_MPIRUN} --freq 15:7.8290:0.01 --rowmax 16:0.4)
     # Passive scalar of the two-fluid solver: uniform stays uniform, a slab stays bounded and conserved, np1 and np4
+    # (the scalars, buoyancy and particles of the two-fluid solver are host-only: these tests are CPU builds only)
+    if(NOT ENABLE_GPU)
     foreach(_np 1 4)
         add_test(NAME vof_scalar_slosh_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_scalar_slosh/check_scalar.py
@@ -775,6 +777,7 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_combo/check_combo.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
     endforeach()
+    endif()
     # Variable-density steep wave: x rank seams cut the interface obliquely (np1 vs the x-split layout, tight PCG tolerance so only round-off remains)
     add_test(NAME vof_break_small_np1_vs_np4_4x1
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
@@ -809,10 +812,12 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_small --mpirun ${TEST_MPIRUN}
                     --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-12)
-        add_test(NAME vof_restart_scalar_np${_np}
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
-                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_scalar --mpirun ${TEST_MPIRUN}
-                    --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-7)
+        if(NOT ENABLE_GPU)
+            add_test(NAME vof_restart_scalar_np${_np}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
+                        --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_scalar --mpirun ${TEST_MPIRUN}
+                        --exe $<TARGET_FILE:dopamine> --np ${_np} --tol 1e-7)
+        endif()
         add_test(NAME vof_restart_flume_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/restart_check.py
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_restart_flume --mpirun ${TEST_MPIRUN}
