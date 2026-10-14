@@ -66,6 +66,7 @@ Contains
     wv_g = vof_grav
     Allocate( wv_in_u(nyg), wv_in_v(ny), wv_in_m(nyg), wv_in_mv(ny) )
     wv_in_u = 0d0;  wv_in_v = 0d0;  wv_in_m = 0d0;  wv_in_mv = 0d0
+    !$acc enter data copyin(wv_in_u,wv_in_v,wv_in_m,wv_in_mv)
 
     Select Case(wave_type)
     Case(1)
@@ -362,6 +363,7 @@ Contains
     Do j = 1, ny
        wv_in_mv(j) = Merge(rm, 0d0, y(j) <= hs)
     End Do
+    !$acc update device(wv_in_u,wv_in_v,wv_in_m,wv_in_mv)
 
   End Subroutine wave_inlet_profile
 

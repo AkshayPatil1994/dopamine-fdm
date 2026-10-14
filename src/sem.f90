@@ -63,7 +63,7 @@ Module synthetic_eddy_method
   Real   (Int64) :: wall_y_lo = 0d0, wall_y_hi = 0d0, wall_Ltaper_lo = 1d0, wall_Ltaper_hi = 1d0
 
   ! device residency for the state sem_fluctuation's per-step (!$acc routine seq) call chain reads; populated once by init_inflow (see its !$acc update device calls), read-only thereafter
-  !$acc declare create(n_profile, prof_y, prof_U, prof_R11, prof_R22, prof_R33, prof_R12)
+  !$acc declare create(n_profile, prof_y, prof_U, prof_U_fl, prof_R11, prof_R22, prof_R33, prof_R12)
   !$acc declare create(n_sigma, sig_y, sig_ux, sig_uy, sig_uz, sig_vx, sig_vy, sig_vz, sig_wx, sig_wy, sig_wz)
   !$acc declare create(n_cdf, cdf_y, cdf_val)
   !$acc declare create(eddy_x0, eddy_y0, eddy_sig, eddy_smax, eddy_Tperiod, Uconv_sem)
@@ -573,6 +573,7 @@ Contains
   !> One-time setup for inflow_type==2's runtime BC buffers: no-op on every rank except the one owning the x=1 face (row==0), which opens a persistent stream handle on the donor .bin and primes the bracketing time-interpolation frames (rec_lo/rec_hi) for this rank's own local z-slab only
   Subroutine init_inflow_recycle
 
+    !$acc update device(prof_U_fl)
     Integer(Int32) :: ios, u_times
     Character(300) :: fname
     ! NVFORTRAN 23.3 fails to parse "Merge(...,rec_col_T==1)"/"...,rec_col_C==1)" inline

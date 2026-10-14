@@ -358,6 +358,7 @@ Contains
     If ( inflow_type == 3 ) Then
        Call wave_inlet_profile(t)
        If ( wave_turb == 1 ) Call update_inflow_recycle(t)
+       !$acc parallel loop collapse(2) present(F,wv_in_u,wv_in_v,wv_in_m,wv_in_mv) private(target_val)
        Do k = 1, n3
           Do j = 1, n2
              If ( comp == 1 ) Then

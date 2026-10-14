@@ -61,6 +61,9 @@ Module vof_twofluid
   Logical,     Allocatable, Dimension(:,:,:) :: wt_on_u, wt_on_w
   ! IBM wall-model stress (ibm_stress): on when the IBM wall model is active; kinematic viscosity of the phase at the cells (0 = off)
   Logical :: ibm_wm_on = .False.
+  ! relaxation-zone targets per x station (vof_relax)
+  Real(Int64), Allocatable, Dimension(:)   :: rl_fr_c, rl_top, rl_fr_u
+  Real(Int64), Allocatable, Dimension(:,:) :: rl_vf, rl_uc
   Real(Int64), Allocatable, Dimension(:,:,:) :: nu_cw
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
   ! IBM load output: whether this step is a sampling step
@@ -912,17 +915,19 @@ Contains
   Subroutine set_wall_stress
 
     Real(Int64), Parameter :: cgate = 0.05d0
-    Integer(Int32) :: i, k, iw, jw, jn, jm, ia, ib, ka, kb, ph(nxg,nzg), pa, pb
+    Integer(Int32) :: i, k, iw, jw, jn, jm, ia, ib, ka, kb, ii, kk, ph(nxg,nzg), pa, pb, ph_keep
     Real(Int64) :: ym, z0w, ut, ux, wz, ur, um, nul, rhof, sgn
 
-    ! host loops (solve_u_tau_wall): pull the inputs, push the wall-stress fluxes back
-    !$acc update host(Cv,U,V,W,vp_rfu,vp_rfw)
+    !$acc data create(ph) present(Cv,U,V,W,vp_rfu,vp_rfw,wt_u,wt_w,wt_on_u,wt_on_w)
+    !$acc kernels
     wt_on_u = .False.;  wt_on_w = .False.
+    !$acc end kernels
     Do iw = 1, 2
        If ( Merge(bc_face_ylo, bc_face_yhi, iw == 1) == 2 ) Cycle
        jw = Merge(2, nyg-1, iw == 1);  jn = Merge(3, nyg-2, iw == 1)
        jm = Merge(j_match_ylo, j_match_yhi, iw == 1);  z0w = Merge(z0_ylo, z0_yhi, iw == 1)
        ym = Merge(yg(jm), Ly - yg(jm), iw == 1);  sgn = Merge(1d0, -1d0, iw == 1)
+       !$acc parallel loop collapse(2) default(present)
        Do k = 1, nzg
           Do i = 1, nxg
              ph(i,k) = 0
@@ -930,13 +935,22 @@ Contains
              If ( Max(Cv(i,jw,k), Cv(i,jn,k), Cv(i,jm,k)) <= cgate ) ph(i,k) = -1
           End Do
        End Do
+       ! the in-place sweep below depends on the visiting order, so it stays sequential
+       !$acc serial default(present)
        Do k = 1, nzg
           ka = Max(k-1, 1);  kb = Min(k+1, nzg)
           Do i = 1, nxg
              ia = Max(i-1, 1);  ib = Min(i+1, nxg)
-             If ( Any( ph(ia:ib,ka:kb) /= ph(i,k) ) ) ph(i,k) = 0
+             ph_keep = ph(i,k)
+             Do kk = ka, kb
+                Do ii = ia, ib
+                   If ( ph(ii,kk) /= ph_keep ) ph(i,k) = 0
+                End Do
+             End Do
           End Do
        End Do
+       !$acc end serial
+       !$acc parallel loop collapse(2) default(present) private(pa,pb,ux,wz,ur,nul,um,ut,rhof)
        Do k = 2, nzg-1
           Do i = 2, nx-1
              pa = ph(i,k);  pb = ph(i+1,k)
@@ -950,6 +964,7 @@ Contains
              wt_u(i,k,iw) = sgn*rhof*ut*ut*ux/ur;  wt_on_u(i,k,iw) = .True.
           End Do
        End Do
+       !$acc parallel loop collapse(2) default(present) private(pa,pb,ux,wz,ur,nul,um,ut,rhof)
        Do k = 2, nz-1
           Do i = 2, nxg-1
              pa = ph(i,k);  pb = ph(i,k+1)
@@ -964,8 +979,7 @@ Contains
           End Do
        End Do
     End Do
-
-    !$acc update device(wt_u,wt_w,wt_on_u,wt_on_w)
+    !$acc end data
 
   End Subroutine set_wall_stress
 
@@ -1346,8 +1360,11 @@ Contains
     Integer(Int32) :: partner, khi
 
     If ( wave_gen_len <= 0d0 .And. wave_abs_len <= 0d0 ) Return
-    ! host loops (wave profiles): pull the fields, push the relaxed state back
-    !$acc update host(Cv,U,V,W)
+    ! the wave targets are evaluated on the host per x station and handed to the kernels as tables
+    If ( .Not. Allocated(rl_fr_c) ) Then
+       Allocate( rl_fr_c(nxg), rl_top(nxg), rl_vf(ny,nxg), rl_fr_u(nx), rl_uc(nyg,nx) )
+       !$acc enter data create(rl_fr_c,rl_top,rl_vf,rl_fr_u,rl_uc)
+    End If
     Allocate( uc(nyg), vf(ny) )
     khi = nzg-1
     If ( z_bc_type == 0 ) Then
@@ -1355,47 +1372,21 @@ Contains
        If ( is_last_z ) khi = nzg-2
     End If
 
+    rl_fr_c = 0d0;  rl_top = vof_level;  rl_vf = 0d0;  rl_fr_u = 0d0;  rl_uc = 0d0
     Do i = 2, nxg-1
        Call zone_at(xg(i), strength, gen)
        If ( strength <= 0d0 ) Cycle
-       fr = 1d0 - Exp(-wave_relax_rate*strength*dts)
+       rl_fr_c(i) = 1d0 - Exp(-wave_relax_rate*strength*dts)
        If ( gen .And. wave_type > 0 ) Then
-          top = vof_level + wave_eta(xg(i), t)
-       Else
-          top = vof_level
-       End If
-       Do j = 2, nyg-1
-          ct = Min(1d0, Max(0d0, (top - y(j-1))/(y(j) - y(j-1))))
-          Do k = 2, nzg-1
-             If ( vp_masked ) Then
-                If ( vp_act(i,j,k) < 0.5d0 ) Cycle   ! IBM solid cell: its liquid fraction is a continuation, not a state
-             End If
-             vol = Cv(i,j,k)
-             Cv(i,j,k) = Cv(i,j,k) + fr*(ct - Cv(i,j,k))
-             If ( k <= khi ) vf_relax_loc = vf_relax_loc + (Cv(i,j,k) - vol)*dx*hy(j)*hz(k)
-          End Do
-       End Do
-       If ( gen .And. wave_type > 0 ) Then
+          rl_top(i) = vof_level + wave_eta(xg(i), t)
           Call wave_profile_at(xg(i), t, eta, uc, vf)
-       Else
-          vf = 0d0
+          rl_vf(:,i) = vf
        End If
-       Do k = 2, nzg-1
-          Do j = 2, ny-1
-             V(i,j,k) = V(i,j,k) + fr*(vf(j) - V(i,j,k))
-          End Do
-       End Do
-       Do k = 2, nz-1
-          Do j = 2, nyg-1
-             W(i,j,k) = W(i,j,k)*(1d0 - fr)
-          End Do
-       End Do
     End Do
-
     Do i = 2, nx-1
        Call zone_at(x(i), strength, gen)
        If ( strength <= 0d0 ) Cycle
-       fr = 1d0 - Exp(-wave_relax_rate*strength*dts)
+       rl_fr_u(i) = 1d0 - Exp(-wave_relax_rate*strength*dts)
        If ( gen .And. wave_type > 0 ) Then
           Call wave_profile_at(x(i), t, eta, uc, vf)
        Else If ( current_type > 0 ) Then
@@ -1403,14 +1394,66 @@ Contains
        Else
           uc = 0d0
        End If
+       rl_uc(:,i) = uc
+    End Do
+    !$acc update device(rl_fr_c,rl_top,rl_vf,rl_fr_u,rl_uc)
+
+    If ( vp_masked ) Then
+       !$acc parallel loop collapse(3) default(present) private(fr,ct,vol) reduction(+:vf_relax_loc)
+       Do i = 2, nxg-1
+          Do j = 2, nyg-1
+             Do k = 2, nzg-1
+                fr = rl_fr_c(i)
+                ct = Min(1d0, Max(0d0, (rl_top(i) - y(j-1))/(y(j) - y(j-1))))
+                If ( fr > 0d0 .And. vp_act(i,j,k) >= 0.5d0 ) Then   ! IBM solid cell: its liquid fraction is a continuation, not a state
+                   vol = Cv(i,j,k)
+                   Cv(i,j,k) = Cv(i,j,k) + fr*(ct - Cv(i,j,k))
+                   If ( k <= khi ) vf_relax_loc = vf_relax_loc + (Cv(i,j,k) - vol)*dx*hy(j)*hz(k)
+                End If
+             End Do
+          End Do
+       End Do
+    Else
+       !$acc parallel loop collapse(3) default(present) private(fr,ct,vol) reduction(+:vf_relax_loc)
+       Do i = 2, nxg-1
+          Do j = 2, nyg-1
+             Do k = 2, nzg-1
+                fr = rl_fr_c(i)
+                ct = Min(1d0, Max(0d0, (rl_top(i) - y(j-1))/(y(j) - y(j-1))))
+                If ( fr > 0d0 ) Then
+                   vol = Cv(i,j,k)
+                   Cv(i,j,k) = Cv(i,j,k) + fr*(ct - Cv(i,j,k))
+                   If ( k <= khi ) vf_relax_loc = vf_relax_loc + (Cv(i,j,k) - vol)*dx*hy(j)*hz(k)
+                End If
+             End Do
+          End Do
+       End Do
+    End If
+    !$acc parallel loop collapse(3) default(present)
+    Do i = 2, nxg-1
+       Do k = 2, nzg-1
+          Do j = 2, ny-1
+             V(i,j,k) = V(i,j,k) + rl_fr_c(i)*(rl_vf(j,i) - V(i,j,k))
+          End Do
+       End Do
+    End Do
+    !$acc parallel loop collapse(3) default(present)
+    Do i = 2, nxg-1
+       Do k = 2, nz-1
+          Do j = 2, nyg-1
+             W(i,j,k) = W(i,j,k)*(1d0 - rl_fr_c(i))
+          End Do
+       End Do
+    End Do
+    !$acc parallel loop collapse(3) default(present)
+    Do i = 2, nx-1
        Do k = 2, nzg-1
           Do j = 2, nyg-1
-             U(i,j,k) = U(i,j,k) + fr*(uc(j) - U(i,j,k))
+             U(i,j,k) = U(i,j,k) + rl_fr_u(i)*(rl_uc(j,i) - U(i,j,k))
           End Do
        End Do
     End Do
     Deallocate( uc, vf )
-    !$acc update device(Cv,U,V,W)
 
   End Subroutine vof_relax
 
