@@ -282,9 +282,6 @@ Contains
        If ( pcg_precond < 0 ) Then
           pcg_precond = 0
           If ( y_bc_type /= 0 ) pcg_precond = 1
-#ifdef GPU_POISSON
-          If ( vof_flow >= 1 ) pcg_precond = 0
-#endif
        End If
        If ( ibm_method < 0 .Or. ibm_method > 1 ) &
             Call abort_input( 'ERROR: ibm_method must be 0 (ghost-cell) or 1 (staircase)' )
@@ -298,8 +295,8 @@ Contains
 #ifdef GPU_POISSON
        If ( ibm_method == 1 .And. pcg_precond < 1 ) &
             Call abort_input( 'ERROR: ibm_method=1 in a GPU build needs the multigrid preconditioner (pcg_precond = 1)' )
-       If ( pcg_precond >= 1 .And. vof_flow >= 1 ) &
-            Call abort_input( 'ERROR: pcg_precond = 1 is not available for the two-fluid solver in a GPU build' )
+       If ( pcg_precond < 1 .And. vof_flow >= 1 ) &
+            Call abort_input( 'ERROR: the two-fluid solver in a GPU build needs the multigrid preconditioner (pcg_precond = 1)' )
 #endif
        alphaGrid  = alpha_grid
        ! grid_type is used directly from the global module (no alias needed)

@@ -53,6 +53,8 @@ Module vof_twofluid
   ! RK3: start-of-step velocity is Uo/Vo/Wo (global); stage force combinations H = F_explicit - beta grad p of stages 1 and 2
   Real(Int64), Allocatable, Dimension(:,:,:) :: Hu1, Hv1, Hw1, Hu2, Hv2, Hw2, Fu_, Fv_, Fw_, Gu_, Gv_, Gw_
   Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c, mr_c, kap_c
+  ! stage force workspace (predictor pressure gradient), padded-transport staging, transport-projection potential
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Bu_, Bv_, Bw_, tmpU, tmpV, tmpW, phT
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
   ! flat-wall EQWM stress fluxes on the u and w faces of the bottom (3rd index 1) and top (2) wall, and where they replace the molecular flux
   Real(Int64), Allocatable, Dimension(:,:,:) :: wt_u, wt_w
@@ -100,6 +102,8 @@ Contains
     Allocate( Fu_(nx,nyg,nzg), Fv_(nxg,ny,nzg), Fw_(nxg,nyg,nz), Gu_(nx,nyg,nzg), Gv_(nxg,ny,nzg), Gw_(nxg,nyg,nz) )
     Allocate( ppre(nxg,nyg,nzg), dphi(nxg,nyg,nzg), fdiv(nxg,nyg,nzg), mu_c(nxg,nyg,nzg), mr_c(nxg,nyg,nzg), kap_c(nxg,nyg,nzg) )
     kap_c = 0d0
+    Allocate( Bu_(nx,nyg,nzg), Bv_(nxg,ny,nzg), Bw_(nxg,nyg,nz), phT(nxg,nyg,nzg) )
+    Allocate( tmpU(1-EP:nx+EP,nyg,1-EP:nzg+EP), tmpV(1-EP:nxg+EP,ny,1-EP:nzg+EP), tmpW(1-EP:nxg+EP,nyg,1-EP:nz+EP) )
     Allocate( rhos(nyg), rsf(ny), cw0(nyg), cw1(nyg) )
     Allocate( PadU(1-EP:nx+EP,1-EP:nyg+EP,1-EP:nzg+EP), PadV(1-EP:nxg+EP,1-EP:ny+EP,1-EP:nzg+EP), &
               PadW(1-EP:nxg+EP,1-EP:nyg+EP,1-EP:nz+EP) )
@@ -179,6 +183,9 @@ Contains
        End Block
     End If
 
+    ! the initial fields above were set on the host
+    !$acc update device(U,V,W)
+
     ! pseudo-time RK3 of the momentum needs less than half of a control volume's mass to leave in one sweep, which fails for
     ! density ratios above a few thousand (drop in a uniform stream, 1e4 .. 1e6): forward Euler with small sub-steps there
     If ( vof_rk_nth <= 0 ) vof_rk_nth = 1
@@ -188,9 +195,17 @@ Contains
 
     ! the viscous time-step limit sees the largest kinematic viscosity of the two fluids
     nu = Max(vof_nu_l, vof_nu_g)
+    !$acc update device(nu)
 
+    !$acc enter data copyin(qu,qv,qw,uqu,uqv,uqw,Md,rt,Dd,Ut,Vt,Wt,Utmp,Vtmp,Wtmp,Hu1,Hv1,Hw1,Hu2,Hv2,Hw2,Fu_,Fv_,Fw_,Gu_,Gv_,Gw_) &
+    !$acc& copyin(ppre,dphi,fdiv,mu_c,mr_c,kap_c,Bu_,Bv_,Bw_,phT,tmpU,tmpV,tmpW,rsf,cw0,cw1,wt_u,wt_w,wt_on_u,wt_on_w) &
+    !$acc& copyin(PadU,PadV,PadW,rou,rov,row,rmu,rmv,rmw,q0u,q0v,q0w,dqu,dqv,dqw,Fl)
+    If ( ibm_wm_on ) Then
+       !$acc enter data copyin(nu_cw)
+    End If
     If ( restart == 1 ) Then
        ppre = P
+       !$acc update device(ppre)
        Call vp_halo(ppre, .True.)
     Else
        Call vof_initial_pressure
@@ -209,6 +224,8 @@ Contains
     Call vp_set_density(Cv)
     Allocate( gz(nxg,ny,nzg), zu(nx,nyg,nzg), zw(nxg,nyg,nz) )
     zu = 0d0;  zw = 0d0
+    !$acc data copyin(zu,zw) create(gz)
+    !$acc parallel loop collapse(3) present(gz,vp_rfv,vp_riv,rsf)
     Do k = 1, nzg
        Do j = 1, ny
           Do i = 1, nxg
@@ -216,7 +233,11 @@ Contains
           End Do
        End Do
     End Do
-    If ( vof_hsplit /= 0 ) gz = 0d0
+    If ( vof_hsplit /= 0 ) Then
+       !$acc kernels present(gz)
+       gz = 0d0
+       !$acc end kernels
+    End If
     If ( vof_sigma > 0d0 ) Then
        Call vof_curvature(kap_c)
        Call add_surface_tension(zu, gz, zw)
@@ -224,6 +245,7 @@ Contains
     Call vp_div(zu, gz, zw, fdiv)
     Call vp_pcg(fdiv, 400, 1d-12, ppre)
     Call vp_halo(ppre, .True.)
+    !$acc end data
     If ( myid == 0 ) Write(*,'(A,I4,A,ES10.2)') '   VOF initial pressure: PCG iterations', vp_iters_last, '  residual', vp_res_last
     Deallocate( gz, zu, zw )
 
@@ -287,10 +309,12 @@ Contains
     Call profiler_start(PROF_ADV_DENSITY)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv, sweep_only=.True.)
+    !$acc kernels present(qu,qv,qw,vp_rau,vp_rav,vp_raw,U,V,W,vof_cc,Cv,rt)
     qu = vp_rau*U;  qv = vp_rav*V;  qw = vp_raw*W
-    Call profiler_stop(PROF_ADV_DENSITY)
     vof_cc = Merge(1d0, 0d0, Cv(1:nxg,1:nyg,1:nzg) > 0.5d0)
     rt = vof_rho_g + (vof_rho_l - vof_rho_g)*vof_cc
+    !$acc end kernels
+    Call profiler_stop(PROF_ADV_DENSITY)
     co = 0d0;  cl = 0d0
 
     If ( Mod(vof_nadv, 2) == 0 ) Then
@@ -306,8 +330,10 @@ Contains
        Call profiler_start(PROF_ADV_RECON)
        If ( vof_geo_density < 1 ) Call vof_reconstruct(Cv, nxg, nyg, nzg, vof_normal_scheme)
        Call profiler_stop(PROF_ADV_RECON)
+       !$acc kernels present(uqu,uqv,uqw,qu,qv,qw,vp_rau,vp_rav,vp_raw,rou,rov,row)
        uqu = qu/vp_rau;  uqv = qv/vp_rav;  uqw = qw/vp_raw
        rou = vp_rau;  rov = vp_rav;  row = vp_raw
+       !$acc end kernels
        Call profiler_start(PROF_ADV_SWEEP)
        If ( d == 1 ) Then
           Call vof_sweep(1, Cv, nxg, nyg, nzg, Ut, hx, hy, hz, tau, co, cl)
@@ -322,7 +348,9 @@ Contains
        Call sweep_mass_flux(d, tau)
        Call vp_halo(Md, .False.)
        Call vp_halo(Dd, .False.)
+       !$acc kernels present(Md)
        Md(:,1,:) = 0d0;  Md(:,nyg,:) = 0d0
+       !$acc end kernels
        Call profiler_stop(PROF_ADV_MASSFLUX)
        Call profiler_start(PROF_ADV_MOMENTUM)
        Call momentum_update(d)
@@ -333,6 +361,7 @@ Contains
     vof_co_max = Max(vof_co_max, co)
     vof_clip_total = vof_clip_total + cl
 
+    !$acc parallel loop collapse(3) present(U,qu,vp_rau)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
@@ -340,6 +369,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(V,qv,vp_rav)
     Do k = 2, nzg-1
        Do j = 2, ny-1
           Do i = 2, nxg-1
@@ -347,6 +377,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(W,qw,vp_raw)
     Do k = 2, nz-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
@@ -370,13 +401,19 @@ Contains
        Call make_transport_velocity_masked
        Return
     End If
+    !$acc kernels present(Utmp,Vtmp,Wtmp,U,V,W)
     Utmp = U;  Vtmp = V;  Wtmp = W
+    !$acc end kernels
     Call compute_pseudo_pressure_rhs
     Call solve_poisson_equation(skip_p_save=.True.)
     Call project_velocity
+    !$acc kernels present(Ut,Vt,Wt,U,V,W)
     Ut = U;  Vt = V;  Wt = W
+    !$acc end kernels
     Call face_halo(Ut, Vt, Wt)
+    !$acc kernels present(Utmp,Vtmp,Wtmp,U,V,W)
     U = Utmp;  V = Vtmp;  W = Wtmp
+    !$acc end kernels
 
   End Subroutine make_transport_velocity
 
@@ -386,54 +423,81 @@ Contains
   !  liquid or momentum crosses the body, and the divergence-free field is exact in every fluid cell.
   Subroutine make_transport_velocity_masked
 
-    Real(Int64), Allocatable :: gu(:,:,:), gv(:,:,:), gw(:,:,:), ph(:,:,:)
     Real(Int64) :: beta0_save, umax
 
-    Allocate( gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz), ph(nxg,nyg,nzg) )
     beta0_save = vp_beta0
-    vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
-    vp_mg_stale = ( pcg_precond >= 1 )
-
+    !$acc kernels present(vp_bu,vp_bv,vp_bw,vp_mu,vp_mv,vp_mw,Utmp,Vtmp,Wtmp,U,V,W)
+    vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw
     Utmp = U;  Vtmp = V;  Wtmp = W
     U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
+    !$acc end kernels
+    vp_beta0 = 1d0;  vp_use_layered = .False.
+    vp_mg_stale = ( pcg_precond >= 1 )
+
     Call vp_div(U, V, W, fdiv)
     ! the iteration stops at the round-off level of the velocity (a relative tolerance alone is unreachable once the field is
     ! already nearly divergence free, and PCG then amplifies noise)
-    umax = Max( MaxVal(Abs(U)), MaxVal(Abs(V)), MaxVal(Abs(W)) )
+    umax = Max( maxabs3(U, nx, nyg, nzg), maxabs3(V, nxg, ny, nzg), maxabs3(W, nxg, nyg, nz) )
     Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     Call profiler_start(PROF_PCG)
     Call profiler_start(PROF_PCG_TRANSPORT)
-    Call vp_pcg(fdiv, 800, 1d-13, ph, rfloor=vof_tr_floor*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
+    Call vp_pcg(fdiv, 800, 1d-13, phT, rfloor=vof_tr_floor*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
     Call profiler_stop(PROF_PCG_TRANSPORT)
     Call profiler_stop(PROF_PCG)
     ! Ut must be solenoidal for the liquid volume to be conserved: report a solve that hit the cap or broke down at the start
-    If ( ( vp_iters_last >= 800 .And. vp_res_last > 1d-6 ) .Or. ( vp_iters_last == 0 .And. MaxVal(Abs(fdiv)) > 0d0 ) ) Then
+    If ( ( vp_iters_last >= 800 .And. vp_res_last > 1d-6 ) .Or. &
+         ( vp_iters_last == 0 .And. maxabs3(fdiv, nxg, nyg, nzg) > 0d0 ) ) Then
        vf_tr_warn = vf_tr_warn + 1
        If ( myid == 0 .And. vf_tr_warn <= 5 ) Then
           Write(*,'(A,I0,A,I0,A,ES9.2)') ' WARNING: transporting-velocity projection ended after ', vp_iters_last, &
                ' iterations (cap 800) at step ', istep, ', relative residual ', vp_res_last
        End If
     End If
-    Call vp_halo(ph, .True.)
-    Call vp_grad(ph, gu, gv, gw)
-    Call apply_face_gradient(gu, gv, gw, 1d0)
+    Call vp_halo(phT, .True.)
+    Call vp_grad(phT, Gu_, Gv_, Gw_)
+    Call apply_face_gradient(Gu_, Gv_, Gw_, 1d0)
+    !$acc kernels present(Ut,Vt,Wt,U,V,W)
     Ut = U;  Vt = V;  Wt = W
+    !$acc end kernels
     Call face_halo(Ut, Vt, Wt)
+    !$acc kernels present(Utmp,Vtmp,Wtmp,U,V,W)
     U = Utmp;  V = Vtmp;  W = Wtmp
+    !$acc end kernels
 
     ! vp_bu.. keep the mask coefficients: every solve with the density coefficients starts with a full vp_set_density
     vp_beta0 = beta0_save;  vp_use_layered = .True.
     vp_mg_stale = ( pcg_precond >= 1 )
-    Deallocate( gu, gv, gw, ph )
 
   End Subroutine make_transport_velocity_masked
+
+
+  !> max|a| over a whole face-shaped array (ghost planes included), this rank only
+  Function maxabs3(a, n1, n2, n3) Result(s)
+
+    Integer(Int32), Intent(In) :: n1, n2, n3
+    Real(Int64), Intent(In) :: a(n1,n2,n3)
+    Real(Int64) :: s
+    Integer(Int32) :: i, j, k
+
+    s = 0d0
+    !$acc parallel loop collapse(3) reduction(max:s) present(a)
+    Do k = 1, n3
+       Do j = 1, n2
+          Do i = 1, n1
+             s = Max(s, Abs(a(i,j,k)))
+          End Do
+       End Do
+    End Do
+
+  End Function maxabs3
 
 
   !> Liquid volume that crossed the inlet (positive in) and outlet (positive out) faces in the x-sweep just done
   Subroutine tally_x_boundary_flux
 
     Logical :: is_first_x, is_last_x, is_first_z, is_last_z
-    Integer(Int32) :: partner, khi
+    Integer(Int32) :: partner, khi, j, k
+    Real(Int64) :: s
 
     khi = nzg-1
     If ( z_bc_type == 0 ) Then
@@ -441,8 +505,26 @@ Contains
        If ( is_last_z ) khi = nzg-2
     End If
     Call x_periodic_partner(is_first_x, is_last_x, partner)
-    If ( is_first_x ) vf_bnd_loc = vf_bnd_loc + Sum( vof_flux(1,2:nyg-1,2:khi) )
-    If ( is_last_x )  vf_bnd_loc = vf_bnd_loc - Sum( vof_flux(nx,2:nyg-1,2:khi) )
+    If ( is_first_x ) Then
+       s = 0d0
+       !$acc parallel loop collapse(2) reduction(+:s) present(vof_flux)
+       Do k = 2, khi
+          Do j = 2, nyg-1
+             s = s + vof_flux(1,j,k)
+          End Do
+       End Do
+       vf_bnd_loc = vf_bnd_loc + s
+    End If
+    If ( is_last_x ) Then
+       s = 0d0
+       !$acc parallel loop collapse(2) reduction(+:s) present(vof_flux)
+       Do k = 2, khi
+          Do j = 2, nyg-1
+             s = s + vof_flux(nx,j,k)
+          End Do
+       End Do
+       vf_bnd_loc = vf_bnd_loc - s
+    End If
 
   End Subroutine tally_x_boundary_flux
 
@@ -456,27 +538,39 @@ Contains
     Real(Int64) :: drho
 
     drho = vof_rho_l - vof_rho_g
+    !$acc kernels present(Md,Dd)
     Md = 0d0
     Dd = 0d0
+    !$acc end kernels
     Select Case(d)
     Case(1)
+       !$acc parallel loop collapse(3) present(Md,Ut,hy,hz,vof_flux)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
              Do i = 1, nx
                 Md(i,j,k) = vof_rho_g*Ut(i,j,k)*tau*hy(j)*hz(k) + drho*vof_flux(i,j,k)
              End Do
+          End Do
+       End Do
+       !$acc parallel loop collapse(3) present(Dd,Ut,hy,hz)
+       Do k = 2, nzg-1
+          Do j = 2, nyg-1
              Do i = 2, nx
                 Dd(i,j,k) = tau*hy(j)*hz(k)*( Ut(i,j,k) - Ut(i-1,j,k) )
              End Do
           End Do
        End Do
     Case(2)
+       !$acc parallel loop collapse(3) present(Md,Vt,hz,vof_flux)
        Do k = 2, nzg-1
           Do j = 1, ny
              Do i = 2, nxg-1
                 Md(i,j,k) = vof_rho_g*Vt(i,j,k)*tau*dx*hz(k) + drho*vof_flux(i,j,k)
              End Do
           End Do
+       End Do
+       !$acc parallel loop collapse(3) present(Dd,Vt,hz)
+       Do k = 2, nzg-1
           Do j = 2, ny
              Do i = 2, nxg-1
                 Dd(i,j,k) = tau*dx*hz(k)*( Vt(i,j,k) - Vt(i,j-1,k) )
@@ -484,6 +578,7 @@ Contains
           End Do
        End Do
     Case Default
+       !$acc parallel loop collapse(3) present(Md,Wt,hy,vof_flux)
        Do k = 1, Min(nz, nzg-1)
           Do j = 2, nyg-1
              Do i = 2, nxg-1
@@ -491,6 +586,7 @@ Contains
              End Do
           End Do
        End Do
+       !$acc parallel loop collapse(3) present(Dd,Wt,hy)
        Do k = 2, nz
           Do j = 2, nyg-1
              Do i = 2, nxg-1
@@ -518,11 +614,15 @@ Contains
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv, sweep_only=.True.)
     Call profiler_stop(PROF_MOM_DENSITY)
+    !$acc kernels present(rmu,rmv,rmw,rou,rov,row,vp_rau,vp_rav,vp_raw)
     rmu = Min(rou, vp_rau);  rmv = Min(rov, vp_rav);  rmw = Min(row, vp_raw)
+    !$acc end kernels
     nst = Merge(3, Merge(2, 1, vof_rk_mom == 2), vof_rk_mom == 1)
     Do seg = 1, vof_rk_nth
        Call profiler_start(PROF_MOM_QPREP)
+       !$acc kernels present(q0u,q0v,q0w,qu,qv,qw)
        q0u = qu;  q0v = qv;  q0w = qw
+       !$acc end kernels
        Call profiler_stop(PROF_MOM_QPREP)
        Do stage = 1, nst
           If ( stage > 1 .Or. seg > 1 ) Then
@@ -531,7 +631,9 @@ Contains
              Call profiler_stop(PROF_MOM_HALO)
              Call profiler_start(PROF_MOM_QPREP)
              th = ( Real(seg - 1, Int64) + Merge(0d0, Merge(1d0, 0.5d0, stage == 2), stage == 1) )/vof_rk_nth
+             !$acc kernels present(uqu,uqv,uqw,qu,qv,qw,rou,rov,row,vp_rau,vp_rav,vp_raw)
              uqu = qu/( rou + th*(vp_rau - rou) );  uqv = qv/( rov + th*(vp_rav - rov) );  uqw = qw/( row + th*(vp_raw - row) )
+             !$acc end kernels
              Call profiler_stop(PROF_MOM_QPREP)
           End If
           Call profiler_start(PROF_MOM_PAD)
@@ -542,8 +644,10 @@ Contains
           Call profiler_stop(PROF_MOM_TENDENCY)
           Call profiler_start(PROF_MOM_UPDATE)
           a0 = Merge(0d0, Merge(Merge(0.5d0, 0.75d0, vof_rk_mom == 2), 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
+          !$acc kernels present(qu,qv,qw,q0u,q0v,q0w,dqu,dqv,dqw)
           qu = a0*q0u + a1*( qu + dqu/vof_rk_nth );  qv = a0*q0v + a1*( qv + dqv/vof_rk_nth )
           qw = a0*q0w + a1*( qw + dqw/vof_rk_nth )
+          !$acc end kernels
           Call profiler_stop(PROF_MOM_UPDATE)
        End Do
     End Do
@@ -571,35 +675,26 @@ Contains
     Integer(Int32), Intent(In)    :: c, d, i0, i1, j0, j1, k0, k1
     Real(Int64),    Intent(InOut) :: dq(:,:,:)
     Real(Int64),    Intent(In)    :: uc(:,:,:)
-    Integer(Int32) :: i, j, k, ec(3), ed(3)
+    Integer(Int32) :: i, j, k, ec1, ec2, ec3, ed1, ed2, ed3
     Real(Int64) :: corr, vcv
 
-    ec = (/ Merge(1,0,c==1), Merge(1,0,c==2), Merge(1,0,c==3) /)
-    ed = (/ Merge(1,0,d==1), Merge(1,0,d==2), Merge(1,0,d==3) /)
-    If ( vof_mom_scheme == MOM_WENO5 ) Then
-       Select Case(c)
-       Case(1)
-          Call flux_rows(c, d, i0, i1, j0, j1, k0, k1, PadU, rmu)
-       Case(2)
-          Call flux_rows(c, d, i0, i1, j0, j1, k0, k1, PadV, rmv)
-       Case Default
-          Call flux_rows(c, d, i0, i1, j0, j1, k0, k1, PadW, rmw)
-       End Select
-    Else
-       Do k = k0-ed(3), k1
-          Do j = j0-ed(2), j1
-             Do i = i0-ed(1), i1
-                Fl(i,j,k) = face_flux(c, d, i, j, k)
-             End Do
-          End Do
-       End Do
-    End If
+    ec1 = Merge(1,0,c==1);  ec2 = Merge(1,0,c==2);  ec3 = Merge(1,0,c==3)
+    ed1 = Merge(1,0,d==1);  ed2 = Merge(1,0,d==2);  ed3 = Merge(1,0,d==3)
+    Select Case(c)
+    Case(1)
+       Call face_fluxes(c, d, i0, i1, j0, j1, k0, k1, PadU, rmu, weight_y_0, weight_y_1, 0)
+    Case(2)
+       Call face_fluxes(c, d, i0, i1, j0, j1, k0, k1, PadV, rmv, cw0, cw1, 1)
+    Case Default
+       Call face_fluxes(c, d, i0, i1, j0, j1, k0, k1, PadW, rmw, weight_y_0, weight_y_1, 0)
+    End Select
+    !$acc parallel loop collapse(3) private(vcv,corr) present(dq,uc,rt,Dd,Fl,hy,hz,yg,zg)
     Do k = k0, k1
        Do j = j0, j1
           Do i = i0, i1
              vcv = dx*Merge(yg(j+1) - yg(j), hy(j), c==2)*Merge(zg(k+1) - zg(k), hz(k), c==3)
-             corr = uc(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i+ec(1),j+ec(2),k+ec(3))*Dd(i+ec(1),j+ec(2),k+ec(3)) )
-             dq(i,j,k) = ( corr - ( Fl(i,j,k) - Fl(i-ed(1),j-ed(2),k-ed(3)) ) )/vcv
+             corr = uc(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i+ec1,j+ec2,k+ec3)*Dd(i+ec1,j+ec2,k+ec3) )
+             dq(i,j,k) = ( corr - ( Fl(i,j,k) - Fl(i-ed1,j-ed2,k-ed3) ) )/vcv
           End Do
        End Do
     End Do
@@ -607,150 +702,92 @@ Contains
   End Subroutine tend_comp
 
 
-  !> Fl for the WENO5-Z scheme, one unit-stride row in i at a time (mom_flux_weno5z_row); same faces as the loop of face_flux
-  Subroutine flux_rows(c, d, i0, i1, j0, j1, k0, k1, pad, rm)
+  !> Fl = momentum flux of component c through the face of its control volume on the high side in direction d (the flux through the
+  !  low face of the next control volume): centre-plane mass flux of the two cells the CV spans (Md), face value of the padded
+  !  transported velocity pad blended to first-order upwind where the control volume is refilled within a step (rm: the smaller
+  !  of the CV densities before and after the sweep). vof_mom_scheme 0 is the weighted central value (stretched-grid weights
+  !  wy0/wy1 at j+wsh along y), others come from mom_recon (index-space formulas); WENO5-Z uses the branch-free form of mom_recon.
+  Subroutine face_fluxes(c, d, i0, i1, j0, j1, k0, k1, pad, rm, wy0, wy1, wsh)
 
-    Integer(Int32), Intent(In) :: c, d, i0, i1, j0, j1, k0, k1
-    Real(Int64),    Intent(In) :: pad(1-EP:,1-EP:,1-EP:), rm(:,:,:)
-    Integer(Int32) :: j, k, ia, ib, n, ec1, ec2, ec3, ed1, ed2, ed3
-    Real(Int64) :: ivcv
+    Integer(Int32), Intent(In) :: c, d, i0, i1, j0, j1, k0, k1, wsh
+    Real(Int64),    Intent(In) :: pad(1-EP:,1-EP:,1-EP:), rm(:,:,:), wy0(:), wy1(:)
+    Integer(Int32) :: i, j, k, m, ec1, ec2, ec3, ed1, ed2, ed3, ii, jj, kk
+    Real(Int64) :: ivcv, vcv, mfc, wa, wb, r1, r2, cm, up, t, rv, s(-2:3), icm, cm0, cm1
 
     ec1 = Merge(1,0,c==1);  ec2 = Merge(1,0,c==2);  ec3 = Merge(1,0,c==3)
     ed1 = Merge(1,0,d==1);  ed2 = Merge(1,0,d==2);  ed3 = Merge(1,0,d==3)
-    ia = i0 - ed1;  ib = i1;  n = ib - ia + 1
-    Do k = k0-ed3, k1
-       Do j = j0-ed2, j1
-          ivcv = 1d0/( dx*Merge(yg(j+1) - yg(j), hy(j), c==2)*Merge(zg(k+1) - zg(k), hz(k), c==3) )
-          Call mom_flux_weno5z_row(n, pad(ia-2*ed1:ib-2*ed1, j-2*ed2, k-2*ed3), pad(ia-ed1:ib-ed1, j-ed2, k-ed3), &
-               pad(ia:ib, j, k), pad(ia+ed1:ib+ed1, j+ed2, k+ed3), pad(ia+2*ed1:ib+2*ed1, j+2*ed2, k+2*ed3), &
-               pad(ia+3*ed1:ib+3*ed1, j+3*ed2, k+3*ed3), Md(ia:ib, j, k), Md(ia+ec1:ib+ec1, j+ec2, k+ec3), &
-               rm(ia:ib, j, k), rm(ia+ed1:ib+ed1, j+ed2, k+ed3), ivcv, vof_mom_cm0, vof_mom_cm1, Fl(ia:ib, j, k))
+    cm0 = vof_mom_cm0;  cm1 = vof_mom_cm1;  icm = 1d0/(cm1 - cm0)
+    If ( vof_mom_scheme == MOM_WENO5 ) Then
+       !$acc parallel loop collapse(3) private(ivcv) present(pad,rm,Md,Fl,hy,hz,yg,zg)
+       Do k = k0-ed3, k1
+          Do j = j0-ed2, j1
+             Do i = i0-ed1, i1
+                ivcv = 1d0/( dx*Merge(yg(j+1) - yg(j), hy(j), c==2)*Merge(zg(k+1) - zg(k), hz(k), c==3) )
+                Fl(i,j,k) = mom_flux_weno5z_pt( pad(i-2*ed1, j-2*ed2, k-2*ed3), pad(i-ed1, j-ed2, k-ed3), pad(i,j,k), &
+                     pad(i+ed1, j+ed2, k+ed3), pad(i+2*ed1, j+2*ed2, k+2*ed3), pad(i+3*ed1, j+3*ed2, k+3*ed3), &
+                     Md(i,j,k), Md(i+ec1,j+ec2,k+ec3), rm(i,j,k), rm(i+ed1,j+ed2,k+ed3), ivcv, cm0, icm )
+             End Do
+          End Do
        End Do
-    End Do
-
-  End Subroutine flux_rows
-
-
-  !> Momentum flux of component c through the face of its control volume on the high side in direction d (the flux through the
-  !  low face of the next control volume): centre-plane mass flux of the two cells the CV spans, blended face value
-  Function face_flux(c, d, i, j, k) Result(f)
-
-    Integer(Int32), Intent(In) :: c, d, i, j, k
-    Real(Int64) :: f, mfc, wa, wb, vcv, r1, r2, s(-2:3)
-    Integer(Int32) :: ii, jj, kk
-
-    ii = i + Merge(1,0,d==1);  jj = j + Merge(1,0,d==2);  kk = k + Merge(1,0,d==3)
-    wa = 0.5d0;  wb = 0.5d0
-    Select Case(c)
-    Case(1)
-       mfc = 0.5d0*( Md(i,j,k) + Md(i+1,j,k) )
-       s = gatu(i,j,k, d);  r1 = rmu(i,j,k);  r2 = rmu(ii,jj,kk)
-       vcv = dx*hy(j)*hz(k)
-       If ( d == 2 ) Then;  wa = weight_y_0(j);  wb = weight_y_1(j);  End If
-    Case(2)
-       mfc = 0.5d0*( Md(i,j,k) + Md(i,j+1,k) )
-       s = gatv(i,j,k, d);  r1 = rmv(i,j,k);  r2 = rmv(ii,jj,kk)
-       vcv = dx*( yg(j+1) - yg(j) )*hz(k)
-       If ( d == 2 ) Then;  wa = cw0(j+1);  wb = cw1(j+1);  End If
-    Case Default
-       mfc = 0.5d0*( Md(i,j,k) + Md(i,j,k+1) )
-       s = gatw(i,j,k, d);  r1 = rmw(i,j,k);  r2 = rmw(ii,jj,kk)
-       vcv = dx*hy(j)*( zg(k+1) - zg(k) )
-       If ( d == 2 ) Then;  wa = weight_y_0(j);  wb = weight_y_1(j);  End If
-    End Select
-    f = mfc*fmom( mfc, s, wa, wb, cmcv(mfc, r1, r2, vcv) )
-
-  End Function face_flux
-
-
-  !> Face value of the transported velocity for the momentum flux from the six-point stencil s(-2:3) around the face:
-  !  vof_mom_scheme 0 weighted central (stretched-grid weights wa, wb), others from mom_recon (index-space formulas). cm is the
-  !  face mass flux over the volume times the jump of 1/rho between the adjacent control volumes: the Courant number of the
-  !  single-fluid scheme is excluded, so only control volumes that are refilled within a step (update weights must stay
-  !  positive there) get the face value blended to first-order upwind
-  Pure Function fmom(mf, s, wa, wb, cm) Result(r)
-
-    Real(Int64), Intent(In) :: mf, s(-2:3), wa, wb, cm
-    Real(Int64) :: r, up, t
-
-    up = Merge(s(0), s(1), mf >= 0d0)
-    If ( vof_mom_scheme == 0 ) Then
-       r = wa*s(0) + wb*s(1)
     Else
-       r = mom_face(s, mf, vof_mom_scheme)
+       !$acc parallel loop collapse(3) private(s,mfc,wa,wb,r1,r2,cm,up,t,rv,vcv) &
+       !$acc& present(pad,rm,Md,Fl,hy,hz,yg,zg,wy0,wy1)
+       Do k = k0-ed3, k1
+          Do j = j0-ed2, j1
+             Do i = i0-ed1, i1
+                ii = i + ed1;  jj = j + ed2;  kk = k + ed3
+                mfc = 0.5d0*( Md(i,j,k) + Md(i+ec1,j+ec2,k+ec3) )
+                Do m = -2, 3
+                   s(m) = pad(i + m*ed1, j + m*ed2, k + m*ed3)
+                End Do
+                r1 = rm(i,j,k);  r2 = rm(ii,jj,kk)
+                vcv = dx*Merge(yg(j+1) - yg(j), hy(j), c==2)*Merge(zg(k+1) - zg(k), hz(k), c==3)
+                wa = 0.5d0;  wb = 0.5d0
+                If ( d == 2 ) Then;  wa = wy0(j+wsh);  wb = wy1(j+wsh);  End If
+                cm = Abs(mfc)*Abs(1d0/r1 - 1d0/r2)/vcv
+                up = Merge(s(0), s(1), mfc >= 0d0)
+                If ( vof_mom_scheme == 0 ) Then
+                   rv = wa*s(0) + wb*s(1)
+                Else
+                   rv = mom_face(s, mfc, vof_mom_scheme)
+                End If
+                t = Min(1d0, Max(0d0, (cm - cm0)/(cm1 - cm0)))
+                rv = up + (1d0 - t*t*(3d0 - 2d0*t))*(rv - up)
+                Fl(i,j,k) = mfc*rv
+             End Do
+          End Do
+       End Do
     End If
-    t = Min(1d0, Max(0d0, (cm - vof_mom_cm0)/(vof_mom_cm1 - vof_mom_cm0)))
-    r = up + (1d0 - t*t*(3d0 - 2d0*t))*(r - up)
 
-  End Function fmom
-
-
-  Pure Function cmcv(mf, r1, r2, vcv) Result(c)
-
-    Real(Int64), Intent(In) :: mf, r1, r2, vcv
-    Real(Int64) :: c
-
-    c = Abs(mf)*Abs(1d0/r1 - 1d0/r2)/vcv
-
-  End Function cmcv
-
-
-  Pure Function gatu(i, j, k, dir) Result(s)
-    Integer(Int32), Intent(In) :: i, j, k, dir
-    Real(Int64) :: s(-2:3)
-    Integer(Int32) :: m
-    Do m = -2, 3
-       s(m) = PadU( i + m*Merge(1,0,dir==1), j + m*Merge(1,0,dir==2), k + m*Merge(1,0,dir==3) )
-    End Do
-  End Function gatu
-
-  Pure Function gatv(i, j, k, dir) Result(s)
-    Integer(Int32), Intent(In) :: i, j, k, dir
-    Real(Int64) :: s(-2:3)
-    Integer(Int32) :: m
-    Do m = -2, 3
-       s(m) = PadV( i + m*Merge(1,0,dir==1), j + m*Merge(1,0,dir==2), k + m*Merge(1,0,dir==3) )
-    End Do
-  End Function gatv
-
-  Pure Function gatw(i, j, k, dir) Result(s)
-    Integer(Int32), Intent(In) :: i, j, k, dir
-    Real(Int64) :: s(-2:3)
-    Integer(Int32) :: m
-    Do m = -2, 3
-       s(m) = PadW( i + m*Merge(1,0,dir==1), j + m*Merge(1,0,dir==2), k + m*Merge(1,0,dir==3) )
-    End Do
-  End Function gatw
+  End Subroutine face_fluxes
 
 
   !> Padded copies of uqu, uqv, uqw: EP planes beyond the ghost plane in x and z (neighbour rank / periodic partner via pad_field),
   !  EP rows beyond the wall ghost row in y by reflection (tangential: odd for no-slip, even for free-slip; normal: odd about the wall face)
   Subroutine pad_transported
-    Real(Int64), Allocatable :: tmp(:,:,:)
+
     Real(Int64) :: s_lo, s_hi
     Integer(Int32) :: m
 
     s_lo = Merge(-1d0, 1d0, bc_face_ylo == 1);  s_hi = Merge(-1d0, 1d0, bc_face_yhi == 1)
-    Allocate( tmp(1-EP:nx+EP,nyg,1-EP:nzg+EP) )
-    Call pad_field(uqu, nx, nyg, nzg, .True., .False., EP, tmp)
-    PadU(:,1:nyg,:) = tmp
-    Deallocate( tmp )
-    Allocate( tmp(1-EP:nxg+EP,ny,1-EP:nzg+EP) )
-    Call pad_field(uqv, nxg, ny, nzg, .False., .False., EP, tmp)
-    PadV(:,1:ny,:) = tmp
-    Deallocate( tmp )
-    Allocate( tmp(1-EP:nxg+EP,nyg,1-EP:nz+EP) )
-    Call pad_field(uqw, nxg, nyg, nz, .False., .True., EP, tmp)
-    PadW(:,1:nyg,:) = tmp
-    Deallocate( tmp )
+    Call pad_field_dev(uqu, tmpU, nx, nyg, nzg, .True., .False., EP)
+    Call pad_field_dev(uqv, tmpV, nxg, ny, nzg, .False., .False., EP)
+    Call pad_field_dev(uqw, tmpW, nxg, nyg, nz, .False., .True., EP)
+    !$acc kernels present(PadU,PadV,PadW,tmpU,tmpV,tmpW)
+    PadU(:,1:nyg,:) = tmpU
+    PadV(:,1:ny,:) = tmpV
+    PadW(:,1:nyg,:) = tmpW
     ! the wall ghost rows: the stored ones are the boundary-condition values of the start of the step, not the reflection of the
     ! rows just advected (alpha = 0 / large for no-slip / free-slip gives exactly -1 / +1)
     PadU(:,1,:) = s_lo*PadU(:,2,:);  PadU(:,nyg,:) = s_hi*PadU(:,nyg-1,:)
     PadW(:,1,:) = s_lo*PadW(:,2,:);  PadW(:,nyg,:) = s_hi*PadW(:,nyg-1,:)
+    !$acc end kernels
     Do m = 1, EP
+       !$acc kernels present(PadU,PadV,PadW)
        PadU(:,1-m,:)     = s_lo*PadU(:,2+m,:);        PadU(:,nyg+m,:) = s_hi*PadU(:,nyg-1-m,:)
        PadW(:,1-m,:)     = s_lo*PadW(:,2+m,:);        PadW(:,nyg+m,:) = s_hi*PadW(:,nyg-1-m,:)
        PadV(:,1-m,:)     = -PadV(:,1+m,:);             PadV(:,ny+m,:)  = -PadV(:,ny-m,:)
+       !$acc end kernels
     End Do
 
   End Subroutine pad_transported
@@ -763,9 +800,6 @@ Contains
     Real(Int64),    Intent(In) :: tol
     Integer(Int32), Intent(In) :: maxit
 
-    Real(Int64), Allocatable :: gu(:,:,:), gv(:,:,:), gw(:,:,:)
-
-    Allocate( gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     Call vp_div(U, V, W, fdiv)
@@ -777,9 +811,8 @@ Contains
     vf_proj_its_last = vp_iters_last
     vf_proj_its_sum = vf_proj_its_sum + vp_iters_last
     Call vp_halo(dphi, .True.)
-    Call vp_grad(dphi, gu, gv, gw)
-    Call apply_face_gradient(gu, gv, gw, 1d0)
-    Deallocate( gu, gv, gw )
+    Call vp_grad(dphi, Gu_, Gv_, Gw_)
+    Call apply_face_gradient(Gu_, Gv_, Gw_, 1d0)
 
   End Subroutine vof_project
 
@@ -794,6 +827,7 @@ Contains
 
     mul = vof_rho_l*vof_nu_l
     mug = vof_rho_g*vof_nu_g
+    !$acc parallel loop collapse(3) present(mu_c,mr_c,Cv,vp_rho,nu_t)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
@@ -804,6 +838,7 @@ Contains
     End Do
     ! the SGS model leaves nu_t at a free-slip wall's ghost row unset: use the nearest interior value there (no-slip keeps zero)
     If ( bc_face_ylo == 2 ) Then
+       !$acc parallel loop collapse(2) present(mu_c,mr_c,Cv,vp_rho,nu_t)
        Do k = 1, nzg
           Do i = 1, nxg
              mu_c(i,1,k) = mug + (mul - mug)*Cv(i,1,k) + vp_rho(i,1,k)*nu_t(i,2,k);  mr_c(i,1,k) = 1d0/mu_c(i,1,k)
@@ -811,6 +846,7 @@ Contains
        End Do
     End If
     If ( bc_face_yhi == 2 ) Then
+       !$acc parallel loop collapse(2) present(mu_c,mr_c,Cv,vp_rho,nu_t)
        Do k = 1, nzg
           Do i = 1, nxg
              mu_c(i,nyg,k) = mug + (mul - mug)*Cv(i,nyg,k) + vp_rho(i,nyg,k)*nu_t(i,nyg-1,k)
@@ -832,6 +868,8 @@ Contains
 
     ! min and max over the clipped 3x3x3 window, taken one direction at a time
     Allocate( mnx(nxg,nyg,nzg), mxx(nxg,nyg,nzg), mny(nxg,nyg,nzg), mxy(nxg,nyg,nzg) )
+    !$acc data create(mnx,mxx,mny,mxy)
+    !$acc parallel loop collapse(3) present(Cv,mnx,mxx)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
@@ -840,6 +878,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(mnx,mxx,mny,mxy)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
@@ -848,6 +887,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) private(cmn,cmx) present(mny,mxy,nu_cw)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
@@ -859,6 +899,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc end data
     Deallocate( mnx, mxx, mny, mxy )
 
   End Subroutine set_cell_phase_nu
@@ -874,6 +915,8 @@ Contains
     Integer(Int32) :: i, k, iw, jw, jn, jm, ia, ib, ka, kb, ph(nxg,nzg), pa, pb
     Real(Int64) :: ym, z0w, ut, ux, wz, ur, um, nul, rhof, sgn
 
+    ! host loops (solve_u_tau_wall): pull the inputs, push the wall-stress fluxes back
+    !$acc update host(Cv,U,V,W,vp_rfu,vp_rfw)
     wt_on_u = .False.;  wt_on_w = .False.
     Do iw = 1, 2
        If ( Merge(bc_face_ylo, bc_face_yhi, iw == 1) == 2 ) Cycle
@@ -922,6 +965,8 @@ Contains
        End Do
     End Do
 
+    !$acc update device(wt_u,wt_w,wt_on_u,wt_on_w)
+
   End Subroutine set_wall_stress
 
 
@@ -939,14 +984,18 @@ Contains
 
     inv_dx = 1d0/dx
     inv_dx2 = inv_dx*inv_dx
+    !$acc kernels present(Fu,Fv,Fw)
     Fu = 0d0;  Fv = 0d0;  Fw = 0d0
+    !$acc end kernels
 
     ! ---- u faces
+    !$acc parallel loop collapse(3) private(hzk,ihz,hyj,ihy,mx1,mx2,my1,my2,mz1,mz2,fy1,fy2,fz1,fz2) &
+    !$acc& present(Fu,U,V,W,mu_c,mr_c,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg,wt_on_u,wt_u,vp_rfu,vp_riu,ovr_u)
     Do k = 2, nzg-1
-       hzk = z(k) - z(k-1);  ihz = 1d0/hzk
        Do j = 2, nyg-1
-          hyj = y(j) - y(j-1);  ihy = 1d0/hyj
           Do i = 2, nx-1
+             hzk = z(k) - z(k-1);  ihz = 1d0/hzk
+             hyj = y(j) - y(j-1);  ihy = 1d0/hyj
              mx1 = mu_c(i,j,k);  mx2 = mu_c(i+1,j,k)
              my1 = 1d0/( 0.5d0*( weight_y_0(j-1)*( mr_c(i,j-1,k) + mr_c(i+1,j-1,k) ) + weight_y_1(j-1)*( mr_c(i,j,k) &
                    + mr_c(i+1,j,k) ) ) )
@@ -975,11 +1024,13 @@ Contains
     End Do
 
     ! ---- v faces
+    !$acc parallel loop collapse(3) private(hzk,ihz,dy1,dy2,dyc,mx1,mx2,my1,my2,mz1,mz2,fx1,fx2,fz1,fz2) &
+    !$acc& present(Fv,U,V,W,mu_c,mr_c,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg,vp_rfv,vp_riv,ovr_v)
     Do k = 2, nzg-1
-       hzk = z(k) - z(k-1);  ihz = 1d0/hzk
        Do j = 2, ny-1
-          dy1 = y(j) - y(j-1);  dy2 = y(j+1) - y(j);  dyc = yg(j+1) - yg(j)
           Do i = 2, nxg-1
+             hzk = z(k) - z(k-1);  ihz = 1d0/hzk
+             dy1 = y(j) - y(j-1);  dy2 = y(j+1) - y(j);  dyc = yg(j+1) - yg(j)
              mx1 = 1d0/( 0.5d0*( weight_y_0(j)*( mr_c(i-1,j,k) + mr_c(i,j,k) ) + weight_y_1(j)*( mr_c(i-1,j+1,k) &
                    + mr_c(i,j+1,k) ) ) )
              mx2 = 1d0/( 0.5d0*( weight_y_0(j)*( mr_c(i,j,k) + mr_c(i+1,j,k) ) + weight_y_1(j)*( mr_c(i,j+1,k) &
@@ -1007,11 +1058,13 @@ Contains
     End Do
 
     ! ---- w faces
+    !$acc parallel loop collapse(3) private(dz1,dz2,dzc,hyj,ihy,mx1,mx2,my1,my2,mz1,mz2,fx1,fx2,fy1,fy2) &
+    !$acc& present(Fw,U,V,W,mu_c,mr_c,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg,wt_on_w,wt_w,vp_rfw,vp_riw,ovr_w)
     Do k = 2, nz-1
-       dz1 = z(k) - z(k-1);  dz2 = z(k+1) - z(k);  dzc = zg(k+1) - zg(k)
        Do j = 2, nyg-1
-          hyj = y(j) - y(j-1);  ihy = 1d0/hyj
           Do i = 2, nxg-1
+             dz1 = z(k) - z(k-1);  dz2 = z(k+1) - z(k);  dzc = zg(k+1) - zg(k)
+             hyj = y(j) - y(j-1);  ihy = 1d0/hyj
              mx1 = 1d0/( 0.5d0*( weight_z_0(k)*( mr_c(i-1,j,k) + mr_c(i,j,k) ) + weight_z_1(k)*( mr_c(i-1,j,k+1) &
                    + mr_c(i,j,k+1) ) ) )
              mx2 = 1d0/( 0.5d0*( weight_z_0(k)*( mr_c(i,j,k) + mr_c(i+1,j,k) ) + weight_z_1(k)*( mr_c(i,j,k+1) &
@@ -1051,26 +1104,30 @@ Contains
     Real(Int64), Intent(InOut) :: Fx(nx,nyg,nzg), Fy(nxg,ny,nzg), Fz(nxg,nyg,nz)
     Integer(Int32) :: i, j, k
 
+    !$acc parallel loop collapse(3) present(Fx,Cv,kap_c,vp_riu)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
-             Fx(i,j,k) = Fx(i,j,k) + vof_sigma*face_kappa(i,j,k, i+1,j,k)*( Cv(i+1,j,k) - Cv(i,j,k) )/( dx*vp_riu(i,j,k) )
+             Fx(i,j,k) = Fx(i,j,k) + vof_sigma*face_kappa(Cv(i,j,k), Cv(i+1,j,k), kap_c(i,j,k), kap_c(i+1,j,k)) &
+                         *( Cv(i+1,j,k) - Cv(i,j,k) )/( dx*vp_riu(i,j,k) )
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(Fy,Cv,kap_c,vp_riv,yg)
     Do k = 2, nzg-1
        Do j = 2, ny-1
           Do i = 2, nxg-1
-             Fy(i,j,k) = Fy(i,j,k) + vof_sigma*face_kappa(i,j,k, i,j+1,k)*( Cv(i,j+1,k) - Cv(i,j,k) ) &
-                         /( ( yg(j+1) - yg(j) )*vp_riv(i,j,k) )
+             Fy(i,j,k) = Fy(i,j,k) + vof_sigma*face_kappa(Cv(i,j,k), Cv(i,j+1,k), kap_c(i,j,k), kap_c(i,j+1,k)) &
+                         *( Cv(i,j+1,k) - Cv(i,j,k) )/( ( yg(j+1) - yg(j) )*vp_riv(i,j,k) )
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(Fz,Cv,kap_c,vp_riw,zg)
     Do k = 2, nz-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             Fz(i,j,k) = Fz(i,j,k) + vof_sigma*face_kappa(i,j,k, i,j,k+1)*( Cv(i,j,k+1) - Cv(i,j,k) ) &
-                         /( ( zg(k+1) - zg(k) )*vp_riw(i,j,k) )
+             Fz(i,j,k) = Fz(i,j,k) + vof_sigma*face_kappa(Cv(i,j,k), Cv(i,j,k+1), kap_c(i,j,k), kap_c(i,j,k+1)) &
+                         *( Cv(i,j,k+1) - Cv(i,j,k) )/( ( zg(k+1) - zg(k) )*vp_riw(i,j,k) )
           End Do
        End Do
     End Do
@@ -1078,15 +1135,16 @@ Contains
   End Subroutine add_surface_tension
 
 
-  Function face_kappa(i1, j1, k1, i2, j2, k2) Result(kf)
+  Function face_kappa(c1, c2, kap1, kap2) Result(kf)
+    !$acc routine seq
 
-    Integer(Int32), Intent(In) :: i1, j1, k1, i2, j2, k2
+    Real(Int64), Intent(In) :: c1, c2, kap1, kap2
     Real(Int64) :: kf, a1, a2
 
-    a1 = Merge(1d0, 0d0, Cv(i1,j1,k1) > vof_eps .And. Cv(i1,j1,k1) < 1d0 - vof_eps)
-    a2 = Merge(1d0, 0d0, Cv(i2,j2,k2) > vof_eps .And. Cv(i2,j2,k2) < 1d0 - vof_eps)
+    a1 = Merge(1d0, 0d0, c1 > vof_eps .And. c1 < 1d0 - vof_eps)
+    a2 = Merge(1d0, 0d0, c2 > vof_eps .And. c2 < 1d0 - vof_eps)
     kf = 0d0
-    If ( a1 + a2 > 0d0 ) kf = ( a1*kap_c(i1,j1,k1) + a2*kap_c(i2,j2,k2) )/( a1 + a2 )
+    If ( a1 + a2 > 0d0 ) kf = ( a1*kap1 + a2*kap2 )/( a1 + a2 )
 
   End Function face_kappa
 
@@ -1097,9 +1155,7 @@ Contains
     Real(Int64), Intent(In) :: to
     Integer(Int32) :: s, i, j, k
     Real(Int64) :: ass, a1, a2, dta
-    Real(Int64), Allocatable :: bu(:,:,:), bv(:,:,:), bw(:,:,:), gu(:,:,:), gv(:,:,:), gw(:,:,:)
 
-    Allocate( bu(nx,nyg,nzg), bv(nxg,ny,nzg), bw(nxg,nyg,nz), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
     Call vp_set_density(Cv)
     Call profiler_start(PROF_F_BODY)
@@ -1128,6 +1184,7 @@ Contains
        Call profiler_stop(PROF_F_VISC)
        Call profiler_start(PROF_F_BODY)
        If ( vof_hsplit == 0 ) Then
+          !$acc parallel loop collapse(3) present(Fv_,vp_rfv,vp_riv,rsf)
           Do k = 2, nzg-1
              Do j = 2, ny-1
                 Do i = 2, nxg-1
@@ -1136,6 +1193,7 @@ Contains
              End Do
           End Do
        Else
+          !$acc parallel loop collapse(3) present(Fu_,vp_rho,vp_riu,yg)
           Do k = 2, nzg-1
              Do j = 2, nyg-1
                 Do i = 2, nx-1
@@ -1143,6 +1201,7 @@ Contains
                 End Do
              End Do
           End Do
+          !$acc parallel loop collapse(3) present(Fv_,vp_rho,vp_riv,y,yg)
           Do k = 2, nzg-1
              Do j = 2, ny-1
                 Do i = 2, nxg-1
@@ -1151,6 +1210,7 @@ Contains
                 End Do
              End Do
           End Do
+          !$acc parallel loop collapse(3) present(Fw_,vp_rho,vp_riw,yg,zg)
           Do k = 2, nz-1
              Do j = 2, nyg-1
                 Do i = 2, nxg-1
@@ -1169,6 +1229,7 @@ Contains
        dta = dt*ass
        ! stage predictor u* = u_o + dt sum_{j<s} a_sj H_j + dt a_ss F_s  (interior faces; seams and walls come from the BCs)
        a1 = rk_coef(s,1);  a2 = rk_coef(s,2)
+       !$acc parallel loop collapse(3) present(U,Uo,Fu_,Hu1,Hu2)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
              Do i = 2, nx-1
@@ -1178,6 +1239,7 @@ Contains
              End Do
           End Do
        End Do
+       !$acc parallel loop collapse(3) present(V,Vo,Fv_,Hv1,Hv2)
        Do k = 2, nzg-1
           Do j = 2, ny-1
              Do i = 2, nxg-1
@@ -1187,6 +1249,7 @@ Contains
              End Do
           End Do
        End Do
+       !$acc parallel loop collapse(3) present(W,Wo,Fw_,Hw1,Hw2)
        Do k = 2, nz-1
           Do j = 2, nyg-1
              Do i = 2, nxg-1
@@ -1203,11 +1266,13 @@ Contains
        If ( ibm_input_mode >= 1 ) Call enforce_ibm
        ! explicit predictor force, then the increment
        Call vp_halo(ppre, .True.)
-       Call vp_grad(ppre, bu, bv, bw)
-       Call apply_face_gradient(bu, bv, bw, dta)
+       Call vp_grad(ppre, Bu_, Bv_, Bw_)
+       Call apply_face_gradient(Bu_, Bv_, Bw_, dta)
        Call face_halo(U, V, W)
        Call vp_div(U, V, W, fdiv)
+       !$acc kernels present(fdiv)
        fdiv = fdiv/dta
+       !$acc end kernels
        Call profiler_stop(PROF_F_PRED)
        Call profiler_start(PROF_PCG)
        Call profiler_start(PROF_PCG_FORCES)
@@ -1216,21 +1281,22 @@ Contains
        Call profiler_stop(PROF_PCG)
        Call profiler_start(PROF_F_POST)
        Call vp_halo(dphi, .True.)
-       Call vp_grad(dphi, gu, gv, gw)
-       Call apply_face_gradient(gu, gv, gw, dta)
-       ppre = ppre + dphi
+       Call vp_grad(dphi, Gu_, Gv_, Gw_)
+       Call apply_face_gradient(Gu_, Gv_, Gw_, dta)
        ! H_s = F_s - beta grad(p_s), with beta grad(p_s) = b + g
+       !$acc kernels present(ppre,dphi,Fu_,Fv_,Fw_,Bu_,Bv_,Bw_,Gu_,Gv_,Gw_,Hu1,Hv1,Hw1,Hu2,Hv2,Hw2)
+       ppre = ppre + dphi
        If ( s == 1 ) Then
-          Hu1 = Fu_ - (bu + gu);  Hv1 = Fv_ - (bv + gv);  Hw1 = Fw_ - (bw + gw)
+          Hu1 = Fu_ - (Bu_ + Gu_);  Hv1 = Fv_ - (Bv_ + Gv_);  Hw1 = Fw_ - (Bw_ + Gw_)
        Else If ( s == 2 ) Then
-          Hu2 = Fu_ - (bu + gu);  Hv2 = Fv_ - (bv + gv);  Hw2 = Fw_ - (bw + gw)
+          Hu2 = Fu_ - (Bu_ + Gu_);  Hv2 = Fv_ - (Bv_ + Gv_);  Hw2 = Fw_ - (Bw_ + Gw_)
        End If
+       !$acc end kernels
        Call apply_boundary_conditions(after_projection=.True.)
        If ( ibm_input_mode >= 1 ) Call enforce_ibm
        Call profiler_stop(PROF_F_POST)
     End Do
     outflow_relax_on = .False.
-    Deallocate( bu, bv, bw, gu, gv, gw )
 
   End Subroutine vof_forces_rk3
 
@@ -1280,6 +1346,8 @@ Contains
     Integer(Int32) :: partner, khi
 
     If ( wave_gen_len <= 0d0 .And. wave_abs_len <= 0d0 ) Return
+    ! host loops (wave profiles): pull the fields, push the relaxed state back
+    !$acc update host(Cv,U,V,W)
     Allocate( uc(nyg), vf(ny) )
     khi = nzg-1
     If ( z_bc_type == 0 ) Then
@@ -1342,6 +1410,7 @@ Contains
        End Do
     End Do
     Deallocate( uc, vf )
+    !$acc update device(Cv,U,V,W)
 
   End Subroutine vof_relax
 
@@ -1412,7 +1481,9 @@ Contains
     Call apply_boundary_conditions(after_projection=.True.)
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
 
+    !$acc kernels present(Uo,Vo,Wo,U,V,W)
     Uo = U;  Vo = V;  Wo = W
+    !$acc end kernels
     Call profiler_start(PROF_VOF_FORCES)
     Call vof_forces_rk3(to)
     Call profiler_stop(PROF_VOF_FORCES)
@@ -1437,8 +1508,10 @@ Contains
     Call tally_ledger
     ! the whole array, ghost planes included: snapshots copy every rank's full local block, so a stale (zero) seam ghost plane would
     ! overwrite the neighbour's last real plane in the file, and a restart reads that file back as the pressure predictor
+    !$acc kernels present(P,ppre)
     P = ppre
     P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)
+    !$acc end kernels
     Call vof_end_step
     If ( Mod(istep, nmonitor) == 0 ) Call vof_output_monitor
     Call vof_write_gauges

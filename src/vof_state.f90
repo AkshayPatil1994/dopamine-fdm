@@ -61,13 +61,6 @@ Contains
     Integer(Int64) :: nint
     Integer(Int32) :: wmin, wmin_g, wreq
 
-#ifdef GPU_POISSON
-    If ( vof_flow >= 1 ) Then
-       If ( myid == 0 ) Write(*,'(A)') ' ERROR: the two-fluid solver (vof_flow>=1) is not available in GPU builds yet'
-       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
-    End If
-#endif
-
     ! the padded stencils (two-fluid momentum reconstruction, height-function curvature) reach VOF_MIN_SLAB planes into the
     ! neighbouring rank, the passive transport one plane: a thinner slab silently gives rank-layout-dependent results
     wreq = Merge(VOF_MIN_SLAB, 1, vof_flow >= 1)
@@ -178,6 +171,7 @@ Contains
     Integer(Int32) :: i, j, k
     Real(Int64), Allocatable :: s1(:), s2(:), g1(:), g2(:)
 
+    !$acc update host(vp_rho)
     Allocate( s1(nyg), s2(nyg), g1(nyg), g2(nyg) )
     s1 = 0d0;  s2 = 0d0
     Do k = 2, nzg-1
@@ -399,13 +393,17 @@ Contains
     Integer(Int32) :: i, j, k, ii, jj, kk, cnt
     Real(Int64) :: acc
 
+    !$acc parallel loop collapse(3) private(acc,cnt) present(Cp,vp_act)
     Do k = 1, n3
        Do j = 2, n2-1
           Do i = 1, n1
              If ( vp_act(i,j,k) > 0.5d0 ) Cycle
              acc = 0d0;  cnt = 0
+             !$acc loop seq
              Do kk = k-1, k+1
+                !$acc loop seq
                 Do jj = j-1, j+1
+                   !$acc loop seq
                    Do ii = i-1, i+1
                       If ( jj < 2 .Or. jj > n2-1 ) Cycle   ! wall ghost rows are copies of the rows next to them
                       If ( vp_act(ii,jj,kk) > 0.5d0 ) Then
@@ -437,12 +435,15 @@ Contains
   !> Inlet ghost cell of C: liquid below the target wave surface at the inlet plane x = 0
   Subroutine wave_inlet_fraction
 
-    Integer(Int32) :: j
+    Integer(Int32) :: j, k
     Real(Int64) :: top
 
     top = vof_level + wave_eta(0d0, t)   ! same station as the velocity inlet profile (wave_inlet_profile)
-    Do j = 2, nyg-1
-       Cw(1,j,:) = Min(1d0, Max(0d0, (top - y(j-1))/(y(j) - y(j-1))))
+    !$acc parallel loop collapse(2) present(Cw,y)
+    Do k = 1, nzg
+       Do j = 2, nyg-1
+          Cw(1,j,k) = Min(1d0, Max(0d0, (top - y(j-1))/(y(j) - y(j-1))))
+       End Do
     End Do
 
   End Subroutine wave_inlet_fraction
@@ -596,7 +597,7 @@ Contains
     Integer(Int64) :: nint
     Logical :: has_rows
 
-    !$acc update host(U,V,W)
+    !$acc update host(U,V,W,P)
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     serr = shape_error()
     pjump = pressure_jump()

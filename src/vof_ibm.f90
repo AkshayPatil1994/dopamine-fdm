@@ -52,6 +52,7 @@ Contains
     Logical :: skip_x, skip_z, ibm_wm
     Real(Int64), Allocatable :: ps(:), Ptot(:,:,:), Pp(:,:,:), Php(:,:,:), Ue(:,:,:), Ve(:,:,:), We(:,:,:)
 
+    !$acc update host(P,U,V,W,nu_t)
     mul = vof_rho_l*vof_nu_l;  mug = vof_rho_g*vof_nu_g
     cw = (/ U_wall, V_wall, W_wall /)
     ibm_wm = ( ibm_wall_model_flag == 1 )
