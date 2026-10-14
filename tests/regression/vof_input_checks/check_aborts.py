@@ -11,7 +11,7 @@ CASES = [
     ('turbulence without donor', r'&VOF', '&WAVES\n  wave_turb = 1,\n/\n&VOF', 'wave_turb=1 needs'),
     ('staircase IBM with vof_flow', r'&VOF', '&IBM\n  ibm_method = 1,\n/\n&VOF', 'always uses the staircase wall stress'),
     ('Boussinesq grav mismatch', r'&VOF', '&BOUSSINESQ\n  boussinesq_flag = 1, grav = 3.0,\n/\n&VOF', 'needs grav'),
-    ('Boussinesq with vof_hsplit', r'&VOF', '&BOUSSINESQ\n  boussinesq_flag = 1, grav = 9.81,\n/\n&VOF\n  vof_hsplit = 1,', 'vof_hsplit = 0'),
+    ('Boussinesq with vof_hsplit', r'&VOF', '&BOUSSINESQ\n  boussinesq_flag = 1, grav = 0.0,\n/\n&VOF\n  vof_hsplit = 1,', 'vof_hsplit = 0'),
     ('particles with VOF', r'&VOF', '&PARTICLES\n  particles_active = 1,\n/\n&VOF', 'does not support particles'),
     ('inflow_type out of range', r'&VOF', '&INFLOW\n  inflow_type = 7,\n/\n&VOF', 'inflow_type must be 0..3'),
     ('y periodic', r'y_bc_type\s*=\s*1', 'y_bc_type = 0', 'wall-bounded y only'),
