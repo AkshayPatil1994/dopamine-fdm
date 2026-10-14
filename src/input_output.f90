@@ -277,7 +277,15 @@ Contains
        Call check_vof_inputs
        If ( pcg_precond < -1 .Or. pcg_precond > 1 ) &
             Call abort_input( 'ERROR: pcg_precond must be 0 (fast Poisson solver), 1 (multigrid) or -1 (automatic)' )
-       If ( mg_cycle < 1 .Or. mg_cycle > 3 ) Call abort_input( 'ERROR: mg_cycle must be 1 (V), 2 (W) or 3' )
+       If ( mg_cycle == 0 .Or. mg_cycle < -1 .Or. mg_cycle > 3 ) &
+            Call abort_input( 'ERROR: mg_cycle must be 1 (V), 2 (W), 3 or -1 (automatic)' )
+       ! the W cycle halves the PCG iterations but visits the coarse levels 2^L times: launch-bound tiny kernels on a GPU
+       If ( mg_cycle < 0 ) Then
+          mg_cycle = 2
+#ifdef GPU_POISSON
+          mg_cycle = 1
+#endif
+       End If
        If ( mg_smooth_deg < 1 ) Call abort_input( 'ERROR: mg_smooth_deg must be >= 1' )
        If ( pcg_precond < 0 ) Then
           pcg_precond = 0

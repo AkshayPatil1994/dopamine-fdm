@@ -189,7 +189,7 @@ tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1 wit
 Measured on the Ting & Kirby breaker (976 × 81 × 14, immersed bed, wave generation and absorption zones, 8 ranks, restart from a breaking
 state): 1.36 s/step at the old defaults (V-cycle multigrid, automatic 4 × 2 rank layout) and 0.46 s/step now, from three changes:
 
-* The multigrid preconditioner uses a W-cycle with a degree-4 smoother (`mg_cycle = 2`, `mg_smooth_deg = 4`, the defaults): 3–6× fewer PCG
+* The multigrid preconditioner uses a W-cycle with a degree-4 smoother (`mg_cycle = 2`, `mg_smooth_deg = 4`; `mg_cycle = -1`, the default, picks the W-cycle on CPU builds and the V-cycle on GPU builds, where the W-cycle's 2^L tiny coarse-level kernel launches make it 6× slower in wall time on a 0.9 M-cell flume): 3–6× fewer PCG
   iterations; the V-cycle with its aggregation transfers converges slowly. A three-visit cycle (`mg_cycle = 3`) is slower again.
 * A rank layout with at least ~12 cells per rank in z (`p_col = 1`, `p_row` = number of ranks for flume grids): with 6 z-cells per rank
   the multigrid stops coarsening in z early and needs about twice the iterations; the code prints a note at start-up in that case.

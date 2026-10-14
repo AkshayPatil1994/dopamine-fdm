@@ -76,7 +76,7 @@
   dt_min       = 1.0e-8,
   dt_max       = 1.0e10,
   ! pcg_precond = -1,     ! masked/variable-density PCG: 0 fast Poisson | 1 multigrid | -1 auto
-  ! mg_cycle = 2,         ! multigrid cycle (pcg_precond=1): 1 V | 2 W (3-6x fewer PCG iterations) | 3
+  ! mg_cycle = -1,        ! multigrid cycle (pcg_precond=1): 1 V | 2 W (3-6x fewer PCG iterations) | 3 | -1 auto (W on CPU, V on GPU)
   ! mg_smooth_deg = 4,    ! Chebyshev smoother degree of the multigrid
 /
 

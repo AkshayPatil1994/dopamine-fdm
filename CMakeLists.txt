@@ -945,6 +945,7 @@ if(Python3_Interpreter_FOUND)
                         --np-a 1 --np-b 1 --max-l1 ${_vl1} --same-cols 4,5,6,7,14,16,17,18,28)
         endif()
     endforeach()
+    # the GPU uses the V-cycle preconditioner (mg_cycle = -1), the CPU the W-cycle: same PCG tolerance, different iterates
     if(ENABLE_GPU AND CPU_REFERENCE_EXE)
         set(_ref_mpirun_v ${TEST_MPIRUN})
         if(CPU_REFERENCE_MPIRUN)
@@ -959,7 +960,7 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                         --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${_vname} --exe $<TARGET_FILE:dopamine>
                         --mpirun ${TEST_MPIRUN} --exe-ref ${CPU_REFERENCE_EXE} --mpirun-ref ${_ref_mpirun_v}
-                        --np-a 1 --np-b 1 --max-dvol 1e-10 --same-cols ${_vcols})
+                        --np-a 1 --np-b 1 --max-dvol 1e-10 --same-tol 1e-7 --same-cols ${_vcols})
         endforeach()
     endif()
 else()
