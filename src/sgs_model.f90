@@ -4,7 +4,7 @@ Module sgs_models
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
-  Use decomp, Only : z_halo_neighbors, z_periodic_partner, x_periodic_partner
+  Use decomp, Only : z_periodic_partner, x_periodic_partner
   Use boundary_conditions, Only : apply_periodic_bc_z, update_ghost_interior_planes_x, update_ghost_interior_planes
 #ifdef GPU_POISSON
   Use boundary_conditions, Only : gpu_periodic_wrap
@@ -12,9 +12,6 @@ Module sgs_models
 
   Implicit None
 
-  ! Module-level halo buffers for nu_t z-exchange (avoids per-call heap allocation)
-  Real(Int64), Allocatable, Dimension(:,:,:) :: sgs_snd_lo, sgs_snd_hi
-  Real(Int64), Allocatable, Dimension(:,:,:) :: sgs_rcv_lo, sgs_rcv_hi
   ! cells where the IBM pass of compute_vreman can differ from the standard one (solid neighbour or filter clamp); built on first use
   Logical, Allocatable, Dimension(:,:,:) :: sgs_ibm_band
 
@@ -61,6 +58,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc enter data copyin(sgs_ibm_band)
 
   End Subroutine build_sgs_ibm_band
 
@@ -171,24 +169,10 @@ Contains
     End Do
     !$acc end parallel loop
 
-#ifdef GPU_POISSON
-    ! Without IBM there is no host-only Pass 2, so wall zeroing, ghost fills and MPI halos all stay on the device
-    If ( .Not. ibm_active ) Then
-       Call vreman_ghosts_device(nu_t_)
-       ! host copy only needed by host consumers (snapshot write syncs it itself, see input_output.f90)
-       If ( rsb_active == 1 ) Then
-          !$acc update host(nu_t_)
-       End If
-       Return
-    End If
-#endif
-
-    ! Pass 2, wall zeroing, x-periodicity, and MPI halo exchange below all run on host; sync Pass 1's GPU result back first
-    !$acc update host(nu_t_)
-
     ! Pass 2: IBM corrections (only when ibm_active); re-visits the fluid cells next to the body, the rest keeps its Pass 1 value
     If ( ibm_active ) Then
        If ( .Not. Allocated(sgs_ibm_band) ) Call build_sgs_ibm_band
+       !$acc parallel loop collapse(2) present(U_,V_,W_,nu_t_,y,yg,z,zg,phi,Umask_cc,sgs_ibm_band)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
              dz_c      = z(k) - z(k-1)
@@ -277,6 +261,13 @@ Contains
        End Do
     End If
 
+#ifdef GPU_POISSON
+    Call vreman_ghosts_device(nu_t_, ibm_active)
+    ! host copy only needed by host consumers (snapshot write syncs it itself, see input_output.f90)
+    If ( rsb_active == 1 ) Then
+       !$acc update host(nu_t_)
+    End If
+#else
     ! No-slip flat walls only (j=1, nyg): zero nu_t to avoid polluting the Robin BC; leave nu_t alone at a free-slip boundary (bc_face_y*==2), which has no molecular sublayer to damp it
     If ( y_bc_type == 1 .And. bc_face_ylo == 1 ) nu_t_(:,  1,:) = 0d0
     If ( y_bc_type == 1 .And. bc_face_yhi == 1 ) nu_t_(:,nyg,:) = 0d0
@@ -298,15 +289,7 @@ Contains
 
     ! x-periodicity: fill ghost planes i=1,nxg (never written above, but read by compute_rhs_v/w at the x boundaries)
     ! (x-split: seam planes come from the x-neighbour, the wrap from the partner rank at the opposite domain edge)
-#ifdef GPU_POISSON
-    ! this (IBM, host-only Pass 2) path works on the host copy, but the x seam exchange now runs on device memory:
-    ! push the just-corrected host nu_t to the device, exchange there, and bring the filled ghost planes back
-    !$acc update device(nu_t_)
-#endif
     Call update_ghost_interior_planes_x(nu_t_, 2)
-#ifdef GPU_POISSON
-    !$acc update host(nu_t_)
-#endif
     Call x_periodic_partner(is_first, is_last, partner)
     If ( x_bc_type == 0 ) Then
        ! periodic: ghost 1 <- cell nxg-2, cells nxg-1,nxg <- 2,3 (cell nxg-1 duplicates cell 2), as apply_periodic_bc_x does for cell-centred fields
@@ -331,11 +314,8 @@ Contains
        If ( is_last  ) nu_t_(nxg,:,:) = nu_t_(nxg-1,:,:)
     End If
     ! Ring exchange for intermediate ranks (host-only); rank-0/rank-(nprocs-1) wrap handled below.
-    Call update_ghost_interior_planes_nut(nu_t_)
+    Call update_ghost_interior_planes(nu_t_, 4)
 
-    ! Push host state to device before the z-boundary fill below, which runs device-resident
-    ! at nprocs==1 and would otherwise have its result clobbered by a later blanket update device
-    !$acc update device(nu_t_)
     If ( z_bc_type == 0 ) Then
        Call apply_periodic_bc_z(nu_t_, 4)
     Else
@@ -344,24 +324,22 @@ Contains
        ! edge -- z is domain-decomposed, so only the rank(s) owning the z=0/z=Lz
        ! physical boundary act (as in apply_Dirichlet_bc_z).
        Call z_periodic_partner(is_first, is_last, partner)
-       !$acc kernels present(nu_t_)
        If ( is_first ) nu_t_(:,:,1)   = 0d0
        If ( is_last  ) nu_t_(:,:,nzg) = 0d0
-       !$acc end kernels
     End If
-    ! Sync back to host for output_data's snapshot write and compute_wall_model's host-only bits
-    !$acc update host(nu_t_)
+#endif
 
   End Subroutine compute_vreman
 
 
 #ifdef GPU_POISSON
   !> Device-resident equivalent of compute_vreman's post-Pass-1 host block (non-IBM only): y wall/periodic ghosts, x seam + periodic wrap, z seam + z BC, all on nu_t_ in device memory, MPI on device buffers
-  Subroutine vreman_ghosts_device(nu_t_)
+  Subroutine vreman_ghosts_device(nu_t_, zero_solid)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: nu_t_
+    Logical,                               Intent(In)    :: zero_solid
     Logical        :: is_first, is_last
-    Integer(Int32) :: partner
+    Integer(Int32) :: partner, i, j, k
 
     ! No-slip flat walls only (j=1, nyg): zero nu_t; leave it alone at a free-slip boundary
     If ( y_bc_type == 1 .And. bc_face_ylo == 1 ) Then
@@ -380,6 +358,18 @@ Contains
        nu_t_(:,nyg-1,:) = nu_t_(:,    2,:)
        nu_t_(:,nyg  ,:) = nu_t_(:,    3,:)
        !$acc end kernels
+    End If
+
+    ! IBM solid cells: suppress SGS stress to avoid polluting adjacent fluid (after the y fills, before the halos copy the values)
+    If ( zero_solid ) Then
+       !$acc parallel loop collapse(3) present(nu_t_,Umask_cc)
+       Do k = 2, nzg-1
+          Do j = 2, nyg-1
+             Do i = 2, nxg-1
+                If ( Umask_cc(i,j,k) < 0.5d0 ) nu_t_(i,j,k) = 0d0
+             End Do
+          End Do
+       End Do
     End If
 
     ! x seam planes from the x-neighbour, then the periodic wrap (single-plane, cell-centred)
@@ -416,36 +406,5 @@ Contains
 
   End Subroutine vreman_ghosts_device
 #endif
-
-  !> MPI ring exchange for nu_t z-halo (cell-centred, 1 ghost/side)
-  Subroutine update_ghost_interior_planes_nut(F_)
-
-    Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: F_
-
-    Integer(Int32) :: up, down
-
-    ! Allocate persistent single-plane buffers on first call
-    If (.Not. Allocated(sgs_snd_lo)) Then
-       Allocate( sgs_snd_lo(nxg,nyg,1), sgs_snd_hi(nxg,nyg,1) )
-       Allocate( sgs_rcv_lo(nxg,nyg,1), sgs_rcv_hi(nxg,nyg,1) )
-    End If
-
-    Call z_halo_neighbors(up, down)
-
-    !-- Exchange A: send nzg-1 towards +z; receive z=1 from -z -------
-    sgs_snd_lo(:,:,1) = F_(:,:,nzg-1)
-    Call Mpi_Sendrecv( sgs_snd_lo, nxg*nyg, Mpi_real8, up,   0, &
-                       sgs_rcv_lo, nxg*nyg, Mpi_real8, down, 0, &
-                       MPI_COMM_WORLD, istat, ierr )
-    If (down /= MPI_PROC_NULL) F_(:,:,1) = sgs_rcv_lo(:,:,1)
-
-    !-- Exchange B: send z=2 towards -z; receive z=nzg from +z -----
-    sgs_snd_hi(:,:,1) = F_(:,:,2)
-    Call Mpi_Sendrecv( sgs_snd_hi, nxg*nyg, Mpi_real8, down, 0, &
-                       sgs_rcv_hi, nxg*nyg, Mpi_real8, up,   0, &
-                       MPI_COMM_WORLD, istat, ierr )
-    If (up /= MPI_PROC_NULL) F_(:,:,nzg) = sgs_rcv_hi(:,:,1)
-
-  End Subroutine update_ghost_interior_planes_nut
 
 End Module sgs_models

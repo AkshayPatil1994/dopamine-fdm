@@ -791,18 +791,23 @@ Contains
 
   !          Update ghost interior planes (z-direction, same row/adjacent column)
   !          Both directions (+z,-z) are exchanged concurrently via non-blocking MPI instead of two sequential blocking round trips
-  Subroutine update_ghost_interior_planes(F,id)
+  !          host_only: F holds the authoritative state on the host (callers that bracket this with their own update host/device)
+  Subroutine update_ghost_interior_planes(F,id,host_only)
 
     Real   (Int64), Intent(InOut) :: F(:,:,:)
     Integer(Int32), Intent(In)    :: id
+    Logical,        Intent(In), Optional :: host_only
 
     Integer(Int32) :: up, down
     Integer(Int32) :: reqs(4)
+    Logical        :: on_device
 
     Call z_halo_neighbors(up, down)
 
 #ifdef GPU_POISSON
-    If ( nprocs > 1 ) Then
+    on_device = .True.
+    If ( Present(host_only) ) on_device = .Not. host_only
+    If ( nprocs > 1 .And. on_device ) Then
        If ( id == 3 ) Then
           Call gpu_halo_exchange(F, .False., nz-1, nz, up, down)
        Else

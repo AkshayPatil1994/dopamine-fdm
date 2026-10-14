@@ -6,13 +6,10 @@ Module scalar_transport
   Use mpi
   Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner, z_periodic_partner
   Use boundary_conditions, Only : apply_periodic_bc_z, apply_periodic_bc_x, update_ghost_interior_planes_x, &
-                                  apply_inflow_bc_scalar_x_C, outflow_convection_velocity, outflow_stage_dt
+                                  update_ghost_interior_planes, apply_inflow_bc_scalar_x_C, outflow_convection_velocity, &
+                                  outflow_stage_dt
 
   Implicit None
-
-  ! Module-level halo buffers for C z-exchange (avoids per-call heap allocation)
-  Real(Int64), Allocatable, Dimension(:,:,:) :: sc_snd_lo, sc_snd_hi
-  Real(Int64), Allocatable, Dimension(:,:,:) :: sc_rcv_lo, sc_rcv_hi
 
   ! Scalar copy with a second x and z ghost layer (indices 0 and nxg+1 / nzg+1) for the MUSCL far-upwind cell, so the scheme
   ! stays second order across MPI seams and periodic wraps instead of dropping to first order there
@@ -382,45 +379,13 @@ Contains
   End Subroutine scalar_fill_pad
 
 
-  !> MPI ring exchange for C ghost planes (intermediate ranks only)
-  Subroutine update_ghost_scalar(C_)
-
-    Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
-
-    Integer(Int32) :: up, down
-
-    ! Allocate persistent single-plane buffers on first call
-    If (.Not. Allocated(sc_snd_lo)) Then
-       Allocate( sc_snd_lo(nxg,nyg,1), sc_snd_hi(nxg,nyg,1) )
-       Allocate( sc_rcv_lo(nxg,nyg,1), sc_rcv_hi(nxg,nyg,1) )
-    End If
-
-    Call z_halo_neighbors(up, down)
-
-    !-- Exchange A: send nzg-1 towards +z; receive z=1 from -z -------
-    sc_snd_lo(:,:,1) = C_(:,:,nzg-1)
-    Call Mpi_Sendrecv( sc_snd_lo, nxg*nyg, Mpi_real8, up,   0, &
-                       sc_rcv_lo, nxg*nyg, Mpi_real8, down, 0, &
-                       MPI_COMM_WORLD, istat, ierr )
-    If (down /= MPI_PROC_NULL) C_(:,:,1) = sc_rcv_lo(:,:,1)
-
-    !-- Exchange B: send z=2 towards -z; receive z=nzg from +z -----
-    sc_snd_hi(:,:,1) = C_(:,:,2)
-    Call Mpi_Sendrecv( sc_snd_hi, nxg*nyg, Mpi_real8, down, 0, &
-                       sc_rcv_hi, nxg*nyg, Mpi_real8, up,   0, &
-                       MPI_COMM_WORLD, istat, ierr )
-    If (up /= MPI_PROC_NULL) C_(:,:,nzg) = sc_rcv_hi(:,:,1)
-
-  End Subroutine update_ghost_scalar
-
-
   !> z-halo exchange plus the periodic x/z wraps for a cell-centred scalar, after the caller's x seam exchange and inflow/outflow update; host-side (runs the wraps on the device via a round trip)
   Subroutine finish_scalar_halos(C_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
 
     ! z-halo via MPI (ring exchange, non-periodic)
-    Call update_ghost_scalar(C_)
+    Call update_ghost_interior_planes(C_, 4, host_only=.True.)
     ! Push host state to device first: the periodic wraps run device-resident at nprocs==1, else their fill is clobbered by the caller's later blanket update device
     !$acc update device(C_)
     If ( x_bc_type == 0 ) Call apply_periodic_bc_x(C_, 2)
