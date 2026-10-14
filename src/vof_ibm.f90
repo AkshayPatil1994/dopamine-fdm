@@ -116,7 +116,7 @@ Contains
                       eo = 6 - d - e
                       If ( ibm_wm ) Then
                          lvisc(e) = lvisc(e) + rho_c*area*wall_flux( uc(e) - cw(e), uc(eo) - cw(eo), 0.5d0*hn, &
-                              ( mug + (mul - mug)*Cv(i,j,k) )/rho_c, solid_id(ii,jj,kk), 1d0 )
+                              ( mug + (mul - mug)*Cv(i,j,k) )/rho_c, solid_id(ibm_obj_id,ii,jj,kk), 1d0 )
                       Else
                          lvisc(e) = lvisc(e) + mu_c*( uc(e) - cw(e) )/(0.5d0*hn)*area
                       End If

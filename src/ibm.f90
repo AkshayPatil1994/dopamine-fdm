@@ -94,8 +94,8 @@ Contains
     Allocate ( ghost_img_val(Max(n_ghost_u, n_ghost_v, n_ghost_w, 1)) )
     !$acc enter data create(ghost_img_val)
 
-    ! Device-resident IBM data: phi (read once above) and the ghost-cell lists (built once above), never modified afterward
-    !$acc enter data copyin(phi)
+    ! Device-resident IBM data: phi, ibm_obj_id, Umask_cc and the ghost-cell lists (all built once above), never modified afterward
+    !$acc enter data copyin(phi,ibm_obj_id,Umask_cc)
     !$acc enter data copyin(ghost_u_idx,ghost_u_wgt,ghost_u_img,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_dGI,ghost_u_objid)
     !$acc enter data copyin(ghost_v_idx,ghost_v_wgt,ghost_v_img,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_dGI,ghost_v_objid)
     !$acc enter data copyin(ghost_w_idx,ghost_w_wgt,ghost_w_img,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_dGI,ghost_w_objid)

@@ -25,7 +25,7 @@ Contains
     Logical, Intent(In) :: full
 
     If ( Allocated(ovr_u) ) Then
-       !$acc exit data delete(ovr_u,ovr_v,ovr_w)
+       !$acc exit data delete(ovr_u,ovr_v,ovr_w,nu_const)
        Deallocate( ovr_u, ovr_v, ovr_w, nu_const )
     End If
     If ( full ) Then
@@ -34,7 +34,7 @@ Contains
        Allocate( ovr_u(1,1,1,4), ovr_v(1,1,1,4), ovr_w(1,1,1,4), nu_const(1,1,1) )
     End If
     ovr_u = ovr_none;  ovr_v = ovr_none;  ovr_w = ovr_none;  nu_const = nu
-    !$acc enter data copyin(ovr_u,ovr_v,ovr_w)
+    !$acc enter data copyin(ovr_u,ovr_v,ovr_w,nu_const)
 
   End Subroutine ibm_stress_init
 
@@ -42,6 +42,7 @@ Contains
   !> Wall shear of the log law at distance d from the closed face, along the tangential velocity (ua along the component, ub the other
   !  tangential one); sg = +1 when the closed face is on the low side of the fluid face, -1 on the high side
   Function wall_flux(ua, ub, d, nul, oid, sg) Result(f)
+    !$acc routine seq
 
     Real(Int64),    Intent(In) :: ua, ub, d, nul, sg
     Integer(Int32), Intent(In) :: oid
@@ -60,19 +61,21 @@ Contains
   End Function wall_flux
 
 
-  Pure Function solid_id(i, j, k) Result(oid)
+  Pure Function solid_id(ob, i, j, k) Result(oid)
+    !$acc routine seq
 
+    Real(Int64),    Intent(In) :: ob(nxg,nyg,nzg)
     Integer(Int32), Intent(In) :: i, j, k
     Integer(Int32) :: oid
 
-    oid = 0
-    If ( Allocated(ibm_obj_id) ) oid = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
+    oid = Min(Max(Nint(ob(i,j,k)), 0), max_ibm_objects)
 
   End Function solid_id
 
 
   !> Mean of the open faces among four (mask 1 = open); 0 when all four are closed
   Pure Function open_mean4(f1, f2, f3, f4, m1, m2, m3, m4) Result(f)
+    !$acc routine seq
 
     Real(Int64), Intent(In) :: f1, f2, f3, f4, m1, m2, m3, m4
     Real(Int64) :: f, n
@@ -85,14 +88,16 @@ Contains
 
 
   !> Roughness id of the closed face between two cells: that of the solid cell (phi < 0), the larger one when both are solid
-  Pure Function face_id(i1, j1, k1, i2, j2, k2) Result(oid)
+  Pure Function face_id(ph, ob, i1, j1, k1, i2, j2, k2) Result(oid)
+    !$acc routine seq
 
+    Real(Int64),    Intent(In) :: ph(nxg,nyg,nzg), ob(nxg,nyg,nzg)
     Integer(Int32), Intent(In) :: i1, j1, k1, i2, j2, k2
     Integer(Int32) :: oid
 
     oid = 0
-    If ( phi(i1,j1,k1) < 0d0 ) oid = solid_id(i1, j1, k1)
-    If ( phi(i2,j2,k2) < 0d0 ) oid = Max( oid, solid_id(i2, j2, k2) )
+    If ( ph(i1,j1,k1) < 0d0 ) oid = solid_id(ob, i1, j1, k1)
+    If ( ph(i2,j2,k2) < 0d0 ) oid = Max( oid, solid_id(ob, i2, j2, k2) )
 
   End Function face_id
 
@@ -107,8 +112,11 @@ Contains
     Integer(Int32) :: i, j, k
     Real(Int64) :: nul, ua, ub
 
+    !$acc kernels present(ovr_u,ovr_v,ovr_w)
     ovr_u = ovr_none;  ovr_v = ovr_none;  ovr_w = ovr_none
+    !$acc end kernels
 
+    !$acc parallel loop collapse(3) private(nul,ua,ub) present(U,V,W,mu,mv,mw,nu_cell,ovr_u,phi,ibm_obj_id,y,yg,z,zg)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nx-1
@@ -118,16 +126,19 @@ Contains
              ua = U(i,j,k)
              ub = open_mean4( W(i,j,k-1), W(i,j,k), W(i+1,j,k-1), W(i+1,j,k), mw(i,j,k-1), mw(i,j,k), mw(i+1,j,k-1), mw(i+1,j,k) )
              If ( j-1 >= 2 ) Then;  If ( mu(i,j-1,k) < 0.5d0 ) &
-                ovr_u(i,j,k,1) = wall_flux(ua, ub, yg(j) - y(j-1), nul, face_id(i,j-1,k, i+1,j-1,k), 1d0);  End If
+                ovr_u(i,j,k,1) = wall_flux(ua, ub, yg(j) - y(j-1), nul, face_id(phi, ibm_obj_id, i,j-1,k, i+1,j-1,k), 1d0);  End If
              If ( j+1 <= nyg-1 ) Then;  If ( mu(i,j+1,k) < 0.5d0 ) &
-                ovr_u(i,j,k,2) = wall_flux(ua, ub, y(j) - yg(j), nul, face_id(i,j+1,k, i+1,j+1,k), -1d0);  End If
+                ovr_u(i,j,k,2) = wall_flux(ua, ub, y(j) - yg(j), nul, face_id(phi, ibm_obj_id, i,j+1,k, i+1,j+1,k), -1d0);  End If
              ub = open_mean4( V(i,j-1,k), V(i,j,k), V(i+1,j-1,k), V(i+1,j,k), mv(i,j-1,k), mv(i,j,k), mv(i+1,j-1,k), mv(i+1,j,k) )
-             If ( mu(i,j,k-1) < 0.5d0 ) ovr_u(i,j,k,3) = wall_flux(ua, ub, zg(k) - z(k-1), nul, face_id(i,j,k-1, i+1,j,k-1), 1d0)
-             If ( mu(i,j,k+1) < 0.5d0 ) ovr_u(i,j,k,4) = wall_flux(ua, ub, z(k) - zg(k), nul, face_id(i,j,k+1, i+1,j,k+1), -1d0)
+             If ( mu(i,j,k-1) < 0.5d0 ) ovr_u(i,j,k,3) = wall_flux(ua, ub, zg(k) - z(k-1), nul, &
+                face_id(phi, ibm_obj_id, i,j,k-1, i+1,j,k-1), 1d0)
+             If ( mu(i,j,k+1) < 0.5d0 ) ovr_u(i,j,k,4) = wall_flux(ua, ub, z(k) - zg(k), nul, &
+                face_id(phi, ibm_obj_id, i,j,k+1, i+1,j,k+1), -1d0)
           End Do
        End Do
     End Do
 
+    !$acc parallel loop collapse(3) private(nul,ua,ub) present(U,V,W,mu,mv,mw,nu_cell,ovr_v,phi,ibm_obj_id,x,xg,z,zg)
     Do k = 2, nzg-1
        Do j = 2, ny-1
           Do i = 2, nxg-1
@@ -136,15 +147,20 @@ Contains
              If ( nul <= 0d0 ) Cycle
              ua = V(i,j,k)
              ub = open_mean4( W(i,j,k-1), W(i,j,k), W(i,j+1,k-1), W(i,j+1,k), mw(i,j,k-1), mw(i,j,k), mw(i,j+1,k-1), mw(i,j+1,k) )
-             If ( mv(i-1,j,k) < 0.5d0 ) ovr_v(i,j,k,1) = wall_flux(ua, ub, xg(i) - x(i-1), nul, face_id(i-1,j,k, i-1,j+1,k), 1d0)
-             If ( mv(i+1,j,k) < 0.5d0 ) ovr_v(i,j,k,2) = wall_flux(ua, ub, x(i) - xg(i), nul, face_id(i+1,j,k, i+1,j+1,k), -1d0)
+             If ( mv(i-1,j,k) < 0.5d0 ) ovr_v(i,j,k,1) = wall_flux(ua, ub, xg(i) - x(i-1), nul, &
+                face_id(phi, ibm_obj_id, i-1,j,k, i-1,j+1,k), 1d0)
+             If ( mv(i+1,j,k) < 0.5d0 ) ovr_v(i,j,k,2) = wall_flux(ua, ub, x(i) - xg(i), nul, &
+                face_id(phi, ibm_obj_id, i+1,j,k, i+1,j+1,k), -1d0)
              ub = open_mean4( U(i-1,j,k), U(i,j,k), U(i-1,j+1,k), U(i,j+1,k), mu(i-1,j,k), mu(i,j,k), mu(i-1,j+1,k), mu(i,j+1,k) )
-             If ( mv(i,j,k-1) < 0.5d0 ) ovr_v(i,j,k,3) = wall_flux(ua, ub, zg(k) - z(k-1), nul, face_id(i,j,k-1, i,j+1,k-1), 1d0)
-             If ( mv(i,j,k+1) < 0.5d0 ) ovr_v(i,j,k,4) = wall_flux(ua, ub, z(k) - zg(k), nul, face_id(i,j,k+1, i,j+1,k+1), -1d0)
+             If ( mv(i,j,k-1) < 0.5d0 ) ovr_v(i,j,k,3) = wall_flux(ua, ub, zg(k) - z(k-1), nul, &
+                face_id(phi, ibm_obj_id, i,j,k-1, i,j+1,k-1), 1d0)
+             If ( mv(i,j,k+1) < 0.5d0 ) ovr_v(i,j,k,4) = wall_flux(ua, ub, z(k) - zg(k), nul, &
+                face_id(phi, ibm_obj_id, i,j,k+1, i,j+1,k+1), -1d0)
           End Do
        End Do
     End Do
 
+    !$acc parallel loop collapse(3) private(nul,ua,ub) present(U,V,W,mu,mv,mw,nu_cell,ovr_w,phi,ibm_obj_id,x,xg,y,yg)
     Do k = 2, nz-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
@@ -153,13 +169,15 @@ Contains
              If ( nul <= 0d0 ) Cycle
              ua = W(i,j,k)
              ub = open_mean4( V(i,j-1,k), V(i,j,k), V(i,j-1,k+1), V(i,j,k+1), mv(i,j-1,k), mv(i,j,k), mv(i,j-1,k+1), mv(i,j,k+1) )
-             If ( mw(i-1,j,k) < 0.5d0 ) ovr_w(i,j,k,1) = wall_flux(ua, ub, xg(i) - x(i-1), nul, face_id(i-1,j,k, i-1,j,k+1), 1d0)
-             If ( mw(i+1,j,k) < 0.5d0 ) ovr_w(i,j,k,2) = wall_flux(ua, ub, x(i) - xg(i), nul, face_id(i+1,j,k, i+1,j,k+1), -1d0)
+             If ( mw(i-1,j,k) < 0.5d0 ) ovr_w(i,j,k,1) = wall_flux(ua, ub, xg(i) - x(i-1), nul, &
+                face_id(phi, ibm_obj_id, i-1,j,k, i-1,j,k+1), 1d0)
+             If ( mw(i+1,j,k) < 0.5d0 ) ovr_w(i,j,k,2) = wall_flux(ua, ub, x(i) - xg(i), nul, &
+                face_id(phi, ibm_obj_id, i+1,j,k, i+1,j,k+1), -1d0)
              ub = open_mean4( U(i-1,j,k), U(i,j,k), U(i-1,j,k+1), U(i,j,k+1), mu(i-1,j,k), mu(i,j,k), mu(i-1,j,k+1), mu(i,j,k+1) )
              If ( j-1 >= 2 ) Then;  If ( mw(i,j-1,k) < 0.5d0 ) &
-                ovr_w(i,j,k,3) = wall_flux(ua, ub, yg(j) - y(j-1), nul, face_id(i,j-1,k, i,j-1,k+1), 1d0);  End If
+                ovr_w(i,j,k,3) = wall_flux(ua, ub, yg(j) - y(j-1), nul, face_id(phi, ibm_obj_id, i,j-1,k, i,j-1,k+1), 1d0);  End If
              If ( j+1 <= nyg-1 ) Then;  If ( mw(i,j+1,k) < 0.5d0 ) &
-                ovr_w(i,j,k,4) = wall_flux(ua, ub, y(j) - yg(j), nul, face_id(i,j+1,k, i,j+1,k+1), -1d0);  End If
+                ovr_w(i,j,k,4) = wall_flux(ua, ub, y(j) - yg(j), nul, face_id(phi, ibm_obj_id, i,j+1,k, i,j+1,k+1), -1d0);  End If
           End Do
        End Do
     End Do
@@ -215,7 +233,7 @@ Contains
                       e2 = 6 - d - e
                       If ( ibm_wall_model_flag == 1 ) Then
                          lvisc(e) = lvisc(e) + area*wall_flux( uc(e), uc(e2), 0.5d0*hn, nu, &
-                              solid_id(i+de(1), j+de(2), k+de(3)), 1d0 )
+                              solid_id(ibm_obj_id, i+de(1), j+de(2), k+de(3)), 1d0 )
                       Else
                          lvisc(e) = lvisc(e) + (nu + nu_t(i,j,k))*uc(e)/(0.5d0*hn)*area
                       End If

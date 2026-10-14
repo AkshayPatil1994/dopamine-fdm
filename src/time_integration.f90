@@ -45,9 +45,7 @@ Contains
   Subroutine update_ibm_stress
 
     If ( .Not. ibm_stress_on ) Return
-    !$acc update host(U,V,W)
     Call ibm_stress_update(U, V, W, vp_mu, vp_mv, vp_mw, nu_const)
-    !$acc update device(ovr_u,ovr_v,ovr_w)
 
   End Subroutine update_ibm_stress
 
@@ -86,8 +84,6 @@ Contains
     If ( ibm_input_mode >= 1 ) Then
        Call profiler_start(PROF_IBM)
        Call apply_ghost_cell_ibm(U, V, W)
-       ! compute_sgs_model's Pass 2 below is host-only when IBM is active and needs current U,V,W
-       !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)
     End If
 
@@ -260,15 +256,13 @@ Contains
     Call apply_boundary_conditions(after_projection=.True.)
     Call trace_stage('s1_bc_post1')
     Call profiler_stop(PROF_BC)
-    ! U,V,W are correct and resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
+    ! U,V,W are correct and resident on device; the IBM re-enforce block below only needs a host mirror for the impulse snapshot
     If ( ibm_input_mode >= 1 ) Then
-       Call profiler_start(PROF_RK_UPDATE)
-       !$acc update host(U,V,W)
-       Call profiler_stop(PROF_RK_UPDATE)
        ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
        ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
        Call profiler_start(PROF_IBM)
        If ( nsampling > 0 .And. Mod(istep, nsampling) == 0 ) Then
+          !$acc update host(U,V,W)
           U_pre = U;  V_pre = V;  W_pre = W
        End If
        Call apply_ghost_cell_ibm(U, V, W)
@@ -278,8 +272,6 @@ Contains
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
        If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W)
-       ! Refresh host mirror: next substage's SGS Pass 2 reads U,V,W host-only; see GPU_porting.md
-       !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)
     End If
 
@@ -391,15 +383,13 @@ Contains
     Call apply_boundary_conditions(after_projection=.True.)
     Call trace_stage('s2_bc_post1')
     Call profiler_stop(PROF_BC)
-    ! U,V,W are correct and resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
+    ! U,V,W are correct and resident on device; the IBM re-enforce block below only needs a host mirror for the impulse snapshot
     If ( ibm_input_mode >= 1 ) Then
-       Call profiler_start(PROF_RK_UPDATE)
-       !$acc update host(U,V,W)
-       Call profiler_stop(PROF_RK_UPDATE)
        ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
        ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
        Call profiler_start(PROF_IBM)
        If ( nsampling > 0 .And. Mod(istep, nsampling) == 0 ) Then
+          !$acc update host(U,V,W)
           U_pre = U;  V_pre = V;  W_pre = W
        End If
        Call apply_ghost_cell_ibm(U, V, W)
@@ -409,8 +399,6 @@ Contains
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
        If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W)
-       ! Refresh host mirror: see the matching comment on substage 1's re-enforce-IBM block above.
-       !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)
     End If
 
@@ -544,9 +532,8 @@ Contains
        Call profiler_stop(PROF_BC)
     End If
 
-    ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (IBM re-enforce below, RSB/inflow-optimization accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
-    needs_final_sync = ( ibm_input_mode >= 1 ) .Or. &
-         ( particles_active >= 1 ) .Or. &
+    ! Final sync: host U,V,W only needed this step if a host-only consumer will actually run (RSB/inflow-optimization accumulation, monitor/divergence check, a field snapshot, or a slice/line probe)
+    needs_final_sync = ( particles_active >= 1 ) .Or. &
          ( rsb_active == 1 .And. istep >= rsb_nstart ) .Or. &
          ( inflow_opt_active == 1 .And. istep >= inflow_opt_nstart ) .Or. &
          ( Mod(istep, nmonitor) == 0 ) .Or. &
@@ -556,8 +543,11 @@ Contains
          ( n_lines  > 0 .And. line_freq  > 0 .And. Mod(istep, line_freq)  == 0 )
     If ( needs_final_sync ) Then
        Call profiler_start(PROF_RK_UPDATE)
-       !$acc update host(U,V,W,P)
-       ! P (and nu_t, in LES) are device-resident too: refresh the host copies for the same host-only consumers (IBM forces, RSB, probes); snapshots also sync them in input_output.f90
+       If ( ibm_input_mode == 0 ) Then
+          !$acc update host(U,V,W)
+       End If
+       !$acc update host(P)
+       ! U,V,W with the IBM are refreshed after the final re-enforce below. P (and nu_t, in LES) are device-resident too: refresh the host copies for the same host-only consumers (IBM forces, RSB, probes); snapshots also sync them in input_output.f90
        If ( sgs_model /= 0 ) Then
           !$acc update host(nu_t)
        End If
@@ -568,6 +558,7 @@ Contains
     If ( ibm_input_mode >= 1 ) Then
        Call profiler_start(PROF_IBM)
        If ( nsampling > 0 .And. Mod(istep, nsampling) == 0 ) Then
+          !$acc update host(U,V,W)
           U_pre = U;  V_pre = V;  W_pre = W
        End If
        Call apply_ghost_cell_ibm(U, V, W)
@@ -577,8 +568,10 @@ Contains
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
        If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W)
-       ! Refresh host mirror: output_monitor/output_data/check_divergence read U,V,W host-only
-       !$acc update host(U,V,W)
+       ! Refresh host mirror for the host-only consumers (output_monitor/output_data/check_divergence, particles, probes)
+       If ( needs_final_sync ) Then
+          !$acc update host(U,V,W)
+       End If
        Call profiler_stop(PROF_IBM)
     End If
 
