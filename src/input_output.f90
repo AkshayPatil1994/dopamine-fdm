@@ -1332,6 +1332,9 @@ Contains
 
        End If
 
+#ifdef GPU_POISSON
+       !$acc update host(U,V,W)
+#endif
        Call write_distributed_field_block(1, U, nx_global,  nyg_global, nzg_global, .True.,  .False.)
        Call write_distributed_field_block(1, V, nxg_global, ny_global,  nzg_global, .False., .False.)
        Call write_distributed_field_block(1, W, nxg_global, nyg_global, nz_global,  .False., .True.)
