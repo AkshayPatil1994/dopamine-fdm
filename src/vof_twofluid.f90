@@ -33,7 +33,9 @@ Module vof_twofluid
   Use vof_curv, Only : vof_curvature
   Use mom_recon
   Use halo_pad, Only : pad_field
-  Use ibm, Only : apply_ghost_cell_ibm
+  Use ibm, Only : apply_ghost_cell_ibm, apply_ghost_cell_ibm_scalar, apply_ghost_cell_ibm_scalar_noflux
+  Use scalar_transport, Only : compute_rhs_scalar_core, apply_scalar_bc, kf_on, kfield
+  Use thermal_transport, Only : apply_temperature_bc
   Use vof_ibm, Only : vof_compute_ibm_forces
   Use projection, Only : compute_pseudo_pressure_rhs, solve_poisson_equation, project_velocity
 
@@ -58,6 +60,8 @@ Module vof_twofluid
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
   ! flat-wall EQWM stress fluxes on the u and w faces of the bottom (3rd index 1) and top (2) wall, and where they replace the molecular flux
   Real(Int64), Allocatable, Dimension(:,:,:) :: wt_u, wt_w
+  ! scalar (sediment, temperature) work: start-of-step copy, stage RHS, effective y velocity with the settling folded in
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Fsc, Vsc, Csc0
   Logical,     Allocatable, Dimension(:,:,:) :: wt_on_u, wt_on_w
   ! IBM wall-model stress (ibm_stress): on when the IBM wall model is active; kinematic viscosity of the phase at the cells (0 = off)
   Logical :: ibm_wm_on = .False.
@@ -78,14 +82,19 @@ Contains
     Integer(Int32) :: i, j, k
     Real(Int64) :: kt(3), om
 
-    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 &
-         .Or. uav_active >= 1 .Or. rotation_active >= 1 ) Then
-       If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support sediment, ' // &
+    If ( boussinesq_flag >= 1 .Or. particles_active >= 1 .Or. uav_active >= 1 .Or. rotation_active >= 1 ) Then
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support ' // &
             'Boussinesq, particles, UAV or rotation'
        If ( myid == 0 ) Write(*,'(A,7I3)') ' ibm_wall_model, sediment, boussinesq, particles, uav, flat_wall, rotation: ', &
             ibm_wall_model_flag, sediment_flag, boussinesq_flag, particles_active, uav_active, flat_wall_model_flag, rotation_active
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
+#ifdef GPU_POISSON
+    If ( sediment_flag >= 1 ) Then
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: the scalars of the two-fluid solver (sediment, temperature) are not ported to the GPU yet'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
+#endif
     If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not apply dPdx, dPdz or mass-flux forcing (set them to zero)'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
@@ -1472,6 +1481,74 @@ Contains
   End Subroutine tally_ledger
 
 
+  !> Explicit SSP-RK3 step of dts for one cell-centred scalar (kind 1 sediment with settling, kind 2 temperature) with the end-of-step
+  !  velocity. The flux form -div(u C) + C div(u) keeps a uniform field exactly uniform whatever divergence the velocity has; the
+  !  molecular diffusivity is nu/Sc (nu/Pr) of the phase at each cell blended by the liquid fraction, harmonic on the faces.
+  Subroutine vof_scalar_rk3(Cs, kind, dts)
+
+    Real(Int64), Intent(InOut) :: Cs(:,:,:)
+    Integer(Int32), Intent(In) :: kind
+    Real(Int64), Intent(In) :: dts
+
+    Integer(Int32) :: stage, i, j, k
+    Real(Int64) :: a0, a1, divu, kl, kg, fr
+
+    If ( .Not. Allocated(Fsc) ) Then
+       Allocate( Fsc(2:nxg-1,2:nyg-1,2:nzg-1), Vsc(nxg,ny,nzg), Csc0(nxg,nyg,nzg) )
+       If ( Allocated(kfield) ) Then
+          !$acc exit data delete(kfield)
+          Deallocate( kfield )
+       End If
+       Allocate( kfield(nxg,nyg,nzg) )
+       !$acc enter data create(kfield)
+    End If
+    kl = vof_nu_l/Merge(Sc, Pr, kind == 1);  kg = vof_nu_g/Merge(Sc, Pr, kind == 1)
+    Do k = 1, nzg
+       Do j = 1, nyg
+          Do i = 1, nxg
+             kfield(i,j,k) = kg + (kl - kg)*Min(1d0, Max(0d0, Cv(i,j,k)))
+          End Do
+       End Do
+    End Do
+    kf_on = .True.
+    Vsc = V
+    If ( kind == 1 ) Then
+       Do k = 1, nzg
+          Do j = 1, ny
+             Do i = 1, nxg
+                fr = 0.5d0*( Min(1d0, Max(0d0, Cv(i,j,k))) + Min(1d0, Max(0d0, Cv(i,j+1,k))) )
+                Vsc(i,j,k) = V(i,j,k) - ws*fr
+             End Do
+          End Do
+       End Do
+    End If
+    Csc0 = Cs
+    Do stage = 1, 3
+       Call compute_rhs_scalar_core(Cs, U, Vsc, W, 0d0, 0d0, Merge(1d0/Sc_t, 1d0/Pr_t, kind == 1), kind == 2, Fsc)
+       Do k = 2, nzg-1
+          Do j = 2, nyg-1
+             Do i = 2, nxg-1
+                divu = ( U(i,j,k) - U(i-1,j,k) )/( x(i) - x(i-1) ) + ( V(i,j,k) - V(i,j-1,k) )/( y(j) - y(j-1) ) &
+                     + ( W(i,j,k) - W(i,j,k-1) )/( z(k) - z(k-1) )
+                Fsc(i,j,k) = Fsc(i,j,k) + Cs(i,j,k)*divu
+             End Do
+          End Do
+       End Do
+       a0 = Merge(0d0, Merge(0.75d0, 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
+       Cs(2:nxg-1,2:nyg-1,2:nzg-1) = a0*Csc0(2:nxg-1,2:nyg-1,2:nzg-1) + a1*( Cs(2:nxg-1,2:nyg-1,2:nzg-1) + dts*Fsc )
+       If ( kind == 1 ) Then
+          Call apply_scalar_bc(Cs)
+          If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cs)
+       Else
+          Call apply_temperature_bc(Cs)
+          If ( ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Cs)
+       End If
+    End Do
+    kf_on = .False.
+
+  End Subroutine vof_scalar_rk3
+
+
   !> One two-fluid time step: dt from the CFL (the Courant limit sees the gas currents too), then the Strang sequence
   Subroutine compute_time_step_vof
 
@@ -1548,6 +1625,8 @@ Contains
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
     Call profiler_start(PROF_VOF_END)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
+    If ( sediment_flag >= 1 ) Call vof_scalar_rk3(Cscal, 1, dt)
+    If ( boussinesq_flag >= 1 ) Call vof_scalar_rk3(Tscal, 2, dt)
     Call tally_ledger
     ! the whole array, ghost planes included: snapshots copy every rank's full local block, so a stale (zero) seam ghost plane would
     ! overwrite the neighbour's last real plane in the file, and a restart reads that file back as the pressure predictor

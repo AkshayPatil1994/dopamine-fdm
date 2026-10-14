@@ -16,6 +16,9 @@ Module scalar_transport
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cpad
   ! MPI staging planes for scalar_fill_pad (device-resident in GPU builds; the exchange itself runs on the host copies)
   Real(Int64), Allocatable, Dimension(:,:) :: xs, xr, zs, zr
+  ! Cell-wise molecular diffusivity (two-fluid VOF: phase-dependent), face value = harmonic mean of the two cells; off = kappa_mol
+  Logical :: kf_on = .False.
+  Real(Int64), Allocatable, Dimension(:,:,:) :: kfield
 
 Contains
 
@@ -80,14 +83,19 @@ Contains
     Real   (Int64) :: gf, gb, slp                   ! face gradients & limited slope
     Real   (Int64) :: dx_f, dy_f, dz_f
     Real   (Int64) :: flux_lo, flux_hi
+    Real   (Int64) :: km_hi, km_lo
     Logical        :: wall_q_lo, wall_q_hi
 
+    If ( .Not. Allocated(kfield) ) Then
+       Allocate( kfield(1,1,1) )
+       !$acc enter data create(kfield)
+    End If
     wall_q_lo = temp_wall_flux .And. T_bc_bot == 2
     wall_q_hi = temp_wall_flux .And. T_bc_top == 2
 
     Call scalar_fill_pad(C_)
 
-    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,nu_t,qT_wall,phi,x,xg,y,yg,z,zg, &
+    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,nu_t,qT_wall,phi,x,xg,y,yg,z,zg,kfield, &
     !$acc& weight_y_0,weight_y_1,weight_z_0,weight_z_1)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
@@ -212,14 +220,24 @@ Contains
 
              !-------- x-diffusion -----------------------------------------
              ! kappa at high x-face (x uniform: plain average; y, z use the interpolation weights): average of nu_t at (i,j,k) and (i+1,j,k)
-             kappa_hi = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i+1,j,k))*kappa_t_inv
-             kappa_lo = kappa_mol + 0.5d0*(nu_t(i,j,k) + nu_t(i-1,j,k))*kappa_t_inv
+             km_hi = kappa_mol;  km_lo = kappa_mol
+             If ( kf_on ) Then
+                km_hi = 2d0*kfield(i,j,k)*kfield(i+1,j,k)/( kfield(i,j,k) + kfield(i+1,j,k) )
+                km_lo = 2d0*kfield(i,j,k)*kfield(i-1,j,k)/( kfield(i,j,k) + kfield(i-1,j,k) )
+             End If
+             kappa_hi = km_hi + 0.5d0*(nu_t(i,j,k) + nu_t(i+1,j,k))*kappa_t_inv
+             kappa_lo = km_lo + 0.5d0*(nu_t(i,j,k) + nu_t(i-1,j,k))*kappa_t_inv
              diff_x = ( kappa_hi*(Cpad(i+1,j,k) - Cpad(i,j,k))/(xg(i+1)-xg(i)) &
                       - kappa_lo*(Cpad(i,j,k) - Cpad(i-1,j,k))/(xg(i)-xg(i-1)) ) / dx_f
 
              !-------- y-diffusion -----------------------------------------
-             kappa_hi = kappa_mol + ( weight_y_0(j  )*nu_t(i,j,k) + weight_y_1(j  )*nu_t(i,j+1,k) )*kappa_t_inv
-             kappa_lo = kappa_mol + ( weight_y_0(j-1)*nu_t(i,j-1,k) + weight_y_1(j-1)*nu_t(i,j,k) )*kappa_t_inv
+             km_hi = kappa_mol;  km_lo = kappa_mol
+             If ( kf_on ) Then
+                km_hi = 2d0*kfield(i,j,k)*kfield(i,j+1,k)/( kfield(i,j,k) + kfield(i,j+1,k) )
+                km_lo = 2d0*kfield(i,j,k)*kfield(i,j-1,k)/( kfield(i,j,k) + kfield(i,j-1,k) )
+             End If
+             kappa_hi = km_hi + ( weight_y_0(j  )*nu_t(i,j,k) + weight_y_1(j  )*nu_t(i,j+1,k) )*kappa_t_inv
+             kappa_lo = km_lo + ( weight_y_0(j-1)*nu_t(i,j-1,k) + weight_y_1(j-1)*nu_t(i,j,k) )*kappa_t_inv
              flux_hi = kappa_hi*(Cpad(i,j+1,k) - Cpad(i,j,k))/(yg(j+1)-yg(j))
              flux_lo = kappa_lo*(Cpad(i,j,k) - Cpad(i,j-1,k))/(yg(j)-yg(j-1))
              If ( wall_q_lo .And. j == 2     ) flux_lo = qT_wall(i,1,k)
@@ -227,8 +245,13 @@ Contains
              diff_y = ( flux_hi - flux_lo ) / dy_f
 
              !-------- z-diffusion -----------------------------------------
-             kappa_hi = kappa_mol + ( weight_z_0(k  )*nu_t(i,j,k) + weight_z_1(k  )*nu_t(i,j,k+1) )*kappa_t_inv
-             kappa_lo = kappa_mol + ( weight_z_0(k-1)*nu_t(i,j,k-1) + weight_z_1(k-1)*nu_t(i,j,k) )*kappa_t_inv
+             km_hi = kappa_mol;  km_lo = kappa_mol
+             If ( kf_on ) Then
+                km_hi = 2d0*kfield(i,j,k)*kfield(i,j,k+1)/( kfield(i,j,k) + kfield(i,j,k+1) )
+                km_lo = 2d0*kfield(i,j,k)*kfield(i,j,k-1)/( kfield(i,j,k) + kfield(i,j,k-1) )
+             End If
+             kappa_hi = km_hi + ( weight_z_0(k  )*nu_t(i,j,k) + weight_z_1(k  )*nu_t(i,j,k+1) )*kappa_t_inv
+             kappa_lo = km_lo + ( weight_z_0(k-1)*nu_t(i,j,k-1) + weight_z_1(k-1)*nu_t(i,j,k) )*kappa_t_inv
              diff_z = ( kappa_hi*(Cpad(i,j,k+1) - Cpad(i,j,k))/(zg(k+1)-zg(k)) &
                       - kappa_lo*(Cpad(i,j,k) - Cpad(i,j,k-1))/(zg(k)-zg(k-1)) ) / dz_f
 
