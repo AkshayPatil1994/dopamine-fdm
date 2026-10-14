@@ -335,6 +335,15 @@ convergence of the plunge geometry with N have not been done.
 Not supported with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
 non-periodic z, periodic y, SEM / recycled inflow, the Reynolds-stress budget and the inflow optimisation. In a **GPU build** the two-fluid flow (VOF, densities, multigrid pressure, WENO5 momentum, curvature, wall stress, wave inlet and relaxation zones) runs on the device (it needs `pcg_precond = 1`, the default for wall-bounded y); the scalars of 1.8 are advanced on the device (their boundary conditions run on the host copy) and the particles are host code fed by a once-per-step copy of the velocity and liquid fraction; multi-rank GPU runs of these are not yet verified.
 
+Measured on an RTX 3060 (FP64 at 1/64 of the FP32 rate; the multigrid runs in single precision) against one CPU core, wave flume of 0.9 M cells (770×97×12), 30 steps, default tolerances, `pcg_precond = 1`:
+
+| Case | CPU 1 rank | GPU 1 rank |
+|------|-----------:|-----------:|
+| two-fluid flow | 35 s | 10 s |
+| + sediment and Boussinesq temperature | 39 s | 17 s |
+
+The scalar boundary conditions still run on the host (whole-array copies per RK stage), which is why the scalars cost 65 % extra on the GPU against 12 % on the CPU. Two launch-bound patterns had made the first GPU version 8× slower than the CPU: the multigrid ghost fill staged through the host even without neighbour ranks, and multi-array `a = b` copies that the compiler ran on one GPU thread. The multigrid W-cycle is also launch-bound on a GPU (2^L visits of tiny coarse levels), hence `mg_cycle = -1` selects the V-cycle there.
+
 ## 5. References
 
 See [References](References.md): Weymouth & Yue (2010), Rudman (1998), Vaudor et al. (2017), Pal, Fuster & Zaleski (2021),
