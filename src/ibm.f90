@@ -6,7 +6,7 @@ Module ibm
   Use mpi
   Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner, z_periodic_partner
   Use boundary_conditions, Only : exchange_velocity_halos
-  Use halo_pad, Only : pad_axis, pad_field
+  Use halo_pad, Only : pad_axis, pad_field, pad_field_dev
 
   Implicit None
 
@@ -34,7 +34,6 @@ Module ibm
   Real   (Int64), Allocatable, Dimension(:)     :: xge, xe, zge, ze
   Real   (Int64), Allocatable, Dimension(:,:,:) :: phie, Umaske
   Real   (Int64), Allocatable, Dimension(:,:,:) :: Uext, Vext, Wext, Cext
-  Real   (Int64), Allocatable, Dimension(:)     :: ext_bs, ext_br
 
   ! Accumulators for Method 1 IBM force (summed over 6 IBM applications/step)
   Real(Int64) :: ibm_Fx_acc = 0d0
@@ -820,9 +819,7 @@ Contains
 
   End Subroutine trace_ghost_lists
 
-  !> Fe(1-E:n1+E, :, 1-E:n3+E) = F plus E extra planes in x and z from the neighbour rank / periodic partner / edge (the rules of
-  !  halo_pad.pad_field). Device-aware: the copy and the pack/unpack run on the device in GPU builds, only the small exchanged
-  !  planes go through the host for MPI.
+  !> Fe(1-ibm_E:n1+ibm_E, :, 1-ibm_E:n3+ibm_E) = F plus ibm_E extra planes (halo_pad.pad_field_dev, device-aware).
   Subroutine ibm_fill_ext(F, Fe, n1, n2, n3, xface, zface)
 
     Integer(Int32), Intent(In)    :: n1, n2, n3
@@ -830,202 +827,7 @@ Contains
     Real   (Int64), Intent(InOut) :: Fe(1-ibm_E:n1+ibm_E, n2, 1-ibm_E:n3+ibm_E)
     Logical,        Intent(In)    :: xface, zface
 
-    Logical        :: is_first, is_last, per
-    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup, m, i, j, k, E, cnt
-
-    E = ibm_E
-
-    !$acc parallel loop collapse(3) present(F,Fe)
-    Do k = 1, n3
-       Do j = 1, n2
-          Do i = 1, n1
-             Fe(i,j,k) = F(i,j,k)
-          End Do
-       End Do
-    End Do
-    !$acc end parallel loop
-
-    !-- x --
-    per = ( x_bc_type == 0 )
-    Call x_halo_neighbors(up, down)
-    Call x_periodic_partner(is_first, is_last, partner)
-    If ( is_first .And. is_last ) Then
-       If ( per ) Then
-          sdn = Merge(3, 4, xface);  sup = Merge(n1-2, n1-3, xface)
-          !$acc parallel loop collapse(3) present(Fe)
-          Do k = 1, n3
-             Do j = 1, n2
-                Do m = 1, E
-                   Fe(n1+m,j,k) = Fe(sdn+m-1,j,k)
-                   Fe(1-m, j,k) = Fe(sup-m+1,j,k)
-                End Do
-             End Do
-          End Do
-          !$acc end parallel loop
-       Else
-          !$acc parallel loop collapse(3) present(Fe)
-          Do k = 1, n3
-             Do j = 1, n2
-                Do m = 1, E
-                   Fe(n1+m,j,k) = Fe(n1,j,k)
-                   Fe(1-m, j,k) = Fe(1, j,k)
-                End Do
-             End Do
-          End Do
-          !$acc end parallel loop
-       End If
-    Else
-       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
-       sdn = 3;  sup = n1-2
-       If ( per .And. is_first ) Then
-          dst_dn = partner;  src_dn = partner;  sdn = Merge(3, 4, xface)
-       End If
-       If ( per .And. is_last ) Then
-          dst_up = partner;  src_up = partner;  sup = Merge(n1-2, n1-3, xface)
-       End If
-       cnt = E*n2*n3
-       !$acc parallel loop collapse(3) present(Fe,ext_bs)
-       Do k = 1, n3
-          Do j = 1, n2
-             Do m = 1, E
-                ext_bs(m + E*((j-1) + n2*(k-1))) = Fe(sdn+m-1,j,k)
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-       !$acc update host(ext_bs(1:cnt))
-       Call MPI_Sendrecv( ext_bs, cnt, MPI_real8, dst_dn, 71, ext_br, cnt, MPI_real8, src_up, 71, MPI_COMM_WORLD, istat, ierr )
-       !$acc update device(ext_br(1:cnt))
-       !$acc parallel loop collapse(3) present(Fe,ext_br)
-       Do k = 1, n3
-          Do j = 1, n2
-             Do m = 1, E
-                If ( src_up /= MPI_PROC_NULL ) Then
-                   Fe(n1+m,j,k) = ext_br(m + E*((j-1) + n2*(k-1)))
-                Else
-                   Fe(n1+m,j,k) = Fe(n1,j,k)
-                End If
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-       !$acc parallel loop collapse(3) present(Fe,ext_bs)
-       Do k = 1, n3
-          Do j = 1, n2
-             Do m = 1, E
-                ext_bs(m + E*((j-1) + n2*(k-1))) = Fe(sup-E+m,j,k)
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-       !$acc update host(ext_bs(1:cnt))
-       Call MPI_Sendrecv( ext_bs, cnt, MPI_real8, dst_up, 72, ext_br, cnt, MPI_real8, src_dn, 72, MPI_COMM_WORLD, istat, ierr )
-       !$acc update device(ext_br(1:cnt))
-       !$acc parallel loop collapse(3) present(Fe,ext_br)
-       Do k = 1, n3
-          Do j = 1, n2
-             Do m = 1, E
-                If ( src_dn /= MPI_PROC_NULL ) Then
-                   Fe(m-E,j,k) = ext_br(m + E*((j-1) + n2*(k-1)))
-                Else
-                   Fe(m-E,j,k) = Fe(1,j,k)
-                End If
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-    End If
-
-    !-- z (over the x-extended extent) --
-    per = ( z_bc_type == 0 )
-    Call z_halo_neighbors(up, down)
-    Call z_periodic_partner(is_first, is_last, partner)
-    If ( is_first .And. is_last ) Then
-       If ( per ) Then
-          sdn = Merge(3, 4, zface);  sup = Merge(n3-2, n3-3, zface)
-          !$acc parallel loop collapse(3) present(Fe)
-          Do m = 1, E
-             Do j = 1, n2
-                Do i = 1-E, n1+E
-                   Fe(i,j,n3+m) = Fe(i,j,sdn+m-1)
-                   Fe(i,j,1-m ) = Fe(i,j,sup-m+1)
-                End Do
-             End Do
-          End Do
-          !$acc end parallel loop
-       Else
-          !$acc parallel loop collapse(3) present(Fe)
-          Do m = 1, E
-             Do j = 1, n2
-                Do i = 1-E, n1+E
-                   Fe(i,j,n3+m) = Fe(i,j,n3)
-                   Fe(i,j,1-m ) = Fe(i,j,1)
-                End Do
-             End Do
-          End Do
-          !$acc end parallel loop
-       End If
-    Else
-       dst_dn = down;  src_up = up;  dst_up = up;  src_dn = down
-       sdn = 3;  sup = n3-2
-       If ( per .And. is_first ) Then
-          dst_dn = partner;  src_dn = partner;  sdn = Merge(3, 4, zface)
-       End If
-       If ( per .And. is_last ) Then
-          dst_up = partner;  src_up = partner;  sup = Merge(n3-2, n3-3, zface)
-       End If
-       cnt = (n1+2*E)*n2*E
-       !$acc parallel loop collapse(3) present(Fe,ext_bs)
-       Do m = 1, E
-          Do j = 1, n2
-             Do i = 1, n1+2*E
-                ext_bs(i + (n1+2*E)*((j-1) + n2*(m-1))) = Fe(i-E,j,sdn+m-1)
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-       !$acc update host(ext_bs(1:cnt))
-       Call MPI_Sendrecv( ext_bs, cnt, MPI_real8, dst_dn, 73, ext_br, cnt, MPI_real8, src_up, 73, MPI_COMM_WORLD, istat, ierr )
-       !$acc update device(ext_br(1:cnt))
-       !$acc parallel loop collapse(3) present(Fe,ext_br)
-       Do m = 1, E
-          Do j = 1, n2
-             Do i = 1, n1+2*E
-                If ( src_up /= MPI_PROC_NULL ) Then
-                   Fe(i-E,j,n3+m) = ext_br(i + (n1+2*E)*((j-1) + n2*(m-1)))
-                Else
-                   Fe(i-E,j,n3+m) = Fe(i-E,j,n3)
-                End If
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-       !$acc parallel loop collapse(3) present(Fe,ext_bs)
-       Do m = 1, E
-          Do j = 1, n2
-             Do i = 1, n1+2*E
-                ext_bs(i + (n1+2*E)*((j-1) + n2*(m-1))) = Fe(i-E,j,sup-E+m)
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-       !$acc update host(ext_bs(1:cnt))
-       Call MPI_Sendrecv( ext_bs, cnt, MPI_real8, dst_up, 74, ext_br, cnt, MPI_real8, src_dn, 74, MPI_COMM_WORLD, istat, ierr )
-       !$acc update device(ext_br(1:cnt))
-       !$acc parallel loop collapse(3) present(Fe,ext_br)
-       Do m = 1, E
-          Do j = 1, n2
-             Do i = 1, n1+2*E
-                If ( src_dn /= MPI_PROC_NULL ) Then
-                   Fe(i-E,j,m-E) = ext_br(i + (n1+2*E)*((j-1) + n2*(m-1)))
-                Else
-                   Fe(i-E,j,m-E) = Fe(i-E,j,1)
-                End If
-             End Do
-          End Do
-       End Do
-       !$acc end parallel loop
-    End If
+    Call pad_field_dev(F, Fe, n1, n2, n3, xface, zface, ibm_E)
 
   End Subroutine ibm_fill_ext
 
@@ -1556,10 +1358,7 @@ Contains
     Allocate( Uext(1-ibm_E:nx +ibm_E, nyg, 1-ibm_E:nzg+ibm_E), Vext(1-ibm_E:nxg+ibm_E, ny,  1-ibm_E:nzg+ibm_E) )
     Allocate( Wext(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nz +ibm_E), Cext(1-ibm_E:nxg+ibm_E, nyg, 1-ibm_E:nzg+ibm_E) )
     Uext = 0d0;  Vext = 0d0;  Wext = 0d0;  Cext = 0d0
-    cnt = Max( ibm_E*nyg*nzg, (nxg+2*ibm_E)*nyg*ibm_E ) + 8
-    Allocate( ext_bs(cnt), ext_br(cnt) )
-    ext_bs = 0d0;  ext_br = 0d0
-    !$acc enter data create(Uext,Vext,Wext,Cext,ext_bs,ext_br)
+    !$acc enter data create(Uext,Vext,Wext,Cext)
 
     If ( myid == 0 ) Write(*,'(A,I0,A)') ' IBM: extended halo of ', ibm_E, ' planes for image-point stencils'
 
