@@ -96,6 +96,16 @@ Contains
     End Do
     Call MPI_Allreduce(wl, vp_wsum, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     If ( pcg_precond >= 1 ) Call mg_init(ihi, jhi, khi)
+#ifdef GPU_POISSON
+    If ( vof_flow >= 1 ) Then   ! the single-phase masked path sets up its own device copies in vp_init_masked
+       vp_dev = .True.
+       !$acc enter data copyin(vp_rho,vp_bu,vp_bv,vp_bw,vp_w,vp_rfu,vp_rfv,vp_rfw,vp_rau,vp_rav,vp_raw,vp_riu,vp_riv,vp_riw,vp_hy,vp_act)
+       !$acc enter data create(vp_r,vp_z,vp_d,vp_ap)
+       If ( vp_masked ) Then
+          !$acc enter data copyin(vp_mu,vp_mv,vp_mw)
+       End If
+    End If
+#endif
 
   End Subroutine vp_init
 
@@ -125,9 +135,9 @@ Contains
 
     Call vp_init
     vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
-    If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
     vp_dev = .True.
     !$acc enter data copyin(vp_bu,vp_bv,vp_bw,vp_mu,vp_mv,vp_mw,vp_w,vp_act) create(vp_r,vp_z,vp_d,vp_ap)
+    If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
 
   End Subroutine vp_init_masked
 
@@ -293,6 +303,7 @@ Contains
     Real(Int64) :: dr, hl, hu
 
     Call profiler_start(PROF_DENS_BASE)
+    !$acc parallel loop collapse(3) present(Cp,vp_rho)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, nxg
@@ -300,6 +311,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(vp_rho,vp_rau)
     Do k = 1, nzg
        Do j = 1, nyg
           Do i = 1, Min(nx, nxg-1)
@@ -308,7 +320,12 @@ Contains
        End Do
     End Do
     ! on a rank with a +x neighbour the last face is the duplicate of the neighbour's first one: its far cell is the pad layer
-    If ( nx == nxg ) vp_rau(nx,:,:) = 0.5d0*( vp_rho(nx,:,:) + vof_rho_g + (vof_rho_l - vof_rho_g)*Cp(nxg+1,1:nyg,1:nzg) )
+    If ( nx == nxg ) Then
+       !$acc kernels present(Cp,vp_rho,vp_rau)
+       vp_rau(nx,:,:) = 0.5d0*( vp_rho(nx,:,:) + vof_rho_g + (vof_rho_l - vof_rho_g)*Cp(nxg+1,1:nyg,1:nzg) )
+       !$acc end kernels
+    End If
+    !$acc parallel loop collapse(3) present(vp_rho,vp_rav,vp_hy)
     Do k = 1, nzg
        Do j = 1, ny
           Do i = 1, nxg
@@ -316,6 +333,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(vp_rho,vp_raw)
     Do k = 1, nz
        Do j = 1, nyg
           Do i = 1, nxg
@@ -338,47 +356,68 @@ Contains
        Call profiler_stop(PROF_DENS_RECON)
        Call profiler_start(PROF_DENS_GEO)
        dr = vof_rho_l - vof_rho_g
+       !$acc parallel loop collapse(3) present(Cp,vp_rfu,vof_mx,vof_my,vof_mz,vof_al)
        Do k = 1, nzg
           Do j = 1, nyg
              Do i = 1, Min(nx, nxg-1)
-                vp_rfu(i,j,k) = vof_rho_g + dr*0.5d0*( half_frac(Cp(i,j,k), i,j,k, 1, .True.) &
-                                                     + half_frac(Cp(i+1,j,k), i+1,j,k, 1, .False.) )
+                vp_rfu(i,j,k) = vof_rho_g + dr*0.5d0*( half_frac(Cp(i,j,k), vof_mx(i,j,k), vof_my(i,j,k), vof_mz(i,j,k), &
+                                                                 vof_al(i,j,k), 1, .True.) &
+                                                     + half_frac(Cp(i+1,j,k), vof_mx(i+1,j,k), vof_my(i+1,j,k), vof_mz(i+1,j,k), &
+                                                                 vof_al(i+1,j,k), 1, .False.) )
              End Do
           End Do
        End Do
-       If ( nx == nxg ) vp_rfu(nx,:,:) = vp_rau(nx,:,:)
+       If ( nx == nxg ) Then
+          !$acc kernels present(vp_rfu,vp_rau)
+          vp_rfu(nx,:,:) = vp_rau(nx,:,:)
+          !$acc end kernels
+       End If
+       !$acc parallel loop collapse(3) private(hl,hu) present(Cp,vp_rfv,vp_hy,vof_mx,vof_my,vof_mz,vof_al)
        Do k = 1, nzg
           Do j = 1, ny
-             hl = vp_hy(j);  hu = vp_hy(j+1)
              Do i = 1, nxg
-                vp_rfv(i,j,k) = vof_rho_g + dr*( hl*half_frac(Cp(i,j,k), i,j,k, 2, .True.) &
-                                               + hu*half_frac(Cp(i,j+1,k), i,j+1,k, 2, .False.) )/( hl + hu )
+                hl = vp_hy(j);  hu = vp_hy(j+1)
+                vp_rfv(i,j,k) = vof_rho_g + dr*( hl*half_frac(Cp(i,j,k), vof_mx(i,j,k), vof_my(i,j,k), vof_mz(i,j,k), &
+                                                              vof_al(i,j,k), 2, .True.) &
+                                               + hu*half_frac(Cp(i,j+1,k), vof_mx(i,j+1,k), vof_my(i,j+1,k), vof_mz(i,j+1,k), &
+                                                              vof_al(i,j+1,k), 2, .False.) )/( hl + hu )
              End Do
           End Do
        End Do
+       !$acc parallel loop collapse(3) present(Cp,vp_rfw,vof_mx,vof_my,vof_mz,vof_al)
        Do k = 1, nz
           Do j = 1, nyg
              Do i = 1, nxg
-                vp_rfw(i,j,k) = vof_rho_g + dr*0.5d0*( half_frac(Cp(i,j,k), i,j,k, 3, .True.) &
-                                                     + half_frac(Cp(i,j,Min(k+1,nzg)), i,j,Min(k+1,nzg), 3, .False.) )
+                vp_rfw(i,j,k) = vof_rho_g + dr*0.5d0*( half_frac(Cp(i,j,k), vof_mx(i,j,k), vof_my(i,j,k), vof_mz(i,j,k), &
+                                                                 vof_al(i,j,k), 3, .True.) &
+                     + half_frac(Cp(i,j,Min(k+1,nzg)), vof_mx(i,j,Min(k+1,nzg)), vof_my(i,j,Min(k+1,nzg)), &
+                                 vof_mz(i,j,Min(k+1,nzg)), vof_al(i,j,Min(k+1,nzg)), 3, .False.) )
              End Do
           End Do
        End Do
        Call profiler_stop(PROF_DENS_GEO)
     Else
+       !$acc kernels present(vp_rfu,vp_rfv,vp_rfw,vp_rau,vp_rav,vp_raw)
        vp_rfu = vp_rau;  vp_rfv = vp_rav;  vp_rfw = vp_raw
+       !$acc end kernels
     End If
     Call profiler_start(PROF_DENS_COEF)
+    !$acc kernels present(vp_riu,vp_riv,vp_riw,vp_rau,vp_rav,vp_raw,vp_rfu,vp_rfv,vp_rfw,vp_bu,vp_bv,vp_bw)
     If ( vof_inertia >= 1 ) Then
        vp_riu = vp_rau;  vp_riv = vp_rav;  vp_riw = vp_raw
     Else
        vp_riu = vp_rfu;  vp_riv = vp_rfv;  vp_riw = vp_rfw
     End If
     vp_bu = 1d0/vp_riu;  vp_bv = 1d0/vp_riv;  vp_bw = 1d0/vp_riw
+    !$acc end kernels
     If ( vp_masked ) Then
+       !$acc kernels present(vp_bu,vp_bv,vp_bw,vp_mu,vp_mv,vp_mw)
        vp_bu = vp_bu*vp_mu;  vp_bv = vp_bv*vp_mv;  vp_bw = vp_bw*vp_mw
+       !$acc end kernels
     End If
+#ifndef GPU_POISSON
     If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Call layer_coefficients
+#endif
     vp_mg_stale = ( pcg_precond >= 1 )
     Call profiler_stop(PROF_DENS_COEF)
 
@@ -416,10 +455,11 @@ Contains
 
 
   !> Liquid fraction of the upper (upper=.True.) or lower half of the cell (i,j,k) along direction dir, from its plane
-  Function half_frac(c, i, j, k, dir, upper) Result(f)
+  Function half_frac(c, mx, my, mz, al, dir, upper) Result(f)
+    !$acc routine seq
 
-    Real(Int64),    Intent(In) :: c
-    Integer(Int32), Intent(In) :: i, j, k, dir
+    Real(Int64),    Intent(In) :: c, mx, my, mz, al
+    Integer(Int32), Intent(In) :: dir
     Logical,        Intent(In) :: upper
     Real(Int64) :: f, xlo(3), w(3)
 
@@ -431,8 +471,7 @@ Contains
        xlo = -0.5d0;  w = 1d0
        w(dir) = 0.5d0
        If ( upper ) xlo(dir) = 0d0
-       f = plic_subbox_fraction( vof_mx(i,j,k), vof_my(i,j,k), vof_mz(i,j,k), vof_al(i,j,k), &
-                                 xlo(1), xlo(2), xlo(3), w(1), w(2), w(3) )
+       f = plic_subbox_fraction( mx, my, mz, al, xlo(1), xlo(2), xlo(3), w(1), w(2), w(3) )
     End If
 
   End Function half_frac

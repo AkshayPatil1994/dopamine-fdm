@@ -7,7 +7,7 @@ Module vof_curv
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global
-  Use halo_pad, Only : pad_field
+  Use halo_pad, Only : pad_field_dev
   Use vof_plic, Only : vof_eps
   Use vof_state, Only : Cv, hy, hz, vof_hf_fail
   Use vof_pressure, Only : vp_halo
@@ -16,6 +16,8 @@ Module vof_curv
 
   Integer(Int32), Parameter :: NH = 4        ! half length of the height-function columns (cells)
   Integer(Int32), Parameter :: EH = NH - 1   ! planes beyond the ghost plane the columns reach from an interior cell
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Pc, tmpc, cwc, kap0   ! padded C and staging, device-resident
+  Logical, Allocatable, Dimension(:,:,:) :: valid
 
 Contains
 
@@ -24,54 +26,72 @@ Contains
 
     Real(Int64), Intent(Out) :: kap(nxg,nyg,nzg)
 
-    Real(Int64), Allocatable :: P(:,:,:), tmp(:,:,:), cw(:,:,:), kap0(:,:,:)
-    Logical, Allocatable :: valid(:,:,:)
-    Integer(Int32) :: i, j, k, m
+    Integer(Int32) :: i, j, k, m, ii, jj, kk, cnt
     Real(Int64) :: c, kv, acc
-    Integer(Int32) :: ii, jj, kk, cnt
+    Integer(Int64) :: nfail
     Logical :: ok
 
-    Allocate( P(1-EH:nxg+EH,1-EH:nyg+EH,1-EH:nzg+EH), tmp(1-EH:nxg+EH,nyg,1-EH:nzg+EH), cw(nxg,nyg,nzg) )
-    Allocate( valid(nxg,nyg,nzg), kap0(nxg,nyg,nzg) )
-    cw = Cv(1:nxg,1:nyg,1:nzg)
-    Call pad_field(cw, nxg, nyg, nzg, .False., .False., EH, tmp)
-    P = 0d0
-    P(:,1:nyg,:) = tmp
+    If ( .Not. Allocated(Pc) ) Then
+       Allocate( Pc(1-EH:nxg+EH,1-EH:nyg+EH,1-EH:nzg+EH), tmpc(1-EH:nxg+EH,nyg,1-EH:nzg+EH), cwc(nxg,nyg,nzg) )
+       Allocate( valid(nxg,nyg,nzg), kap0(nxg,nyg,nzg) )
+       Pc = 0d0;  tmpc = 0d0;  cwc = 0d0;  kap0 = 0d0;  valid = .False.
+       !$acc enter data copyin(Pc,tmpc,cwc,valid,kap0)
+    End If
+    !$acc kernels present(cwc,Cv)
+    cwc = Cv(1:nxg,1:nyg,1:nzg)
+    !$acc end kernels
+    Call pad_field_dev(cwc, tmpc, nxg, nyg, nzg, .False., .False., EH)
+    !$acc kernels present(Pc,tmpc)
+    Pc = 0d0
+    Pc(:,1:nyg,:) = tmpc
+    !$acc end kernels
     Do m = 1, EH
-       P(:,1-m,:)   = P(:,2+m,:)
-       P(:,nyg+m,:) = P(:,nyg-1-m,:)
+       !$acc kernels present(Pc)
+       Pc(:,1-m,:)   = Pc(:,2+m,:)
+       Pc(:,nyg+m,:) = Pc(:,nyg-1-m,:)
+       !$acc end kernels
     End Do
-    Deallocate( tmp, cw )
 
-    kap = 0d0;  valid = .False.;  vof_hf_fail = 0
+    !$acc kernels present(kap,valid)
+    kap = 0d0;  valid = .False.
+    !$acc end kernels
+    nfail = 0
+    !$acc parallel loop collapse(3) private(c,kv,ok) reduction(+:nfail) present(Pc,kap,valid,hy,hz)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             c = P(i,j,k)
+             c = Pc(i,j,k)
              If ( c <= vof_eps .Or. c >= 1d0 - vof_eps ) Cycle
-             Call height_curvature(P, i, j, k, kv, ok)
+             Call height_curvature(Pc, hy, hz, dx, i, j, k, kv, ok)
              If ( ok ) Then
                 kap(i,j,k) = kv;  valid(i,j,k) = .True.
              Else
-                vof_hf_fail = vof_hf_fail + 1
+                nfail = nfail + 1
              End If
           End Do
        End Do
     End Do
+    vof_hf_fail = nfail
     Call vp_halo(kap, .False.)
+    !$acc kernels present(kap,kap0)
     kap0 = kap
+    !$acc end kernels
 
     ! interface cells without a height function: mean of the valid neighbours (the halo carries the seam cells)
+    !$acc parallel loop collapse(3) private(c,acc,cnt) present(Pc,kap,kap0,valid)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             c = P(i,j,k)
+             c = Pc(i,j,k)
              If ( c <= vof_eps .Or. c >= 1d0 - vof_eps .Or. valid(i,j,k) ) Cycle
              acc = 0d0;  cnt = 0
+             !$acc loop seq
              Do kk = k-1, k+1
+                !$acc loop seq
                 Do jj = j-1, j+1
+                   !$acc loop seq
                    Do ii = i-1, i+1
-                      If ( P(ii,jj,kk) > vof_eps .And. P(ii,jj,kk) < 1d0 - vof_eps .And. kap0(ii,jj,kk) /= 0d0 ) Then
+                      If ( Pc(ii,jj,kk) > vof_eps .And. Pc(ii,jj,kk) < 1d0 - vof_eps .And. kap0(ii,jj,kk) /= 0d0 ) Then
                          acc = acc + kap0(ii,jj,kk);  cnt = cnt + 1
                       End If
                    End Do
@@ -82,16 +102,17 @@ Contains
        End Do
     End Do
     Call vp_halo(kap, .False.)
-    Deallocate( P, valid, kap0 )
 
   End Subroutine vof_curvature
 
 
   !> Height-function curvature of interface cell (i,j,k): direction d of the largest central difference of C, heights of the
-  !  3x3 neighbouring columns, valid only if every column starts in a full (or empty) and ends in an empty (full) cell
-  Subroutine height_curvature(P, i, j, k, kv, ok)
+  !  3x3 neighbouring columns, valid only if every column starts in a full (or empty) and ends in an empty (full) cell.
+  !  hyc, hzc: cell sizes of the rows and planes, dxs the x spacing (a device routine takes no module data).
+  Subroutine height_curvature(P, hyc, hzc, dxs, i, j, k, kv, ok)
+    !$acc routine seq
 
-    Real(Int64),    Intent(In)  :: P(1-EH:,1-EH:,1-EH:)
+    Real(Int64),    Intent(In)  :: P(1-EH:,1-EH:,1-EH:), hyc(nyg), hzc(nzg), dxs
     Integer(Int32), Intent(In)  :: i, j, k
     Real(Int64),    Intent(Out) :: kv
     Logical,        Intent(Out) :: ok
@@ -106,7 +127,9 @@ Contains
     g(2) = P(i,j+1,k) - P(i,j-1,k)
     g(3) = P(i,j,k+1) - P(i,j,k-1)
     kv = 0d0;  ok = .False.
-    d = MaxLoc(Abs(g), 1)
+    d = 1
+    If ( Abs(g(2)) > Abs(g(d)) ) d = 2
+    If ( Abs(g(3)) > Abs(g(d)) ) d = 3
     If ( Abs(g(d)) < 1d-12 ) Return
     below = g(d) < 0d0               ! liquid on the low side along d
     t1 = Mod(d, 3) + 1;  t2 = Mod(d+1, 3) + 1
@@ -116,7 +139,7 @@ Contains
           H(a,b) = 0d0
           Do m = -NH, NH
              q = (/ i, j, k /) + a*e(:,t1) + b*e(:,t2) + m*e(:,d)
-             H(a,b) = H(a,b) + P(q(1),q(2),q(3))*cell_size(d, q)
+             H(a,b) = H(a,b) + P(q(1),q(2),q(3))*cell_size(d, q, hyc, hzc, dxs)
           End Do
           q = (/ i, j, k /) + a*e(:,t1) + b*e(:,t2) - NH*e(:,d)
           lo = P(q(1),q(2),q(3))
@@ -131,7 +154,7 @@ Contains
     End Do
 
     q = (/ i, j, k /)
-    h1 = cell_size(t1, q);  h2 = cell_size(t2, q)
+    h1 = cell_size(t1, q, hyc, hzc, dxs);  h2 = cell_size(t2, q, hyc, hzc, dxs)
     Hx  = ( H(1,0) - H(-1,0) )/(2d0*h1)
     Hz  = ( H(0,1) - H(0,-1) )/(2d0*h2)
     Hxx = ( H(1,0) - 2d0*H(0,0) + H(-1,0) )/h1**2
@@ -145,17 +168,19 @@ Contains
 
 
   !> Size of the cell q(1:3) along direction d (the padded planes repeat the edge sizes)
-  Pure Function cell_size(d, q) Result(h)
+  Pure Function cell_size(d, q, hyc, hzc, dxs) Result(h)
+    !$acc routine seq
 
     Integer(Int32), Intent(In) :: d, q(3)
+    Real(Int64),    Intent(In) :: hyc(nyg), hzc(nzg), dxs
     Real(Int64) :: h
 
     If ( d == 1 ) Then
-       h = dx
+       h = dxs
     Else If ( d == 2 ) Then
-       h = hy(Min(Max(q(2), 1), nyg))
+       h = hyc(Min(Max(q(2), 1), nyg))
     Else
-       h = hz(Min(Max(q(3), 1), nzg))
+       h = hzc(Min(Max(q(3), 1), nzg))
     End If
 
   End Function cell_size

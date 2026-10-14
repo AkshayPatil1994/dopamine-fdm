@@ -125,9 +125,43 @@ Contains
 
 
   !> Momentum flux mfc*face value of the WENO5-Z scheme (mom_face, scheme 6, blended to upwind by the refill Courant number as in
-  !  vof_twofluid fmom) for a row of n faces. The stencil rows sm2..s3 hold s(-2:3) of every face, mda/mdb the two cell mass fluxes
-  !  whose mean is the face flux, r1/r2 the control-volume densities each side, ivcv = 1/(control-volume volume). Unit-stride rows
-  !  without branches so that the loop vectorizes; the three weights share one division (rational form of the WENO-Z weights).
+  !  vof_twofluid fmom) for one face. The stencil values sm2..s3 are s(-2:3) of the face, mda/mdb the two cell mass fluxes
+  !  whose mean is the face flux, r1/r2 the control-volume densities each side, ivcv = 1/(control-volume volume), icm = 1/(cm1-cm0).
+  !  No branches (the three weights share one division, rational form of the WENO-Z weights) so that the row loop vectorizes.
+  Pure Function mom_flux_weno5z_pt(sm2, sm1, s0, s1, s2, s3, mda, mdb, r1, r2, ivcv, cm0, icm) Result(f)
+    !$acc routine seq
+
+    Real(Int64), Intent(In) :: sm2, sm1, s0, s1, s2, s3, mda, mdb, r1, r2, ivcv, cm0, icm
+    Real(Int64) :: f
+
+    Real(Int64) :: mf, vm2, vm1, v0, vp1, vp2, p0, p1, p2, b0, b1, b2, t5, eps, d0, d1, d2, n0, n1, n2, tt, r, up, t
+    Logical :: fwd
+
+    mf = 0.5d0*( mda + mdb )
+    fwd = ( mf >= 0d0 )
+    vm2 = Merge(sm2, s3, fwd);  vm1 = Merge(sm1, s2, fwd);  v0 = Merge(s0, s1, fwd)
+    vp1 = Merge(s1, s0, fwd);   vp2 = Merge(s2, sm1, fwd)
+    p0 = ( 2d0*vm2 - 7d0*vm1 + 11d0*v0 )/6d0
+    p1 = ( -vm1 + 5d0*v0 + 2d0*vp1 )/6d0
+    p2 = ( 2d0*v0 + 5d0*vp1 - vp2 )/6d0
+    b0 = 13d0/12d0*( vm2 - 2d0*vm1 + v0 )**2  + 0.25d0*( vm2 - 4d0*vm1 + 3d0*v0 )**2
+    b1 = 13d0/12d0*( vm1 - 2d0*v0 + vp1 )**2  + 0.25d0*( vm1 - vp1 )**2
+    b2 = 13d0/12d0*( v0 - 2d0*vp1 + vp2 )**2  + 0.25d0*( 3d0*v0 - 4d0*vp1 + vp2 )**2
+    eps = 1d-30 + 1d-12*( vm2**2 + vm1**2 + v0**2 + vp1**2 + vp2**2 )
+    t5 = Abs(b0 - b2)
+    tt = t5*t5
+    b0 = b0 + eps;  b1 = b1 + eps;  b2 = b2 + eps
+    d0 = b0*b0;  d1 = b1*b1;  d2 = b2*b2
+    n0 = 0.1d0*( d0 + tt )*d1*d2;  n1 = 0.6d0*( d1 + tt )*d0*d2;  n2 = 0.3d0*( d2 + tt )*d0*d1
+    r = ( n0*p0 + n1*p1 + n2*p2 )/( n0 + n1 + n2 )
+    up = v0
+    t = Min(1d0, Max(0d0, ( Abs(mf)*Abs(r2 - r1)/( r1*r2 )*ivcv - cm0 )*icm))
+    f = mf*( up + ( 1d0 - t*t*( 3d0 - 2d0*t ) )*( r - up ) )
+
+  End Function mom_flux_weno5z_pt
+
+
+  !> mom_flux_weno5z_pt for a row of n faces held as unit-stride rows (see there for the arguments)
   Subroutine mom_flux_weno5z_row(n, sm2, sm1, s0, s1, s2, s3, mda, mdb, r1, r2, ivcv, cm0, cm1, f)
 
     Integer(Int32), Intent(In)  :: n
@@ -135,32 +169,12 @@ Contains
     Real(Int64),    Intent(Out) :: f(n)
 
     Integer(Int32) :: i
-    Real(Int64) :: mf, vm2, vm1, v0, vp1, vp2, p0, p1, p2, b0, b1, b2, t5, eps, d0, d1, d2, n0, n1, n2, tt, r, up, t, icm
-    Logical :: fwd
+    Real(Int64) :: icm
 
     icm = 1d0/(cm1 - cm0)
     !GCC$ ivdep
     Do i = 1, n
-       mf = 0.5d0*( mda(i) + mdb(i) )
-       fwd = ( mf >= 0d0 )
-       vm2 = Merge(sm2(i), s3(i), fwd);  vm1 = Merge(sm1(i), s2(i), fwd);  v0 = Merge(s0(i), s1(i), fwd)
-       vp1 = Merge(s1(i), s0(i), fwd);   vp2 = Merge(s2(i), sm1(i), fwd)
-       p0 = ( 2d0*vm2 - 7d0*vm1 + 11d0*v0 )/6d0
-       p1 = ( -vm1 + 5d0*v0 + 2d0*vp1 )/6d0
-       p2 = ( 2d0*v0 + 5d0*vp1 - vp2 )/6d0
-       b0 = 13d0/12d0*( vm2 - 2d0*vm1 + v0 )**2  + 0.25d0*( vm2 - 4d0*vm1 + 3d0*v0 )**2
-       b1 = 13d0/12d0*( vm1 - 2d0*v0 + vp1 )**2  + 0.25d0*( vm1 - vp1 )**2
-       b2 = 13d0/12d0*( v0 - 2d0*vp1 + vp2 )**2  + 0.25d0*( 3d0*v0 - 4d0*vp1 + vp2 )**2
-       eps = 1d-30 + 1d-12*( vm2**2 + vm1**2 + v0**2 + vp1**2 + vp2**2 )
-       t5 = Abs(b0 - b2)
-       tt = t5*t5
-       b0 = b0 + eps;  b1 = b1 + eps;  b2 = b2 + eps
-       d0 = b0*b0;  d1 = b1*b1;  d2 = b2*b2
-       n0 = 0.1d0*( d0 + tt )*d1*d2;  n1 = 0.6d0*( d1 + tt )*d0*d2;  n2 = 0.3d0*( d2 + tt )*d0*d1
-       r = ( n0*p0 + n1*p1 + n2*p2 )/( n0 + n1 + n2 )
-       up = v0
-       t = Min(1d0, Max(0d0, ( Abs(mf)*Abs(r2(i) - r1(i))/( r1(i)*r2(i) )*ivcv - cm0 )*icm))
-       f(i) = mf*( up + ( 1d0 - t*t*( 3d0 - 2d0*t ) )*( r - up ) )
+       f(i) = mom_flux_weno5z_pt(sm2(i), sm1(i), s0(i), s1(i), s2(i), s3(i), mda(i), mdb(i), r1(i), r2(i), ivcv, cm0, icm)
     End Do
 
   End Subroutine mom_flux_weno5z_row

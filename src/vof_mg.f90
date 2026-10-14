@@ -140,7 +140,7 @@ Contains
     Allocate( mg_sbz((mg_ni(1)+2)*(mg_nj(1)+2),2), mg_rbz((mg_ni(1)+2)*(mg_nj(1)+2),2) )
     !$acc enter data copyin(mg_cx,mg_cy,mg_cz,mg_dd,mg_x,mg_b,mg_t,mg_d,mg_m,mg_iw,mg_s)
     !$acc enter data create(mg_sbx,mg_rbx,mg_sbz,mg_rbz)
-    !$acc enter data copyin(mg_hy1,mg_hz1)
+    !$acc enter data copyin(mg_hy1,mg_hz1,mg_fx,mg_fy,mg_fz)
     mg_ready = .True.
 
     If ( myid == 0 ) Then
@@ -203,7 +203,8 @@ Contains
 
 
   !> Conductances of all levels from the fine face coefficients (beta on the faces of U, V, W; zero on closed faces), the
-  !  diagonals and the tridiagonal factors of the line smoother; call whenever the coefficients change
+  !  diagonals and the tridiagonal factors of the line smoother; call whenever the coefficients change. Device-resident: bu, bv, bw
+  !  must be present on the device in a GPU build.
   Subroutine mg_set_coef(bu, bv, bw)
 
     Real(Int64), Intent(In) :: bu(nx,nyg,nzg), bv(nxg,ny,nzg), bw(nxg,nyg,nz)
@@ -220,7 +221,6 @@ Contains
        o = mg_off(l) + 1
        Call mg_factor(mg_ni(l), mg_nj(l), mg_nk(l), mg_cx(o), mg_cy(o), mg_cz(o), mg_dd(o), mg_m(o), mg_iw(o))
     End Do
-    !$acc update device(mg_cx,mg_cy,mg_cz,mg_dd,mg_m,mg_iw)
 
   End Subroutine mg_set_coef
 
@@ -234,7 +234,10 @@ Contains
     Integer(Int32) :: i, j, k, partner
     Logical :: is_first, is_last
 
+    !$acc kernels present(cx,cy,cz) async(1)
     cx = 0d0;  cy = 0d0;  cz = 0d0
+    !$acc end kernels
+    !$acc parallel loop collapse(3) present(bu,cx,mg_hy1,mg_hz1) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 0, ni
@@ -242,6 +245,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(bv,cy,mg_hz1,yg) async(1)
     Do k = 1, nk
        Do j = 1, nj-1
           Do i = 1, ni
@@ -249,6 +253,7 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) present(bw,cz,mg_hy1,zg) async(1)
     Do k = 0, nk
        Do j = 1, nj
           Do i = 1, ni
@@ -258,12 +263,16 @@ Contains
     End Do
     If ( x_bc_type == 1 ) Then
        Call x_periodic_partner(is_first, is_last, partner)
+       !$acc kernels present(cx) async(1)
        If ( is_first ) cx(0,:,:) = 0d0
+       !$acc end kernels
     End If
     If ( z_bc_type == 1 ) Then
        Call z_periodic_partner(is_first, is_last, partner)
+       !$acc kernels present(cz) async(1)
        If ( is_first ) cz(:,:,0) = 0d0
        If ( is_last ) cz(:,:,nk) = 0d0
+       !$acc end kernels
     End If
 
   End Subroutine mg_fine_coef
@@ -279,12 +288,17 @@ Contains
     Integer(Int32) :: I, J, K, ii, jj, kk, lc
     Real(Int64) :: s
 
+    !$acc kernels present(cxc,cyc,czc) async(1)
     cxc = 0d0;  cyc = 0d0;  czc = 0d0
+    !$acc end kernels
+    !$acc parallel loop collapse(3) private(lc,s) present(cxf,cxc,fxr) async(1)
     Do K = 1, nkc
        Do J = 1, njc
           Do I = 0, nic
              lc = Min(sx*I, nif);  s = 0d0
+             !$acc loop seq
              Do kk = sz*K - (sz-1), Min(sz*K, nkf)
+                !$acc loop seq
                 Do jj = sy*J - (sy-1), Min(sy*J, njf)
                    s = s + cxf(lc,jj,kk)
                 End Do
@@ -293,11 +307,14 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) private(lc,s) present(cyf,cyc,fyr) async(1)
     Do K = 1, nkc
        Do J = 0, njc
           Do I = 1, nic
              lc = Min(sy*J, njf);  s = 0d0
+             !$acc loop seq
              Do kk = sz*K - (sz-1), Min(sz*K, nkf)
+                !$acc loop seq
                 Do ii = sx*I - (sx-1), Min(sx*I, nif)
                    s = s + cyf(ii,lc,kk)
                 End Do
@@ -306,11 +323,14 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(3) private(lc,s) present(czf,czc,fzr) async(1)
     Do K = 0, nkc
        Do J = 1, njc
           Do I = 1, nic
              lc = Min(sz*K, nkf);  s = 0d0
+             !$acc loop seq
              Do jj = sy*J - (sy-1), Min(sy*J, njf)
+                !$acc loop seq
                 Do ii = sx*I - (sx-1), Min(sx*I, nif)
                    s = s + czf(ii,jj,lc)
                 End Do
@@ -335,7 +355,10 @@ Contains
     Logical :: dirichlet_hi
 
     dirichlet_hi = ( x_bc_type == 1 .And. mg_xup == MPI_PROC_NULL )
+    !$acc kernels present(dd,m,iw) async(1)
     dd = 0d0;  m = 0d0;  iw = 0d0
+    !$acc end kernels
+    !$acc parallel loop collapse(3) present(cx,cy,cz,dd) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
@@ -343,9 +366,11 @@ Contains
           End Do
        End Do
     End Do
+    !$acc parallel loop collapse(2) private(w,dt,mm) present(cx,cy,dd,m,iw) async(1)
     Do k = 1, nk
        Do i = 1, ni
           w = 0d0
+          !$acc loop seq
           Do j = 1, nj
              dt = (1d0 + mg_eps)*dd(i,j,k)
              If ( dirichlet_hi .And. i == ni ) dt = dt + (1d0 + mg_eps)*cx(i,j,k)
