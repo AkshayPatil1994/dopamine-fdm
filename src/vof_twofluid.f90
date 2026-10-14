@@ -1,5 +1,4 @@
-!> Two-fluid time step on the staggered grid (VOF liquid fraction C, one-fluid momentum); design validated in
-!> tests/vof/spike_c_momentum.f90:
+!> Two-fluid time step on the staggered grid (VOF liquid fraction C, one-fluid momentum):
 !>
 !>   Strang step:  A(dt/2) - project - RK3(forces, frozen density) - A(dt/2) - project
 !>
@@ -765,8 +764,6 @@ Contains
     Integer(Int32), Intent(In) :: maxit
 
     Real(Int64), Allocatable :: gu(:,:,:), gv(:,:,:), gw(:,:,:)
-    Logical :: is_first_x, is_last_x
-    Integer(Int32) :: partner_x
 
     Allocate( gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
@@ -1122,7 +1119,7 @@ Contains
        If ( ibm_wm_on ) Then
           Call ibm_stress_update(U, V, W, vp_mu, vp_mv, vp_mw, nu_cw)
        End If
-       Call compute_wall_model(U, V, W, nu_t)
+       Call compute_wall_model(U, V, W)
        Call set_viscosity
        If ( flat_wall_model_flag > 0 ) Call set_wall_stress
        Call profiler_stop(PROF_F_WALL)
@@ -1373,7 +1370,7 @@ Contains
     If ( ibm_sampling_now ) ibm_sampling_now = ( Mod(istep, nsampling) == 0 )
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
     Call compute_sgs_model(U, V, W, nu_t)
-    Call compute_wall_model(U, V, W, nu_t)
+    Call compute_wall_model(U, V, W)
     Call compute_cfl(cfl_conv, cfl_visc, cfl_accel)
     cfl_conv_last  = cfl_conv
     cfl_visc_last  = cfl_visc

@@ -97,14 +97,17 @@ Contains
     Call compute_sgs_model(U,V,W,nu_t)
     Call profiler_stop(PROF_SGS)
 
-    ! CFL check and adaptive dt, evaluated from the start-of-step velocity so dt is enforced on the current step, not lagged by one
-    Call profiler_start(PROF_CFL)
-    Call compute_cfl(cfl_conv, cfl_visc, cfl_accel)
-    Call profiler_stop(PROF_CFL)
-    cfl_conv_last  = cfl_conv
-    cfl_visc_last  = cfl_visc
-    cfl_accel_last = cfl_accel
-    cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
+    ! CFL check and adaptive dt, evaluated from the start-of-step velocity so dt is enforced on the current step, not lagged by one;
+    ! a fixed dt only needs it for the monitor line
+    If ( cfl_adaptive == 1 .Or. Mod(istep, nmonitor) == 0 ) Then
+       Call profiler_start(PROF_CFL)
+       Call compute_cfl(cfl_conv, cfl_visc, cfl_accel)
+       Call profiler_stop(PROF_CFL)
+       cfl_conv_last  = cfl_conv
+       cfl_visc_last  = cfl_visc
+       cfl_accel_last = cfl_accel
+       cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
+    End If
     If ( cfl_adaptive == 1 .And. cfl_current > 0d0 ) Then
        dt_new = dt * cfl_target / cfl_current * cfl_safety
        dt = Max(dt_min, Min(dt_max, dt_new))
@@ -181,7 +184,7 @@ Contains
     rk_step = 1
     ! nu_t, U,V,W stay device-resident throughout; compute_wall_model is device-resident too (except the host-only compute_pseudo_pressure_bc_for_robin_bc), so no update device needed here
     Call profiler_start(PROF_WALLMODEL)
-    Call compute_wall_model(U,V,W,nu_t) ! sets the wall stress + EQWM ghost cells on old velocity
+    Call compute_wall_model(U,V,W) ! sets the wall stress + EQWM ghost cells on old velocity
     Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
@@ -236,10 +239,10 @@ Contains
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
        If ( ibm_wall_model_flag == 1 ) Then
-          Call compute_ibm_wall_model(U, V, W, nu_t)
+          Call compute_ibm_wall_model(U, V, W)
        End If
        ! No update device needed: apply_ghost_cell_ibm/compute_ibm_wall_model both write device
-       ! directly now, and the host-only reads above never modify U,V,W (Intent(In) throughout)
+       ! directly, and the host-only reads above never modify U,V,W (Intent(In) throughout)
        Call profiler_stop(PROF_IBM)
     End If
 
@@ -257,7 +260,7 @@ Contains
     Call apply_boundary_conditions(after_projection=.True.)
     Call trace_stage('s1_bc_post1')
     Call profiler_stop(PROF_BC)
-    ! U,V,W now correct+resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
+    ! U,V,W are correct and resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
     If ( ibm_input_mode >= 1 ) Then
        Call profiler_start(PROF_RK_UPDATE)
        !$acc update host(U,V,W)
@@ -274,7 +277,7 @@ Contains
           !$acc update host(U,V,W)
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
-       If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W, nu_t)
+       If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W)
        ! Refresh host mirror: next substage's SGS Pass 2 reads U,V,W host-only; see GPU_porting.md
        !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)
@@ -319,7 +322,7 @@ Contains
     Call compute_sgs_model(U,V,W,nu_t)
     Call profiler_stop(PROF_SGS)
     Call profiler_start(PROF_WALLMODEL)
-    Call compute_wall_model(U,V,W,nu_t)
+    Call compute_wall_model(U,V,W)
     Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
@@ -367,10 +370,10 @@ Contains
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
        If ( ibm_wall_model_flag == 1 ) Then
-          Call compute_ibm_wall_model(U, V, W, nu_t)
+          Call compute_ibm_wall_model(U, V, W)
        End If
        ! No update device needed: apply_ghost_cell_ibm/compute_ibm_wall_model both write device
-       ! directly now, and the host-only reads above never modify U,V,W (Intent(In) throughout)
+       ! directly, and the host-only reads above never modify U,V,W (Intent(In) throughout)
        Call profiler_stop(PROF_IBM)
     End If
 
@@ -388,7 +391,7 @@ Contains
     Call apply_boundary_conditions(after_projection=.True.)
     Call trace_stage('s2_bc_post1')
     Call profiler_stop(PROF_BC)
-    ! U,V,W now correct+resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
+    ! U,V,W are correct and resident on device; only the IBM re-enforce block below (if active) needs a host mirror here
     If ( ibm_input_mode >= 1 ) Then
        Call profiler_start(PROF_RK_UPDATE)
        !$acc update host(U,V,W)
@@ -405,7 +408,7 @@ Contains
           !$acc update host(U,V,W)
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
-       If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W, nu_t)
+       If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W)
        ! Refresh host mirror: see the matching comment on substage 1's re-enforce-IBM block above.
        !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)
@@ -452,7 +455,7 @@ Contains
     Call compute_sgs_model(U,V,W,nu_t)
     Call profiler_stop(PROF_SGS)
     Call profiler_start(PROF_WALLMODEL)
-    Call compute_wall_model(U,V,W,nu_t)
+    Call compute_wall_model(U,V,W)
     Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
@@ -503,10 +506,10 @@ Contains
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
        If ( ibm_wall_model_flag == 1 ) Then
-          Call compute_ibm_wall_model(U, V, W, nu_t)
+          Call compute_ibm_wall_model(U, V, W)
        End If
        ! No update device needed: apply_ghost_cell_ibm/compute_ibm_wall_model both write device
-       ! directly now, and the host-only reads above never modify U,V,W (Intent(In) throughout)
+       ! directly, and the host-only reads above never modify U,V,W (Intent(In) throughout)
        Call profiler_stop(PROF_IBM)
     End If
 
@@ -573,7 +576,7 @@ Contains
           !$acc update host(U,V,W)
           Call accumulate_ibm_stage_impulse(U_pre, V_pre, W_pre, U, V, W)
        End If
-       If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W, nu_t)
+       If ( ibm_wall_model_flag == 1 ) Call compute_ibm_wall_model(U, V, W)
        ! Refresh host mirror: output_monitor/output_data/check_divergence read U,V,W host-only
        !$acc update host(U,V,W)
        Call profiler_stop(PROF_IBM)

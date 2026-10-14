@@ -29,9 +29,8 @@ Module uav_actuator
   ! so a time-varying thrust (uav_hover_thrust or uav_current_thrust(t)) needs no marker rebuild.
   Real   (Int64), Allocatable :: uav_mk_dx(:), uav_mk_dz(:), uav_mk_frac(:), uav_mk_theta(:)
 
-  ! Phase 2 path (uav_path_active==1 only): waypoints "t x y z", sorted by
-  ! increasing t; the disk centre is cubic-Hermite (Catmull-Rom tangent)
-  ! interpolated between them and clamped outside [path_t(1),path_t(n_path)]
+  ! Path waypoints "t x y z" (uav_path_active==1 only), sorted by increasing t; the disk centre is cubic-Hermite (Catmull-Rom
+  ! tangent) interpolated between them and clamped outside [path_t(1),path_t(n_path)]
   Integer(Int32) :: n_path = 0
   Real   (Int64), Allocatable :: path_t(:), path_x(:), path_y(:), path_z(:)
 
@@ -52,6 +51,13 @@ Module uav_actuator
   Real   (Int64) :: uav_tilt_e2(3) = (/ 0d0, 0d0, 1d0 /)
 
 Contains
+
+  !> Abort every rank on a fatal input error (a bare Stop exits with status 0)
+  Subroutine uav_abort(msg)
+    Character(*), Intent(In) :: msg
+    Write(*,'(A)') Trim(msg)
+    Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+  End Subroutine uav_abort
 
   !> Build the marker ring (uav_n_r radial bands x uav_n_theta azimuthal
   !  sectors), each carrying a thrust share proportional to its annulus-
@@ -94,7 +100,7 @@ Contains
     uav_mk_frac = uav_mk_frac / frac_sum   ! exact no-op when uniform; restores sum=1 under tip-tapering
 
     If ( uav_path_active >= 1 ) Then
-       If ( Len_Trim(uav_path_file) == 0 ) Stop 'ERROR: uav_path_active=1 but uav_path_file is empty'
+       If ( Len_Trim(uav_path_file) == 0 ) Call uav_abort( 'ERROR: uav_path_active=1 but uav_path_file is empty' )
        Call read_uav_path
     End If
 
@@ -111,7 +117,7 @@ Contains
     End If
 
     If ( uav_thrust_active >= 1 ) Then
-       If ( Len_Trim(uav_thrust_file) == 0 ) Stop 'ERROR: uav_thrust_active=1 but uav_thrust_file is empty'
+       If ( Len_Trim(uav_thrust_file) == 0 ) Call uav_abort( 'ERROR: uav_thrust_active=1 but uav_thrust_file is empty' )
        Call read_uav_thrust
     End If
 
@@ -160,7 +166,7 @@ Contains
        If ( Len_Trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n_path = n_path + 1
     End Do
-    If ( n_path < 2 ) Stop 'ERROR: uav_path_file: fewer than 2 waypoints found'
+    If ( n_path < 2 ) Call uav_abort( 'ERROR: uav_path_file: fewer than 2 waypoints found' )
 
     Allocate( path_t(n_path), path_x(n_path), path_y(n_path), path_z(n_path) )
 
@@ -173,10 +179,10 @@ Contains
        If ( Len_Trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n = n + 1
        Read(line,*,iostat=ios) col(1:4)
-       If ( ios /= 0 ) Stop 'ERROR: uav_path_file: failed to parse a data row (need 4 columns: t x y z)'
+       If ( ios /= 0 ) Call uav_abort( 'ERROR: uav_path_file: failed to parse a data row (need 4 columns: t x y z)' )
        path_t(n) = col(1);  path_x(n) = col(2);  path_y(n) = col(3);  path_z(n) = col(4)
        If ( n > 1 ) Then
-          If ( path_t(n) <= path_t(n-1) ) Stop 'ERROR: uav_path_file: t column must be strictly increasing'
+          If ( path_t(n) <= path_t(n-1) ) Call uav_abort( 'ERROR: uav_path_file: t column must be strictly increasing' )
        End If
     End Do
     Close(unit_in)
@@ -209,7 +215,7 @@ Contains
        If ( Len_Trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n_thrust = n_thrust + 1
     End Do
-    If ( n_thrust < 2 ) Stop 'ERROR: uav_thrust_file: fewer than 2 points found'
+    If ( n_thrust < 2 ) Call uav_abort( 'ERROR: uav_thrust_file: fewer than 2 points found' )
 
     Allocate( thrust_t(n_thrust), thrust_val(n_thrust) )
 
@@ -222,10 +228,10 @@ Contains
        If ( Len_Trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n = n + 1
        Read(line,*,iostat=ios) col(1:2)
-       If ( ios /= 0 ) Stop 'ERROR: uav_thrust_file: failed to parse a data row (need 2 columns: t T)'
+       If ( ios /= 0 ) Call uav_abort( 'ERROR: uav_thrust_file: failed to parse a data row (need 2 columns: t T)' )
        thrust_t(n) = col(1);  thrust_val(n) = col(2)
        If ( n > 1 ) Then
-          If ( thrust_t(n) <= thrust_t(n-1) ) Stop 'ERROR: uav_thrust_file: t column must be strictly increasing'
+          If ( thrust_t(n) <= thrust_t(n-1) ) Call uav_abort( 'ERROR: uav_thrust_file: t column must be strictly increasing' )
        End If
     End Do
     Close(unit_in)
@@ -732,9 +738,7 @@ Contains
   End Function z_face_at
 
   !> Global index of the interior cell centre nearest zp (z stretched and MPI-decomposed, so
-  !  searched over the global array). zg_global is monotonic, so bracket by binary search
-  !  (was an O(n) linear scan -- hot in apply_uav_forcing_u/v/w, called per marker per RK
-  !  substage), same structure as sem.f90's invert_cdf.
+  !  searched over the global array). zg_global is monotonic, so bracket by binary search (same structure as sem.f90's invert_cdf).
   Function nearest_zg_index(zp) Result(kbest)
     Real(Int64), Intent(In) :: zp
     Integer(Int32) :: kbest, kk, lo, hi

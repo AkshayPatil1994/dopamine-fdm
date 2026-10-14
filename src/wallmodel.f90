@@ -129,22 +129,6 @@ Contains
 
   End Subroutine solve_u_tau_most
 
-  !> Explicit fully-rough log law for the temperature scale theta_tau, from the
-  !  wall-normal potential-temperature difference (T_ref - T_wall) and the thermal
-  !  roughness z0h. Neutral limit only (psi_h=0) -- decoupled from u_tau, since in
-  !  this limit the momentum and thermal log laws don't interact.
-  Pure Subroutine solve_theta_tau_rough(dtheta, y_ref, z0h, theta_tau)
-    !$acc routine seq
-    Real(Int64), Intent(In)  :: dtheta, y_ref, z0h
-    Real(Int64), Intent(Out) :: theta_tau
-
-    Real(Int64) :: log_ratio
-
-    log_ratio = Log( Max(y_ref, 2d0*z0h) / Max(z0h, 1d-8) )
-    theta_tau = kappa_wm * dtheta / Max(log_ratio, 1d-3)
-
-  End Subroutine solve_theta_tau_rough
-
   !> Businger-Dyer MOST stability functions psi_m/psi_h(zeta), zeta=y/L.
   !  Unstable (Paulson 1970 / Dyer 1974 integrated form), stable (linear).
   !  zeta is clipped to +-2 -- these empirical forms aren't trusted, and can
@@ -212,12 +196,11 @@ Contains
   End Subroutine solve_most
 
   !              Select wall model
-  Subroutine compute_wall_model(U_,V_,W_,nu_t_)
+  Subroutine compute_wall_model(U_,V_,W_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(InOut) :: U_
     Real(Int64), Dimension(nxg, ny,  nzg), Intent(InOut) :: V_
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(InOut) :: W_
-    Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: nu_t_
 
     If ( y_bc_type == 0 .And. z_bc_type == 0 ) Return   ! no wall model meaning without a wall in either direction
 
@@ -229,7 +212,6 @@ Contains
           ! Constant Robin alpha (no-slip or free-slip depending on bc_face_y*)
           Call compute_constant_alpha
        End If
-       ! alpha_y = 0 enforced inside compute_constant_alpha and compute_flat_wall_eqwm
 
        ! Rough-wall thermal coupling (neutral EQWM): only meaningful alongside the rough
        ! momentum EQWM, and only guarded here since Tscal is unallocated when Boussinesq is off
@@ -237,44 +219,32 @@ Contains
             ( T_bc_bot == 2 .Or. T_bc_top == 2 ) ) Then
           Call compute_flat_wall_thermal_eqwm(U_, W_, Tscal)
        End If
-
-       ! compute_pseudo_pressure_bc_for_robin_bc is host-only and reads alpha_y just written on-device
-       !$acc update host(alpha_y)
-
-       ! Compute boundary conditions for pseudo-pressure (flat walls)
-       Call compute_pseudo_pressure_bc_for_robin_bc
     End If
 
-    ! Spanwise (z) wall: smooth Reichardt EQWM only (flat_wall_model_flag==2 with z_bc_type==1 is rejected at input). No
-    ! pressure-BC change: the wall-normal (W) Robin coefficient is 0, so Dzz's Neumann rows (initialization.f90) apply as they do
-    ! for alpha_y==0 at the y wall.
+    ! Spanwise (z) wall: smooth Reichardt EQWM only (rough is rejected at input); the wall-normal Robin coefficient is zero, so the
+    ! pressure operator keeps its Neumann rows
     If ( z_bc_type == 1 .And. flat_wall_model_flag == 1 ) Then
        Call compute_flat_wall_eqwm_z(U_, V_)
     End If
 
     ! IBM surface wall model (ghost-cell EQWM)
     If ( vof_flow < 1 .And. ibm_input_mode >= 1 .And. ibm_wall_model_flag == 1 ) Then
-       Call compute_ibm_wall_model(U_, V_, W_, nu_t_)
+       Call compute_ibm_wall_model(U_, V_, W_)
     End If
 
   End Subroutine compute_wall_model
 
   !> Equilibrium wall model for IBM ghost cells
-  Subroutine compute_ibm_wall_model(U_, V_, W_, nu_t_)
+  Subroutine compute_ibm_wall_model(U_, V_, W_)
 
-    Use ibm, Only : ghost_u_idx, ghost_u_img, ghost_u_wgt, ghost_u_ref, n_ghost_u, &
-                    ghost_u_nrm, ghost_u_yref, ghost_u_objid,                      &
-                    ghost_v_idx, ghost_v_img, ghost_v_wgt, ghost_v_ref, n_ghost_v, &
-                    ghost_v_nrm, ghost_v_yref, ghost_v_objid,                      &
-                    ghost_w_idx, ghost_w_img, ghost_w_wgt, ghost_w_ref, n_ghost_w, &
-                    ghost_w_nrm, ghost_w_yref, ghost_w_objid,                      &
-                    trilinear_interp_u, trilinear_interp_v, trilinear_interp_w, &
+    Use ibm, Only : ghost_u_idx, ghost_u_ref, n_ghost_u, ghost_u_nrm, ghost_u_yref, ghost_u_objid, &
+                    ghost_v_idx, ghost_v_ref, n_ghost_v, ghost_v_nrm, ghost_v_yref, ghost_v_objid, &
+                    ghost_w_idx, ghost_w_ref, n_ghost_w, ghost_w_nrm, ghost_w_yref, ghost_w_objid, &
                     U_wall, V_wall, W_wall, Uext, Vext, Wext, ibm_fill_ext_uvw, ext_fz_lo
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(InOut) :: U_
     Real(Int64), Dimension(nxg, ny,  nzg), Intent(InOut) :: V_
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(InOut) :: W_
-    Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: nu_t_
 
     Integer(Int32) :: n, i, j, k, ir, jr, kr, oid, kwmin
     Real   (Int64) :: u_ref, u_tau, y_ref
@@ -666,48 +636,6 @@ Contains
     !$acc end kernels
 
   End Subroutine compute_constant_alpha
-
-  !            Compute Neumann boundary conditions
-  !    for pseudo-pressure when slip-wall model is active
-  Subroutine compute_pseudo_pressure_bc_for_robin_bc
-
-    ! local variables
-    Real   (Int64) :: a, b, c
-    Real   (Int64) :: beta, Delta_r, alphad
-    Real   (Int64) :: p_bc2, p_bc3, p_bcn, p_bcn1
-    Integer(Int64) :: j    
-
-    ! bottom wall
-    j        = 2 
-    a        = 1d0/( y(j)-y(j-1) )/( yg(j+1) - yg(j) )
-    b        = 1d0/( y(j)-y(j-1) )*( -1d0/( yg(j+1) - yg(j) ) -1d0/( yg(j) - yg(j-1) ) )
-    c        = 1d0/( y(j)-y(j-1) )/( yg(j) - yg(j-1) ) 
-    Delta_r  = ( yg(2)-yg(1) )/( yg(3)-yg(2) )
-    alphad   = alpha_y(2,1,2)
-    beta     = alphad/(alphad + y(2)-y(1) )
-    p_bc2    = 1d0 + beta*Delta_r
-    p_bc3    =     - beta*Delta_r
-
-    Dyy(2,2) = b + c*p_bc2
-    Dyy(2,3) = a + c*p_bc3
-    !$acc update device(Dyy(2,2:3))
-
-    ! top wall
-    j        = nyg-1
-    a        = 1d0/( y(j)-y(j-1) )/( yg(j+1) - yg(j) )
-    b        = 1d0/( y(j)-y(j-1) )*( -1d0/( yg(j+1) - yg(j) ) -1d0/( yg(j) - yg(j-1) ) )
-    c        = 1d0/( y(j)-y(j-1) )/( yg(j) - yg(j-1) )     
-    alphad   = -alpha_y(2,2,2)
-    Delta_r  = ( yg(nyg) - yg(nyg-1) )/( yg(nyg-1) - yg(nyg-2) )
-    beta     = alphad/( alphad - (y(ny)-y(ny-1)) )
-    p_bcn    = 1d0 + beta*Delta_r
-    p_bcn1   =     - beta*Delta_r
-    
-    Dyy(nyg-1,nyg-1) = b + a*p_bcn
-    Dyy(nyg-1,nyg-2) = c + a*p_bcn1
-    !$acc update device(Dyy(nyg-1,nyg-2:nyg-1))
-
-  End Subroutine compute_pseudo_pressure_bc_for_robin_bc
 
 End Module wallmodel
 

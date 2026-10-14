@@ -28,9 +28,8 @@ Module particles
   ! fluctuation (p_sgs_u/v/w) is added identically to all 3 stages, so it cancels in that difference.
   Real   (Int64), Allocatable :: p_ax(:), p_ay(:), p_az(:)
   Real   (Int64), Allocatable :: p_age(:)
-  ! Phase 5 (sgs_particle_model==1 only): persistent SGS velocity fluctuation state, evolved
-  ! by the simplified Langevin model (advance_sgs_velocity) and added to the resolved fluid
-  ! velocity used for advection
+  ! SGS velocity fluctuation of each particle (sgs_particle_model==1 only), evolved by advance_sgs_velocity and added to the
+  ! resolved fluid velocity
   Real   (Int64), Allocatable :: p_sgs_u(:), p_sgs_v(:), p_sgs_w(:)
 
   ! Resolved per-direction BC codes (0=periodic,1=exit,2=reflect,3=absorb) and this rank's
@@ -49,7 +48,7 @@ Module particles
   Integer(Int32) :: n_exit_ids_local = 0
   Integer(Int32) :: next_particle_id = 0
 
-  ! Phase 2 (particle_mode==1 only): Stokes response time, computed once in setup_particles
+  ! Stokes response time (particle_mode==1 only), computed once in setup_particles
   Real(Int64) :: tau_p_stokes
 
   ! Per-rank streamwise deposition-rate accumulator, sized nxg_global and indexed by global cell-centre index (bracket_index on
@@ -607,7 +606,7 @@ Contains
     Integer(Int32), Intent(In) :: i
 
     Real(Int64) :: phi_c, eps, gx, gy, gz, gmag, vn, e_rest, urel, obj_r
-    Integer(Int32) :: obj_id, bc_code
+    Integer(Int32) :: obj_id, bc_code, k
 
     do_remove = .False.
 
@@ -639,8 +638,8 @@ Contains
     If ( bc_code == 1 ) Then
        do_remove = .True.
        n_deposited_local = n_deposited_local + 1
-       particle_deposit_x(bracket_index(xg_global, nxg_global, p_x(i))) = &
-            particle_deposit_x(bracket_index(xg_global, nxg_global, p_x(i))) + 1d0
+       k = bracket_index(xg_global, nxg_global, p_x(i))
+       particle_deposit_x(k) = particle_deposit_x(k) + 1d0
        Return
     End If
 
@@ -708,8 +707,7 @@ Contains
        End If
        p_age(i) = p_age(i) + dt
 
-       ! IBM collision first (Phase 3): may reflect/push the position back to the fluid side
-       ! before the domain-boundary check below sees it
+       ! IBM collision first: it may push the position back to the fluid side before the domain-boundary check
        do_remove = .False.
        If ( ibm_input_mode >= 1 ) do_remove = apply_ibm_collision(i)
        If ( .Not. do_remove .And. apply_particle_bc(i) ) do_remove = .True.
@@ -853,11 +851,6 @@ Contains
     Integer(Int32), Intent(In) :: dir
     If ( dir == 1 ) Then;  v = x_global(1);  Else;  v = z_global(1);  End If
   End Function x_edge_lo
-
-  Real(Int64) Function x_edge_hi(dir) Result(v)
-    Integer(Int32), Intent(In) :: dir
-    If ( dir == 1 ) Then;  v = x_global(nx_global);  Else;  v = z_global(nz_global);  End If
-  End Function x_edge_hi
 
   Subroutine pack_particle(i, dir, pos_send, id_out, dat_out)
     Integer(Int32), Intent(In)  :: i, dir
@@ -1015,8 +1008,7 @@ Contains
   End Subroutine reinject_at_inflow
 
   !> Reduce per-rank event counters (global sums) and append one row to fields/particle_count.dat
-  !  (istep,t,exited,deposited,reinjected,active), then reset the running totals. Was a stdout
-  !  Write every nmonitor steps -- moved to a file so it doesn't spam the run log.
+  !  (istep,t,exited,deposited,reinjected,active), then reset the running totals
   Subroutine report_particle_counts
 
     Integer(Int64) :: local_buf(4), global_buf(4)

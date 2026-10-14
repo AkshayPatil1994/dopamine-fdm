@@ -118,23 +118,15 @@ Module global
   ! local grid at middle points + ghost cells
   Real(Int64), Allocatable, Dimension(:) :: xg, yg, zg
 
-  ! middle points for yg->yg_m and yg_m->yg_mm
-  Real(Int64), Allocatable, Dimension(:) :: yg_m, yg_mm
-
   ! local velocities and pressure
   Real(Int64), Allocatable, Dimension(:,:,:) :: U,V,W,P
-  Real(Int64), Allocatable, Dimension(:,:,:) :: Uo,Vo,Wo,Po
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Uo,Vo,Wo
 
-  ! local auxiliary 
-  Real(Int64), Allocatable, Dimension(:,:,:) :: term_1, term_2, term
+  ! local auxiliary
+  Real(Int64), Allocatable, Dimension(:,:,:) :: term_1, term_2
 
-  ! local rhs for velocities and pressure
+  ! pressure right-hand side, then the pseudo-pressure
   Real(Int64), Allocatable, Dimension(:,:,:) :: rhs_p
-  Real(Int64), Allocatable, Dimension(:,:,:) :: rhs_uo, rhs_vo, rhs_wo
-
-  ! local rhs for pressure in Fourier
-  ! rhs_p_hat storage order
-  Complex(Int64), Dimension(:,:,:), Allocatable :: rhs_p_hat
 
   ! local auxiliary arrays for MPI_sendrev boundary conditions
   Real(Int64), Allocatable, Dimension(:,:,:) :: buffer_ui, buffer_vi, buffer_ci
@@ -153,7 +145,7 @@ Module global
   Real(Int64), Allocatable, Dimension(:,:)   :: buffer_px
   Real(Int64), Allocatable, Dimension(:,:)   :: buffer_pgxs, buffer_pgxr
   
-  ! local pencil work arrays for the Poisson pencil-transpose chain (2decomp&fft); rhs_p_hat below (y-pencil, post z-FFT) is shared with the GPU_POISSON path
+  ! local pencil work arrays for the Poisson pencil-transpose chain (2decomp&fft)
   Real   (Int64), Allocatable, Dimension(:,:,:) :: poisson_y_r   ! y-pencil, real: interfaces with rhs_p
   Real   (Int64), Allocatable, Dimension(:,:,:) :: poisson_x_r   ! x-pencil, real: DCT-IV path only
   Complex(Int64), Allocatable, Dimension(:,:,:) :: poisson_x_c   ! x-pencil, complex
@@ -162,7 +154,7 @@ Module global
 
   ! Fourier points and wave numbers
   Integer(C_INTPTR_T) :: nxp_global, nzp_global
-  Integer(Int32)      :: nzp   ! local z-slab count for physical-space rhs_p ghost fill (old 1D z-slab convention; unrelated to the pencil-transpose chain above, unchanged by the 2D-pencil Poisson port until physical-space arrays move to the pencil layout too)
+  Integer(Int32)      :: nzp   ! local z-slab count for the physical-space rhs_p ghost fill
   Integer(C_INTPTR_T) :: mx_global, mz_global
   Integer(C_INTPTR_T) :: mx, mz   ! this rank's local mode-count range in the y-pencil after the transpose chain (== mx_global/mz_global whenever x/z aren't split, e.g. nprocs==1)
   Real   (Int64)      :: dx, dz
@@ -229,14 +221,8 @@ Module global
   ! device residency for the scalars sem.f90's per-step (!$acc routine seq) call chain reads directly
   !$acc declare create(inflow_type, inflow_Uconst, sem_n_eddies, sem_length_scale, sem_seed, sem_eddy_placement, sem_use_esem, sem_divergence_free, sem_wall_damping)
 
-  ! finite differences (second derivative)
-  Real(Int64) :: ddx1, ddx2, ddx3
-  Real(Int64) :: ddy1, ddy2, ddy3
-  Real(Int64) :: ddz1, ddz2, ddz3
-
   ! linear solver
   Integer (Int32) :: nr, nrhs
-  Integer (Int32), Dimension(:),   Allocatable :: pivot  
   Complex (Int64), Dimension(:),   Allocatable :: D, DL, DU
   Complex (Int64), Dimension(:,:), Allocatable :: Dyy
   Complex (Int64), Dimension(:,:), Allocatable :: Dzz   ! spanwise (z) wall pressure operator (z_bc_type==1 only), global extent -- see Dyy
@@ -249,15 +235,13 @@ Module global
   Real (Int64), Dimension(:),   Allocatable :: lambda_z    ! eigenvalues, ascending, length nzm_global
   Real (Int64), Dimension(:,:), Allocatable :: Qz          ! orthonormal eigenvectors of S, nzm_global x nzm_global
   Real (Int64), Dimension(:),   Allocatable :: sqrt_w_z    ! sqrt(cell width), length nzm_global
-  ! Complex copies of Qz/sqrt_w_z (Zgtsv/Matmul in solve_poisson_equation both work in Complex),
-  ! and the z_hat scratch buffer -- all built once at init instead of every solve_poisson_equation
-  ! call (was Allocate/Deallocate + Dcmplx conversion on every RK substage, i.e. 3x per step)
+  ! Complex copies of Qz/sqrt_w_z and the z_hat scratch buffer, built once at init (Zgtsv/Matmul in solve_poisson_equation work in Complex)
   Complex (Int64), Dimension(:,:), Allocatable :: Qz_c
   Complex (Int64), Dimension(:),   Allocatable :: sqrt_w_z_c
   Complex (Int64), Dimension(:,:), Allocatable :: z_hat_duct
 
   ! pressure gradients
-  Real(Int64) :: dPdx, dPdy, dPdz, dPdx_ref, dPdx0
+  Real(Int64) :: dPdx, dPdz
 
   ! Oscillatory pressure gradient (x and z)
   Real(Int64) :: dPdx_t, dPdz_t
@@ -278,12 +262,6 @@ Module global
   ! interpolation weights 
   Integer(Int32) :: in1, in2
   Real(Int64), Dimension(:), Allocatable :: weight_y_0, weight_y_1, weight_z_0, weight_z_1
-
-  ! actual pressure boundary conditions
-  Real   (Int64) :: coef_bc_1, coef_bc_2
-  Real   (Int64), Dimension(:,:), Allocatable :: bc_1,     bc_2
-  Complex(Int64), Dimension(:,:), Allocatable :: bc_1_hat, bc_2_hat
-  Logical(Int32) :: pressure_computed
 
   ! Runge-Kutta 3 coefficients and buffers
   Real(Int64), Dimension(:),     Allocatable :: rk_t
@@ -421,20 +399,6 @@ Module global
   Real(Int64), Allocatable, Dimension(:) :: ghost_u_dGI   ! (n_ghost_u)
   Real(Int64), Allocatable, Dimension(:) :: ghost_v_dGI   ! (n_ghost_v)
   Real(Int64), Allocatable, Dimension(:) :: ghost_w_dGI   ! (n_ghost_w)
-
-  ! Physical coordinates of boundary point B = G + dGB * nrm.
-  ! Used for pressure interpolation in force Method 2.
-  Real(Int64), Allocatable, Dimension(:,:) :: ghost_u_xB  ! (3, n_ghost_u)
-  Real(Int64), Allocatable, Dimension(:,:) :: ghost_v_xB  ! (3, n_ghost_v)
-  Real(Int64), Allocatable, Dimension(:,:) :: ghost_w_xB  ! (3, n_ghost_w)
-
-  ! Cell-centre trilinear stencil at image point I = G+2*dGB*nrm, precomputed for pressure interpolation (force Method 2)
-  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_u_img_cc  ! (3, n_ghost_u)
-  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_v_img_cc  ! (3, n_ghost_v)
-  Integer(Int32), Allocatable, Dimension(:,:) :: ghost_w_img_cc  ! (3, n_ghost_w)
-  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_u_wgt_cc  ! (8, n_ghost_u)
-  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_v_wgt_cc  ! (8, n_ghost_v)
-  Real   (Int64), Allocatable, Dimension(:,:) :: ghost_w_wgt_cc  ! (8, n_ghost_w)
 
   ! Cell-centre ghost list for rigorous pressure-force integration (Method 2): one entry per solid/fluid interface cell, no overcounting
   Integer(Int32) :: n_ghost_cc = 0
@@ -635,24 +599,17 @@ Module global
   Real   (Int64) :: particle_ibm_tau_crit    = 1d-3
   Real   (Int64) :: particle_resuspend_ucrit = 1d30   ! effectively "always deposits" until set
 
-  ! Phase 4: Boussinesq coupling (boussinesq_flag>=1 only). 0=off (default): particle_rho_f
-  ! stays the fixed value the user set. 1=on: the buoyancy term's fluid density is instead
-  ! the local Boussinesq value rho_f*(1-beta_T*(T-T_ref)) interpolated at the particle -- only
-  ! the buoyancy term uses this local value (drag/Re_p keep the constant particle_rho_f, a
-  ! scoped simplification). Ships one-way (particles never feed back into Tscal/momentum).
+  ! Boussinesq coupling (boussinesq_flag>=1 only): 0 keeps particle_rho_f fixed; 1 uses the local Boussinesq density
+  ! rho_f*(1-beta_T*(T-T_ref)) at the particle in the buoyancy term only (drag/Re_p keep particle_rho_f). One-way: particles
+  ! never feed back into Tscal or the momentum.
   Integer(Int32) :: particle_boussinesq_coupling = 0
-  ! Deposition diagnostic (any ibm_input_mode>=1 collision that removes a particle, both
-  ! Phase 3's absorb and deposit_resuspend outcomes): streamwise deposition-rate accumulator,
-  ! written to particle_deposit_file every particle_deposit_freq monitor reports. Structured
-  ! so a later two-way concentration/deposition feedback into the flow is a small increment.
+  ! Deposition diagnostic (IBM collisions that remove a particle: absorb and deposit_resuspend): streamwise deposition-rate
+  ! accumulator, written to particle_deposit_file every particle_deposit_freq monitor reports.
   Character(200) :: particle_deposit_file = 'particle_deposit_x.csv'
   Integer(Int32) :: particle_deposit_freq = 10
 
-  ! Phase 5: LES sub-grid dispersion. 0=none (default, correct for DNS resolution); 1=langevin:
-  ! a simplified (isotropic) Thomson/Weil-Sullivan-Moeng well-mixed Langevin model, diagnosing
-  ! k_sgs/eps_sgs from the existing eddy-viscosity SGS model's nu_t via a Deardorff-style
-  ! mixing-length closure (nu_t=C_k*sqrt(k_sgs)*Delta) rather than a transported k_sgs
-  ! equation -- a documented simplification, see particles.f90's compute_sgs_stats.
+  ! LES sub-grid dispersion: 0=none (default, correct at DNS resolution); 1=isotropic Langevin model, with k_sgs/eps_sgs diagnosed
+  ! from nu_t by a Deardorff mixing-length closure (nu_t=C_k*sqrt(k_sgs)*Delta), see compute_sgs_stats in particles.f90.
   Integer(Int32) :: sgs_particle_model  = 0
   Real   (Int64) :: particle_langevin_C0 = 2.1d0   ! Kolmogorov constant
 

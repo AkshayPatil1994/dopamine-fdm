@@ -4,8 +4,8 @@ Module equations
   ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global,          Only : x, xm, xg, y, ym, yg, z, zm, zg, term_1, &
-                              term_2, term, nx, nxg, ny, nyg, nz, nzg, &
-                              nu, dPdx, dPdz, yg_m, nu_t, in1, in2,    &
+                              term_2, nx, nxg, ny, nyg, nz, nzg, &
+                              nu, dPdx, dPdz, nu_t, in1, in2,    &
                               weight_y_0, weight_y_1, weight_z_0, weight_z_1, dx, dz,         &
                               boussinesq_flag, beta_T, grav, T_ref, Tscal, &
                               advection_scheme, uav_active,           &
@@ -38,7 +38,6 @@ Contains
     ! Uniform x grid: all face/centre spacings equal dx. z spacing z(k)-z(k-1) varies with k
     ! when z_bc_type==1 and alpha_grid_z>0 (spanwise stretching); computed per-k below.
     Real   (Int64) :: inv_dx, inv_dx2
-    Real   (Int64) :: inv_dy_j   ! 1/(y(j)-y(j-1))
     Real   (Int64) :: inv_dy3    ! 1/dy_3
     Real   (Int64) :: inv_dz3    ! 1/dz_3
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
@@ -125,7 +124,7 @@ Contains
 
     ! 4)--------compute d( 2*(nu_t+nu)*S1j )/dxj----
 
-    ! first derivation in y: du/dy + dv/dx goes to yg_m(1:ny)
+    ! du/dy at the y cell-centre midpoints
     !$acc kernels present(term_1,U_,yg)
     Do i = 1, nx
        Do k = 1, nzg
@@ -133,10 +132,7 @@ Contains
        End Do
     End Do
     !$acc end kernels
-    ! interpolate du/dy from yg_m(1:ny) to faces y(1:ny): interpolate_y_2nd disabled, term_1 used directly below (no interpolation)
-
-    ! first derivation in z: du/dz + dw/dx goes to a z-face scratch (term_2, free after section 3
-    ! above); non-uniform zg spacing, mirrors the du/dy precompute above
+    ! du/dz on a z-face scratch (term_2, free after section 3 above); non-uniform zg spacing
     !$acc kernels present(term_2,U_,zg)
     Do i = 1, nx
        Do j = 1, nyg
@@ -206,7 +202,7 @@ Contains
                 If ( ovr_u(i,j,k,4) < ovr_none ) fz2 = ovr_u(i,j,k,4)
              End If
 
-             ! viscous term, fused directly into rhs_u (was written to scratch `term` then accumulated separately)
+             ! viscous term
              rhs_u(i,j,k) = rhs_u(i,j,k) +                                                                  &
                            2d0*inv_dx2*(nu_x2*(U_(i+1,j,k)-U_(i,j,k)) - nu_x1*(U_(i,j,k)-U_(i-1,j,k)) )    + & !d(2(nu+nu_t)*du/dx)/dx
                            inv_dy3*( fy2 - fy1 )                                         + & !d((nu+nu_t)*(du/dy+dv/dx))/dy
@@ -241,15 +237,13 @@ Contains
 
     ! local variables
     Integer(Int32) :: i, j, k
-    Real   (Int64) :: dx_1, dx_2, dx_3, maxerr
     Logical        :: zwall_lo, zwall_hi   ! this rank owns a modelled z wall
     Integer(Int32) :: partner
     Real   (Int64) :: dy_1, dy_2, dy_3
-    Real   (Int64) :: dz_1, dz_2, dz_3
+    Real   (Int64) :: dz_3
     Real   (Int64) :: nu_x1, nu_x2, nu_y1, nu_y2, nu_z1, nu_z2
     Real   (Int64) :: fx1, fx2, fz1, fz2   ! x and z edge momentum fluxes of the viscous term
     Real   (Int64) :: inv_dx, inv_dx2
-    Real   (Int64) :: inv_dyg_j               ! 1/(yg(j+1)-yg(j))
     Real   (Int64) :: inv_dy1, inv_dy2, inv_dy3, two_inv_dy3  ! y-spacing inverses
     Real   (Int64) :: inv_dz3    ! 1/dz_3; z spacing varies with k (z_bc_type==1, alpha_grid_z>0)
     Real   (Int64) :: inv_dzg1, inv_dzg2   ! 1/(zg(k)-zg(k-1)), 1/(zg(k+1)-zg(k))
@@ -285,9 +279,6 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
-
-    ! interpolate -dv^2/dy from yg_m(2:ny-1) to y(2:end-1)
-    !Call interpolate_y_2nd(yg_m(2:ny-1),term_2(:,2:ny-1,:),y(2:ny-1),term(:,2:ny-1,:))
 
     ! 2)-----------compute -duv/dx--------------
 
@@ -334,9 +325,6 @@ Contains
 
     ! 4)-----------compute d( 2*(nu+nu_t)*S2j )/dxj--
 
-    ! interpolate eddy viscosity to faces
-
-    ! second order remain, no need to interpolate
     !$acc parallel loop collapse(2) present(rhs_v,V_,U_,W_,nu_t,ovr_v,tau_zv,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg)
     Do k=2,nzg-1
 
@@ -377,7 +365,7 @@ Contains
              nu_z2 = nu + weight_z_0(k  )*( weight_y_0(j)*nu_t(i,j,  k) + weight_y_1(j)*nu_t(i,j+1,  k) ) + &
                           weight_z_1(k  )*( weight_y_0(j)*nu_t(i,j,k+1) + weight_y_1(j)*nu_t(i,j+1,k+1) )
 
-             ! viscous term, fused directly into rhs_v (was written to scratch term_2 then accumulated separately)
+             ! viscous term
              fx2 = nu_x2*( (V_(i+1,j,k) - V_(i  ,j,k))*inv_dx + (U_(i  ,j+1,k) - U_(i  ,j,k))*inv_dy3 )
              fx1 = nu_x1*( (V_(i,  j,k) - V_(i-1,j,k))*inv_dx + (U_(i-1,j+1,k) - U_(i-1,j,k))*inv_dy3 )
              fz2 = nu_z2*( (V_(i,j,k+1) - V_(i,j,k  ))*inv_dzg2 + (W_(i,j+1,k  ) - W_(i,j,k  ))*inv_dy3 )
@@ -460,7 +448,6 @@ Contains
     Real   (Int64) :: nu_x1, nu_x2, nu_y1, nu_y2, nu_z1, nu_z2
     Real   (Int64) :: fy1, fy2, fx1, fx2   ! edge momentum fluxes of the viscous term
     Real   (Int64) :: inv_dx
-    Real   (Int64) :: inv_dy_j   ! 1/(y(j)-y(j-1))
     Real   (Int64) :: inv_dy3    ! 1/dy_3
     Real   (Int64) :: inv_dz1, inv_dz2, inv_dz3, two_inv_dz3  ! z-spacing inverses
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
@@ -541,7 +528,7 @@ Contains
 
     ! 4)----------compute d( 2(nu+nu_t)*S3j )/dxj----
 
-    ! first derivation in y: dw/dy goes to yg_m(1:ny)
+    ! dw/dy at the y cell-centre midpoints
     !$acc kernels present(term_1,W_,yg)
     Do i = 1, nxg
        Do k = 1, nz
@@ -549,10 +536,6 @@ Contains
        End Do
     End Do
     !$acc end kernels
-    ! interpolate dw/dy from yg_m(1:ny) to faces y(1:ny): interpolate_y_2nd disabled, term_1 used directly below (no interpolation)
-
-    ! nu_t at the required face locations is read directly from the global array
-    ! in the loop below; a separate interpolate_y pass is not needed.
 
     !$acc parallel loop collapse(2) present(term_1,rhs_w,nu_t,tau_z,ovr_w,weight_y_0,weight_y_1,weight_z_0,weight_z_1, &
     !$acc&  U_,V_,W_,y,z,zg)
@@ -617,7 +600,7 @@ Contains
                 If ( ovr_w(i,j,k,4) < ovr_none ) fy2 = ovr_w(i,j,k,4)
              End If
 
-             ! viscous term, fused directly into rhs_w (was written to scratch `term` then accumulated separately)
+             ! viscous term
              rhs_w(i,j,k) = rhs_w(i,j,k) +                                                                                &
                            inv_dx*( fx2 - fx1 )                                                                             + & !d((nu+nu_t)*(dw/dx+du/dz))/dx
                            inv_dy3*( fy2 - fy1 )                                         + & !d((nu+nu_t)*(dw/dy+dv/dz))/dy

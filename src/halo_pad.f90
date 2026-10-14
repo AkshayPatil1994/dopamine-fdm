@@ -51,7 +51,7 @@ Contains
     Real   (Int64), Intent(Out) :: P(1-E:n1+E,n2,1-E:n3+E)
 
     Logical        :: is_first, is_last, per
-    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup, m, tagbase
+    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup, m
     Real   (Int64), Allocatable :: sb(:,:,:), rb(:,:,:)
 
     P(1:n1,:,1:n3) = F

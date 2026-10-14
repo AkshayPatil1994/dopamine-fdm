@@ -317,10 +317,8 @@ Contains
           waveOmega_z = 0d0
        End If
 
-       ! Derived pressure-gradient references
-       dPdx0    = dPdx
+       ! Time-dependent forcing starts from the input gradients
        dPdx_t   = dPdx
-       dPdx_ref = dPdx
        dPdz_t   = dPdz
 
        ! Rotation axis (streamwise, x) passes through the domain centerline
@@ -576,11 +574,9 @@ Contains
     Call Mpi_bcast ( advection_scheme,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( dPdx,                 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( dPdx0,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( dPdx_t,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( dPdz,                 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( dPdz_t,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( dPdx_ref,             1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( Ub_x,                 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( Ub_z,                 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( waveOmega_x,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -1360,26 +1356,29 @@ Contains
   End Subroutine output_data
 
 
-  ! Read scalar C from a restart file; caller/layout details
+  !> Open the restart file as unit 2 on rank 0, positioned after the six mesh blocks (size header, then the coordinates)
+  Subroutine open_restart_skip_mesh
+
+    Integer(Int32) :: m, n, nn(6)
+    Real(Int64), Allocatable :: tmp(:)
+
+    If ( myid /= 0 ) Return
+    Open(2, file=Trim(Adjustl(filein)), access='stream', form='unformatted', action='read')
+    nn = (/ nx_global, ny_global, nz_global, nxm_global, nym_global, nzm_global /)
+    Do m = 1, 6
+       Allocate( tmp(nn(m)) )
+       Read(2) n
+       Read(2) tmp
+       Deallocate( tmp )
+    End Do
+
+  End Subroutine open_restart_skip_mesh
+
+
+  !> Read scalar C from a restart file, skipping the mesh and the U, V, W, P blocks
   Subroutine read_scalar_restart
 
-    If ( myid == 0 ) Then
-       Open(2, file=Trim(Adjustl(filein)), access='stream', &
-            form='unformatted', action='read')
-       ! Skip mesh arrays
-       Block
-          Integer(Int32) :: n1, n2, n3, n4, n5, n6
-          Real   (Int64), Allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), &
-                                         tmp5(:), tmp6(:)
-          Allocate(tmp1(nx_global)); Read(2) n1; Read(2) tmp1
-          Allocate(tmp2(ny_global)); Read(2) n2; Read(2) tmp2
-          Allocate(tmp3(nz_global)); Read(2) n3; Read(2) tmp3
-          Allocate(tmp4(nxm_global)); Read(2) n4; Read(2) tmp4
-          Allocate(tmp5(nym_global)); Read(2) n5; Read(2) tmp5
-          Allocate(tmp6(nzm_global)); Read(2) n6; Read(2) tmp6
-          Deallocate(tmp1,tmp2,tmp3,tmp4,tmp5,tmp6)
-       End Block
-    End If
+    Call open_restart_skip_mesh
 
     ! Skip U, V, W, P blocks (discarded — this restart file's U/V/W/P were already consumed by read_input_data)
     Call skip_distributed_field_block(2, nyg, .True.,  .False.)
@@ -1399,22 +1398,7 @@ Contains
   ! Read the VOF fraction into Cvof_io and the pressure history into P from a restart file; skips U,V,W and the C/nu_t/T blocks of the other features
   Subroutine read_vof_restart
 
-    If ( myid == 0 ) Then
-       Open(2, file=Trim(Adjustl(filein)), access='stream', &
-            form='unformatted', action='read')
-       Block
-          Integer(Int32) :: n1, n2, n3, n4, n5, n6
-          Real   (Int64), Allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), &
-                                         tmp5(:), tmp6(:)
-          Allocate(tmp1(nx_global)); Read(2) n1; Read(2) tmp1
-          Allocate(tmp2(ny_global)); Read(2) n2; Read(2) tmp2
-          Allocate(tmp3(nz_global)); Read(2) n3; Read(2) tmp3
-          Allocate(tmp4(nxm_global)); Read(2) n4; Read(2) tmp4
-          Allocate(tmp5(nym_global)); Read(2) n5; Read(2) tmp5
-          Allocate(tmp6(nzm_global)); Read(2) n6; Read(2) tmp6
-          Deallocate(tmp1,tmp2,tmp3,tmp4,tmp5,tmp6)
-       End Block
-    End If
+    Call open_restart_skip_mesh
 
     Call skip_distributed_field_block(2, nyg, .True.,  .False.)
     Call skip_distributed_field_block(2, ny,  .False., .False.)
@@ -1434,22 +1418,7 @@ Contains
   ! Read temperature T from a restart file; skips U,V,W,P and any C/nu_t blocks ahead of it
   Subroutine read_temperature_restart
 
-    If ( myid == 0 ) Then
-       Open(2, file=Trim(Adjustl(filein)), access='stream', &
-            form='unformatted', action='read')
-       Block
-          Integer(Int32) :: n1, n2, n3, n4, n5, n6
-          Real   (Int64), Allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), &
-                                         tmp5(:), tmp6(:)
-          Allocate(tmp1(nx_global)); Read(2) n1; Read(2) tmp1
-          Allocate(tmp2(ny_global)); Read(2) n2; Read(2) tmp2
-          Allocate(tmp3(nz_global)); Read(2) n3; Read(2) tmp3
-          Allocate(tmp4(nxm_global)); Read(2) n4; Read(2) tmp4
-          Allocate(tmp5(nym_global)); Read(2) n5; Read(2) tmp5
-          Allocate(tmp6(nzm_global)); Read(2) n6; Read(2) tmp6
-          Deallocate(tmp1,tmp2,tmp3,tmp4,tmp5,tmp6)
-       End Block
-    End If
+    Call open_restart_skip_mesh
 
     ! U,V,W,P blocks (discarded — already consumed by read_input_data)
     Call skip_distributed_field_block(2, nyg, .True.,  .False.)

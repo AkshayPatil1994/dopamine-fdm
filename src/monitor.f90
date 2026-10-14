@@ -23,7 +23,6 @@ Contains
     Real(Int64)    :: meanU, maxU
     Real(Int64)    :: max_divergence
     Integer(Int32) :: local_nan, global_nan
-    Real(Int64)    :: local_sc, total_sc
 
     If ( Mod(istep, nmonitor) == 0 ) Then
 

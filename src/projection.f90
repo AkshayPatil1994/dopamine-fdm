@@ -84,7 +84,7 @@ Contains
     Logical, Intent(In), Optional :: skip_p_save
 
     Integer(Int32) :: i, j, k, k_global, i_global, j_global, info, nyp
-    Real   (Int64) :: dum, dumref, maxerr, wavenum_sum, inv_pdt
+    Real   (Int64) :: wavenum_sum, inv_pdt
     Logical        :: is_first_p, is_last_p, save_p
     Integer(Int32) :: partner_p
 
@@ -93,7 +93,7 @@ Contains
 
     Call profiler_start(PROF_POISSON_FFT)
 #ifdef GPU_POISSON
-    ! rhs_p/rhs_p_hat stay device-resident through the whole Poisson stage; single-GPU cuFFT transform (nprocs==1 only)
+    ! rhs_p stays device-resident through the whole Poisson stage
     ! z_bc_type==1 (4-wall duct, y_bc_type==1 .And. x_bc_type==0 only -- other z-wall
     ! combinations are rejected for GPU_POISSON builds at init time, initialization.f90)
     ! pencil-decomposed transform chain (x FFT or DCT-IV, z FFT unless duct), multi-GPU capable for every BC combination
@@ -251,23 +251,14 @@ Contains
        End Do
        poisson_y_c(:,1:nyp,:) = poisson_y_c(:,1:nyp,:) / Real(nyp, Int64)
     Else
-       ! Zgtsv overwrites DL, D, DU in-place, so re-initialise all three inside the loop before every call
-       ! solve for each mode this rank owns (local index -> global mode index via decomp_poisson%yst)
+       ! one tridiagonal solve per mode this rank owns (local index -> global mode index via decomp_poisson%yst)
        Do k = 1, decomp_poisson%ysz(3)
           k_global = decomp_poisson%yst(3) + k - 2
           Do i = 1, decomp_poisson%ysz(1)
              i_global = decomp_poisson%yst(1) + i - 2
-             ! Re-fill DL and DU (Zgtsv destroys them on exit)
-             Do j = 2, nyg-2
-                DL(j) = Dyy(j+1,j)   ! lower diagonal
-                DU(j) = Dyy(j,j+1)   ! upper diagonal
-             End Do
              ! kxx+kzz is constant for this (i,k) mode
              wavenum_sum = kxx(i_global) + kzz(k_global)
-             ! form diagonal
-             Do j = 2, nyg-1
-                D(j) = Dyy(j,j) + wavenum_sum
-             End Do
+             ! Re-fill DL, D and DU (Zgtsv destroys them on exit)
              If ( pois_layered ) Then
                 Do j = 2, nyg-2
                    DL(j) = Dyy(j+1,j)*pois_bf(j)
@@ -277,6 +268,14 @@ Contains
                    D(j) = pois_bh(j)*wavenum_sum
                    If ( j < nyg-1 ) D(j) = D(j) - Dyy(j,j+1)*pois_bf(j)
                    If ( j > 2 )     D(j) = D(j) - Dyy(j,j-1)*pois_bf(j-1)
+                End Do
+             Else
+                Do j = 2, nyg-2
+                   DL(j) = Dyy(j+1,j)
+                   DU(j) = Dyy(j,j+1)
+                End Do
+                Do j = 2, nyg-1
+                   D(j) = Dyy(j,j) + wavenum_sum
                 End Do
              End If
              ! Remove singularity 00 mode

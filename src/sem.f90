@@ -153,7 +153,7 @@ Module synthetic_eddy_method
 
 Contains
 
-  !> Abort all ranks on a fatal input error (a bare Stop on a rank subset hangs the others and exits with status 0)
+  !> Abort every rank on a fatal error (a bare Stop exits with status 0 and, on a rank subset, hangs the others)
   Subroutine sem_abort(msg)
     Character(*), Intent(In) :: msg
     Write(*,'(A)') Trim(msg)
@@ -365,7 +365,7 @@ Contains
        Else If ( sem_profile_format == 1 ) Then
           Call read_mean_profile_TI
        Else
-          Stop 'ERROR: sem_profile_format must be 0 (Reynolds-stress) or 1 (wind-tunnel TI)'
+          Call sem_abort( 'ERROR: sem_profile_format must be 0 (Reynolds-stress) or 1 (wind-tunnel TI)' )
        End If
        inflow_profile_loaded = .True.
     Else If ( inflow_type == 2 ) Then
@@ -401,16 +401,16 @@ Contains
 
     If ( boussinesq_flag >= 1 .And. Len_trim(inflow_temperature_file) > 0 ) Call read_mean_profile_T
 
-    If ( sem_use_esem == 0 .And. ( n_sigma > 0 .Or. sem_wall_damping == 1 ) ) Stop &
+    If ( sem_use_esem == 0 .And. ( n_sigma > 0 .Or. sem_wall_damping == 1 ) ) Call sem_abort( &
          'ERROR: sem_use_esem=0 (classical SEM) requires sem_sigma_file to be unset and sem_wall_damping=0 -- ' // &
-         'classical SEM has no well-defined normalisation for inhomogeneous length scales'
+         'classical SEM has no well-defined normalisation for inhomogeneous length scales' )
 
-    If ( sem_divergence_free == 1 .And. sem_use_esem == 0 ) Stop &
+    If ( sem_divergence_free == 1 .And. sem_use_esem == 0 ) Call sem_abort( &
          'ERROR: sem_divergence_free=1 requires sem_use_esem=1 -- classical (analytical) ' // &
-         'normalisation has no closed form for the curl construction'
+         'normalisation has no closed form for the curl construction' )
 
     Uconv_sem = Sum(prof_U) / Real(n_profile,8)
-    If ( Uconv_sem <= 0d0 ) Stop 'ERROR: SEM inflow profile has non-positive bulk velocity'
+    If ( Uconv_sem <= 0d0 ) Call sem_abort( 'ERROR: SEM inflow profile has non-positive bulk velocity' )
 
     ! near-wall no-slip enforcement setup (see wall_taper/sem_fluctuation): only active at faces that are literal Dirichlet (no-slip) walls, not periodic or free-slip
     wall_active_lo = Merge( 1, 0, y_bc_type == 1 .And. bc_face_ylo == 1 )
@@ -843,7 +843,7 @@ Contains
        If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n_profile_T = n_profile_T + 1
     End Do
-    If ( n_profile_T < 2 ) Stop 'ERROR: inflow_temperature_file: fewer than 2 data rows found'
+    If ( n_profile_T < 2 ) Call sem_abort( 'ERROR: inflow_temperature_file: fewer than 2 data rows found' )
 
     Allocate( prof_y_T(n_profile_T), prof_T(n_profile_T) )
 
@@ -856,7 +856,7 @@ Contains
        If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n = n + 1
        Read(line,*,iostat=ios) col(1:2)
-       If ( ios /= 0 ) Stop 'ERROR: inflow_temperature_file: failed to parse a data row (need 2 columns: y T)'
+       If ( ios /= 0 ) Call sem_abort( 'ERROR: inflow_temperature_file: failed to parse a data row (need 2 columns: y T)' )
        prof_y_T(n) = col(1)
        prof_T(n)   = col(2)
     End Do
@@ -886,7 +886,7 @@ Contains
        If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n_profile = n_profile + 1
     End Do
-    If ( n_profile < 2 ) Stop 'ERROR: inflow_profile_file: fewer than 2 data rows found'
+    If ( n_profile < 2 ) Call sem_abort( 'ERROR: inflow_profile_file: fewer than 2 data rows found' )
 
     Allocate( prof_y(n_profile), prof_U(n_profile) )
     Allocate( prof_R11(n_profile), prof_R22(n_profile), prof_R33(n_profile), prof_R12(n_profile) )
@@ -900,7 +900,7 @@ Contains
        If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n = n + 1
        Read(line,*,iostat=ios) col(1:8)
-       If ( ios /= 0 ) Stop 'ERROR: inflow_profile_file: failed to parse a data row (need >=8 columns)'
+       If ( ios /= 0 ) Call sem_abort( 'ERROR: inflow_profile_file: failed to parse a data row (need >=8 columns)' )
        prof_y(n)   = col(1)   ! y
        prof_U(n)   = col(2)   ! U
        prof_R11(n) = col(5)   ! uu
@@ -911,7 +911,7 @@ Contains
        ! PSD check (R13=R23=0 assumed): R11,R33>=0 and the 2x2 leading minor R11*R22-R12^2>=0
        If ( prof_R11(n) < 0d0 .Or. prof_R33(n) < 0d0 .Or. &
             prof_R11(n)*prof_R22(n) - prof_R12(n)**2 < -1d-10*Max(prof_R11(n)*prof_R22(n),1d-30) ) &
-            Stop 'ERROR: inflow_profile_file: Reynolds-stress tensor is not positive-semidefinite at some y'
+            Call sem_abort( 'ERROR: inflow_profile_file: Reynolds-stress tensor is not positive-semidefinite at some y' )
     End Do
     Close(unit_in)
 
@@ -944,16 +944,16 @@ Contains
     ! ---- header: first non-blank line, must start with '#' and list column names ----
     Do
        Read(unit_in,'(A)',iostat=ios) line
-       If ( ios /= 0 ) Stop 'ERROR: inflow_profile_file: missing "# z U Iu Iv Iw ..." header'
+       If ( ios /= 0 ) Call sem_abort( 'ERROR: inflow_profile_file: missing "# z U Iu Iv Iw ..." header' )
        line = Adjustl(line)
        If ( Len_trim(line) == 0 ) Cycle
-       If ( line(1:1) /= '#' ) Stop 'ERROR: inflow_profile_file: first line must be "# ..." header'
+       If ( line(1:1) /= '#' ) Call sem_abort( 'ERROR: inflow_profile_file: first line must be "# ..." header' )
        Call parse_TI_header(line(2:), slot_name, n_slot, col_of_slot, ncols)
        Exit
     End Do
 
     If ( Any( col_of_slot(1:5) == 0 ) ) &
-         Stop 'ERROR: inflow_profile_file: header must include z (or y), U, Iu, Iv, Iw'
+         Call sem_abort( 'ERROR: inflow_profile_file: header must include z (or y), U, Iu, Iv, Iw' )
     any_Lscale = Any( col_of_slot(6:14) > 0 )
 
     ! ---- count data rows ----
@@ -965,7 +965,7 @@ Contains
        If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n_profile = n_profile + 1
     End Do
-    If ( n_profile < 2 ) Stop 'ERROR: inflow_profile_file: fewer than 2 data rows found'
+    If ( n_profile < 2 ) Call sem_abort( 'ERROR: inflow_profile_file: fewer than 2 data rows found' )
 
     Allocate( prof_y(n_profile), prof_U(n_profile) )
     Allocate( prof_R11(n_profile), prof_R22(n_profile), prof_R33(n_profile), prof_R12(n_profile) )
@@ -996,13 +996,13 @@ Contains
        If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n = n + 1
        Read(line,*,iostat=ios) row(1:ncols)
-       If ( ios /= 0 ) Stop 'ERROR: inflow_profile_file: failed to parse a data row'
+       If ( ios /= 0 ) Call sem_abort( 'ERROR: inflow_profile_file: failed to parse a data row' )
 
        prof_y(n) = row(col_of_slot(1))
        prof_U(n) = row(col_of_slot(2))
        Iu_v = row(col_of_slot(3)); Iv_v = row(col_of_slot(4)); Iw_v = row(col_of_slot(5))
        If ( Iu_v < 0d0 .Or. Iv_v < 0d0 .Or. Iw_v < 0d0 ) &
-            Stop 'ERROR: inflow_profile_file: turbulence intensities must be non-negative'
+            Call sem_abort( 'ERROR: inflow_profile_file: turbulence intensities must be non-negative' )
        prof_R11(n) = (Iu_v*prof_U(n))**2
        prof_R22(n) = (Iv_v*prof_U(n))**2
        prof_R33(n) = (Iw_v*prof_U(n))**2
@@ -1087,8 +1087,8 @@ Contains
        ncols = ncols + 1
 
        islot = token_slot(tok, slot_name, n_slot)
-       If ( islot < 0 ) Stop 'ERROR: inflow_profile_file: unrecognized header column name "'//Trim(tok)//'"'
-       If ( col_of_slot(islot) /= 0 ) Stop 'ERROR: inflow_profile_file: duplicate header column name'
+       If ( islot < 0 ) Call sem_abort( 'ERROR: inflow_profile_file: unrecognized header column name "'//Trim(tok)//'"' )
+       If ( col_of_slot(islot) /= 0 ) Call sem_abort( 'ERROR: inflow_profile_file: duplicate header column name' )
        col_of_slot(islot) = ncols
     End Do
 
@@ -1146,7 +1146,7 @@ Contains
     End If
 
     If ( Lx_out <= 0d0 .Or. Ly_out <= 0d0 .Or. Lz_out <= 0d0 ) &
-         Stop 'ERROR: inflow_profile_file: length scales must be strictly positive'
+         Call sem_abort( 'ERROR: inflow_profile_file: length scales must be strictly positive' )
 
   End Subroutine fill_length_scale
 
@@ -1175,7 +1175,7 @@ Contains
        If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n_sigma = n_sigma + 1
     End Do
-    If ( n_sigma < 2 ) Stop 'ERROR: sem_sigma_file: fewer than 2 data rows found'
+    If ( n_sigma < 2 ) Call sem_abort( 'ERROR: sem_sigma_file: fewer than 2 data rows found' )
 
     Allocate( sig_y(n_sigma) )
     Allocate( sig_ux(n_sigma), sig_uy(n_sigma), sig_uz(n_sigma) )
@@ -1191,8 +1191,8 @@ Contains
        If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
        n = n + 1
        Read(line,*,iostat=ios) col(1:10)
-       If ( ios /= 0 ) Stop 'ERROR: sem_sigma_file: failed to parse a data row (need 10 columns)'
-       If ( Minval(col(2:10)) <= 0d0 ) Stop 'ERROR: sem_sigma_file: length scales must be strictly positive'
+       If ( ios /= 0 ) Call sem_abort( 'ERROR: sem_sigma_file: failed to parse a data row (need 10 columns)' )
+       If ( Minval(col(2:10)) <= 0d0 ) Call sem_abort( 'ERROR: sem_sigma_file: length scales must be strictly positive' )
        sig_y(n)  = col(1)
        sig_ux(n) = col(2); sig_uy(n) = col(3); sig_uz(n) = col(4)
        sig_vx(n) = col(5); sig_vy(n) = col(6); sig_vz(n) = col(7)
@@ -1212,8 +1212,7 @@ Contains
 
   ! Generic piecewise-linear interpolation, clamped at the endpoints. xarr
   ! must be non-decreasing (grid/profile y-nodes); bracket found by binary
-  ! search (was an O(n) linear scan -- hot in sem_fluctuation/mean_profile_*,
-  ! called at every inflow grid point, every RK sub-stage).
+  ! search (called at every inflow grid point, every RK sub-stage).
   Real(Int64) Function linterp(xarr, yarr, n, xq) Result(val)
     !$acc routine seq
 
@@ -1471,7 +1470,7 @@ Contains
     Vvol(n_cdf) = Vvol(n_cdf-1)
 
     Vmax = Maxval(Vvol); Vmin = Minval(Vvol)
-    If ( Vmin <= 0d0 ) Stop 'ERROR: sem_sigma_file implies a non-positive eddy volume somewhere'
+    If ( Vmin <= 0d0 ) Call sem_abort( 'ERROR: sem_sigma_file implies a non-positive eddy volume somewhere' )
     w = ( -Vvol + Vmax )/Vmin + 1d0   ! Eq. (9), Schau et al. 2022
 
     cdf_val(1) = 0d0
@@ -1487,8 +1486,7 @@ Contains
 
   ! cdf_val is non-decreasing by construction (trapezoidal integral of a
   ! strictly-positive weight, see build_placement_cdf); bracket found by
-  ! binary search (was an O(n_cdf) linear scan -- hot in place_eddies/
-  ! eddy_realize, called per eddy per placement draw).
+  ! binary search (called per eddy per placement draw).
   Real(Int64) Function invert_cdf(u) Result(yq)
     !$acc routine seq
 
@@ -1980,9 +1978,9 @@ Contains
 
     If ( inflow_opt_active /= 1 ) Return
 
-    If ( x_bc_type /= 1 .Or. inflow_type /= 1 ) Stop &
-         'ERROR: inflow_opt_active=1 requires x_bc_type=1 and inflow_type=1 (SEM inflow)'
-    If ( n_bezier < 3 ) Stop 'ERROR: inflow_opt_active=1 requires n_bezier >= 3'
+    If ( x_bc_type /= 1 .Or. inflow_type /= 1 ) Call sem_abort( &
+         'ERROR: inflow_opt_active=1 requires x_bc_type=1 and inflow_type=1 (SEM inflow)' )
+    If ( n_bezier < 3 ) Call sem_abort( 'ERROR: inflow_opt_active=1 requires n_bezier >= 3' )
 
     ! nearest global interior cc x-index to inflow_opt_x; duplicates probe_output.f90's
     ! nearest_cc_global rather than Use it (compiles after sem.f90 / unlinked in standalone sem test targets)
@@ -2087,7 +2085,7 @@ Contains
     Integer(Int32) :: i
     Real(Int64) :: s
 
-    If ( n_bezier < 3 ) Stop 'ERROR: n_bezier >= 3 is required'
+    If ( n_bezier < 3 ) Call sem_abort( 'ERROR: n_bezier >= 3 is required' )
 
     Allocate( y_cp(n_bezier) )
     Do i = 1, n_bezier
@@ -2550,8 +2548,8 @@ Contains
        Open( newunit=unit_in, file=Trim(inflow_opt_restart_file), access='stream', &
              form='unformatted', status='old', action='read' )
        Read(unit_in) n_bezier_f
-       If ( n_bezier_f /= n_bezier ) Stop &
-            'ERROR: fields/inflow_opt_data.dat n_bezier mismatch with current namelist n_bezier'
+       If ( n_bezier_f /= n_bezier ) Call sem_abort( &
+            'ERROR: fields/inflow_opt_data.dat n_bezier mismatch with current namelist n_bezier' )
        Read(unit_in) inflow_opt_phase, inflow_opt_step_count, inflow_opt_iter, inflow_opt_no_improve
        Read(unit_in) x_cp_R22, x_cp_R33
        Read(unit_in) x_prev_R22, x_prev_R33

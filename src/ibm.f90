@@ -465,9 +465,6 @@ Contains
     Allocate ( ghost_u_ref(3,n_ghost_u) )
     Allocate ( ghost_u_dGB(  n_ghost_u) )
     Allocate ( ghost_u_dGI(  n_ghost_u) )
-    Allocate ( ghost_u_xB(3, n_ghost_u) )
-    Allocate ( ghost_u_img_cc(3, n_ghost_u) )
-    Allocate ( ghost_u_wgt_cc(8, n_ghost_u) )
     Allocate ( ghost_u_objid(n_ghost_u) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
@@ -540,25 +537,11 @@ Contains
        End Do
     End Do
 
-    ! Store dGB, boundary-point coords, and precomputed pressure stencil
+    ! Solid ID and boundary distance of each ghost cell
     Do ng = 1, n_ghost_u
        i = ghost_u_idx(1,ng);  j = ghost_u_idx(2,ng);  k = ghost_u_idx(3,ng)
        ghost_u_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
        ghost_u_dGB(ng)   = Abs( 0.5d0*(phie(i,j,k)+phie(i+1,j,k)) )
-       ghost_u_xB(1,ng)  = xe(i)  + ghost_u_dGB(ng)*ghost_u_nrm(1,ng)
-       ghost_u_xB(2,ng)  = yg(j)  + ghost_u_dGB(ng)*ghost_u_nrm(2,ng)
-       ghost_u_xB(3,ng)  = zge(k)  + ghost_u_dGB(ng)*ghost_u_nrm(3,ng)
-       ! Cell-centre stencil at image point I = xB + (dGI-dGB)*nrm = xG + dGI*nrm
-       ! (same xI as velocity image point, on cell-centre grid for P interpolation)
-       Call find_stencil_centre( ghost_u_xB(1,ng) + (ghost_u_dGI(ng)-ghost_u_dGB(ng))*ghost_u_nrm(1,ng), &
-                                 ghost_u_xB(2,ng) + (ghost_u_dGI(ng)-ghost_u_dGB(ng))*ghost_u_nrm(2,ng), &
-                                 ghost_u_xB(3,ng) + (ghost_u_dGI(ng)-ghost_u_dGB(ng))*ghost_u_nrm(3,ng), &
-                                 ii, jj, kk )
-       Call trilinear_weights( ghost_u_xB(1,ng) + (ghost_u_dGI(ng)-ghost_u_dGB(ng))*ghost_u_nrm(1,ng), &
-                               ghost_u_xB(2,ng) + (ghost_u_dGI(ng)-ghost_u_dGB(ng))*ghost_u_nrm(2,ng), &
-                               ghost_u_xB(3,ng) + (ghost_u_dGI(ng)-ghost_u_dGB(ng))*ghost_u_nrm(3,ng), &
-                               ii, jj, kk, ghost_u_wgt_cc(1:8,ng) )
-       ghost_u_img_cc(1,ng) = ii;  ghost_u_img_cc(2,ng) = jj;  ghost_u_img_cc(3,ng) = kk
     End Do
 
   End Subroutine build_ghost_list_u
@@ -569,7 +552,7 @@ Contains
     Integer(Int32) :: i, j, k, ng, nd
     Integer(Int32) :: ii, jj, kk, ir, jr, kr
     Real   (Int64) :: nx_, ny_, nz_
-    Real   (Int64) :: xGc, yGc, zGc, dGB, dGI, xB, yB, zB, xI, yI, zI, yref_
+    Real   (Int64) :: xGc, yGc, zGc, dGB, dGI, xB, yB, zB, xI, yI, zI
 
     ! Pass 1: count ghost cells (no storage)
     ng = 0;  nd = 0
@@ -621,9 +604,6 @@ Contains
     Allocate ( ghost_v_ref(3,n_ghost_v) )
     Allocate ( ghost_v_dGB(  n_ghost_v) )
     Allocate ( ghost_v_dGI(  n_ghost_v) )
-    Allocate ( ghost_v_xB(3, n_ghost_v) )
-    Allocate ( ghost_v_img_cc(3, n_ghost_v) )
-    Allocate ( ghost_v_wgt_cc(8, n_ghost_v) )
     Allocate ( ghost_v_objid(n_ghost_v) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
@@ -681,18 +661,6 @@ Contains
        i = ghost_v_idx(1,ng);  j = ghost_v_idx(2,ng);  k = ghost_v_idx(3,ng)
        ghost_v_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
        ghost_v_dGB(ng)   = Abs( phi_v(i,j,k) )
-       ghost_v_xB(1,ng)  = xge(i)  + ghost_v_dGB(ng)*ghost_v_nrm(1,ng)
-       ghost_v_xB(2,ng)  = y (j)  + ghost_v_dGB(ng)*ghost_v_nrm(2,ng)
-       ghost_v_xB(3,ng)  = zge(k)  + ghost_v_dGB(ng)*ghost_v_nrm(3,ng)
-       Call find_stencil_centre( ghost_v_xB(1,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(1,ng), &
-                                 ghost_v_xB(2,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(2,ng), &
-                                 ghost_v_xB(3,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(3,ng), &
-                                 ii, jj, kk )
-       Call trilinear_weights( ghost_v_xB(1,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(1,ng), &
-                               ghost_v_xB(2,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(2,ng), &
-                               ghost_v_xB(3,ng) + (ghost_v_dGI(ng)-ghost_v_dGB(ng))*ghost_v_nrm(3,ng), &
-                               ii, jj, kk, ghost_v_wgt_cc(1:8,ng) )
-       ghost_v_img_cc(1,ng) = ii;  ghost_v_img_cc(2,ng) = jj;  ghost_v_img_cc(3,ng) = kk
     End Do
 
   End Subroutine build_ghost_list_v
@@ -703,7 +671,7 @@ Contains
     Integer(Int32) :: i, j, k, ng, nd
     Integer(Int32) :: ii, jj, kk, ir, jr, kr
     Real   (Int64) :: nx_, ny_, nz_
-    Real   (Int64) :: xGc, yGc, zGc, dGB, dGI, xB, yB, zB, xI, yI, zI, yref_
+    Real   (Int64) :: xGc, yGc, zGc, dGB, dGI, xB, yB, zB, xI, yI, zI
 
     ! Pass 1: count ghost cells (no storage)
     ng = 0;  nd = 0
@@ -755,9 +723,6 @@ Contains
     Allocate ( ghost_w_ref(3,n_ghost_w) )
     Allocate ( ghost_w_dGB(  n_ghost_w) )
     Allocate ( ghost_w_dGI(  n_ghost_w) )
-    Allocate ( ghost_w_xB(3, n_ghost_w) )
-    Allocate ( ghost_w_img_cc(3, n_ghost_w) )
-    Allocate ( ghost_w_wgt_cc(8, n_ghost_w) )
     Allocate ( ghost_w_objid(n_ghost_w) )
 
     ! Pass 2: identical traversal, fill ghost arrays directly
@@ -815,18 +780,6 @@ Contains
        i = ghost_w_idx(1,ng);  j = ghost_w_idx(2,ng);  k = ghost_w_idx(3,ng)
        ghost_w_objid(ng) = Min(Max(Nint(ibm_obj_id(i,j,k)), 0), max_ibm_objects)
        ghost_w_dGB(ng)   = Abs( phi_w(i,j,k) )
-       ghost_w_xB(1,ng)  = xge(i)  + ghost_w_dGB(ng)*ghost_w_nrm(1,ng)
-       ghost_w_xB(2,ng)  = yg(j)  + ghost_w_dGB(ng)*ghost_w_nrm(2,ng)
-       ghost_w_xB(3,ng)  = ze(k)  + ghost_w_dGB(ng)*ghost_w_nrm(3,ng)
-       Call find_stencil_centre( ghost_w_xB(1,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(1,ng), &
-                                 ghost_w_xB(2,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(2,ng), &
-                                 ghost_w_xB(3,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(3,ng), &
-                                 ii, jj, kk )
-       Call trilinear_weights( ghost_w_xB(1,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(1,ng), &
-                               ghost_w_xB(2,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(2,ng), &
-                               ghost_w_xB(3,ng) + (ghost_w_dGI(ng)-ghost_w_dGB(ng))*ghost_w_nrm(3,ng), &
-                               ii, jj, kk, ghost_w_wgt_cc(1:8,ng) )
-       ghost_w_img_cc(1,ng) = ii;  ghost_w_img_cc(2,ng) = jj;  ghost_w_img_cc(3,ng) = kk
     End Do
 
   End Subroutine build_ghost_list_w
@@ -878,7 +831,7 @@ Contains
     Logical,        Intent(In)    :: xface, zface
 
     Logical        :: is_first, is_last, per
-    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup, m, i, j, k, E, cnt, idx
+    Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup, m, i, j, k, E, cnt
 
     E = ibm_E
 

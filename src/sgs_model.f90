@@ -173,7 +173,6 @@ Contains
 
 #ifdef GPU_POISSON
     ! Without IBM there is no host-only Pass 2, so wall zeroing, ghost fills and MPI halos all stay on the device
-    ! (previously nu_t made three full-array host<->device round trips per RK substage)
     If ( .Not. ibm_active ) Then
        Call vreman_ghosts_device(nu_t_)
        ! host copy only needed by host consumers (snapshot write syncs it itself, see input_output.f90)

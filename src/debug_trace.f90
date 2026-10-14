@@ -117,7 +117,7 @@ Contains
     Type(blk_t), Allocatable :: blk(:)
     Real(Int64), Allocatable :: G(:,:,:)
     Logical,     Allocatable :: own(:,:), set(:,:)
-    Integer(Int32) :: iproc, ix1, ix2, iz1, iz2, nxl, nzl, n1, n2, n3, i, j, k, gi, gk, nbad, worst(3), u
+    Integer(Int32) :: iproc, ix1, ix2, iz1, iz2, nxl, nzl, n1, n2, n3, i, k, gi, gk, nbad, worst(3), u
     Real(Int64)    :: dmax, dd, tol
     Character(Len=1024) :: fname
 

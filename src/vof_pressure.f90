@@ -1,7 +1,7 @@
 !> Variable-density pressure operator of the two-fluid solver: face coefficients beta = 1/rho_face from the VOF field, the
 !  operator A phi = div(beta grad phi) (equal to the fast Poisson solver's discrete Laplacian for constant beta), and a PCG
-!  preconditioned by that fast solver (solve_poisson_equation) with the lightest-fluid coefficient
-!  (tests/vof/spike_pressure_pcg.f90: 17/28/39 iterations to 1e-6 at density ratios 10/100/1000, grid independent).
+!  preconditioned by that fast solver (solve_poisson_equation) with the lightest-fluid coefficient (about 17/28/39 iterations to
+!  1e-6 at density ratios 10/100/1000, independent of the grid).
 !  Cell-centred vectors have shape (nxg,nyg,nzg) with ghost layers 1 and n; face coefficients bu(1:nx,:,:), bv(:,1:ny,:),
 !  bw(:,:,1:nz) sit on the faces of U, V, W. The periodic duplicate cell of the last rank and the ghost cells have zero weight in
 !  the inner products, so the CG sees exactly the Poisson problem's distinct unknowns.

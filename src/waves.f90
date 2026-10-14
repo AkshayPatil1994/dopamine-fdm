@@ -56,7 +56,7 @@ Contains
   Subroutine wave_init
 
     Integer(Int32) :: i, nf
-    Real(Int64) :: om, fp, fmin, fmax, df, f, sigma, r, alpha_j, m0, sj, hs, pi_
+    Real(Int64) :: om, fp, fmin, fmax, df, f, sigma, r, alpha_j, m0, sj, pi_
     Real(Int64), Allocatable :: sp(:)
     Integer(Int32), Allocatable :: seed(:)
     Integer(Int32) :: nseed
@@ -240,7 +240,7 @@ Contains
     Real(Int64),    Intent(Out) :: res(2*n+6)
 
     Integer(Int32) :: m, j
-    Real(Int64) :: k, c, b0, psis, rr, bj(n), sm(0:n), pi_, psi, um, vm, sk, sjm, ch, sh, ang, tsum
+    Real(Int64) :: k, c, b0, psis, rr, bj(n), sm(0:n), pi_, psi, um, vm, ch, sh, ang, tsum
 
     pi_ = 4d0*Atan(1d0)
     k = z(1);  c = z(2);  b0 = z(3);  psis = z(4);  rr = z(5)

@@ -141,7 +141,7 @@ Contains
   End Subroutine init_rsb
 
 
-  !> accumulate_rsb: called every rsb_freq steps when istep >= rsb_nstart; interpolates staggered U/V/W to cell centres, computes gradients, accumulates raw moments
+  !> accumulate_rsb: called every step, accumulates once istep >= rsb_nstart; interpolates staggered U/V/W to cell centres, computes gradients, accumulates raw moments
   Subroutine accumulate_rsb
 
     Integer(Int32) :: i, j, k
@@ -227,6 +227,22 @@ Contains
              acc_TijY(4,i-1,j-1,k-1) = acc_TijY(4,i-1,j-1,k-1) + dt_step*( uc*vc*vc )
              acc_TijY(5,i-1,j-1,k-1) = acc_TijY(5,i-1,j-1,k-1) + dt_step*( uc*wc*vc )
              acc_TijY(6,i-1,j-1,k-1) = acc_TijY(6,i-1,j-1,k-1) + dt_step*( vc*wc*vc )
+             If ( .Not. hom_x ) Then
+                acc_TijX(1,i-1,j-1,k-1) = acc_TijX(1,i-1,j-1,k-1) + dt_step*( uc*uc*uc )
+                acc_TijX(2,i-1,j-1,k-1) = acc_TijX(2,i-1,j-1,k-1) + dt_step*( vc*vc*uc )
+                acc_TijX(3,i-1,j-1,k-1) = acc_TijX(3,i-1,j-1,k-1) + dt_step*( wc*wc*uc )
+                acc_TijX(4,i-1,j-1,k-1) = acc_TijX(4,i-1,j-1,k-1) + dt_step*( uc*vc*uc )
+                acc_TijX(5,i-1,j-1,k-1) = acc_TijX(5,i-1,j-1,k-1) + dt_step*( uc*wc*uc )
+                acc_TijX(6,i-1,j-1,k-1) = acc_TijX(6,i-1,j-1,k-1) + dt_step*( vc*wc*uc )
+             End If
+             If ( .Not. hom_z ) Then
+                acc_TijZ(1,i-1,j-1,k-1) = acc_TijZ(1,i-1,j-1,k-1) + dt_step*( uc*uc*wc )
+                acc_TijZ(2,i-1,j-1,k-1) = acc_TijZ(2,i-1,j-1,k-1) + dt_step*( vc*vc*wc )
+                acc_TijZ(3,i-1,j-1,k-1) = acc_TijZ(3,i-1,j-1,k-1) + dt_step*( wc*wc*wc )
+                acc_TijZ(4,i-1,j-1,k-1) = acc_TijZ(4,i-1,j-1,k-1) + dt_step*( uc*vc*wc )
+                acc_TijZ(5,i-1,j-1,k-1) = acc_TijZ(5,i-1,j-1,k-1) + dt_step*( uc*wc*wc )
+                acc_TijZ(6,i-1,j-1,k-1) = acc_TijZ(6,i-1,j-1,k-1) + dt_step*( vc*wc*wc )
+             End If
 
              ! IBM: skip gradient stencils crossing the solid-fluid interface
              If ( ibm_input_mode >= 1 ) Then
@@ -302,51 +318,6 @@ Contains
        End Do
     End Do
 
-    ! ── acc_TijX: x-direction triple flux (only if x not homogeneous) ────
-    If ( .Not. hom_x ) Then
-       Do k = 2, nzg-1
-          Do j = 2, nyg-1
-             Do i = 2, nxg-1
-                If ( ibm_input_mode >= 1 ) Then
-                   If ( phi(i,j,k) < 0d0 ) Cycle
-                End If
-                uc = 0.5d0 * ( U(i-1,j,k) + U(i,j,k) )
-                vc = 0.5d0 * ( V(i,j-1,k) + V(i,j,k) )
-                wc = 0.5d0 * ( W(i,j,k-1) + W(i,j,k) )
-                acc_TijX(1,i-1,j-1,k-1) = acc_TijX(1,i-1,j-1,k-1) + dt_step*( uc*uc*uc )
-                acc_TijX(2,i-1,j-1,k-1) = acc_TijX(2,i-1,j-1,k-1) + dt_step*( vc*vc*uc )
-                acc_TijX(3,i-1,j-1,k-1) = acc_TijX(3,i-1,j-1,k-1) + dt_step*( wc*wc*uc )
-                acc_TijX(4,i-1,j-1,k-1) = acc_TijX(4,i-1,j-1,k-1) + dt_step*( uc*vc*uc )
-                acc_TijX(5,i-1,j-1,k-1) = acc_TijX(5,i-1,j-1,k-1) + dt_step*( uc*wc*uc )
-                acc_TijX(6,i-1,j-1,k-1) = acc_TijX(6,i-1,j-1,k-1) + dt_step*( vc*wc*uc )
-             End Do
-          End Do
-       End Do
-    End If
-
-    ! ── acc_TijZ: z-direction triple flux (only if z not homogeneous) ────
-    If ( .Not. hom_z ) Then
-       Do k = 2, nzg-1
-          Do j = 2, nyg-1
-             Do i = 2, nxg-1
-                If ( ibm_input_mode >= 1 ) Then
-                   If ( phi(i,j,k) < 0d0 ) Cycle
-                End If
-                uc = 0.5d0 * ( U(i-1,j,k) + U(i,j,k) )
-                vc = 0.5d0 * ( V(i,j-1,k) + V(i,j,k) )
-                wc = 0.5d0 * ( W(i,j,k-1) + W(i,j,k) )
-                acc_TijZ(1,i-1,j-1,k-1) = acc_TijZ(1,i-1,j-1,k-1) + dt_step*( uc*uc*wc )
-                acc_TijZ(2,i-1,j-1,k-1) = acc_TijZ(2,i-1,j-1,k-1) + dt_step*( vc*vc*wc )
-                acc_TijZ(3,i-1,j-1,k-1) = acc_TijZ(3,i-1,j-1,k-1) + dt_step*( wc*wc*wc )
-                acc_TijZ(4,i-1,j-1,k-1) = acc_TijZ(4,i-1,j-1,k-1) + dt_step*( uc*vc*wc )
-                acc_TijZ(5,i-1,j-1,k-1) = acc_TijZ(5,i-1,j-1,k-1) + dt_step*( uc*wc*wc )
-                acc_TijZ(6,i-1,j-1,k-1) = acc_TijZ(6,i-1,j-1,k-1) + dt_step*( vc*wc*wc )
-             End Do
-          End Do
-       End Do
-    End If
-
-
     n_accum = n_accum + 1
     t_accum = t_accum + dt_step
 
@@ -384,7 +355,7 @@ Contains
     Real(Int64), Allocatable, Save :: Tmean_g(:,:,:), Tvar_g(:,:,:), UiT_g(:,:,:,:), BuoyProd_g(:,:,:)
     Real(Int64), Allocatable, Save :: Tmean(:,:,:,:), Tvar(:,:,:,:), UiT(:,:,:,:), BuoyProd(:,:,:,:)
 
-    Integer(Int32) :: c, i, j, k
+    Integer(Int32) :: i, j, k
     Real(Int64)    :: dn   ! = 1 / t_accum (for averaging)
 
     If ( rsb_active /= 1 ) Return
@@ -1106,8 +1077,6 @@ Contains
 
     Character(300)  :: fpath
     Integer(Int32)  :: funit, ios
-    Integer(Int64)  :: rec_len
-    Logical         :: fexists
 
     fpath = Trim(rsb_fileout) // '_' // Trim(tag) // '.bin'
 
@@ -1193,7 +1162,7 @@ Contains
   Subroutine truncate_rsb_files
 
     Character(300)  :: fpath
-    Integer(Int32)  :: funit
+    Integer(Int32)  :: funit, ios
     Character(10), Dimension(10), Parameter :: tags = [ &
          'Umean     ', 'Rij       ', 'Pij       ', 'epsRes    ', 'epsSGS    ', &
          'PiStrain  ', 'DTij      ', 'Dnuij     ', 'PhiPij    ', 'Resid     ' ]
@@ -1202,8 +1171,8 @@ Contains
     Do t = 1, 10
        fpath = Trim(rsb_fileout) // '_' // Trim(Adjustl(tags(t))) // '.bin'
        Open(newunit=funit, file=Trim(fpath), form='unformatted', &
-            access='stream', status='replace', iostat=funit)
-       Close(funit)
+            access='stream', status='replace', iostat=ios)
+       If ( ios == 0 ) Close(funit)
     End Do
     ! meta file is written/replaced at the first output call
     Write(*,'(A)') ' RSB: truncated pre-existing output files for fresh run.'

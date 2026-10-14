@@ -4,7 +4,7 @@
 !  host path, so a GPU build needs the field moved on-device first.
 !
 !  C is advanced in three sub-steps (8/15, 2/15, 1/3 dt) ending at the RK stage times, each with the stage-consistent linearly
-!  extrapolated midpoint velocity (tests/vof/spike_c_timeint.f90, second order observed):
+!  extrapolated midpoint velocity (second order):
 !    sub-step 1  u^n and the previous step's stage-2 velocity,  midpoint t_n + 4/15 dt
 !    sub-step 2  u^n and u^(1),                                 midpoint t_n + 3/5 dt
 !    sub-step 3  u^(1) and u^(2),                               midpoint t_n + 5/6 dt

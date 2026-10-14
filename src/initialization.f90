@@ -38,10 +38,9 @@ Contains
   Subroutine initialize(input_file)
 
     Character(*), Intent(In), Optional :: input_file
-    Integer(Int32) :: i, j, k, kk, nzpe, pos, ipos
-    Real   (Int64) :: dy1, dy2, det, a, b, c, r, Qflow_ref
+    Integer(Int32) :: i, j, k
+    Real   (Int64) :: a, b, c
     Real   (Int64) :: dy   ! uniform y spacing, periodic-y path only (y_bc_type==0)
-    Integer(Int32), Dimension(:,:), Allocatable :: A_kmodes, A_kmodes_local
     Logical        :: is_first_z, is_last_z
     Integer(Int32) :: z_partner
 
@@ -200,10 +199,6 @@ Contains
     Allocate (  xm( nxm),  ym( nym),  zm( nzm) )
     Allocate ( xg(nxm+2), yg(nym+2), zg(nzm+2) )
 
-    Allocate ( yg_m (nyg-1) )
-    Allocate ( yg_mm(nyg-2) )
-    
-
 
     ! global interior + boundary + ghost points
     Allocate (U (    nx, nym+2, nzm+2) )
@@ -215,18 +210,13 @@ Contains
     Allocate (Uo  (    nx,  nym+2, nzm+2) )
     Allocate (Vo  ( nxm+2,     ny, nzm+2) )
     Allocate (Wo  ( nxm+2,  nym+2,    nz) )
-    Allocate (Po  ( nxm+2,  nym+2, nzm+2) )
 
     ! Auxiliary arrays
-    Allocate ( term   ( nxg, nyg, nzm+2 ) ) 
     Allocate ( term_1 ( nxg, nyg, nzm+2 ) ) 
     Allocate ( term_2 ( nxg, nyg, nzm+2 ) ) 
 
-    ! RHS: interior points only
-    Allocate ( rhs_uo ( 2:nx-1,  2:nyg-1, 2:nzg-1 ) ) 
-    Allocate ( rhs_vo ( 2:nxg-1, 2:ny-1,  2:nzg-1 ) )
-    Allocate ( rhs_wo ( 2:nxg-1, 2:nyg-1, 2:nz-1  ) )
-    Allocate ( rhs_p  ( 2:nxg,   2:nyg-1, 2:nzg   ) ) ! ONE EXTRA PLANE IN X AND Z FOR GHOST CELLS
+    ! one extra plane in x and z for the ghost cells
+    Allocate ( rhs_p  ( 2:nxg,   2:nyg-1, 2:nzg   ) )
     rhs_p = 0d0
     
     ! read data
@@ -281,12 +271,6 @@ Contains
     xg = xg_global( ig1_global(myid):ig2_global(myid) )
     yg = yg_global
     zg = zg_global( kg1_global(myid):kg2_global(myid) )
-
-    ! middle points for yg (.not. equal to y in general)
-    yg_m = 0.5d0*( yg(2:nyg) + yg(1:nyg-1) )
-
-    ! middle points for yg_m (.not. equal to ym in general)
-    yg_mm = 0.5d0*( yg_m(2:nyg-1) + yg_m(1:nyg-2) )
 
     ! local minimum grid size for CFL
     dxmin = Minval ( xg_global(2:nxg_global) - xg_global(1:nxg_global-1) )
@@ -380,10 +364,6 @@ Contains
     ! this rank's local mode-count range in the y-pencil (post transpose chain)
     mx = decomp_poisson%ysz(1) - 1
     mz = decomp_poisson%ysz(3) - 1
-
-    ! y-first layout: rhs_p_hat(2:nyg-1, 0:mx, 0:mz) keeps each y-pencil
-    ! contiguous so Zgtsv can operate in-place without a temporary copy.
-    Allocate ( rhs_p_hat ( 2:nyg-1, 0:mx, 0:mz ) )
 
     ! pencil work arrays for the transpose chain
     Allocate ( poisson_y_r ( decomp_poisson%ysz(1), decomp_poisson%ysz(2), decomp_poisson%ysz(3) ) )
@@ -513,7 +493,6 @@ Contains
     ! z (Zgtsv-in-z, z_bc_type==1 .And. y_bc_type==0) or y (Zgtsv-in-y, every other case,
     ! including the 4-wall duct's per-z-eigenmode solve -- see the Qz/lambda_z block below).
     If ( myid==0 ) Write(*,*) 'initializing pressure solver...'
-    Allocate ( pivot(nyg) )
     Allocate ( Dyy(2:nyg-1,2:nyg-1) )
     Allocate ( Dzz(2:nzg_global-1,2:nzg_global-1) )
     Dzz = 0d0
@@ -545,7 +524,6 @@ Contains
     ! Dirichlet in V: p(1)==p(2) 
     Dyy(2,2)   = b + c 
     Dyy(2,3)   = a
-    coef_bc_1  = c
 
     j = nyg-1
     a = 1d0/( y(j)-y(j-1) )/( yg(j+1) - yg(j) )
@@ -554,10 +532,8 @@ Contains
     ! Dirichlet in V: p(nyg)==p(nyg-1) 
     Dyy(nyg-1,nyg-1) = a + b
     Dyy(nyg-1,nyg-2) = c
-    coef_bc_2        = a
 
-    ! Device-resident (GPU_POISSON): wallmodel.f90's compute_pseudo_pressure_bc_for_robin_bc updates Dyy in place with a targeted
-    ! update device, so it must be registered before the first call to that routine.
+    ! Device-resident for the GPU Poisson solve
     !$acc enter data create(Dyy)
     !$acc update device(Dyy)
 
@@ -641,9 +617,6 @@ Contains
 
     End If
 
-    Allocate ( bc_1(2:nxg-1,2:nzg-1), bc_2(2:nxg-1,2:nzg-1) )
-    Allocate ( bc_1_hat(0:mx,0:mz),   bc_2_hat(0:mx,0:mz)   )
-
     ! some parameters for linear solver
     If ( z_bc_type == 1 .And. y_bc_type == 0 ) Then
        nr = nzm_global
@@ -697,8 +670,6 @@ Contains
     Allocate ( Fw1 ( 2:nxg-1,  2:nyg-1, 2:nz-1 ) )
     Allocate ( Fw2 ( 2:nxg-1,  2:nyg-1, 2:nz-1 ) )
     Allocate ( Fw3 ( 2:nxg-1,  2:nyg-1, 2:nz-1 ) )
-
-    dPdy      = 0d0
 
     ! Eddy viscosity
     Allocate( nu_t     (1:nxg,1:nyg,1:nzg) )
@@ -808,10 +779,10 @@ Contains
     !$acc enter data copyin(y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
     ! x,xg needed on device by compute_rhs_scalar_core (non-uniform-grid-style stencil, even though x itself is uniform)
     !$acc enter data copyin(x,xg)
-    !$acc enter data create(term,term_1,term_2)
+    !$acc enter data create(term_1,term_2)
     ! zero them (host+device): stencils read planes/rows a given call may not write, so uninitialised device scratch makes results decomposition/allocation dependent
-    term = 0d0; term_1 = 0d0; term_2 = 0d0
-    !$acc update device(term,term_1,term_2)
+    term_1 = 0d0; term_2 = 0d0
+    !$acc update device(term_1,term_2)
     ! Evolving per-substage fields: allocated here (create, not copyin) so time_integration.f90's per-RK-substage update device/host calls have a target
     !$acc enter data create(U,V,W,nu_t,Fu1,Fv1,Fw1,Fu2,Fv2,Fw2,Fu3,Fv3,Fw3)
     ! One-time initial sync: enter data create only allocates, so push host U,V,W or step 1 runs on uninitialized device data
@@ -831,9 +802,7 @@ Contains
        !$acc update device(Cscal,Cscal_o)
     End If
 #ifdef GPU_POISSON
-    ! rhs_p_hat is unused by the GPU Poisson path (the pencil solve works in place on poisson_y_c). P stays host-only (touched
-    ! at rk_step==3), but the periodic-BC fill in solve_poisson_equation reuses the device apply_periodic_bc_x/z routines, which
-    ! need P present on device: register it and round-trip it with a targeted update around that fill (see projection.f90).
+    ! P is also device-resident: the periodic-BC fill in solve_poisson_equation reuses the device apply_periodic_bc_x/z routines
     !$acc enter data create(P)
     !$acc update device(P)
 #endif

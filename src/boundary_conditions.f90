@@ -766,61 +766,6 @@ Contains
 
   End Subroutine apply_periodic_bc_y
 
-  ! Dirichlet boundary condition in y (no MPI): F; id: 1=y-faces, 2=y-centres; F in/out
-  Subroutine apply_Dirichlet_bc_y(F,id)
-
-    Real   (Int64), Intent(InOut) :: F(:,:,:)
-    Integer(Int32), Intent(In)    :: id
-
-    If ( id==1 ) Then
-       ! F defined at y faces
-       F(:, 1,:) = 0d0
-       F(:,ny,:) = 0d0
-    Else
-       ! F defined at y centers
-       F(:,  1,:) = -F(:,    2,:)
-       F(:,nyg,:) = -F(:,nyg-1,:)
-    End If
-
-  End Subroutine apply_Dirichlet_bc_y
-
-  ! Neumann boundary condition in y (no MPI): F; id: 1=y-faces, 2=y-centres; F in/out
-  Subroutine apply_Neumann_bc_y(F,id)
-
-    Real   (Int64), Intent(InOut) :: F(:,:,:)
-    Integer(Int32), Intent(In)    :: id
-
-    If ( id==1 ) Then
-       ! F defined at y faces (first order)
-       F(:, 1,:) = F(:,   2,:) 
-       F(:,ny,:) = F(:,ny-1,:) 
-    Else
-       ! F defined at y centers (second order)
-       F(:,  1,:) = F(:,    2,:) 
-       F(:,nyg,:) = F(:,nyg-1,:) 
-    End If
-
-  End Subroutine apply_Neumann_bc_y
-
-  ! Non-zero Neumann boundary condition in y (no MPI): F, alpha (slip length); id: 1=y-faces, 2=y-centres; F in/out
-  Subroutine apply_nonzero_Neumann_bc_y(F,alpha,id)
-
-    Real   (Int64), Intent(InOut) :: F(:,:,:)
-    Real   (Int64), Intent(In)    :: alpha(:,:,:)
-    Integer(Int32), Intent(In)    :: id
-
-    If ( id==1 ) Then
-       ! F defined at y faces (first order)
-       F(:, 1,:) = F(:,   2,:) - (y (2) - y(   1))*alpha(:,1,:)
-       F(:,ny,:) = F(:,ny-1,:) - (y(ny) - y(ny-1))*alpha(:,2,:)
-    Else
-       ! F defined at y centers (second order)
-       F(:,  1,:) = F(:,    2,:) - (yg  (2) - yg(    1))*alpha(:,1,:)
-       F(:,nyg,:) = F(:,nyg-1,:) - (yg(nyg) - yg(nyg-1))*alpha(:,2,:)
-    End If
-
-  End Subroutine apply_nonzero_Neumann_bc_y
-
   ! Robin (slip-length) BC in y; formulas
   Subroutine apply_Robin_bc_y(F,alpha,id)
 
