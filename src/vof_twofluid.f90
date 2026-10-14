@@ -36,6 +36,7 @@ Module vof_twofluid
   Use ibm, Only : apply_ghost_cell_ibm, apply_ghost_cell_ibm_scalar, apply_ghost_cell_ibm_scalar_noflux
   Use scalar_transport, Only : compute_rhs_scalar_core, apply_scalar_bc, kf_on, kfield
   Use thermal_transport, Only : apply_temperature_bc
+  Use particles, Only : advance_particles, particles_load_surface, particles_check_gas_seeds
   Use vof_ibm, Only : vof_compute_ibm_forces
   Use projection, Only : compute_pseudo_pressure_rhs, solve_poisson_equation, project_velocity
 
@@ -82,16 +83,16 @@ Contains
     Integer(Int32) :: i, j, k
     Real(Int64) :: kt(3), om
 
-    If ( particles_active >= 1 .Or. uav_active >= 1 .Or. rotation_active >= 1 ) Then
+    If ( uav_active >= 1 .Or. rotation_active >= 1 ) Then
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: vof_flow=1 does not yet support ' // &
-            'particles, UAV or rotation'
+            'UAV or rotation'
        If ( myid == 0 ) Write(*,'(A,7I3)') ' ibm_wall_model, sediment, boussinesq, particles, uav, flat_wall, rotation: ', &
             ibm_wall_model_flag, sediment_flag, boussinesq_flag, particles_active, uav_active, flat_wall_model_flag, rotation_active
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
 #ifdef GPU_POISSON
-    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 ) Then
-       If ( myid == 0 ) Write(*,'(A)') ' ERROR: the scalars of the two-fluid solver (sediment, temperature) are not ported to the GPU yet'
+    If ( sediment_flag >= 1 .Or. boussinesq_flag >= 1 .Or. particles_active >= 1 ) Then
+       If ( myid == 0 ) Write(*,'(A)') ' ERROR: the scalars and particles of the two-fluid solver are not ported to the GPU yet'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
 #endif
@@ -221,6 +222,10 @@ Contains
        Call vp_halo(ppre, .True.)
     Else
        Call vof_initial_pressure
+    End If
+    If ( particles_active >= 1 ) Then
+       Call particles_load_surface(Cv(1:nxg,1:nyg,1:nzg))
+       Call particles_check_gas_seeds
     End If
 
   End Subroutine vof_flow_init
@@ -1644,6 +1649,10 @@ Contains
     If ( ibm_input_mode >= 1 ) Call enforce_ibm
     Call profiler_start(PROF_VOF_END)
     Call vof_fill_pad(Cv, nxg, nyg, nzg)
+    If ( particles_active >= 1 ) Then
+       Call particles_load_surface(Cv(1:nxg,1:nyg,1:nzg))
+       Call advance_particles
+    End If
     If ( sediment_flag >= 1 ) Call vof_scalar_rk3(Cscal, 1, dt)
     If ( boussinesq_flag >= 1 ) Call vof_scalar_rk3(Tscal, 2, dt)
     Call tally_ledger

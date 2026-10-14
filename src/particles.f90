@@ -65,6 +65,10 @@ Module particles
   Real(Int64), Allocatable :: xpad_f(:), xpad_c(:), zpad_f(:), zpad_c(:)
   ! padded SDF for the IBM collision normal (a finite difference over +-0.5 cell, which also reaches past the ghost cell); static
   Real(Int64), Allocatable :: phipad(:,:,:)
+  ! two-fluid VOF: padded liquid fraction (particles live in the liquid and reflect at the free surface) and the carrier's viscosity
+  Real(Int64), Allocatable :: Cvpad(:,:,:)
+  Logical :: surf_on = .False.
+  Real(Int64) :: p_nu_f = 0d0
 
 Contains
 
@@ -85,7 +89,8 @@ Contains
 
     ! Stokes response time tau_p = rho_p*d_p^2/(18*mu_f), mu_f = rho_f*nu (particle_mode==1 only,
     ! but harmless to precompute unconditionally)
-    tau_p_stokes = particle_rho * particle_diam**2 / (18d0 * particle_rho_f * nu)
+    p_nu_f = Merge(vof_nu_l, nu, vof_flow >= 1)
+    tau_p_stokes = particle_rho * particle_diam**2 / (18d0 * particle_rho_f * p_nu_f)
 
     n_particles_local = 0
     particle_capacity = 0
@@ -291,7 +296,7 @@ Contains
     End If
 
     urel = Sqrt( (uf-p_u(i))**2 + (vf-p_v(i))**2 + (wf-p_w(i))**2 )
-    Re_p = urel * particle_diam / nu
+    Re_p = urel * particle_diam / p_nu_f
     f_drag = 1d0 + 0.15d0 * Re_p**0.687d0            ! Schiller-Naumann, valid Re_p ~< 1000
     tau_eff = tau_p_stokes / f_drag
 
@@ -330,7 +335,7 @@ Contains
        ! Isotropic Stokes-Einstein Brownian kick: D = kB*T/(3*pi*mu_f*d_p), displacement
        ! std dev = sqrt(2*D*dt) per axis (independent Box-Muller draws)
        dsig = Sqrt( 2d0 * (1.380649d-23*particle_temp_abs) / &
-            (3d0*pi*particle_rho_f*nu*particle_diam) * dt )
+            (3d0*pi*particle_rho_f*p_nu_f*particle_diam) * dt )
        Call gaussian_pair(ex, ey);  Call gaussian_pair(ez, dv)
        p_x(i) = p_x(i) + dsig*ex
        p_y(i) = p_y(i) + dsig*ey
@@ -658,13 +663,80 @@ Contains
 
   End Function apply_ibm_collision
 
+  !> Refresh the padded liquid fraction the free-surface reflection reads (two-fluid VOF; Cv with its ghost cells, nxg x nyg x nzg)
+  Subroutine particles_load_surface(Cv_in)
+
+    Real(Int64), Intent(In) :: Cv_in(nxg,nyg,nzg)
+
+    If ( .Not. Allocated(Cvpad) ) Then
+       Call ensure_pad_axes
+       Allocate( Cvpad(0:nxg+1, nyg, 0:nzg+1) )
+    End If
+    Call pad_field( Cv_in, nxg, nyg, nzg, .False., .False., 1, Cvpad )
+    surf_on = .True.
+
+  End Subroutine particles_load_surface
+
+  !> Liquid fraction at a point (trilinear on the padded cell-centred field)
+  Real(Int64) Function liquid_fraction_at(xp, yp, zp) Result(c)
+
+    Real(Int64), Intent(In) :: xp, yp, zp
+
+    c = interp3(Cvpad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, xp, yp, zp)
+
+  End Function liquid_fraction_at
+
+  !> Abort when a particle (fresh seed or restart) sits in the gas: the particles are liquid-only
+  Subroutine particles_check_gas_seeds
+
+    Integer(Int32) :: i, n_bad, n_bad_all
+
+    n_bad = 0
+    Do i = 1, n_particles_local
+       If ( liquid_fraction_at(p_x(i), p_y(i), p_z(i)) < 0.5d0 ) n_bad = n_bad + 1
+    End Do
+    Call MPI_Allreduce(n_bad, n_bad_all, 1, MPI_integer, MPI_SUM, MPI_COMM_WORLD, ierr)
+    If ( n_bad_all > 0 ) Then
+       If ( myid == 0 ) Write(*,'(A,I0,A)') ' ERROR: ', n_bad_all, &
+            ' particle(s) are seeded in the gas (liquid fraction < 0.5): the particles of vof_flow=1 are liquid-only, ' // &
+            'move the seed box below the free surface'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+    End If
+
+  End Subroutine particles_check_gas_seeds
+
+  !> A particle that ended the step in the gas goes back to where it started and its velocity is mirrored about the surface normal
+  !  n = -grad(Cv)/|grad(Cv)| (pointing into the gas) taken at the start position; only an outward normal velocity is reversed
+  Subroutine reflect_at_surface(i, xo, yo, zo)
+
+    Integer(Int32), Intent(In) :: i
+    Real(Int64),    Intent(In) :: xo, yo, zo
+
+    Real(Int64) :: eps, nx_, ny_, nz_, nmag, vn
+
+    If ( liquid_fraction_at(p_x(i), p_y(i), p_z(i)) >= 0.5d0 ) Return
+    eps = 0.5d0*dxmin
+    nx_ = liquid_fraction_at(xo-eps, yo, zo) - liquid_fraction_at(xo+eps, yo, zo)
+    ny_ = liquid_fraction_at(xo, yo-eps, zo) - liquid_fraction_at(xo, yo+eps, zo)
+    nz_ = liquid_fraction_at(xo, yo, zo-eps) - liquid_fraction_at(xo, yo, zo+eps)
+    nmag = Sqrt(nx_*nx_ + ny_*ny_ + nz_*nz_)
+    p_x(i) = xo;  p_y(i) = yo;  p_z(i) = zo
+    If ( nmag < 1d-14 ) Return
+    nx_ = nx_/nmag;  ny_ = ny_/nmag;  nz_ = nz_/nmag
+    vn = p_u(i)*nx_ + p_v(i)*ny_ + p_w(i)*nz_
+    If ( vn > 0d0 ) Then
+       p_u(i) = p_u(i) - 2d0*vn*nx_;  p_v(i) = p_v(i) - 2d0*vn*ny_;  p_w(i) = p_w(i) - 2d0*vn*nz_
+    End If
+
+  End Subroutine reflect_at_surface
+
   !> Advance every local particle one step against the frozen post-projection U/V/W, apply boundary handling, migrate, and
   !  report counters at the monitor cadence. Called once per step from compute_time_step_RK3 (time_integration.f90) after the
   !  final host U/V/W sync. particle_mode==0: classical RK3 on dx/dt=u_fluid(x); ==1: see advance_particle_inertial.
   Subroutine advance_particles
 
     Integer(Int32) :: i
-    Real(Int64) :: x0, y0, z0
+    Real(Int64) :: x0, y0, z0, xs, ys, zs
     Real(Int64) :: k1u, k1v, k1w, k2u, k2v, k2w, k3u, k3v, k3w
     Logical :: do_remove
 
@@ -679,6 +751,7 @@ Contains
     Do While ( i <= n_particles_local )
 
        If ( sgs_particle_model == 1 ) Call advance_sgs_velocity(i)
+       xs = p_x(i);  ys = p_y(i);  zs = p_z(i)
 
        If ( particle_mode == 1 ) Then
           Call advance_particle_inertial(i)
@@ -711,6 +784,7 @@ Contains
        do_remove = .False.
        If ( ibm_input_mode >= 1 ) do_remove = apply_ibm_collision(i)
        If ( .Not. do_remove .And. apply_particle_bc(i) ) do_remove = .True.
+       If ( .Not. do_remove .And. surf_on ) Call reflect_at_surface(i, xs, ys, zs)
 
        If ( do_remove ) Then
           Call remove_particle(i)   ! swaps the last particle into slot i; re-check the same slot

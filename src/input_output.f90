@@ -912,8 +912,11 @@ Contains
        Write(*,'(A)') ' WARNING: restart with adaptive dt and no t_start: t = nstep_init*dt is not the physical time'
     End If
     If ( vof_flow >= 1 ) Then
-       If ( particles_active >= 1 .Or. rotation_active >= 1 ) &
-            Call abort_input( 'ERROR: vof_flow=1 does not support particles or rotation' )
+       If ( rotation_active >= 1 ) Call abort_input( 'ERROR: vof_flow=1 does not support rotation' )
+       If ( particles_active >= 1 .And. Abs(particle_rho_f - vof_rho_l) > 1d-12*vof_rho_l ) &
+            Call abort_input( 'ERROR: vof_flow=1 particles move in the liquid: particle_rho_f must equal vof_rho_l' )
+       If ( particles_active >= 1 .And. particle_mode >= 1 .And. Abs(grav - vof_grav) > 1d-12*Max(1d0, Abs(vof_grav)) ) &
+            Call abort_input( 'ERROR: vof_flow=1 inertial particles need grav (&SEDIMENT/&BOUSSINESQ) equal to vof_grav (&VOF)' )
        If ( boussinesq_flag >= 1 .And. Abs(grav - vof_grav) > 1d-12*Max(1d0, Abs(vof_grav)) ) &
             Call abort_input( 'ERROR: vof_flow=1 with Boussinesq needs grav (&BOUSSINESQ) equal to vof_grav (&VOF)' )
        If ( boussinesq_flag >= 1 .And. vof_hsplit /= 0 ) &
