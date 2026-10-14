@@ -459,11 +459,13 @@ Contains
           End If
        End If
        Write(*,'(A,I2)')     '   ibm_input_mode              = ', ibm_input_mode
-       Write(*,'(A,I2)')     '   ibm_method (0 ghost-cell, 1 staircase) = ', ibm_method
-       Write(*,'(A,ES10.2)') '   ibm_pcg_tol (masked projection)       = ', ibm_pcg_tol
-       Write(*,'(A,I2)')     '   ibm_projection (0 masked PCG, 1 fast)  = ', ibm_projection
-       Write(*,'(A,I2)')     '   ibm_wall_model_flag         = ', ibm_wall_model_flag
-       Write(*,'(A,I4)')     '   smooth_ibm (SDF corner-rounding passes, 0=off) = ', smooth_ibm
+       If ( ibm_input_mode >= 1 ) Then
+          Write(*,'(A,I2)')     '   ibm_method (0 ghost-cell, 1 staircase) = ', ibm_method
+          Write(*,'(A,ES10.2)') '   ibm_pcg_tol (masked projection)       = ', ibm_pcg_tol
+          Write(*,'(A,I2)')     '   ibm_projection (0 masked PCG, 1 fast)  = ', ibm_projection
+          Write(*,'(A,I2)')     '   ibm_wall_model_flag         = ', ibm_wall_model_flag
+          Write(*,'(A,I4)')     '   smooth_ibm (SDF corner-rounding passes, 0=off) = ', smooth_ibm
+       End If
        Write(*,'(A,I8)')     '   nsampling                   = ', nsampling
        Write(*,'(A,I8)')     '   ibm_surface_nsampling       = ', ibm_surface_nsampling
        Write(*,'(A,I2)')     '   cfl_adaptive                = ', cfl_adaptive
@@ -496,6 +498,19 @@ Contains
           Write(*,'(A,F6.3)')  '   Pr_t                         = ', Pr_t
           Write(*,'(A,2I3)')   '   T_bc (bot/top, 0=adiabatic,1=isothermal) = ', T_bc_bot, T_bc_top
        End If
+       If ( sediment_flag >= 1 ) Then
+          Write(*,'(A,I2)')    '   sediment_flag                = ', sediment_flag
+          Write(*,'(A,2E12.4)') '   d_s, rho_s                   = ', d_s, rho_s
+          Write(*,'(A,E12.4)') '   grav                         = ', grav
+          Write(*,'(A,2F6.3)') '   Sc, Sc_t                     = ', Sc, Sc_t
+       End If
+       If ( uav_active >= 1 ) Write(*,'(A,I2)') '   uav_active                   = ', uav_active
+       If ( wave_type > 0 ) Then
+          Write(*,'(A,I2)')    '   wave_type (1 Airy,2 stream function,3 JONSWAP) = ', wave_type
+          Write(*,'(A,2E12.4)') '   wave_gen_len, wave_abs_len   = ', wave_gen_len, wave_abs_len
+          If ( current_type > 0 ) Write(*,'(A,I2)') '   current_type                 = ', current_type
+          If ( wave_turb == 1 ) Write(*,'(A)') '   wave_turb=1 (precursor fluctuation on the wave inlet)'
+       End If
        If ( n_slices > 0 ) Then
           Write(*,'(A,I4)')  '   n_slices                    = ', n_slices
           Write(*,'(A,I8)')  '   slice_freq                  = ', slice_freq
@@ -522,7 +537,7 @@ Contains
        End If
        If ( vof_active >= 1 ) Then
           Write(*,'(A,I2)')    '   vof_active                  = ', vof_active
-          Write(*,'(A,I2)')    '   vof_ic_type (1=plane,2=drop,3=bubble) = ', vof_ic_type
+          Write(*,'(A,I2)')    '   vof_ic_type (1 plane,2 drop,3 bubble,4 wave,5 column,6 disk,7 Zalesak) = ', vof_ic_type
           Write(*,'(A,I2)')    '   vof_normal_scheme (1=Youngs,2=height function) = ', vof_normal_scheme
           Write(*,'(A,I2,A,F6.2)') '   vof_method (1=PLIC,2=THINC) = ', vof_method, '  vof_beta = ', vof_beta
           Write(*,'(A,I2)')    '   vof_flow (0=passive,1=two-fluid)       = ', vof_flow
