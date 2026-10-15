@@ -116,7 +116,7 @@ Contains
     Call MPI_Allreduce(wl, vp_wsum, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     If ( pcg_precond >= 1 ) Call mg_init(ihi, jhi, khi)
 #ifdef GPU_POISSON
-    If ( vof_flow >= 1 ) Then   ! the single-phase masked path sets up its own device copies in vp_init_masked
+    If ( vof_flow >= 1 ) Then   ! the single-phase staircase path copies its masks in vp_init_masked
        vp_dev = .True.
        !$acc enter data copyin(vp_rho,vp_bu,vp_bv,vp_bw,vp_w,vp_rfu,vp_rfv,vp_rfw,vp_rau,vp_rav,vp_raw,vp_riu,vp_riv,vp_riw,vp_hy,vp_act)
        !$acc enter data create(vp_r,vp_z,vp_d,vp_ap)
@@ -149,105 +149,34 @@ Contains
   End Subroutine apply_face_gradient
 
 
-  !> Single-phase setup for ibm_method = 1: the masks and the PCG workspace, with the Neumann-at-body operator of constant coefficient
+  !> Single-phase setup for ibm_method = 1: the face masks (and the device copies); the pressure is the fast whole-box solve
   Subroutine vp_init_masked
 
-    Call vp_init
-    vp_bu = vp_mu;  vp_bv = vp_mv;  vp_bw = vp_mw;  vp_beta0 = 1d0;  vp_use_layered = .False.
+    Allocate( vp_act(0:nxg+1,0:nyg+1,0:nzg+1) )
+    vp_masked = .True.
+    Call vp_build_ibm_masks
     vp_dev = .True.
-    !$acc enter data copyin(vp_bu,vp_bv,vp_bw,vp_mu,vp_mv,vp_mw,vp_w,vp_act) create(vp_r,vp_z,vp_d,vp_ap)
-    If ( pcg_precond >= 1 ) Call mg_set_coef(vp_bu, vp_bv, vp_bw)
+    !$acc enter data copyin(vp_mu,vp_mv,vp_mw)
 
   End Subroutine vp_init_masked
 
 
-  !> Projection of the single-phase velocity with an immersed body (ibm_method = 1): the fast solver cannot honour the closed faces, so
-  !  the pseudo-pressure is found by PCG on the masked operator (no flux through the body), to ibm_pcg_tol, and the closed faces stay zero.
-  Subroutine vp_project_masked
+  !> Projection of the single-phase velocity with a staircase body (ibm_method = 1): the fast whole-box solve, the closed faces zeroed
+  !  before it (its divergence is that of the masked velocity) and, for ibm_pressure < 2, again after it
+  Subroutine vp_project_staircase
 
-    Real(Int64), Allocatable :: fd(:,:,:), ph(:,:,:), gu(:,:,:), gv(:,:,:), gw(:,:,:)
-    Real(Int64) :: umax
-    Logical :: is_first_p, is_last_p
-    Integer(Int32) :: partner_p, i, j, k
-
-    If ( ibm_projection == 1 ) Then
-       !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
-       U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
-       !$acc end kernels
-       Call compute_projection_step
-       !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
-       U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
-       !$acc end kernels
-       Return
-    End If
-    Allocate( fd(nxg,nyg,nzg), ph(nxg,nyg,nzg), gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz) )
-    !$acc enter data create(fd,ph,gu,gv,gw) if(vp_dev)
     !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
     U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
     !$acc end kernels
-    Call vp_div(U, V, W, fd)
-    umax = 0d0
-    !$acc parallel loop collapse(3) reduction(max:umax) present(U) if(vp_dev)
-    Do k = 1, nzg
-       Do j = 1, nyg
-          Do i = 1, nx
-             umax = Max(umax, Abs(U(i,j,k)))
-          End Do
-       End Do
-    End Do
-    !$acc parallel loop collapse(3) reduction(max:umax) present(V) if(vp_dev)
-    Do k = 1, nzg
-       Do j = 1, ny
-          Do i = 1, nxg
-             umax = Max(umax, Abs(V(i,j,k)))
-          End Do
-       End Do
-    End Do
-    !$acc parallel loop collapse(3) reduction(max:umax) present(W) if(vp_dev)
-    Do k = 1, nz
-       Do j = 1, nyg
-          Do i = 1, nxg
-             umax = Max(umax, Abs(W(i,j,k)))
-          End Do
-       End Do
-    End Do
-    Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
-    Call vp_pcg(fd, 800, ibm_pcg_tol, ph, rfloor=1d-14*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
-    Call vp_halo(ph, .True.)
-    Call vp_grad(ph, gu, gv, gw)
-    Call apply_face_gradient(gu, gv, gw, 1d0)
+    Call compute_projection_step
+    ! ibm_pressure = 2: the body faces keep the flux of the solve, so the fluid cells stay divergence-free; they are zeroed again at
+    ! the start of the next stage, before its predictor is built (zeroing here would discard that flux, as ibm_pressure = 0 does)
+    If ( ibm_pressure >= 2 ) Return
+    !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
+    U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
+    !$acc end kernels
 
-    If ( rk_step == 3 ) Then
-       !$acc kernels present(P,ph) if(vp_dev)
-       P = 0d0
-       P(2:nxg-1,2:nyg-1,2:nzg-1) = ph(2:nxg-1,2:nyg-1,2:nzg-1)/(dt*rk_coef(3,3))
-       P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)
-       !$acc end kernels
-       Call update_ghost_interior_planes_x(P,4)
-       Call update_ghost_interior_planes(P,4)
-       If ( x_bc_type == 0 ) Then
-          Call apply_periodic_bc_x(P,4)
-       Else
-          Call x_periodic_partner(is_first_p, is_last_p, partner_p)
-          !$acc kernels present(P) if(vp_dev)
-          If ( is_first_p ) P(1,:,:) = P(2,:,:)
-          If ( is_last_p  ) P(nxg,:,:) = P(nxg-1,:,:)
-          !$acc end kernels
-       End If
-       If ( z_bc_type == 0 ) Then
-          Call apply_periodic_bc_z(P,4)
-       Else
-          Call z_periodic_partner(is_first_p, is_last_p, partner_p)
-          !$acc kernels present(P) if(vp_dev)
-          If ( is_first_p ) P(:,:,1) = P(:,:,2)
-          If ( is_last_p  ) P(:,:,nzg) = P(:,:,nzg-1)
-          !$acc end kernels
-       End If
-    End If
-    !$acc exit data delete(fd,ph,gu,gv,gw) if(vp_dev)
-    Deallocate( fd, ph, gu, gv, gw )
-
-  End Subroutine vp_project_masked
+  End Subroutine vp_project_staircase
 
 
   !> IBM face and cell masks from the signed distance: a face is open only if both cells it joins have phi >= 0 (cell voxelisation,

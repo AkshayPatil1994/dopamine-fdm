@@ -362,51 +362,68 @@ Contains
           End Do
        End Do
        !$acc end parallel loop
-       !$acc kernels present(P)
-       P(:,  1,:) = P(:,    2,:)
-       P(:,nyg,:) = P(:,nyg-1,:)
-       !$acc end kernels
 #else
        P( 2:nxg-1, 2:nyg-1, 2:nzg-1 ) = rhs_p( 2:nxg-1, 2:nyg-1, 2:nzg-1 )/(dt*rk_coef(3,3))
-       P(:,  1,:) = P(:,    2,:)
-       P(:,nyg,:) = P(:,nyg-1,:)
 #endif
-       ! x/z ghosts: cross-rank halo + domain-periodic wrap (id=4, generic scalar-shaped convention), not
-       ! a same-rank self-copy -- a self-copy here duplicated the neighbour rank's own edge plane in the
-       ! output snapshot at every interior MPI boundary (visible as spurious repeated planes along z/x)
-       Call update_ghost_interior_planes_x(P,4)
-       Call update_ghost_interior_planes(P,4)
-       If ( x_bc_type == 0 ) Then
-          Call apply_periodic_bc_x(P,4)
-       Else
-          Call x_periodic_partner(is_first_p, is_last_p, partner_p)
-#ifdef GPU_POISSON
-          !$acc kernels present(P)
-          If ( is_first_p ) P(1,:,:) = P(2,:,:)
-          If ( is_last_p  ) P(nxg,:,:) = P(nxg-1,:,:)
-          !$acc end kernels
-#else
-          If ( is_first_p ) P(1,:,:) = P(2,:,:)
-          If ( is_last_p  ) P(nxg,:,:) = P(nxg-1,:,:)
-#endif
-       End If
-       If ( z_bc_type == 0 ) Then
-          Call apply_periodic_bc_z(P,4)
-       Else
-          Call z_periodic_partner(is_first_p, is_last_p, partner_p)
-#ifdef GPU_POISSON
-          !$acc kernels present(P)
-          If ( is_first_p ) P(:,:,1)   = P(:,:,2)
-          If ( is_last_p  ) P(:,:,nzg) = P(:,:,nzg-1)
-          !$acc end kernels
-#else
-          If ( is_first_p ) P(:,:,1)   = P(:,:,2)
-          If ( is_last_p  ) P(:,:,nzg) = P(:,:,nzg-1)
-#endif
-       End If
+       Call finish_pressure_ghosts(P)
     End If
 
   End Subroutine solve_poisson_equation
+
+  !> Wall rows and x/z ghost planes of a pressure-shaped array Pf whose interior is set: y wall copy, cross-rank halo and domain-periodic
+  !  wrap (id=4, generic scalar-shaped convention), or the Neumann copy at an x/z domain edge. Shared by the pressure saved at the end of
+  !  the step and by the incremental stage pressure (ibm_pressure)
+  Subroutine finish_pressure_ghosts(Pf)
+
+    Real(Int64), Intent(InOut) :: Pf(nxg,nyg,nzg)
+
+    Logical        :: is_first_p, is_last_p
+    Integer(Int32) :: partner_p
+
+#ifdef GPU_POISSON
+    !$acc kernels present(Pf)
+    Pf(:,  1,:) = Pf(:,    2,:)
+    Pf(:,nyg,:) = Pf(:,nyg-1,:)
+    !$acc end kernels
+#else
+    Pf(:,  1,:) = Pf(:,    2,:)
+    Pf(:,nyg,:) = Pf(:,nyg-1,:)
+#endif
+    ! x/z ghosts: cross-rank halo + domain-periodic wrap (id=4, generic scalar-shaped convention), not
+    ! a same-rank self-copy -- a self-copy here duplicated the neighbour rank's own edge plane in the
+    ! output snapshot at every interior MPI boundary (visible as spurious repeated planes along z/x)
+    Call update_ghost_interior_planes_x(Pf,4)
+    Call update_ghost_interior_planes(Pf,4)
+    If ( x_bc_type == 0 ) Then
+       Call apply_periodic_bc_x(Pf,4)
+    Else
+       Call x_periodic_partner(is_first_p, is_last_p, partner_p)
+#ifdef GPU_POISSON
+       !$acc kernels present(Pf)
+       If ( is_first_p ) Pf(1,:,:) = Pf(2,:,:)
+       If ( is_last_p  ) Pf(nxg,:,:) = Pf(nxg-1,:,:)
+       !$acc end kernels
+#else
+       If ( is_first_p ) Pf(1,:,:) = Pf(2,:,:)
+       If ( is_last_p  ) Pf(nxg,:,:) = Pf(nxg-1,:,:)
+#endif
+    End If
+    If ( z_bc_type == 0 ) Then
+       Call apply_periodic_bc_z(Pf,4)
+    Else
+       Call z_periodic_partner(is_first_p, is_last_p, partner_p)
+#ifdef GPU_POISSON
+       !$acc kernels present(Pf)
+       If ( is_first_p ) Pf(:,:,1)   = Pf(:,:,2)
+       If ( is_last_p  ) Pf(:,:,nzg) = Pf(:,:,nzg-1)
+       !$acc end kernels
+#else
+       If ( is_first_p ) Pf(:,:,1)   = Pf(:,:,2)
+       If ( is_last_p  ) Pf(:,:,nzg) = Pf(:,:,nzg-1)
+#endif
+    End If
+
+  End Subroutine finish_pressure_ghosts
 
   ! Boundary conditions for pseudo-pressure in x and z
   Subroutine apply_periodic_xz_pressure

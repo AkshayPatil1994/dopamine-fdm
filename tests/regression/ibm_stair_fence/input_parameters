@@ -19,5 +19,5 @@
   filein = 'restart/x', fileout = 'x',
 /
 &IBM
-  ibm_input_mode = 1, ibm_method = 1, ibm_wall_model_flag = 1, ibm_sdf_file = 'SDF_in',
+  ibm_input_mode = 1, ibm_method = 1, ibm_pressure = 2, ibm_wall_model_flag = 1, ibm_sdf_file = 'SDF_in',
 /

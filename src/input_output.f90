@@ -51,7 +51,7 @@ Contains
                        inflow_recycle_file, inflow_recycle_loop, inflow_recycle_t_offset, &
                        inflow_recycle_shift_z, inflow_recycle_seed
 
-    Namelist /IBM/ ibm_input_mode, ibm_method, ibm_pcg_tol, ibm_projection, ibm_wall_model_flag, &
+    Namelist /IBM/ ibm_input_mode, ibm_method, ibm_pressure, ibm_wall_model_flag, &
                    ibm_sdf_file, ibm_objid_file, ks, nks, nsampling, ibm_surface_nsampling, &
                    ibm_T_bc_type, ibm_T_wall, ibm_z0, smooth_ibm
 
@@ -103,7 +103,7 @@ Contains
                    vof_pcg_iters, vof_pcg_tol, vof_mom_scheme, vof_mom_cm0, vof_mom_cm1, &
                    vof_rk_mom, vof_rk_nth, vof_co_sub, vof_nsub, vof_freeze_ut, vof_adv_iters, vof_adv_tol, &
                    vof_tr_floor, &
-                   vof_div_tol, vof_cfl_max, &
+                   vof_div_tol, &
                    vof_u0, vof_wave_amp, vof_wave_lambda, vof_wave_stokes, vof_tgv, vof_shear, vof_prescribed, vof_presc_T, &
                    vof_selftest, vof_frozen, vof_smooth_w, vof_hsplit, vof_debug, vof_snap_dt
 
@@ -170,8 +170,7 @@ Contains
           Write(*,'(A)') ' INFO: no &IBM found, using defaults (no IBM body)'
           ibm_input_mode      = 0
           ibm_method          = 0
-          ibm_pcg_tol         = 1d-8
-          ibm_projection      = 0
+          ibm_pressure        = 0
           ibm_wall_model_flag = 0
           ibm_sdf_file        = 'SDF_in'
           ks                  = 0d0
@@ -275,6 +274,7 @@ Contains
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
        Lx_i       = Lx;  Ly_i       = Ly;  Lz_i       = Lz
        Call check_vof_inputs
+       Call check_run_inputs
        If ( pcg_precond < -1 .Or. pcg_precond > 1 ) &
             Call abort_input( 'ERROR: pcg_precond must be 0 (fast Poisson solver), 1 (multigrid) or -1 (automatic)' )
        If ( mg_cycle == 0 .Or. mg_cycle < -1 .Or. mg_cycle > 3 ) &
@@ -293,16 +293,14 @@ Contains
        End If
        If ( ibm_method < 0 .Or. ibm_method > 1 ) &
             Call abort_input( 'ERROR: ibm_method must be 0 (ghost-cell) or 1 (staircase)' )
-       If ( ibm_pcg_tol <= 0d0 ) Call abort_input( 'ERROR: ibm_pcg_tol must be > 0' )
-       If ( ibm_projection < 0 .Or. ibm_projection > 1 ) &
-            Call abort_input( 'ERROR: ibm_projection must be 0 (masked PCG) or 1 (fast whole-box solve)' )
-       If ( ibm_projection == 1 .And. ibm_method /= 1 ) &
-            Call abort_input( 'ERROR: ibm_projection = 1 needs the staircase method (ibm_method = 1)' )
+       If ( ibm_pressure < 0 .Or. ibm_pressure > 2 ) Call abort_input( 'ERROR: ibm_pressure must be 0, 1 or 2' )
+       If ( ibm_pressure > 0 .And. ibm_input_mode < 1 ) &
+            Call abort_input( 'ERROR: ibm_pressure > 0 needs an immersed body (ibm_input_mode >= 1)' )
+       If ( ibm_pressure == 2 .And. ibm_method /= 1 ) &
+            Call abort_input( 'ERROR: ibm_pressure = 2 needs the staircase method (ibm_method = 1)' )
        If ( ibm_method == 1 .And. ibm_input_mode < 1 ) &
             Call abort_input( 'ERROR: ibm_method=1 needs an immersed body (ibm_input_mode >= 1)' )
 #ifdef GPU_POISSON
-       If ( ibm_method == 1 .And. pcg_precond < 1 ) &
-            Call abort_input( 'ERROR: ibm_method=1 in a GPU build needs the multigrid preconditioner (pcg_precond = 1)' )
        If ( pcg_precond < 1 .And. vof_flow >= 1 ) &
             Call abort_input( 'ERROR: the two-fluid solver in a GPU build needs the multigrid preconditioner (pcg_precond = 1)' )
 #endif
@@ -473,8 +471,7 @@ Contains
        Write(*,'(A,I2)')     '   ibm_input_mode              = ', ibm_input_mode
        If ( ibm_input_mode >= 1 ) Then
           Write(*,'(A,I2)')     '   ibm_method (0 ghost-cell, 1 staircase) = ', ibm_method
-          Write(*,'(A,ES10.2)') '   ibm_pcg_tol (masked projection)       = ', ibm_pcg_tol
-          Write(*,'(A,I2)')     '   ibm_projection (0 masked PCG, 1 fast)  = ', ibm_projection
+          Write(*,'(A,I2)')     '   ibm_pressure (0 off, 1 incr., 2 +flux) = ', ibm_pressure
           Write(*,'(A,I2)')     '   ibm_wall_model_flag         = ', ibm_wall_model_flag
           Write(*,'(A,I4)')     '   smooth_ibm (SDF corner-rounding passes, 0=off) = ', smooth_ibm
        End If
@@ -583,8 +580,7 @@ Contains
 
     Call Mpi_bcast ( ibm_input_mode,       1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_method,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ibm_pcg_tol,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( ibm_projection,       1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( ibm_pressure,         1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( pcg_precond,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( mg_cycle,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( mg_smooth_deg,        1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -826,7 +822,6 @@ Contains
     Call Mpi_bcast ( vof_pcg_iters,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_pcg_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_mom_scheme,        1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( vof_cfl_max,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_selftest,          1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_u0,                1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_adv_iters,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
@@ -855,6 +850,65 @@ Contains
     Call Mpi_bcast ( vof_smooth_w,         1, MPI_real8,  0, MPI_COMM_WORLD, ierr )
 
   End Subroutine read_input_parameters
+
+  !> Range checks of the single-phase inputs that had none (an unknown value used to act as a silent default, e.g. sgs_model = 7 ran as DNS)
+  !  and warnings for combinations that are accepted but weak or contradictory (see docs/Input-Parameters.md, docs/Numerics.md 6.4)
+  Subroutine check_run_inputs
+
+    Integer(Int32) :: n
+
+    If ( sgs_model < 0 .Or. sgs_model > 1 ) Call abort_input( 'ERROR: sgs_model must be 0 (DNS) or 1 (Vreman)' )
+    If ( advection_scheme < 0 .Or. advection_scheme > 1 ) &
+         Call abort_input( 'ERROR: advection_scheme must be 0 (skew-symmetric) or 1 (divergence-form central)' )
+    If ( flat_wall_model_flag < 0 .Or. flat_wall_model_flag > 2 ) &
+         Call abort_input( 'ERROR: flat_wall_model_flag must be 0 (no-slip), 1 (smooth log law) or 2 (rough log law)' )
+    If ( ibm_wall_model_flag < 0 .Or. ibm_wall_model_flag > 1 ) &
+         Call abort_input( 'ERROR: ibm_wall_model_flag must be 0 (no-slip) or 1 (log-law EQWM)' )
+    If ( ibm_input_mode < 0 .Or. ibm_input_mode > 1 ) &
+         Call abort_input( 'ERROR: ibm_input_mode must be 0 (no body) or 1 (SDF immersed boundary)' )
+    If ( x_bc_type < 0 .Or. x_bc_type > 1 ) Call abort_input( 'ERROR: x_bc_type must be 0 (periodic) or 1 (inflow/outflow)' )
+    If ( y_bc_type < 0 .Or. y_bc_type > 1 ) Call abort_input( 'ERROR: y_bc_type must be 0 (periodic) or 1 (walls)' )
+    If ( z_bc_type < 0 .Or. z_bc_type > 1 ) Call abort_input( 'ERROR: z_bc_type must be 0 (periodic) or 1 (walls)' )
+    If ( sediment_flag < 0 ) Call abort_input( 'ERROR: sediment_flag must be 0 or 1' )
+    If ( boussinesq_flag < 0 ) Call abort_input( 'ERROR: boussinesq_flag must be 0 or 1' )
+    If ( cfl_adaptive < 0 .Or. cfl_adaptive > 1 ) Call abort_input( 'ERROR: cfl_adaptive must be 0 (fixed dt) or 1 (adaptive dt)' )
+    If ( dt <= 0d0 ) Call abort_input( 'ERROR: &NUMERICS dt must be > 0 (it is the initial dt when cfl_adaptive = 1)' )
+    If ( cfl_adaptive == 1 ) Then
+       If ( cfl_target <= 0d0 .Or. cfl_safety <= 0d0 ) Call abort_input( 'ERROR: cfl_target and cfl_safety must be > 0' )
+       If ( dt_min > dt_max ) Call abort_input( 'ERROR: dt_min must not exceed dt_max' )
+    End If
+
+    ! immersed body: weak or contradictory combinations
+    If ( ibm_input_mode >= 1 .And. vof_flow < 1 ) Then
+       If ( ibm_method == 0 ) Then
+          Write(*,'(A)') ' WARNING: ghost-cell IBM (ibm_method = 0) needs walls resolved by >= 2 cells; thin or sharp ' // &
+               'geometry (buildings, terrain) is better served by ibm_method = 1, ibm_pressure = 2'
+          If ( ibm_wall_model_flag == 1 ) Write(*,'(A)') ' WARNING: ibm_wall_model_flag = 1 with ibm_method = 0 only ' // &
+               'rewrites the ghost velocities and carries almost no stress'
+       Else If ( ibm_pressure == 0 ) Then
+          Write(*,'(A)') ' WARNING: ibm_method = 1 with ibm_pressure = 0 discards the pressure-gradient flux through ' // &
+               'the body faces (divergence next to the body, velocity can grow at sharp geometry): ibm_pressure = 2 is recommended'
+       End If
+       If ( flat_wall_model_flag > 0 ) Write(*,'(A)') &
+            ' INFO: flat_wall_model_flag > 0 together with an immersed body: the y-wall model and the IBM wall stress both act'
+    End If
+    If ( ibm_input_mode < 1 .And. ibm_wall_model_flag == 1 ) &
+         Write(*,'(A)') ' WARNING: ibm_wall_model_flag = 1 is ignored without an immersed body (ibm_input_mode = 0)'
+    If ( boussinesq_flag < 1 ) Then
+       Do n = 0, Size(ibm_T_bc_type) - 1
+          If ( ibm_T_bc_type(n) == 1 ) Then
+             Write(*,'(A,I0,A)') ' WARNING: ibm_T_bc_type(', n, ') = 1 (isothermal) is ignored without boussinesq_flag = 1'
+             Exit
+          End If
+       End Do
+    End If
+    If ( x_bc_type == 0 .And. inflow_type /= 0 ) &
+         Write(*,'(A)') ' WARNING: &INFLOW inflow_type is ignored with a periodic streamwise direction (x_bc_type = 0)'
+    If ( restart == 1 .And. cfl_adaptive == 1 .And. t_start < 0d0 .And. vof_flow < 1 ) &
+         Write(*,'(A)') ' WARNING: restart with adaptive dt and no t_start: the time restarts from nstep_init*dt, not the true time'
+
+  End Subroutine check_run_inputs
+
 
   !> Reject feature combinations the free-surface solver does not support (rank 0, right after the namelists are read). UAV is
   !  excluded in both VOF modes; the two-fluid solver (vof_flow>=1) additionally excludes the features listed below.
@@ -1442,6 +1496,21 @@ Contains
     Cscal_o = Cscal
 
   End Subroutine read_scalar_restart
+
+
+  !> Read the pressure block of a restart file into P (written there from Pst when ibm_pressure > 0); skips the mesh and U, V, W
+  Subroutine read_pressure_restart
+
+    Call open_restart_skip_mesh
+
+    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
+    Call skip_distributed_field_block(2, ny,  .False., .False.)
+    Call skip_distributed_field_block(2, nyg, .False., .True.)
+    Call read_distributed_field_block(2, P, .False., .False.)
+
+    If ( myid == 0 ) Close(2)
+
+  End Subroutine read_pressure_restart
 
 
   ! Read the VOF fraction into Cvof_io and the pressure history into P from a restart file; skips U,V,W and the C/nu_t/T blocks of the other features

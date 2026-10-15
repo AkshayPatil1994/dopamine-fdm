@@ -3,7 +3,7 @@ Module equations
 
   ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
-  Use global,          Only : x, xm, xg, y, ym, yg, z, zm, zg, term_1, &
+  Use global,          Only : x, xg, y, yg, z, zg, term_1, &
                               term_2, nx, nxg, ny, nyg, nz, nzg, &
                               nu, dPdx, dPdz, nu_t, in1, in2,    &
                               weight_y_0, weight_y_1, weight_z_0, weight_z_1, dx, dz,         &

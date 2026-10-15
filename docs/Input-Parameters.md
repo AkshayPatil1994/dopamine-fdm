@@ -59,7 +59,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `cfl_target` | `0.5` | Target CFL (adaptive). |
 | `cfl_safety` | `0.9` | Safety factor on the `dt` update (adaptive). |
 | `dt_min, dt_max` | `1e-10`, `1e10` | Bounds on `dt` (adaptive). |
-| `pcg_precond` | `-1` | Preconditioner of the masked / variable-density PCG (`ibm_method=1`, `vof_flow≥1`): `0` fast Poisson solver, `1` mask-aware multigrid (needs y walls), `-1` automatic (1 with y walls, else 0). GPU: `ibm_method=1` and `vof_flow≥1` need 1. |
+| `pcg_precond` | `-1` | Preconditioner of the variable-density PCG of the two-fluid solver (`vof_flow≥1`): `0` fast Poisson solver, `1` mask-aware multigrid (needs y walls), `-1` automatic (1 with y walls, else 0). GPU: `vof_flow≥1` needs 1. |
 | `mg_cycle` | `-1` | Multigrid cycle of the `pcg_precond=1` preconditioner: `1` V-cycle, `2` W-cycle (the coarse level is visited twice; 3–6× fewer PCG iterations for ~15 % more work per cycle), `3` three visits, `-1` automatic (W on CPU builds, V on GPU builds, where the W cycle's many tiny coarse-level kernels are launch-bound: 6× slower on a 0.9 M-cell wave flume). |
 | `mg_smooth_deg` | `4` | Degree of the Chebyshev smoother of the multigrid on every level but the coarsest. |
 
@@ -129,9 +129,8 @@ Ghost-cell or staircase immersed boundaries from a precomputed signed-distance f
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
 | `ibm_input_mode` | `0` | `0` no body; `1` read the cell-centre SDF `ibm_sdf_file` (solid where `phi<0`). |
-| `ibm_method` | `0` | `0` ghost-cell (image-point mirror; resolve walls with ≥2 cells); `1` staircase (zero velocity in solid, masked PCG projection keeping closed faces at zero flux, log-law stress as viscous flux with `ibm_wall_model_flag=1`; needs `ibm_input_mode≥1`, GPU needs `pcg_precond=1`; not for `vof_flow=1`, which always uses the staircase stress). |
-| `ibm_pcg_tol` | `1e-8` | Relative PCG residual of the masked projection of `ibm_method=1` (the divergence left after the projection is of this order relative to its pre-projection value; `1e-13` reaches round-off at about 1.3× the cost). |
-| `ibm_projection` | `0` | Projection of `ibm_method=1`: `0` masked PCG (closed faces at exactly zero flux, divergence-free to `ibm_pcg_tol`); `1` fast whole-box Poisson solve that ignores the body, after which the closed faces are zeroed (as in direct-forcing/ghost-cell codes). `1` is 3–4× cheaper per run on the cases tested but is not divergence-free next to the body (see [Numerics §6.4](Numerics.md#64-staircase-method-ibm_method--1)). Not available with `vof_flow=1`. |
+| `ibm_method` | `0` | `0` ghost-cell (image-point mirror; resolve walls with ≥2 cells); `1` staircase (zero velocity in solid, fast whole-box projection with the closed faces zeroed, log-law stress as viscous flux with `ibm_wall_model_flag=1`; needs `ibm_input_mode≥1`; not for `vof_flow=1`, which always uses the staircase stress). |
+| `ibm_pressure` | `0` | Pressure treatment of the fast whole-box projection (`ibm_method=0` or `1`). `0` pressure-free predictor: the solve removes the whole pressure gradient and the faces of the body are zeroed again afterwards, discarding the pressure-gradient flux across them (cells next to the body end up with divergence of order 1 s⁻¹ and the velocity next to sharp or thin geometry can grow without bound). `1` incremental: the predictor carries −∇ of the last stage pressure, so the solve only supplies the increment and the discarded flux is the increment's. `2` as `1`, and the body faces also keep the flux of the solve, so the fluid cells stay divergence-free to round-off (staircase `ibm_method=1` with `ibm_projection=1` only). **Recommended for urban/rough-terrain LES: `ibm_method=1, ibm_projection=1, ibm_pressure=2`.** `ibm_method=0` does not profit (its ghost values are rewritten after the solve). Costs one extra array and a gradient per stage, no extra Poisson solve. Single-phase only; see [Numerics §6.4](Numerics.md#64-staircase-method-ibm_method--1). |
 | `ibm_wall_model_flag` | `0` | `0` no-slip; `1` log-law EQWM on IBM surfaces. With `ibm_method=0` it only rewrites ghost velocities and carries almost no stress in near-1-D shear: use `ibm_method=1` (or `vof_flow=1`) for a wall-modelled IBM. |
 | `ibm_sdf_file` | `'SDF_in'` | Path of the SDF file. |
 | `ibm_objid_file` | `''` | Optional per-solid ID field (GenSDF `sdfp_objid.bin`) enabling per-object settings below; empty = one condition for all solids. |
@@ -311,7 +310,6 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_tr_floor` | `1e-14` | Stopping floor of the transporting-velocity projection (with an immersed body), as a fraction of the largest velocity. `1e-12` saves ~15% of the PCG iterations; the liquid volume then drifts at ~1e-14 instead of ~1e-16. |
 | `vof_div_tol` | `0.0` | `>0`: stop every pressure solve once `dt·max\|div u\|` is below this. |
 | `vof_layered_precond` | `0` | `1` row-mean-density PCG preconditioner (CPU, y walls). |
-| `vof_cfl_max` | `0.4` | Courant limit of the advection step. |
 | `vof_prescribed, vof_presc_T` | `0`, `8.0` | Passive tests (`vof_flow=0`): `1` LeVeque vortex, `2` Enright deformation (reversing at `T/2`, unit box; `vof_diag.dat` column 28 = L1 error), `3` rigid rotation about (0.5,0.5) of period `T` (Zalesak). |
 | `vof_tgv` | `0` | `1` Taylor–Green initial velocity of amplitude `vof_u0`. |
 | `vof_shear` | `0` | `1` gas above `vof_level` starts at `vof_u0`. |
@@ -321,7 +319,7 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_debug` | `0` | `1` write `vof_dev/prof/front/vmax.dat`. |
 | `vof_snap_dt` | `0.0` | With `vof_debug=1`: interval of mid-plane slices `vof_snap_NNNN.dat` of C, u, v. |
 
-Not supported with `vof_flow=1` (aborts): UAV, rotation, SEM / recycled inflow. Sediment, Boussinesq temperature and particles are supported (see [Two-Phase-VOF](Two-Phase-VOF.md) 1.8; `grav` must equal `vof_grav` with Boussinesq or inertial particles, `particle_rho_f` must equal `vof_rho_l`); on the GPU the scalars run on the device, and the particles on the host with a per-step copy of U, V, W and the liquid fraction. `dPdx` / `Ub_target` forcing is not applied; only periodic z. The ghost-cell IBM (`ibm_input_mode=1`) is supported.
+Not supported with `vof_flow=1` (aborts): UAV, rotation, `inflow_type` 1 and 2 (SEM, recycled precursor; the wave inlet of `wave_turb=1` has its own recycle file and is supported). Sediment, Boussinesq temperature and particles are supported (see [Two-Phase-VOF](Two-Phase-VOF.md) 1.8; `grav` must equal `vof_grav` with Boussinesq or inertial particles, `particle_rho_f` must equal `vof_rho_l`); on the GPU the scalars run on the device, and the particles on the host with a per-step copy of U, V, W and the liquid fraction. `dPdx` / `Ub_target` forcing is not applied; only periodic z. The ghost-cell IBM (`ibm_input_mode=1`) is supported.
 
 ## WAVES
 

@@ -12,7 +12,7 @@ Module time_integration
   Use sgs_models
   Use ibm
   Use ibm_stress,       Only : ibm_stress_update, nu_const, ibm_stair_forces, ovr_u, ovr_v, ovr_w
-  Use vof_pressure,     Only : vp_project_masked, vp_mu, vp_mv, vp_mw
+  Use vof_pressure,     Only : vp_project_staircase, vp_mu, vp_mv, vp_mw
   Use scalar_transport,  Only : compute_rhs_scalar, apply_scalar_bc
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
   Use monitor,          Only : compute_cfl, write_force_csv, compute_bulk_velocity
@@ -30,16 +30,52 @@ Module time_integration
 
 Contains
 
-  !> Projection: the fast Poisson solver, or with the staircase IBM (ibm_method = 1) the masked PCG that keeps the closed faces at zero flux
+  !> Projection: the fast Poisson solver; with the staircase IBM (ibm_method = 1) the closed faces are zeroed around it
   Subroutine project_velocity_field
 
     If ( ibm_method == 1 ) Then
-       Call vp_project_masked
+       Call vp_project_staircase
     Else
        Call compute_projection_step
     End If
 
   End Subroutine project_velocity_field
+
+  !> Predictor with the last stage pressure: U -= dt*c*grad(Pst), applied with project_velocity (same seam/outflow face handling as the
+  !  projection). The IBM block that follows zeroes the body faces, so the right-hand side of the whole-box solve is the divergence of a
+  !  field with no flux through the body, and the solve only supplies the increment: the flux it pushes through the body faces is that of
+  !  the increment, not of the full pressure gradient (which is what the pressure-free predictor of ibm_pressure = 0 discards)
+  Subroutine add_pressure_predictor(c)
+
+    Real(Int64), Intent(In) :: c
+
+    !$acc kernels present(rhs_p,Pst)
+    rhs_p = dt*c*Pst
+    !$acc end kernels
+    Call apply_periodic_xz_pressure
+    Call update_ghost_interior_planes_pressure
+    Call update_ghost_interior_planes_pressure_x
+    Call project_velocity
+
+  End Subroutine add_pressure_predictor
+
+  !> Stage pressure after the projection: Pst += (solved pseudo-pressure)/(dt*c). After the last stage Pst is copied into P, the pressure
+  !  block of the snapshots and restart files (read back into Pst by read_pressure_restart, so a hot start continues the incremental form)
+  Subroutine update_stage_pressure(c)
+
+    Real(Int64), Intent(In) :: c
+
+    !$acc kernels present(rhs_p,Pst)
+    Pst = Pst + rhs_p/(dt*c)
+    !$acc end kernels
+    If ( rk_step == 3 ) Then
+       !$acc kernels present(P,Pst)
+       P(2:nxg-1,2:nyg-1,2:nzg-1) = Pst(2:nxg-1,2:nyg-1,2:nzg-1)
+       !$acc end kernels
+       Call finish_pressure_ghosts(P)
+    End If
+
+  End Subroutine update_stage_pressure
 
   !> Wall-model stress on the staircase faces of the immersed body (ibm_method = 1 with the IBM wall model), from the current velocity
   Subroutine update_ibm_stress
@@ -214,6 +250,8 @@ Contains
     W(2:nxg-1,2:nyg-1,2:nz-1) = Wo(2:nxg-1,2:nyg-1,2:nz-1) + dt*rk_coef(1,1)*Fw1
     !$acc end kernels
     Call profiler_stop(PROF_RK_UPDATE)
+    ! incremental pressure (ibm_pressure): the stage pressure of the last solve enters the predictor, before the body faces are zeroed
+    If ( ibm_pressure > 0 ) Call add_pressure_predictor(rk_coef(1,1))
 
     ! Apply ghost-cell IBM on updated velocity (2nd-order; no-slip or EQWM)
     ! Always zero solid cells first; then overwrite ghost cells with EQWM if active.
@@ -251,13 +289,15 @@ Contains
     Call trace_stage('s1_bc_pre')
     Call profiler_stop(PROF_BC)
     Call project_velocity_field
+    If ( ibm_pressure > 0 ) Call update_stage_pressure(rk_coef(1,1))   ! the solve returned the increment
     Call trace_stage('s1_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
     Call trace_stage('s1_bc_post1')
     Call profiler_stop(PROF_BC)
     ! U,V,W are correct and resident on device; the IBM re-enforce block below only needs a host mirror for the impulse snapshot
-    If ( ibm_input_mode >= 1 ) Then
+    ! ibm_pressure = 2 skips this re-enforcement: it would discard the flux the solve put through the body faces (zeroed at the next stage)
+    If ( ibm_input_mode >= 1 .And. ibm_pressure < 2 ) Then
        ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
        ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
        Call profiler_start(PROF_IBM)
@@ -342,6 +382,8 @@ Contains
     V(2:nxg-1,2:ny-1,2:nzg-1) = Vo(2:nxg-1,2:ny-1,2:nzg-1) + dt*( rk_coef(2,1)*Fv1 + rk_coef(2,2)*Fv2 )
     W(2:nxg-1,2:nyg-1,2:nz-1) = Wo(2:nxg-1,2:nyg-1,2:nz-1) + dt*( rk_coef(2,1)*Fw1 + rk_coef(2,2)*Fw2 )
     !$acc end kernels
+    ! incremental pressure (ibm_pressure): the stage pressure of the last solve enters the predictor, before the body faces are zeroed
+    If ( ibm_pressure > 0 ) Call add_pressure_predictor(rk_coef(2,2))
     Call profiler_stop(PROF_RK_UPDATE)
 
     If ( ibm_input_mode >= 1 ) Then
@@ -374,13 +416,15 @@ Contains
     Call trace_stage('s2_bc_pre')
     Call profiler_stop(PROF_BC)
     Call project_velocity_field
+    If ( ibm_pressure > 0 ) Call update_stage_pressure(rk_coef(2,2))   ! the solve returned the increment
     Call trace_stage('s2_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
     Call trace_stage('s2_bc_post1')
     Call profiler_stop(PROF_BC)
     ! U,V,W are correct and resident on device; the IBM re-enforce block below only needs a host mirror for the impulse snapshot
-    If ( ibm_input_mode >= 1 ) Then
+    ! ibm_pressure = 2 skips this re-enforcement: it would discard the flux the solve put through the body faces (zeroed at the next stage)
+    If ( ibm_input_mode >= 1 .And. ibm_pressure < 2 ) Then
        ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
        ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
        Call profiler_start(PROF_IBM)
@@ -469,6 +513,8 @@ Contains
          dt*( rk_coef(3,1)*Fv1 + rk_coef(3,2)*Fv2 + rk_coef(3,3)*Fv3 )
     W(2:nxg-1,2:nyg-1,2:nz-1) = Wo(2:nxg-1,2:nyg-1,2:nz-1) + &
          dt*( rk_coef(3,1)*Fw1 + rk_coef(3,2)*Fw2 + rk_coef(3,3)*Fw3 )
+    ! incremental pressure (ibm_pressure): the stage pressure of the last solve enters the predictor, before the body faces are zeroed
+    If ( ibm_pressure > 0 ) Call add_pressure_predictor(rk_coef(3,3))
     !$acc end kernels
     Call profiler_stop(PROF_RK_UPDATE)
 
@@ -502,6 +548,7 @@ Contains
     Call trace_stage('s3_bc_pre')
     Call profiler_stop(PROF_BC)
     Call project_velocity_field
+    If ( ibm_pressure > 0 ) Call update_stage_pressure(rk_coef(3,3))   ! the solve returned the increment
     Call trace_stage('s3_proj')
     Call profiler_start(PROF_BC)
     Call apply_boundary_conditions(after_projection=.True.)
@@ -516,7 +563,6 @@ Contains
        !$acc kernels present(U)
        U(2:nx-1,2:nyg-1,2:nzg-1) = U(2:nx-1,2:nyg-1,2:nzg-1) + dU_cmfr
        !$acc end kernels
-       dPdx_cmfr = -dU_cmfr/dt   ! diagnostic only; dPdx itself stays 0 (see update_pressure_forcing guard above)
        Call profiler_stop(PROF_CMFR)
        Call profiler_start(PROF_BC)
        Call apply_boundary_conditions(after_projection=.True.)
@@ -547,7 +593,8 @@ Contains
     End If
     ! Re-enforce IBM: projection corrupts ghost-cell velocities via grad(p) correction.
     ! Accumulate the grad(P)-correction impulse so Method 1 captures the full force.
-    If ( ibm_input_mode >= 1 ) Then
+    ! ibm_pressure = 2 skips this re-enforcement: it would discard the flux the solve put through the body faces (zeroed at the next stage)
+    If ( ibm_input_mode >= 1 .And. ibm_pressure < 2 ) Then
        Call profiler_start(PROF_IBM)
        If ( nsampling > 0 .And. Mod(istep, nsampling) == 0 ) Then
           !$acc update host(U,V,W)

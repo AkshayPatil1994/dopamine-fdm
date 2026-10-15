@@ -1,4 +1,4 @@
-! ibm_wm_small with the staircase IBM (ibm_method = 1): zero velocity in the solid, masked PCG projection, log-law wall stress on the closed faces;
+! ibm_wm_small with the staircase IBM (ibm_method = 1): zero velocity in the solid, fast whole-box projection, log-law wall stress on the closed faces;
 ! rank-count, layout and restart parity.
 
 &DOMAIN
@@ -28,7 +28,7 @@
   nsteps       = 20,
   nsave        = 20,
   nmonitor     = 1,
-  cfl_adaptive = 0, pcg_precond = 0,
+  cfl_adaptive = 0, pcg_precond = 1,
 /
 
 &BOUNDARY_CONDITIONS

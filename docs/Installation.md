@@ -89,7 +89,7 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
   Verified at one rank against the CPU build; multi-rank GPU runs are covered only partly (see [Two-Phase-VOF](Two-Phase-VOF.md#42-not-supported)).
   The scalar boundary conditions (sediment, temperature) are device-resident for one rank only; with several ranks they stage the whole field through the host every RK stage.
 - **CPU-only**: a duct with
-  `x_bc_type=1`. A runtime guard `Stop`s immediately on unsupported combinations.
+  `x_bc_type=1`. Unsupported combinations abort at input with an explanatory message.
 
 Put the NVHPC SDK's `nvfortran` and bundled MPI on your `PATH`/`LD_LIBRARY_PATH` first,
 e.g.:

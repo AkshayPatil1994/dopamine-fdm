@@ -110,7 +110,6 @@ Module global
   Real(Int64), Allocatable, Dimension(:) :: xm_global, ym_global, zm_global
 
   ! local grid at middle points
-  Real(Int64), Allocatable, Dimension(:) :: xm, ym, zm
 
   ! global grid at middle points + ghost cells
   Real(Int64), Allocatable, Dimension(:) :: xg_global, yg_global, zg_global
@@ -250,7 +249,6 @@ Module global
   ! Constant mass-flux (CMFR) forcing: mode 0 = prescribed dPdx (default), 1 = hold bulk velocity at Ub_target
   Integer(Int32) :: flow_forcing_mode
   Real(Int64) :: Ub_target
-  Real(Int64) :: dPdx_cmfr   ! diagnostic-only equivalent forcing under CMFR; never fed back into compute_rhs_u
 
   ! Rigid-body rotation about the streamwise (x) axis: rotation_active 0=off,1=on.
   ! Adds Coriolis + centrifugal forcing about the duct centerline (y0_rot,z0_rot),
@@ -303,10 +301,13 @@ Module global
   ! IBM method: 0 = ghost-cell (image-point mirror), 1 = staircase (zero velocity in the solid, masked projection, wall-model stress as the
   ! flux through the edges next to closed faces, see ibm_stress); ibm_stress_on: the viscous terms read the flux overrides of ibm_stress
   Integer(Int32) :: ibm_method = 0
-  ! relative PCG residual of the masked projection (ibm_method = 1)
-  Real   (Int64) :: ibm_pcg_tol = 1d-8
-  ! staircase projection: 0 = masked PCG (closed faces at exactly zero flux), 1 = whole-box fast Poisson solve, then the closed faces are zeroed
-  Integer(Int32) :: ibm_projection = 0
+  ! ibm_pressure (the whole-box fast Poisson projection used with every immersed body): 0 = pressure-free predictor, the solve removes the full pressure gradient and the
+  ! body faces are zeroed afterwards, discarding that flux (mass defect at the body, velocity grows next to sharp/thin geometry);
+  ! 1 = predictor carries -grad(Pst), Pst = pressure of the last stage, so the solve only supplies the increment;
+  ! 2 = as 1, and the body faces keep the flux of the solve so fluid cells stay divergence-free (staircase, ibm_method = 1).
+  ! Pst is updated after every stage in time_integration.f90 (add_pressure_predictor / update_stage_pressure). See docs/Numerics.md 6.4
+  Integer(Int32) :: ibm_pressure = 0
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Pst
   ! PCG preconditioner of vof_pressure (masked, variable-density): 0 fast Poisson solver, 1 geometric multigrid (vof_mg),
   ! -1 (default) picks 1 when the case has y walls and the build supports it, else 0
   Integer(Int32) :: pcg_precond = -1
@@ -673,7 +674,6 @@ Module global
   ! this value, instead of the relative tests above; the iteration caps still apply
   Real   (Int64) :: vof_div_tol       = 0d0
   Integer(Int32) :: vof_layered_precond = 0   ! 1 (CPU, y walls): PCG preconditioner with the row-wise mean density
-  Real   (Int64) :: vof_cfl_max       = 0.4d0
   ! passive tests: vof_prescribed 1 LeVeque vortex reversal, 2 Enright deformation (C advected by an analytic divergence-free
   ! field, reversing at t = vof_presc_T/2), 3 steady rigid rotation with period vof_presc_T; vof_tgv 1 Taylor-Green initial velocity (amplitude vof_u0); vof_shear 1 gas above
   ! y = vof_level starts at vof_u0

@@ -16,10 +16,11 @@ Module initialization
 #define DSPEC decomp_poisson
 #endif
   Use input_output
-  Use ibmSetup
   Use scalar_transport, Only : compute_settling_velocity
   Use vof_state, Only : vof_init
   Use vof_pressure, Only : vp_init_masked
+  Use ibm, Only : setup_ibm
+  Use monitor, Only : open_force_csv
   Use ibm_stress, Only : ibm_stress_init
   Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
   Use uav_actuator, Only : setup_uav
@@ -196,7 +197,6 @@ Contains
     Allocate ( xg_global(nxm_global+2), yg_global(nym_global+2), zg_global(nzm_global+2) )
 
     Allocate (  x (  nx),  y (  ny),  z (  nz) )
-    Allocate (  xm( nxm),  ym( nym),  zm( nzm) )
     Allocate ( xg(nxm+2), yg(nym+2), zg(nzm+2) )
 
 
@@ -218,6 +218,10 @@ Contains
     ! one extra plane in x and z for the ghost cells
     Allocate ( rhs_p  ( 2:nxg,   2:nyg-1, 2:nzg   ) )
     rhs_p = 0d0
+    If ( ibm_pressure > 0 ) Then
+       Allocate ( Pst ( 2:nxg, 2:nyg-1, 2:nzg ) )
+       Pst = 0d0
+    End If
     
     ! read data
     If ( myid==0 ) Then
@@ -249,11 +253,6 @@ Contains
     Do k=1,nzm_global
        zm_global(k) = 0.5d0*( z_global(k) + z_global(k+1) )
     End Do
-
-    ! local interior centers
-    xm = xm_global( ig1_global(myid):ig2_global(myid)-2 )
-    ym = ym_global
-    zm = zm_global( kg1_global(myid):kg2_global(myid)-2 )
 
     ! global 
     xg_global(2:nxm_global+1) = xm_global
@@ -301,7 +300,8 @@ Contains
     ! IBM setup: must come after xg/yg/zg/dxmin/dymin/dzmin are set
     ! (compute_normal_at_face_* divides by grid spacings).
     If ( ibm_input_mode >= 1 ) Then
-       Call readSDF
+       Call setup_ibm
+       If ( nsampling > 0 ) Call open_force_csv
     End If
 
     ! UAV actuator disk marker setup (no-op unless uav_active>=1); no grid
@@ -677,6 +677,12 @@ Contains
     !	Define eddy viscosity to 0
     nu_t = 0d0
 
+    ! incremental pressure (ibm_pressure > 0): continue from the stage pressure stored in the restart file's P block
+    If ( restart == 1 .And. ibm_pressure > 0 ) Then
+       Call read_pressure_restart
+       Pst = P(2:nxg,2:nyg-1,2:nzg)
+    End If
+
     ! Suspended sediment
     If ( sediment_flag >= 1 ) Then
        Allocate( Cscal  (1:nxg, 1:nyg, 1:nzg) )
@@ -790,6 +796,9 @@ Contains
     !$acc update device(U,V,W,nu_t)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
     !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv,qT_wall)
+    If ( ibm_pressure > 0 ) Then
+       !$acc enter data copyin(Pst)
+    End If
     ! Boussinesq temperature: stays device-resident end-to-end so compute_rhs_v can read it directly
     If ( boussinesq_flag >= 1 ) Then
        !$acc enter data create(Tscal,Tscal_o,Ft1,Ft2,Ft3)

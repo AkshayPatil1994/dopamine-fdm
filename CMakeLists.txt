@@ -264,7 +264,6 @@ set(SRCS
     src/boundary_conditions.f90
     src/sgs_model.f90
     src/equations.f90
-    src/readMask.f90
     src/ibm.f90
     src/scalar_transport.f90
     src/thermal_transport.f90
@@ -561,11 +560,7 @@ exec \"$real\" $os \"$@\"
     file(CHMOD "${TEST_MPIRUN}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 endif()
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_mg_small ibm_stair_fast_small rsb_small)
-        # ibm_stair_small (pcg_precond = 0) aborts in a GPU build; ibm_stair_mg_small covers the GPU
-        if(ENABLE_GPU AND case STREQUAL "ibm_stair_small")
-            continue()
-        endif()
+    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small ibm_pressure1_small rsb_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${TEST_MPIRUN} --fields --field-tol 1e-8)
@@ -884,6 +879,11 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME ibm_stair_fence
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_fence/check_fence.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
+    # ibm_pressure = 2 (incremental pressure, body faces keep the flux of the whole-box solve): fluid cells stay divergence-free
+    add_test(NAME ibm_stair_pressure_divergence
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/check_div.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_pressure_small
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --max-div 1e-9)
     # SDF cells at exactly phi = 0 are fluid in every mask (solid is phi < 0)
     add_test(NAME ibm_phi_zero
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_phi_zero/check_phi_zero.py

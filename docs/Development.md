@@ -22,7 +22,6 @@ fdm-dopamine/
 │   ├── sgs_model.f90        # Vreman SGS model
 │   ├── equations.f90        # RHS convection + diffusion
 │   ├── boundary_conditions.f90
-│   ├── readMask.f90         # IBM setup driver (reads precomputed SDF)
 │   ├── ibm.f90              # Ghost-cell IBM module (extended halo for image-point stencils)
 │   ├── halo_pad.f90         # Host-side padded copies (extra x/z planes) of decomposed fields, used by the IBM and particles
 │   ├── particles.f90        # Lagrangian point particles (tracers, inertial, IBM collisions, reinjection)
