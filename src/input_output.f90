@@ -860,7 +860,15 @@ Contains
   !  and warnings for combinations that are accepted but weak or contradictory (see docs/Input-Parameters.md, docs/Numerics.md 6.4)
   Subroutine check_run_inputs
 
-    Integer(Int32) :: n
+    Call check_numerics
+    Call check_physics_and_bc
+    Call check_combination_warnings
+
+  End Subroutine check_run_inputs
+
+
+  !> Required values, ranges of the time stepping and the momentum convection
+  Subroutine check_numerics
 
     If ( nu < 0d0 .And. vof_flow < 1 ) Call abort_input( 'ERROR: &PHYSICS nu (kinematic viscosity) must be set' )
     If ( nu < 0d0 ) nu = 0d0   ! two-fluid runs take the viscosities from &VOF
@@ -873,6 +881,19 @@ Contains
        If ( adv_band < 0 .Or. adv_band > 8 ) Call abort_input( 'ERROR: adv_band must be in 0..8' )
        If ( vof_flow >= 1 ) Call abort_input( 'ERROR: advection_scheme = 2 is for the single-phase solver (vof_flow = 0)' )
     End If
+    If ( cfl_adaptive < 0 .Or. cfl_adaptive > 1 ) Call abort_input( 'ERROR: cfl_adaptive must be 0 (fixed dt) or 1 (adaptive dt)' )
+    If ( dt <= 0d0 ) Call abort_input( 'ERROR: &NUMERICS dt must be > 0 (it is the initial dt when cfl_adaptive = 1)' )
+    If ( cfl_adaptive == 1 ) Then
+       If ( cfl_target <= 0d0 .Or. cfl_safety <= 0d0 ) Call abort_input( 'ERROR: cfl_target and cfl_safety must be > 0' )
+       If ( dt_min > dt_max ) Call abort_input( 'ERROR: dt_min must not exceed dt_max' )
+    End If
+
+  End Subroutine check_numerics
+
+
+  !> Ranges of the wall-model, immersed-body, boundary-condition and feature flags
+  Subroutine check_physics_and_bc
+
     If ( flat_wall_model_flag < 0 .Or. flat_wall_model_flag > 2 ) &
          Call abort_input( 'ERROR: flat_wall_model_flag must be 0 (no-slip), 1 (smooth log law) or 2 (rough log law)' )
     If ( ibm_wall_model_flag < 0 .Or. ibm_wall_model_flag > 1 ) &
@@ -884,12 +905,14 @@ Contains
     If ( z_bc_type < 0 .Or. z_bc_type > 1 ) Call abort_input( 'ERROR: z_bc_type must be 0 (periodic) or 1 (walls)' )
     If ( sediment_flag < 0 ) Call abort_input( 'ERROR: sediment_flag must be 0 or 1' )
     If ( boussinesq_flag < 0 ) Call abort_input( 'ERROR: boussinesq_flag must be 0 or 1' )
-    If ( cfl_adaptive < 0 .Or. cfl_adaptive > 1 ) Call abort_input( 'ERROR: cfl_adaptive must be 0 (fixed dt) or 1 (adaptive dt)' )
-    If ( dt <= 0d0 ) Call abort_input( 'ERROR: &NUMERICS dt must be > 0 (it is the initial dt when cfl_adaptive = 1)' )
-    If ( cfl_adaptive == 1 ) Then
-       If ( cfl_target <= 0d0 .Or. cfl_safety <= 0d0 ) Call abort_input( 'ERROR: cfl_target and cfl_safety must be > 0' )
-       If ( dt_min > dt_max ) Call abort_input( 'ERROR: dt_min must not exceed dt_max' )
-    End If
+
+  End Subroutine check_physics_and_bc
+
+
+  !> Accepted but weak or contradictory combinations: warnings only
+  Subroutine check_combination_warnings
+
+    Integer(Int32) :: n
 
     ! immersed body: weak or contradictory combinations
     If ( ibm_input_mode >= 1 .And. vof_flow < 1 ) Then
@@ -920,7 +943,7 @@ Contains
     If ( restart == 1 .And. cfl_adaptive == 1 .And. t_start < 0d0 .And. vof_flow < 1 ) &
          Write(*,'(A)') ' WARNING: restart with adaptive dt and no t_start: the time restarts from nstep_init*dt, not the true time'
 
-  End Subroutine check_run_inputs
+  End Subroutine check_combination_warnings
 
 
   !> Reject feature combinations the free-surface solver does not support (rank 0, right after the namelists are read). UAV is
