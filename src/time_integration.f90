@@ -513,9 +513,9 @@ Contains
          dt*( rk_coef(3,1)*Fv1 + rk_coef(3,2)*Fv2 + rk_coef(3,3)*Fv3 )
     W(2:nxg-1,2:nyg-1,2:nz-1) = Wo(2:nxg-1,2:nyg-1,2:nz-1) + &
          dt*( rk_coef(3,1)*Fw1 + rk_coef(3,2)*Fw2 + rk_coef(3,3)*Fw3 )
+    !$acc end kernels
     ! incremental pressure (ibm_pressure): the stage pressure of the last solve enters the predictor, before the body faces are zeroed
     If ( ibm_pressure > 0 ) Call add_pressure_predictor(rk_coef(3,3))
-    !$acc end kernels
     Call profiler_stop(PROF_RK_UPDATE)
 
     If ( ibm_input_mode >= 1 ) Then
@@ -612,6 +612,9 @@ Contains
           !$acc update host(U,V,W)
        End If
        Call profiler_stop(PROF_IBM)
+    Else If ( ibm_input_mode >= 1 .And. needs_final_sync ) Then
+       ! ibm_pressure = 2: no re-enforcement, but the host mirror is still needed by the host-only consumers
+       !$acc update host(U,V,W)
     End If
 
     ! Advance particles once per full step against this step's final, consistent (divergence-free,
