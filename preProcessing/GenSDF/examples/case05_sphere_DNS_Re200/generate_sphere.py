@@ -11,7 +11,7 @@ Output: data/sphere.stl
 Usage:
     python3 generate_sphere.py
 
-The generated STL is consumed by GenSDF (gensdf_mpi) to compute the
+The generated STL is consumed by GenSDF (gensdf) to compute the
 signed-distance field on the solver's Cartesian grid.  The normals point
 outward (away from the sphere centre) as required by GenSDF's flood-fill.
 """
@@ -127,4 +127,4 @@ if __name__ == '__main__':
     print(f"  Triangles written: {len(tris)}  (expected {expected})")
     print(f"  Output: {OUT_FILE}")
     print()
-    print("Next step: mpirun -np <N> ../../gensdf_mpi   (run from this directory)")
+    print("Next step: mpirun -np <N> ../../gensdf   (run from this directory)")

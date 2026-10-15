@@ -4,9 +4,9 @@ module narrowband_mod
     !
     use utils_io
 #ifdef GPU_SDF
-    use spatial_hash_mod, only : query_hash, max_cell_count, query_hash_gpu, max_cands_gpu
+    use spatial_hash_mod, only : query_hash, max_cell_count, query_hash_gpu, max_cands_gpu, h_size
 #else
-    use spatial_hash_mod, only : query_hash, max_cell_count
+    use spatial_hash_mod, only : query_hash, max_cell_count, h_size
 #endif
     implicit none
 
@@ -184,6 +184,11 @@ contains
         deltax_inverse = 1.0_dp / dx
         deltay_inverse = 1.0_dp / dy
 
+        ! `distance`/`solid_id` are intent(out): the caller's slab section can arrive as an uninitialised packed copy
+        ! (zeros), which silently turned every near-surface distance into 0. Start from the far-field sentinel.
+        distance = scalarvalue
+        solid_id = 0.0_dp
+
 #ifdef GPU_SDF
         !$acc data copy(distance, solid_id) copyin(xin, yin, zin) &
         !$acc      present(input_vertices, input_normals, input_faces, input_face_normals)
@@ -270,12 +275,13 @@ contains
         !
         ! Narrow-band SDF computation using the spatial hash for candidate triangle queries.
         ! For each cell, we query the hash for nearby triangles and compute the exact
-        ! point-to-triangle distance, accepting the result whenever the hash finds a
-        ! candidate — NOT gated by a separate `nbw` distance threshold. A fixed physical
-        ! band width can be smaller than the true nearest-triangle distance at some nodes
-        ! of a small/thin solid (e.g. sub-cell roughness), leaving those nodes at the
-        ! sentinel value; since fill_internal's interior/exterior test is a topological
-        ! BFS, such gaps let the exterior flood leak through and erase the object.
+        ! point-to-triangle distance. The 3x3x3 hash neighbourhood is guaranteed to contain the
+        ! true nearest triangle only when that triangle is within one hash cell size h_size of the
+        ! point; a farther "best candidate" is merely an over-estimate. Such values are NOT kept:
+        ! fast_sweep_3d treats every value below the sentinel as a frozen seed, so an over-estimate
+        ! would be propagated as if it were exact over the whole far field (errors of several cells
+        ! 12+ cells from the surface). Cells beyond the reach stay at the sentinel and are filled by the sweep.
+        ! (The sign comes from raycast_classify_domain, so a missing magnitude never loses a solid cell.)
         !
         use mpi, only : MPI_WTIME
         implicit none
@@ -352,10 +358,12 @@ contains
                         end if
                     end do
 
-                    ! Accept whenever the hash found a candidate triangle.
+                    ! Keep only distances inside the guaranteed reach of the hash neighbourhood.
                     if (best_fid > 0) then
-                       distance(ii, jj, kk) = best_d
-                       solid_id(ii, jj, kk) = real(input_face_solid_id(best_fid), dp)
+                       if (abs(best_d) <= h_size(1)) then
+                          distance(ii, jj, kk) = best_d
+                          solid_id(ii, jj, kk) = real(input_face_solid_id(best_fid), dp)
+                       end if
                     end if
                 end do
             end do
@@ -403,10 +411,12 @@ contains
                     end do
                     ! no deallocate — cands is pre-allocated across iterations
 
-                    ! Accept whenever the hash found a candidate triangle.
+                    ! Keep only distances inside the guaranteed reach of the hash neighbourhood.
                     if (best_fid > 0) then
-                       distance(ii, jj, kk) = best_d
-                       solid_id(ii, jj, kk) = real(input_face_solid_id(best_fid), dp)
+                       if (abs(best_d) <= h_size(1)) then
+                          distance(ii, jj, kk) = best_d
+                          solid_id(ii, jj, kk) = real(input_face_solid_id(best_fid), dp)
+                       end if
                     end if
                 end do
             end do

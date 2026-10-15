@@ -4,6 +4,8 @@
 
 ## GenSDF
 
+Build options (CPU/GPU), the `.list` manifest with the `ground` tag for open terrain, `sign_method`/`cap_holes`, and damaged-geometry handling are documented on [Pre-Processing: GenSDF](Pre-Processing.md); the summary below covers the basics.
+
 `preProcessing/GenSDF/` is a standalone MPI-Fortran signed-distance-field (SDF)
 generator used to build the cell-centre SDF the solver's IBM reads via `ibm_sdf_file`
 (`&IBM` namelist — see [Input Parameters](Input-Parameters.md#ibm)). The solver

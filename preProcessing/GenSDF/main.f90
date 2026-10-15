@@ -4,7 +4,8 @@ program generatesdf
     !
     use utils_io
     use narrowband_mod,   only : compute_scalar_distance_face, compute_narrowband_sdf
-    use raycast_mod,      only : raycast_classify_domain
+    use raycast_mod,      only : raycast_classify_domain, raycast_set_mesh
+    use meshprep_mod,     only : prepare_mesh
     use spatial_hash_mod, only : build_hash, free_hash
     use fast_sweep_mod,   only : fast_sweep_3d
     use mpi
@@ -26,9 +27,8 @@ program generatesdf
     !  SDF arrays
     real(dp), allocatable :: sdf(:,:,:)
     real(dp), allocatable :: objid(:,:,:)
-    real(dp), allocatable :: flood_fill_arr(:,:,:)
+    real(dp), allocatable :: flood_fill_arr(:,:,:)   ! assembled field, root rank only (for the write)
     real(dp), allocatable :: objid_fill_arr(:,:,:)
-    real(dp), allocatable :: fsm_local(:,:,:)    ! per-rank slab for parallel FSM
 
     !  MPI neighbours for FSM 
     integer :: left_rank, right_rank
@@ -43,6 +43,12 @@ program generatesdf
     !  misc
     integer :: ii
     logical :: debug = .false.
+
+    !  mesh analysis (watertightness, orientation repair), broadcast from rank 0
+    logical,  allocatable :: mesh_flip(:), mesh_active(:), mesh_open(:)
+    integer,  allocatable :: cap_faces(:,:), cap_solid(:)
+    integer :: ncap
+    real(dp) :: weld_tol
 
 #ifdef GPU_SDF
     !  multi-GPU device binding
@@ -105,6 +111,18 @@ program generatesdf
 
     call check_object_resolution(myid, vertices, faces, face_solid_id, nfaces, nsolids)
 
+    ! Mesh health: weld, drop duplicates, locate holes, repair triangle orientation, lid planar holes. Every rank runs
+    ! the same deterministic analysis (only rank 0 reports), so no communication is needed.
+    weld_tol = max(1.0e-3_dp * min(dx, dy, minval(dz)), 1.0e-9_dp * (maxval(vertices) - minval(vertices)))
+    allocate(mesh_open(nsolids))
+    call prepare_mesh(myid, vertices, faces, face_solid_id, nfaces, nsolids, solid_is_ground, weld_tol, &
+                      2.0_dp * max(dx, dy, maxval(dz)), cap_holes /= 0, &
+                      mesh_flip, mesh_active, mesh_open, cap_faces, cap_solid, 'data/')
+    ncap = size(cap_solid)
+    if (ncap > 0) call append_lids()
+    if (sign_method == 0 .and. myid == 0 .and. any(mesh_open)) &
+        print *, "WARNING: sign_method = 0 (parity) on an open mesh: expect misclassified regions behind the holes."
+
 #ifdef GPU_SDF
     ! Geometry is read-only and reused unchanged across the p/u/v/w passes below.
     !$acc enter data copyin(vertices, normals, faces, face_normals, face_solid_id)
@@ -112,7 +130,7 @@ program generatesdf
 
     call getbbox(myid, vertices, nvertices, bbox_min, bbox_max)
     call tagminmax(myid, xf, yp, zp, bbox_min, bbox_max, nx, ny, nz, dx, dy, dz(2), buffer_points, &
-                   sx, ex, sy, ey, sz, ez)
+                   sx, ex, sy, ey, sz, ez, dyv, dz)
 
     !  domain decomposition (x-slab over the FULL domain, not just the AABB).
     !  Restricting the slabs to [sx,ex] used to make fast_sweep_3d structurally
@@ -151,6 +169,8 @@ program generatesdf
         end do
     end if
 
+    call raycast_set_mesh(vertices, faces, face_solid_id, nfaces, nsolids, mesh_flip, mesh_active, mesh_open)
+
     if (myid == 0) then
         call cpu_time(time1)
         print *, "-- Pre-processing done in", time1-startTime, "s"
@@ -165,206 +185,26 @@ program generatesdf
     if (myid == nprocs-1) right_rank = nprocs  ! Neumann BC at right boundary
 
     ! Build spatial hash once (shared geometry, reused for all stagger locations).
-    ! Needed unconditionally now: raycast_classify_domain (the primary sign/objid
-    ! source, replacing flood_fill_mod's topological BFS) relies on it too, not
-    ! just the fast-sweep narrow-band path.
+    ! Needed unconditionally: raycast_classify_domain (the primary sign/objid
+    ! source) relies on it too, not just the fast-sweep narrow-band path.
     call build_hash(vertices, faces, nfaces, bbox_min, bbox_max, dx, dy, minval(dz))
 
-    ! Allocate the full-domain array on all ranks (needed for broadcast before FSM)
-    ! Only sdfp (cell-center) is calculated by default, compute_face_sdf = .true. handles face SDF 
-    allocate(flood_fill_arr(nx, ny, nz))
-    flood_fill_arr = scalarvalue
-    allocate(objid_fill_arr(nx, ny, nz))
-    objid_fill_arr = 0.0_dp
-
+    ! Per-rank slab of the field (and of the solid-object ID); the assembled global array exists on rank 0 only.
     allocate(sdf(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
     allocate(objid(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
-    sdf = scalarvalue
-    objid = 0.0_dp
-    if (cx_lo <= cx_hi) then
-        if (use_fast_sweep) then
-            call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
-                                        sy, ey, sz, ez, xp, yp, zp, nfaces, faces, face_normals, &
-                                        vertices, normals, face_solid_id, narrow_band_width, &
-                                        sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
-        else
-            call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
-                                              sy, ey, sz, ez, xp, yp, zp, nfaces, faces, face_normals, &
-                                              vertices, normals, face_solid_id, buffer_points, &
-                                              sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
-        end if
-    end if
-    call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-    call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                      1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
-    call gather_array(myid, nprocs, objid, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                      1, ny, 1, nz, 0.0_dp, objid_fill_arr, ierror)
-    ! gather_array fills untouched (outside-AABB) cells with the module sentinel `scalarvalue`,
-    ! not the requested background — those cells are always far from any solid, so zero them here.
-    if (myid == 0) where (objid_fill_arr == scalarvalue) objid_fill_arr = 0.0_dp
-    call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-    if (myid == 0) &
-        call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
-                                     xp, yp, zp, sx, ex, sy, ey, sz, ez, scalarvalue, &
-                                     flood_fill_arr, objid_fill_arr)
-    if (use_fast_sweep) then
-        ! Broadcast sign-corrected grid to all ranks, run FSM in parallel on x-slabs
-        call MPI_BCAST(flood_fill_arr, nx*ny*nz, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierror)
-        allocate(fsm_local(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
-        fsm_local = flood_fill_arr(decomp_x_start(myid):decomp_x_end(myid), :, :)
-        call fast_sweep_3d(fsm_local, decomp_x_start(myid), decomp_x_end(myid), 1, ny, 1, nz, &
-                           xp, yp, zp, myid, left_rank, right_rank)
-        call gather_array(myid, nprocs, fsm_local, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                          1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
-        deallocate(fsm_local)
-        ! objid is not touched by the fast-sweep propagation — it only needs to be
-        ! correct in the narrow-band interface cells where ghost points actually live.
-    end if
     if (myid == 0) then
-        call cpu_time(time1)
-        print *, "*** Writing | cell-centres ***"
-        call write_sdf_padded('data/sdfp.bin', flood_fill_arr)
-        call write_sdf_padded('data/sdfp_objid.bin', objid_fill_arr)
-        call cpu_time(time2)
-        print *, "-- Write done in", time2-time1, "s | cell-centres"
-        if (compute_face_sdf) print *, "*** Calculating SDF | u-faces ***"
+        allocate(flood_fill_arr(nx, ny, nz))
+        allocate(objid_fill_arr(nx, ny, nz))
     end if
-    call MPI_BARRIER(MPI_COMM_WORLD, ierror)
 
-    ! Face-staggered SDFs — only computed when compute_face_sdf = .true.
-    ! (objid is recomputed but not written for these passes: the solver's thermal
-    ! ghost list is cell-centre-only, so face-staggered object IDs are unused.)
+    ! Cell-centre SDF is always written; face-staggered SDFs (u, v, w) only when compute_face_sdf = .true.
+    ! (objid is not written for the face passes: the solver's thermal ghost list is cell-centre-only.)
+    call compute_field(xp, yp, zp, 'data/sdfp.bin', 'cell-centres', .true.)
     if (compute_face_sdf) then
-
-        ! U-faces
-        sdf = scalarvalue
-        if (cx_lo <= cx_hi) then
-            if (use_fast_sweep) then
-                call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
-                                            sy, ey, sz, ez, xf, yp, zp, nfaces, faces, face_normals, &
-                                            vertices, normals, face_solid_id, narrow_band_width, &
-                                            sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
-            else
-                call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
-                                                  sy, ey, sz, ez, xf, yp, zp, nfaces, faces, face_normals, &
-                                                  vertices, normals, face_solid_id, buffer_points, &
-                                                  sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
-            end if
-        end if
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-        call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                          1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-        if (myid == 0) &
-            call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
-                                         xf, yp, zp, sx, ex, sy, ey, sz, ez, scalarvalue, &
-                                         flood_fill_arr, objid_fill_arr)
-        if (use_fast_sweep) then
-            call MPI_BCAST(flood_fill_arr, nx*ny*nz, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierror)
-            allocate(fsm_local(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
-            fsm_local = flood_fill_arr(decomp_x_start(myid):decomp_x_end(myid), :, :)
-            call fast_sweep_3d(fsm_local, decomp_x_start(myid), decomp_x_end(myid), 1, ny, 1, nz, &
-                               xf, yp, zp, myid, left_rank, right_rank)
-            call gather_array(myid, nprocs, fsm_local, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                              1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
-            deallocate(fsm_local)
-        end if
-        if (myid == 0) then
-            call cpu_time(time1)
-            print *, "*** Writing | u-faces ***"
-            call write_sdf_padded('data/sdfu.bin', flood_fill_arr)
-            call cpu_time(time2)
-            print *, "-- Write done in", time2-time1, "s | u-faces"
-            print *, "*** Calculating SDF | v-faces ***"
-        end if
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-
-        ! V-faces
-        sdf = scalarvalue
-        if (cx_lo <= cx_hi) then
-            if (use_fast_sweep) then
-                call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
-                                            sy, ey, sz, ez, xp, yf, zp, nfaces, faces, face_normals, &
-                                            vertices, normals, face_solid_id, narrow_band_width, &
-                                            sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
-            else
-                call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
-                                                  sy, ey, sz, ez, xp, yf, zp, nfaces, faces, face_normals, &
-                                                  vertices, normals, face_solid_id, buffer_points, &
-                                                  sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
-            end if
-        end if
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-        call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                          1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-        if (myid == 0) &
-            call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
-                                         xp, yf, zp, sx, ex, sy, ey, sz, ez, scalarvalue, &
-                                         flood_fill_arr, objid_fill_arr)
-        if (use_fast_sweep) then
-            call MPI_BCAST(flood_fill_arr, nx*ny*nz, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierror)
-            allocate(fsm_local(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
-            fsm_local = flood_fill_arr(decomp_x_start(myid):decomp_x_end(myid), :, :)
-            call fast_sweep_3d(fsm_local, decomp_x_start(myid), decomp_x_end(myid), 1, ny, 1, nz, &
-                               xp, yf, zp, myid, left_rank, right_rank)
-            call gather_array(myid, nprocs, fsm_local, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                              1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
-            deallocate(fsm_local)
-        end if
-        if (myid == 0) then
-            call cpu_time(time1)
-            print *, "*** Writing | v-faces ***"
-            call write_sdf_padded('data/sdfv.bin', flood_fill_arr)
-            call cpu_time(time2)
-            print *, "-- Write done in", time2-time1, "s | v-faces"
-            print *, "*** Calculating SDF | w-faces ***"
-        end if
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-
-        ! W-faces
-        sdf = scalarvalue
-        if (cx_lo <= cx_hi) then
-            if (use_fast_sweep) then
-                call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
-                                            sy, ey, sz, ez, xp, yp, zf, nfaces, faces, face_normals, &
-                                            vertices, normals, face_solid_id, narrow_band_width, &
-                                            sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
-            else
-                call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
-                                                  sy, ey, sz, ez, xp, yp, zf, nfaces, faces, face_normals, &
-                                                  vertices, normals, face_solid_id, buffer_points, &
-                                                  sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
-            end if
-        end if
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-        call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                          1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-        if (myid == 0) &
-            call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
-                                         xp, yp, zf, sx, ex, sy, ey, sz, ez, scalarvalue, &
-                                         flood_fill_arr, objid_fill_arr)
-        if (use_fast_sweep) then
-            call MPI_BCAST(flood_fill_arr, nx*ny*nz, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierror)
-            allocate(fsm_local(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
-            fsm_local = flood_fill_arr(decomp_x_start(myid):decomp_x_end(myid), :, :)
-            call fast_sweep_3d(fsm_local, decomp_x_start(myid), decomp_x_end(myid), 1, ny, 1, nz, &
-                               xp, yp, zf, myid, left_rank, right_rank)
-            call gather_array(myid, nprocs, fsm_local, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
-                              1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
-            deallocate(fsm_local)
-        end if
-        if (myid == 0) then
-            call cpu_time(time1)
-            print *, "*** Writing | w-faces ***"
-            call write_sdf_padded('data/sdfw.bin', flood_fill_arr)
-            call cpu_time(time2)
-            print *, "-- Write done in", time2-time1, "s | w-faces"
-        end if
-        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
-
-    end if  ! compute_face_sdf
+        call compute_field(xf, yp, zp, 'data/sdfu.bin', 'u-faces', .false.)
+        call compute_field(xp, yf, zp, 'data/sdfv.bin', 'v-faces', .false.)
+        call compute_field(xp, yp, zf, 'data/sdfw.bin', 'w-faces', .false.)
+    end if
 
     if (myid == 0) then
         call cpu_time(endTime)
@@ -374,4 +214,97 @@ program generatesdf
 
     call free_hash()
     call MPI_FINALIZE(ierror)
+contains
+
+    ! Append the hole lids made by prepare_mesh to the geometry arrays (already wound consistently with their neighbours,
+    ! so they carry no flip; per-face geometric normals keep the narrow-band normal bookkeeping valid).
+    subroutine append_lids()
+        real(dp), allocatable :: new_normals(:,:)
+        integer,  allocatable :: tmp_i(:,:)
+        logical,  allocatable :: tmp_l(:)
+        real(dp) :: e1(3), e2(3), nn(3), mag
+        integer :: i, nf0, nn0
+
+        nf0 = nfaces; nn0 = nnormals
+        allocate(new_normals(3, ncap))
+        do i = 1, ncap
+            e1 = vertices(:,cap_faces(2,i)) - vertices(:,cap_faces(1,i))
+            e2 = vertices(:,cap_faces(3,i)) - vertices(:,cap_faces(1,i))
+            nn = [e1(2)*e2(3)-e1(3)*e2(2), e1(3)*e2(1)-e1(1)*e2(3), e1(1)*e2(2)-e1(2)*e2(1)]
+            mag = sqrt(dot_product(nn, nn))
+            if (mag > 0.0_dp) nn = nn / mag
+            new_normals(:,i) = nn
+        end do
+        normals = reshape([normals(:,1:nn0), new_normals], [3, nn0 + ncap])
+        allocate(tmp_i(3, ncap))
+        tmp_i = faces(:,1:nf0)
+        faces = reshape([faces(:,1:nf0), cap_faces], [3, nf0 + ncap])
+        do i = 1, ncap
+            tmp_i(:,i) = nn0 + i
+        end do
+        face_normals = reshape([face_normals(:,1:nf0), tmp_i], [3, nf0 + ncap])
+        face_solid_id = [face_solid_id(1:nf0), cap_solid]
+        allocate(tmp_l(nf0 + ncap))
+        tmp_l(1:nf0) = mesh_flip; tmp_l(nf0+1:) = .false.
+        call move_alloc(tmp_l, mesh_flip)
+        allocate(tmp_l(nf0 + ncap))
+        tmp_l(1:nf0) = mesh_active; tmp_l(nf0+1:) = .true.
+        call move_alloc(tmp_l, mesh_active)
+        nfaces = nf0 + ncap; nnormals = nn0 + ncap
+        deallocate(new_normals, tmp_i)
+    end subroutine append_lids
+
+    ! One staggering of the field: unsigned near-surface distance per rank slab -> sign from the solid/fluid
+    ! classification (each rank classifies its own slab) -> optional fast-sweep fill -> gather on rank 0 and write.
+    subroutine compute_field(xs, ys, zs, fname, label, write_objid)
+        implicit none
+        real(dp), intent(in) :: xs(:), ys(:), zs(:)
+        character(len=*), intent(in) :: fname, label
+        logical, intent(in) :: write_objid
+
+        sdf = scalarvalue
+        objid = 0.0_dp
+        if (cx_lo <= cx_hi) then
+            if (use_fast_sweep) then
+                call compute_narrowband_sdf(myid, cx_lo, cx_hi, &
+                                            sy, ey, sz, ez, xs, ys, zs, nfaces, faces, face_normals, &
+                                            vertices, normals, face_solid_id, narrow_band_width, &
+                                            sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+            else
+                call compute_scalar_distance_face(myid, cx_lo, cx_hi, &
+                                                  sy, ey, sz, ez, xs, ys, zs, nfaces, faces, face_normals, &
+                                                  vertices, normals, face_solid_id, buffer_points, &
+                                                  sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:))
+            end if
+        end if
+        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
+
+        ! Collective: ranks whose slab misses the box pass an empty range but still take part in the reductions.
+        call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
+                                     xs, ys, zs, sx, ex, sy, ey, sz, ez, cx_lo, cx_hi, scalarvalue, &
+                                     sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:), myid, nprocs, MPI_COMM_WORLD)
+
+        if (use_fast_sweep) then
+            ! objid is not touched by the fast-sweep propagation — it only needs to be correct in the narrow-band
+            ! interface cells where ghost points actually live.
+            call fast_sweep_3d(sdf, decomp_x_start(myid), decomp_x_end(myid), 1, ny, 1, nz, &
+                               xs, ys, zs, myid, left_rank, right_rank)
+        end if
+        call gather_array(myid, nprocs, sdf, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
+                          1, ny, 1, nz, scalarvalue, flood_fill_arr, ierror)
+        if (write_objid) &
+            call gather_array(myid, nprocs, objid, nx, ny, nz, decomp_x_start, decomp_x_end, decomp_size, &
+                              1, ny, 1, nz, 0.0_dp, objid_fill_arr, ierror)
+        if (myid == 0) then
+            call cpu_time(time1)
+            print *, "*** Writing | ", label, " ***"
+            call write_sdf_padded(fname, flood_fill_arr)
+            if (write_objid) call write_sdf_padded('data/sdfp_objid.bin', objid_fill_arr)
+            call cpu_time(time2)
+            print *, "-- Write done in", time2-time1, "s |", label
+            if (label == 'cell-centres' .and. compute_face_sdf) print *, "*** Calculating SDF | face-staggered ***"
+        end if
+        call MPI_BARRIER(MPI_COMM_WORLD, ierror)
+    end subroutine compute_field
+
 end program generatesdf

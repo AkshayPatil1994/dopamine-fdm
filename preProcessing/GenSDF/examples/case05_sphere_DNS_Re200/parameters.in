@@ -1,7 +1,7 @@
 # GenSDF control file — solver Example 05
 # Flow around a sphere — DNS, Re_D = 200
 #
-# Run as:  mpirun -np <N> ../../gensdf_mpi   (N >= 2)
+# Run as:  mpirun -np <N> ../../gensdf   (any N >= 1)
 # Output:  data/sdfu.bin  data/sdfv.bin  data/sdfw.bin  data/sdfp.bin
 #          (SDF at staggered U/V/W faces and cell centres)
 #

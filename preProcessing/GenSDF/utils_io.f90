@@ -22,6 +22,9 @@ module utils_io
     ! per-cell width along GenSDF's internal y (= solver z when vertical_axis==2); uniform unless data/grid_z.out is present
     real(dp), allocatable, dimension(:) :: dyv
     logical :: y_stretched = .false.
+    ! Per-solid flag set from a trailing `ground` keyword in the .list manifest: the solid is an open surface
+    ! (terrain/bathymetry) and everything below it along the vertical axis is solid. Sized by load_multi_object_geometry.
+    logical, allocatable :: solid_is_ground(:)
 
     !  SDF / algorithm control 
     real(dp), protected :: scalarvalue
@@ -33,6 +36,15 @@ module utils_io
     ! Compute face SDFs (sdfu, sdfv, sdfw) in addition to cell-centre (sdfp).
     ! Default .false. — only sdfp is written.
     logical,  protected :: compute_face_sdf = .false.
+    ! Solid/fluid classification of the grid points (optional last line of parameters.in):
+    !   0 = legacy 3-axis ray-parity majority vote (needs a watertight shell)
+    !   1 = robust (default): orientation-signed ray crossings with per-line integrity checks, undecided points
+    !       resolved by the generalized winding number (tolerates holes, cracks, flipped/duplicated/overlapping triangles)
+    !   2 = winding number at every point (slow reference; also prints how often the ray tier disagrees)
+    integer,  protected :: sign_method = 1
+    ! Close simple, nearly planar boundary loops of non-ground solids with a triangulated lid before classifying (1 = yes).
+    ! Optional second trailing line of parameters.in.
+    integer,  protected :: cap_holes = 1
 
     !  MPI 
     integer :: nprocs
@@ -67,6 +79,16 @@ contains
             call skip_and_read(iunit, dummyline, ierr); read(dummyline,*) narrow_band_width
             call skip_and_read(iunit, dummyline, ierr); read(dummyline,*) vertical_axis
             call skip_and_read(iunit, dummyline, ierr); read(dummyline,*) compute_face_sdf
+            ! Optional trailing line: sign_method (absent in older parameter files => robust default)
+            call skip_and_read(iunit, dummyline, ierr)
+            if (ierr == 0) read(dummyline,*,iostat=ierr) sign_method
+            if (sign_method < 0 .or. sign_method > 2) then
+                if (procid == 0) print *, "ERROR: sign_method must be 0, 1 or 2, got:", sign_method
+                error stop
+            end if
+            ! Optional: cap_holes (1 = close planar holes with lids, 0 = leave the mesh as given)
+            call skip_and_read(iunit, dummyline, ierr)
+            if (ierr == 0) read(dummyline,*,iostat=ierr) cap_holes
             if (vertical_axis /= 2 .and. vertical_axis /= 3) then
                 if (procid == 0) &
                     print *, "ERROR: vertical_axis must be 2 or 3, got:", vertical_axis
@@ -82,7 +104,8 @@ contains
             ng(3) = nz
             if (procid == 0) print *, "*** Input file successfully read ***"
         else
-            if (procid == 0) error stop "ERROR: parameters.in encountered a problem!"
+            if (procid == 0) print *, "ERROR: parameters.in encountered a problem!"
+            error stop
         end if
         close(iunit)
 
@@ -264,7 +287,9 @@ contains
         if (procid == 0) print *, "*** Successfully set up grid spacing ***"
     end subroutine setup_grid_spacing
 
-    ! Read OBJ file (ASCII, triangulated, with vertex normals)
+    ! Read OBJ file (ASCII). Polygons are fan-triangulated (a quad exported as 'f 1 2 3 4' must not silently lose half its
+    ! area: that opens a hole in the shell). Face tokens may be v, v/vt, v//vn or v/vt/vn, with negative (relative) indices.
+    ! Per-face geometric normals are synthesized when the file carries no (or incomplete) vertex normals.
     subroutine read_obj(procid, filename, vertices, normals, faces, face_normals, &
                         num_vertices, num_normals, num_faces)
         implicit none
@@ -273,126 +298,235 @@ contains
         real(dp), allocatable, intent(out) :: vertices(:,:), normals(:,:)
         integer,  allocatable, intent(out) :: faces(:,:), face_normals(:,:)
         integer,  intent(out) :: num_vertices, num_normals, num_faces
-        integer :: unit, ios, v_count, vn_count, f_count
-        character(len=512) :: line, dline
-        real(dp) :: verx, very, verz, normx, normy, normz
-        integer  :: verind1, verind2, verind3, vn1, vn2, vn3
-        real(dp), allocatable :: tmp_row(:)
-        integer,  allocatable :: tmp_irow(:)
+        integer, parameter :: max_tok = 256
+        integer :: unit, ios, v_count, vn_count, f_count, ntok, itok
+        integer :: idx_v(max_tok), idx_n(max_tok)
+        character(len=2048) :: line
+        character(len=64)   :: tok(max_tok)
+        real(dp) :: p(3)
+        logical  :: have_all_normals
 
         open(newunit=unit, file=filename, status='old', action='read', iostat=ios)
         if (ios /= 0) then
-            print *, 'Error opening file: ', trim(filename); stop
+            print *, 'Error opening file: ', trim(filename); error stop
         end if
 
         v_count = 0; vn_count = 0; f_count = 0
         do
             read(unit,'(A)',iostat=ios) line
             if (ios /= 0) exit
-            select case (trim(adjustl(line(1:2))))
-                case ('v '); v_count  = v_count  + 1
-                case ('vn'); vn_count = vn_count + 1
-                case ('f '); f_count  = f_count  + 1
-            end select
+            line = adjustl(line)
+            if (line(1:2) == 'v ') then
+                v_count = v_count + 1
+            else if (line(1:3) == 'vn ') then
+                vn_count = vn_count + 1
+            else if (line(1:2) == 'f ') then
+                call split_tokens(line(3:), tok, ntok, max_tok)
+                f_count = f_count + max(0, ntok - 2)
+            end if
         end do
 
-        if (vn_count == 0 .and. procid == 0) then
-            print *, "FATAL: Geometry has no normals. Use mesh.fix_normals() in trimesh."
-            error stop
-        end if
-
-        allocate(vertices(3,v_count), normals(3,vn_count))
+        allocate(vertices(3,v_count), normals(3,max(vn_count,1)))
         allocate(faces(3,f_count), face_normals(3,f_count))
-        num_vertices = v_count; num_normals = vn_count; num_faces = f_count
+        num_vertices = v_count; num_faces = f_count
+        have_all_normals = (vn_count > 0)
 
         rewind(unit)
         v_count = 0; vn_count = 0; f_count = 0
         do
             read(unit,'(A)',iostat=ios) line
             if (ios /= 0) exit
-            if (trim(adjustl(line(1:2))) == 'v ') then
-                read(line(3:),*) verx, very, verz
+            line = adjustl(line)
+            if (line(1:2) == 'v ') then
+                read(line(3:),*) p
                 v_count = v_count + 1
-                vertices(:, v_count) = [verx, very, verz]
-            else if (trim(adjustl(line(1:3))) == 'vn ') then
-                read(line(4:),*) normx, normy, normz
+                vertices(:, v_count) = p
+            else if (line(1:3) == 'vn ') then
+                read(line(4:),*) p
                 vn_count = vn_count + 1
-                normals(:, vn_count) = [normx, normy, normz]
-            else if (trim(adjustl(line(1:2))) == 'f ') then
-                dline = trim(line(3:))
-                call parse_face_line(dline, verind1, vn1, verind2, vn2, verind3, vn3)
-                f_count = f_count + 1
-                faces(:, f_count)        = [verind1, verind2, verind3]
-                face_normals(:, f_count) = [vn1, vn2, vn3]
+                normals(:, vn_count) = p
+            else if (line(1:2) == 'f ') then
+                call split_tokens(line(3:), tok, ntok, max_tok)
+                if (ntok < 3) cycle
+                do itok = 1, ntok
+                    call parse_face_token(tok(itok), v_count, vn_count, idx_v(itok), idx_n(itok))
+                    if (idx_n(itok) == 0) have_all_normals = .false.
+                end do
+                do itok = 2, ntok - 1
+                    f_count = f_count + 1
+                    faces(:, f_count)        = [idx_v(1), idx_v(itok), idx_v(itok+1)]
+                    face_normals(:, f_count) = [idx_n(1), idx_n(itok), idx_n(itok+1)]
+                end do
             end if
         end do
         close(unit)
 
-        if (vertical_axis == 2) then
-            allocate(tmp_row(num_vertices))
-            tmp_row = vertices(2,:); vertices(2,:) = vertices(3,:); vertices(3,:) = tmp_row
-            deallocate(tmp_row)
-            allocate(tmp_row(num_normals))
-            tmp_row = normals(2,:); normals(2,:) = normals(3,:); normals(3,:) = tmp_row
-            deallocate(tmp_row)
-            ! y<->z is a reflection (det=-1): reverse winding so cross-product normals stay outward
-            allocate(tmp_irow(num_faces))
-            tmp_irow = faces(2,:); faces(2,:) = faces(3,:); faces(3,:) = tmp_irow
-            tmp_irow = face_normals(2,:); face_normals(2,:) = face_normals(3,:); face_normals(3,:) = tmp_irow
-            deallocate(tmp_irow)
+        if (num_faces > 0) then
+            if (minval(faces) < 1 .or. maxval(faces) > num_vertices) then
+                print *, 'FATAL: OBJ face references a vertex that does not exist: ', trim(filename); error stop
+            end if
         end if
+
+        num_normals = vn_count
+        if (have_all_normals .and. num_faces > 0) then
+            if (minval(face_normals) < 1 .or. maxval(face_normals) > num_normals) have_all_normals = .false.
+        end if
+        if (.not. have_all_normals) then
+            ! Winding-derived per-face normals (the SDF sign is decided by the ray/winding classifier, not by these)
+            deallocate(normals); allocate(normals(3, max(num_faces,1)))
+            call synthesize_face_normals(vertices, faces, num_faces, normals, face_normals)
+            num_normals = num_faces
+            if (procid == 0) print *, 'Note: OBJ has no usable vertex normals; using per-face geometric normals.'
+        end if
+
+        call permute_geometry_axes(vertices, normals, faces, face_normals, num_vertices, num_normals, num_faces)
 
         if (procid == 0) then
             print *, 'Successfully read OBJ: ', trim(filename)
-            print *, 'Vertices: ', num_vertices, '  Normals: ', num_normals, '  Faces: ', num_faces
+            print *, 'Vertices: ', num_vertices, '  Normals: ', num_normals, '  Triangles: ', num_faces
         end if
     end subroutine read_obj
 
-    ! Read STL file (binary)
+    ! Split a text line into blank-separated tokens (tabs count as blanks); tokens past max_tok are dropped.
+    subroutine split_tokens(str, tok, ntok, max_tok)
+        implicit none
+        character(len=*), intent(in)  :: str
+        integer,          intent(in)  :: max_tok
+        character(len=*), intent(out) :: tok(max_tok)
+        integer,          intent(out) :: ntok
+        integer :: i, n, start
+        logical :: in_tok
+        ntok = 0; in_tok = .false.; start = 1
+        n = len_trim(str)
+        do i = 1, n + 1
+            if (i <= n) then
+                if (str(i:i) == ' ' .or. str(i:i) == char(9) .or. str(i:i) == char(13)) then
+                    if (in_tok) then
+                        if (ntok < max_tok) then; ntok = ntok + 1; tok(ntok) = str(start:i-1); end if
+                        in_tok = .false.
+                    end if
+                else if (.not. in_tok) then
+                    in_tok = .true.; start = i
+                end if
+            else if (in_tok) then
+                if (ntok < max_tok) then; ntok = ntok + 1; tok(ntok) = str(start:n); end if
+            end if
+        end do
+    end subroutine split_tokens
+
+    ! One OBJ face token: v, v/vt, v//vn or v/vt/vn. Negative indices count back from the last element read so far.
+    ! vn_idx = 0 when the token carries no normal.
+    subroutine parse_face_token(tok, v_count, vn_count, v_idx, vn_idx)
+        implicit none
+        character(len=*), intent(in)  :: tok
+        integer,          intent(in)  :: v_count, vn_count
+        integer,          intent(out) :: v_idx, vn_idx
+        integer :: s1, s2, n
+        n  = len_trim(tok)
+        s1 = index(tok(1:n), '/')
+        v_idx = 0; vn_idx = 0
+        if (s1 == 0) then
+            read(tok(1:n), *) v_idx
+        else
+            read(tok(1:s1-1), *) v_idx
+            s2 = index(tok(s1+1:n), '/')
+            if (s2 > 0) then
+                s2 = s1 + s2
+                if (s2 < n) read(tok(s2+1:n), *) vn_idx
+            end if
+        end if
+        if (v_idx  < 0) v_idx  = v_count  + 1 + v_idx
+        if (vn_idx < 0) vn_idx = vn_count + 1 + vn_idx
+    end subroutine parse_face_token
+
+    ! One unit normal per face from its winding; face_normals(:,f) all point at that face's entry
+    subroutine synthesize_face_normals(vertices, faces, nf, normals, face_normals)
+        implicit none
+        real(dp), intent(in)  :: vertices(:,:)
+        integer,  intent(in)  :: faces(:,:), nf
+        real(dp), intent(out) :: normals(:,:)
+        integer,  intent(out) :: face_normals(:,:)
+        integer  :: f
+        real(dp) :: e1(3), e2(3), n(3), m
+        do f = 1, nf
+            e1 = vertices(:,faces(2,f)) - vertices(:,faces(1,f))
+            e2 = vertices(:,faces(3,f)) - vertices(:,faces(1,f))
+            n  = [e1(2)*e2(3)-e1(3)*e2(2), e1(3)*e2(1)-e1(1)*e2(3), e1(1)*e2(2)-e1(2)*e2(1)]
+            m  = sqrt(dot_product(n,n))
+            if (m > 0.0_dp) n = n / m
+            normals(:,f) = n
+            face_normals(:,f) = f
+        end do
+    end subroutine synthesize_face_normals
+
+    ! GenSDF's internal direction 3 is the wall-normal axis; with vertical_axis == 2 swap geometry y<->z.
+    subroutine permute_geometry_axes(vertices, normals, faces, face_normals, nv, nn, nf)
+        implicit none
+        real(dp), intent(inout) :: vertices(:,:), normals(:,:)
+        integer,  intent(inout) :: faces(:,:), face_normals(:,:)
+        integer,  intent(in)    :: nv, nn, nf
+        real(dp), allocatable :: tmp_row(:)
+        integer,  allocatable :: tmp_irow(:)
+        if (vertical_axis /= 2) return
+        allocate(tmp_row(nv))
+        tmp_row = vertices(2,:nv); vertices(2,:nv) = vertices(3,:nv); vertices(3,:nv) = tmp_row
+        deallocate(tmp_row)
+        allocate(tmp_row(nn))
+        tmp_row = normals(2,:nn); normals(2,:nn) = normals(3,:nn); normals(3,:nn) = tmp_row
+        deallocate(tmp_row)
+        ! y<->z is a reflection (det=-1): reverse winding so cross-product normals stay outward
+        allocate(tmp_irow(nf))
+        tmp_irow = faces(2,:nf); faces(2,:nf) = faces(3,:nf); faces(3,:nf) = tmp_irow
+        tmp_irow = face_normals(2,:nf); face_normals(2,:nf) = face_normals(3,:nf); face_normals(3,:nf) = tmp_irow
+        deallocate(tmp_irow)
+    end subroutine permute_geometry_axes
+
+    ! Read STL file: binary (size-checked) or ASCII ('solid ... facet normal ... vertex ...'), detected from the file itself.
     subroutine read_stl_binary(procid, filename, vertices, normals, faces, face_normals, &
                                num_vertices, num_normals, num_faces)
         !
-        ! Binary STL reader (§3).
-        ! File format (little-endian, all ranks read independently):
-        !   80 bytes  — header (ignored)
-        !    4 bytes  — uint32 triangle count  (nf)
-        !   Per triangle (50 bytes):
-        !     3 × float32  — face normal
-        !     3 × float32  — vertex 0
-        !     3 × float32  — vertex 1
-        !     3 × float32  — vertex 2
-        !     2 bytes      — attribute (ignored)
+        ! Binary layout (little-endian): 80-byte header, uint32 triangle count, then per triangle 12 float32
+        ! (normal, 3 vertices) and 2 attribute bytes. Output arrays:
+        !   vertices(3, 3*nf)  — 3 vertices per triangle (no sharing), normals(3, nf) — per-face, faces packed sequentially.
         !
-        ! Output arrays follow the same layout as read_obj:
-        !   vertices(3, 3*nf)  — all vertex coordinates (3 per triangle)
-        !   normals (3, nf)    — per-face normals (no averaging needed for STL)
-        !   faces   (3, nf)    — vertex index triples (1-based, packed sequentially)
-        !   face_normals(3,nf) — normal index triples (all equal to the face index)
-        !
-        use iso_fortran_env, only : int32
+        use iso_fortran_env, only : int32, int64
         implicit none
         integer,  intent(in)  :: procid
         character(len=*), intent(in) :: filename
         real(dp), allocatable, intent(out) :: vertices(:,:), normals(:,:)
         integer,  allocatable, intent(out) :: faces(:,:), face_normals(:,:)
         integer,  intent(out) :: num_vertices, num_normals, num_faces
-        ! Local
         integer            :: unit, ios, fi
         integer(int32)     :: nf_i32
+        integer(int64)     :: fsize
         character(len=80)  :: header
         integer(2)         :: attr
         real(4)            :: fn(3), v0(3), v1(3), v2(3)  ! float32 reads
-        real(dp), allocatable :: tmp_row(:)
-        integer,  allocatable :: tmp_irow(:)
+        logical            :: is_binary
 
         open(newunit=unit, file=trim(filename), access='stream', form='unformatted', &
              status='old', action='read', iostat=ios)
         if (ios /= 0) then
-            print *, "Error opening STL file: ", trim(filename); stop
+            print *, "Error opening STL file: ", trim(filename); error stop
+        end if
+        inquire(unit=unit, size=fsize)
+
+        is_binary = .false.
+        if (fsize >= 84) then
+            read(unit, pos=1) header
+            read(unit) nf_i32
+            is_binary = (fsize == 84_int64 + 50_int64 * int(max(nf_i32,0_int32), int64))
+        end if
+        if (.not. is_binary) then
+            close(unit)
+            if (fsize >= 5) then
+                call read_stl_ascii(procid, filename, vertices, normals, faces, face_normals, &
+                                    num_vertices, num_normals, num_faces)
+                return
+            end if
+            print *, "FATAL: not a valid STL file: ", trim(filename); error stop
         end if
 
-        read(unit) header   ! 80-byte header (ignored)
-        read(unit) nf_i32   ! triangle count
         num_faces    = int(nf_i32)
         num_vertices = 3 * num_faces
         num_normals  = num_faces
@@ -409,33 +543,16 @@ contains
             read(unit) v2(1), v2(2), v2(3)    ! vertex 2
             read(unit) attr                   ! attribute bytes (ignored)
 
-            ! Store face normal (convert float32 -> dp)
-            normals(1,fi) = real(fn(1),dp); normals(2,fi) = real(fn(2),dp); normals(3,fi) = real(fn(3),dp)
-
-            ! Store vertices packed 3-per-face (1-based)
-            vertices(:, 3*fi-2) = [real(v0(1),dp), real(v0(2),dp), real(v0(3),dp)]
-            vertices(:, 3*fi-1) = [real(v1(1),dp), real(v1(2),dp), real(v1(3),dp)]
-            vertices(:, 3*fi  ) = [real(v2(1),dp), real(v2(2),dp), real(v2(3),dp)]
-
-            ! Faces point into the packed vertex array
+            normals(:,fi) = real(fn,dp)
+            vertices(:, 3*fi-2) = real(v0,dp)
+            vertices(:, 3*fi-1) = real(v1,dp)
+            vertices(:, 3*fi  ) = real(v2,dp)
             faces(:,fi)        = [3*fi-2, 3*fi-1, 3*fi]
-            ! All three face-normal indices point to the same per-face normal
             face_normals(:,fi) = [fi, fi, fi]
         end do
         close(unit)
 
-        if (vertical_axis == 2) then
-            allocate(tmp_row(num_vertices))
-            tmp_row = vertices(2,:); vertices(2,:) = vertices(3,:); vertices(3,:) = tmp_row
-            deallocate(tmp_row)
-            allocate(tmp_row(num_normals))
-            tmp_row = normals(2,:); normals(2,:) = normals(3,:); normals(3,:) = tmp_row
-            deallocate(tmp_row)
-            ! y<->z is a reflection (det=-1): reverse winding so cross-product normals stay outward
-            allocate(tmp_irow(num_faces))
-            tmp_irow = faces(2,:); faces(2,:) = faces(3,:); faces(3,:) = tmp_irow
-            deallocate(tmp_irow)
-        end if
+        call permute_geometry_axes(vertices, normals, faces, face_normals, num_vertices, num_normals, num_faces)
 
         if (procid == 0) then
             print *, "Successfully read binary STL: ", trim(filename)
@@ -443,56 +560,73 @@ contains
         end if
     end subroutine read_stl_binary
 
-    ! Parse face line (OBJ helper)
-    subroutine parse_face_line(line, v1, vn1, v2, vn2, v3, vn3)
+    subroutine read_stl_ascii(procid, filename, vertices, normals, faces, face_normals, &
+                              num_vertices, num_normals, num_faces)
         implicit none
-        character(len=512), intent(inout) :: line
-        integer, intent(out) :: v1, vn1, v2, vn2, v3, vn3
-        character(len=32) :: part
-        integer :: pos
+        integer,  intent(in)  :: procid
+        character(len=*), intent(in) :: filename
+        real(dp), allocatable, intent(out) :: vertices(:,:), normals(:,:)
+        integer,  allocatable, intent(out) :: faces(:,:), face_normals(:,:)
+        integer,  intent(out) :: num_vertices, num_normals, num_faces
+        integer :: unit, ios, fi, nvert_in_facet, p
+        character(len=512) :: line
+        real(dp) :: q(3)
 
-        pos = index(line,' '); part = trim(line(1:pos-1))
-        call parse_vertex_normal_pair(part, v1, vn1); line = trim(line(pos+1:))
-        pos = index(line,' '); part = trim(line(1:pos-1))
-        call parse_vertex_normal_pair(part, v2, vn2); line = trim(line(pos+1:))
-        part = trim(line)
-        call parse_vertex_normal_pair(part, v3, vn3)
-    end subroutine parse_face_line
-
-    subroutine parse_vertex_normal_pair(pair, vertex, normal)
-        !
-        ! Parse a single OBJ face token.  Supported formats:
-        !   v//vn      — vertex and normal, no texture (original format)
-        !   v/vt/vn    — vertex, texture, and normal
-        ! Vertex-only tokens (no slash) are rejected because normals are required.
-        !
-        implicit none
-        character(len=*), intent(inout) :: pair
-        integer, intent(out) :: vertex, normal
-        integer :: dpos, dpos2
-        dpos = index(pair,'//')
-        if (dpos > 0) then
-            ! Format v//vn
-            read(pair(1:dpos-1),*) vertex
-            read(pair(dpos+2:),  *) normal
-        else
-            ! Try format v/vt/vn: locate both slashes
-            dpos  = index(pair,'/')
-            dpos2 = index(pair(dpos+1:),'/') + dpos   ! position of second '/'
-            if (dpos > 0 .and. dpos2 > dpos) then
-                read(pair(1:dpos-1), *) vertex
-                read(pair(dpos2+1:), *) normal
-            else
-                print *, "FATAL: unrecognised OBJ face token (expected v//vn or v/vt/vn): ", trim(pair)
-                error stop
-            end if
+        open(newunit=unit, file=trim(filename), form='formatted', access='sequential', status='old', action='read', iostat=ios)
+        if (ios /= 0) then
+            print *, "Error opening STL file: ", trim(filename); error stop
         end if
-    end subroutine parse_vertex_normal_pair
+        num_faces = 0
+        do
+            read(unit,'(A)',iostat=ios) line
+            if (ios /= 0) exit
+            line = adjustl(line)
+            if (line(1:5) == 'facet' .or. line(1:5) == 'FACET') num_faces = num_faces + 1
+        end do
+        if (num_faces == 0) then
+            print *, "FATAL: STL file has no facets (neither valid binary nor ASCII): ", trim(filename); error stop
+        end if
+        num_vertices = 3 * num_faces; num_normals = num_faces
+        allocate(vertices(3,num_vertices), normals(3,num_normals), faces(3,num_faces), face_normals(3,num_faces))
+        normals = 0.0_dp
+
+        rewind(unit)
+        fi = 0; nvert_in_facet = 0
+        do
+            read(unit,'(A)',iostat=ios) line
+            if (ios /= 0) exit
+            line = adjustl(line)
+            if (line(1:5) == 'facet' .or. line(1:5) == 'FACET') then
+                fi = fi + 1; nvert_in_facet = 0
+                p = index(line, 'normal'); if (p == 0) p = index(line, 'NORMAL')
+                if (p > 0) then
+                    read(line(p+6:),*,iostat=ios) q
+                    if (ios == 0) normals(:,fi) = q
+                end if
+            else if (line(1:6) == 'vertex' .or. line(1:6) == 'VERTEX') then
+                read(line(7:),*) q
+                nvert_in_facet = nvert_in_facet + 1
+                if (nvert_in_facet <= 3) vertices(:, 3*(fi-1)+nvert_in_facet) = q
+            end if
+        end do
+        close(unit)
+        do fi = 1, num_faces
+            faces(:,fi)        = [3*fi-2, 3*fi-1, 3*fi]
+            face_normals(:,fi) = [fi, fi, fi]
+        end do
+
+        call permute_geometry_axes(vertices, normals, faces, face_normals, num_vertices, num_normals, num_faces)
+        if (procid == 0) then
+            print *, "Successfully read ASCII STL: ", trim(filename)
+            print *, "Faces: ", num_faces
+        end if
+    end subroutine read_stl_ascii
 
     ! Load geometry for one or more solids, tagging every face with its owning solid ID.
     subroutine load_multi_object_geometry(procid, filename, vertices, normals, faces, face_normals, &
                                           face_solid_id, num_vertices, num_normals, num_faces, num_solids)
         ! `filename` is a single .stl/.obj file (solid ID 1) or a `.list` manifest (one path per line, 1-based order is the solid ID).
+        ! A manifest line ending in ` ground` marks that solid as an open ground surface (see solid_is_ground).
         implicit none
         integer,  intent(in)  :: procid
         character(len=*), intent(in) :: filename
@@ -547,6 +681,17 @@ contains
         end if
 
         num_solids   = size(manifest)
+        allocate(solid_is_ground(num_solids))
+        solid_is_ground = .false.
+        do solid = 1, num_solids
+            ii = len_trim(manifest(solid))
+            if (ii > 7) then
+                if (manifest(solid)(ii-6:ii) == ' ground') then
+                    solid_is_ground(solid) = .true.
+                    manifest(solid) = manifest(solid)(1:ii-7)
+                end if
+            end if
+        end do
         num_vertices = 0; num_normals = 0; num_faces = 0
         allocate(vertices(3,0), normals(3,0), faces(3,0), face_normals(3,0), face_solid_id(0))
 
@@ -667,18 +812,22 @@ contains
         deallocate(smin, smax, seen)
     end subroutine check_object_resolution
 
-    ! Tag grid points inside bounding box (with buffer) for focused SDF computation
+    ! Tag grid points inside bounding box (with buffer) for focused SDF computation.
+    ! The buffer is `sdfresolution` cells. With a stretched grid pass the per-cell widths (dy_cell/dz_cell) so the buffer
+    ! is that many *local* cells rather than that many cells of the smallest spacing (which can be a small fraction of a
+    ! cell where the grid is coarse, leaving the near-surface band outside the tagged box).
     subroutine tagminmax(procid, xin, yin, zin, bbox_min, bbox_max, &
                           nx_in, ny_in, nz_in, dx_in, dy_in, dz_in, sdfresolution, &
-                          sx, ex, sy, ey, sz, ez)
+                          sx, ex, sy, ey, sz, ez, dy_cell, dz_cell)
         implicit none
         integer,  intent(in)  :: procid, nx_in, ny_in, nz_in, sdfresolution
         real(dp), dimension(:), intent(in) :: xin, yin, zin
         real(dp), intent(in)  :: dx_in, dy_in, dz_in
         real(dp), dimension(:), intent(in) :: bbox_min, bbox_max
         integer,  intent(out) :: sx, ex, sy, ey, sz, ez
+        real(dp), intent(in), optional :: dy_cell(:), dz_cell(:)
         integer  :: iteri, iterj, iterk
-        real(dp) :: buf
+        real(dp) :: buf, wy, wz
 
         sx = 1; ex = nx_in; sy = 1; ey = ny_in; sz = 1; ez = nz_in
         buf = real(sdfresolution, dp)
@@ -689,13 +838,15 @@ contains
             else; exit; end if
         end do
         do iterj = 1, ny_in
-            if (yin(iterj) <= bbox_min(2) - buf*dy_in) then; sy = iterj
-            else if (yin(iterj) <= bbox_max(2) + buf*dy_in) then; ey = iterj
+            wy = dy_in; if (present(dy_cell)) wy = dy_cell(iterj)
+            if (yin(iterj) <= bbox_min(2) - buf*wy) then; sy = iterj
+            else if (yin(iterj) <= bbox_max(2) + buf*wy) then; ey = iterj
             else; exit; end if
         end do
         do iterk = 1, nz_in
-            if (zin(iterk) <= bbox_min(3) - buf*dz_in) then; sz = iterk
-            else if (zin(iterk) <= bbox_max(3) + buf*dz_in) then; ez = iterk
+            wz = dz_in; if (present(dz_cell)) wz = dz_cell(iterk)
+            if (zin(iterk) <= bbox_min(3) - buf*wz) then; sz = iterk
+            else if (zin(iterk) <= bbox_max(3) + buf*wz) then; ez = iterk
             else; exit; end if
         end do
 
@@ -743,7 +894,7 @@ contains
             if (.not. allocated(assembled_array)) then
                 allocate(assembled_array(global_nx, global_ny, global_nz))
             end if
-            assembled_array = scalarvalue
+            assembled_array = input_scalarvalue
             allocate(recvbuf(sum(recvcounts)))
         else
             allocate(recvbuf(1))   ! unused on non-root ranks

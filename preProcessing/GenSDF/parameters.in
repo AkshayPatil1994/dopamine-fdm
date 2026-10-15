@@ -1,6 +1,8 @@
 # Name and location of the input geometry: a single OBJ/STL file (one solid, ID 1),
 # or a .list manifest of multiple OBJ/STL files, one path per line (# comments/blank
 # lines skipped) — each line's order becomes that solid's ID, used for per-object BCs.
+# Append ` ground` to a line for an OPEN surface (terrain, bathymetry, or building shells with
+# no floor): every cell below its topmost surface along the vertical axis is then solid.
 'data/objects.list'
 # Scalar default value (real), narrow-band buffer_points (int), progress bar width (int)
 1d10  5  40
@@ -19,3 +21,10 @@
 # Compute face-staggered SDFs (sdfu, sdfv, sdfw) in addition to cell-centre sdfp
 # (.false. = cell-centre only; .true. = all four SDFs)
 .false.
+# Solid/fluid classification of the grid points (optional; default 1):
+#   0 = legacy ray-crossing parity (needs a watertight shell), 1 = robust (signed rays + winding number),
+#   2 = winding number at every point (slow reference; also reports disagreements with the ray tier)
+1
+# Close simple, nearly planar holes of the input surfaces with a triangulated lid before classifying (optional; default 1)
+# 1 = yes, 0 = leave the mesh as given
+1

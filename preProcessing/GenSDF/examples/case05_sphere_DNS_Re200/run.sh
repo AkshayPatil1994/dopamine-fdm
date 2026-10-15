@@ -4,7 +4,7 @@
 #
 #  Steps performed:
 #    1. Generate data/sphere.stl  (UV sphere, D=0.1 m at (0.5,0.4,0.4))
-#    2. Run gensdf_mpi to compute SDF on the solver grid
+#    2. Run gensdf to compute SDF on the solver grid
 #    3. Print instructions for copying output to solver run directory
 #
 #  Prerequisites:
@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 NPROCS="${1:-4}"
-GENSDF="../../gensdf_mpi"
+GENSDF="../../gensdf"
 
 if [[ ! -x "${GENSDF}" ]]; then
     echo "ERROR: ${GENSDF} not found or not executable."

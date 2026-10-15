@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 NPROCS="${1:-4}"
-GENSDF="../../gensdf_mpi"
+GENSDF="../../gensdf"
 
 if [[ ! -x "${GENSDF}" ]]; then
     echo "ERROR: ${GENSDF} not found or not executable."

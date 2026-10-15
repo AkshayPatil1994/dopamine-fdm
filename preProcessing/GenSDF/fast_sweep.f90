@@ -93,17 +93,21 @@ contains
 
     !  Single-cell Godunov update, shared by the CPU and GPU sweep drivers.
     subroutine godunov_update_cell(sdf, xstart, xend, ny_loc, nz_loc, ii, jj, kk, &
-                                    ghost_left, ghost_right)
+                                    ghost_left, ghost_right, is_seed)
         !$acc routine seq
         implicit none
         integer,  intent(in)    :: xstart, xend, ny_loc, nz_loc, ii, jj, kk
+        logical,  intent(in)    :: is_seed    ! frozen narrow-band seed: not to be updated
         real(dp), intent(inout) :: sdf(xstart:xend, ny_loc, nz_loc)
         real(dp), intent(in)    :: ghost_left(ny_loc, nz_loc)   ! ghost col at xstart-1
         real(dp), intent(in)    :: ghost_right(ny_loc, nz_loc)  ! ghost col at xend+1
         real(dp) :: phix, phiy, phiz, phi_try, hx, hy, hz
 
-        ! Skip cells already initialised by narrow-band phase (seeded |phi| << scalarvalue sentinel).
-        if (abs(sdf(ii,jj,kk)) < scalarvalue * 0.5_dp) return
+        ! Skip the cells initialised by the narrow-band phase. The caller decides what is a seed: on the CPU it is the
+        ! mask taken before the first sweep. (Testing |phi| < scalarvalue/2 here instead also froze every cell the first
+        ! sweep had just assigned, so the one-directional first-sweep value was never refined by the other seven
+        ! sweeps: in the far field the result degraded towards a Manhattan distance, errors of tens of cells.)
+        if (is_seed) return
 
         hx = dx           ! uniform in x (xf array assumed uniform in this tool)
         hy = dyv(jj)      ! per-cell (spanwise stretching); equals dy on a uniform grid
@@ -153,7 +157,7 @@ contains
     !
     subroutine do_sweep(sdf, xstart, xend, ystart, yend, zstart, zend, &
                         sx_dir, sy_dir, sz_dir, xin, yin, zin, &
-                        ghost_left, ghost_right)
+                        ghost_left, ghost_right, seed)
         implicit none
         integer,  intent(in)    :: xstart, xend, ystart, yend, zstart, zend
         integer,  intent(in)    :: sx_dir, sy_dir, sz_dir
@@ -161,6 +165,7 @@ contains
         real(dp), intent(inout) :: sdf(xstart:xend, 1:size(yin), 1:size(zin))
         real(dp), intent(in)    :: ghost_left(size(yin), size(zin))   ! ghost col at xstart-1
         real(dp), intent(in)    :: ghost_right(size(yin), size(zin))  ! ghost col at xend+1
+        logical,  intent(in)    :: seed(xstart:xend, 1:size(yin), 1:size(zin))   ! frozen narrow-band cells
 
         integer  :: ii, jj, kk, i_lo, i_hi, i_step
         integer  :: j_lo, j_hi, j_step, k_lo, k_hi, k_step
@@ -182,7 +187,7 @@ contains
             do jj = j_lo, j_hi, j_step
                 do kk = k_lo, k_hi, k_step
                     call godunov_update_cell(sdf, xstart, xend, ny_loc, nz_loc, ii, jj, kk, &
-                                              ghost_left, ghost_right)
+                                              ghost_left, ghost_right, seed(ii,jj,kk))
                 end do
             end do
         end do
@@ -192,7 +197,7 @@ contains
     !  GPU diagonal-wavefront reformulation of do_sweep (same dependency structure, reordered — see docs/external-lib-guidance/GenSDF_GPU_porting.md).
     subroutine do_sweep_wavefront_gpu(sdf, xstart, xend, ystart, yend, zstart, zend, &
                                        sx_dir, sy_dir, sz_dir, xin, yin, zin, &
-                                       ghost_left, ghost_right)
+                                       ghost_left, ghost_right, seed)
         implicit none
         integer,  intent(in)    :: xstart, xend, ystart, yend, zstart, zend
         integer,  intent(in)    :: sx_dir, sy_dir, sz_dir
@@ -200,6 +205,7 @@ contains
         real(dp), intent(inout) :: sdf(xstart:xend, 1:size(yin), 1:size(zin))
         real(dp), intent(in)    :: ghost_left(size(yin), size(zin))
         real(dp), intent(in)    :: ghost_right(size(yin), size(zin))
+        logical,  intent(in)    :: seed(xstart:xend, 1:size(yin), 1:size(zin))
 
         integer :: nx_loc, ny_loc, nz_loc, level, level_max
         integer :: ip, jp, kp, ii, jj, kk
@@ -212,7 +218,7 @@ contains
         do level = 3, level_max
             !$acc parallel loop collapse(2) default(none) &
             !$acc    private(ip, jp, kp, ii, jj, kk) &
-            !$acc    present(sdf, ghost_left, ghost_right) &
+            !$acc    present(sdf, ghost_left, ghost_right, seed) &
             !$acc    firstprivate(level, nx_loc, ny_loc, nz_loc, xstart, xend, sx_dir, sy_dir, sz_dir)
             do jp = 1, ny_loc
                 do ip = 1, nx_loc
@@ -222,7 +228,7 @@ contains
                         if (sy_dir > 0) then; jj = 1 + (jp-1);      else; jj = ny_loc - (jp-1); end if
                         if (sz_dir > 0) then; kk = 1 + (kp-1);      else; kk = nz_loc - (kp-1); end if
                         call godunov_update_cell(sdf, xstart, xend, ny_loc, nz_loc, ii, jj, kk, &
-                                                  ghost_left, ghost_right)
+                                                  ghost_left, ghost_right, seed(ii,jj,kk))
                     end if
                 end do
             end do
@@ -288,14 +294,19 @@ contains
         real(dp), intent(inout) :: sdf(xstart:xend, 1:size(yin), 1:size(zin))
 
         integer  :: sw, sx_dir, sy_dir, sz_dir, ierror
-        integer  :: ny_loc, nz_loc
+        integer  :: ny_loc, nz_loc, round, max_rounds, nchanged
+        logical  :: need_buffers
+        real(dp), allocatable :: before(:,:,:)
+        logical,  allocatable :: seed(:,:,:)
 
         ny_loc = size(yin)
         nz_loc = size(zin)
 
-        ! Allocate ghost buffers on first call (or when grid size changes)
-        if (.not. allocated(send_buf_mod) .or. &
-            size(send_buf_mod,1) /= ny_loc .or. size(send_buf_mod,2) /= nz_loc) then
+        ! Allocate ghost buffers on first call (or when grid size changes). (Fortran does not short-circuit .or., so the
+        ! size() test must not be evaluated while the buffer is still unallocated.)
+        need_buffers = .not. allocated(send_buf_mod)
+        if (.not. need_buffers) need_buffers = (size(send_buf_mod,1) /= ny_loc .or. size(send_buf_mod,2) /= nz_loc)
+        if (need_buffers) then
             if (allocated(send_buf_mod))  deallocate(send_buf_mod)
             if (allocated(ghost_left_mod))  deallocate(ghost_left_mod)
             if (allocated(ghost_right_mod)) deallocate(ghost_right_mod)
@@ -308,14 +319,30 @@ contains
         ghost_left_mod  = INF_D
         ghost_right_mod = INF_D
 
+        allocate(seed(xstart:xend, 1:ny_loc, 1:nz_loc))
+        seed = abs(sdf) < scalarvalue * 0.5_dp
 #ifdef GPU_SDF
-        !$acc data copy(sdf)
+        !$acc data copy(sdf) copyin(seed)
 #endif
         ! 8 sweeps: all combinations of ±x, ±y, ±z.
         ! Each sweep processes cells in a fixed order along each axis, propagating
         ! the distance wave the full domain length in one pass per direction.
         ! With fill_internal providing correct ±scalarvalue sentinels, a single
-        ! round of 8 sweeps covers all octants.
+        ! round of 8 sweeps covers all octants of one slab. A wave crossing into the next rank's slab is only
+        ! delivered at the next ghost-plane exchange, so with several slabs the round is repeated until no cell of any
+        ! slab changes (otherwise the far field depended on the rank count).
+        max_rounds = 1
+        if (nprocs > 1) then
+            max_rounds = nprocs + 2
+            allocate(before(xstart:xend, 1:ny_loc, 1:nz_loc))
+        end if
+        do round = 1, max_rounds
+            if (max_rounds > 1) then
+#ifdef GPU_SDF
+                !$acc update host(sdf)
+#endif
+                before = sdf
+            end if
         do sw = 0, 7
             sx_dir = merge( 1, -1, iand(sw, 1) == 0 )
             sy_dir = merge( 1, -1, iand(sw, 2) == 0 )
@@ -334,15 +361,26 @@ contains
 #ifdef GPU_SDF
             !$acc update device(ghost_left_mod, ghost_right_mod)
             call do_sweep_wavefront_gpu(sdf, xstart, xend, ystart, yend, zstart, zend, &
-                          sx_dir, sy_dir, sz_dir, xin, yin, zin, ghost_left_mod, ghost_right_mod)
+                          sx_dir, sy_dir, sz_dir, xin, yin, zin, ghost_left_mod, ghost_right_mod, seed)
 #else
             call do_sweep(sdf, xstart, xend, ystart, yend, zstart, zend, &
-                          sx_dir, sy_dir, sz_dir, xin, yin, zin, ghost_left_mod, ghost_right_mod)
+                          sx_dir, sy_dir, sz_dir, xin, yin, zin, ghost_left_mod, ghost_right_mod, seed)
 #endif
+        end do
+            if (max_rounds > 1) then
+#ifdef GPU_SDF
+                !$acc update host(sdf)
+#endif
+                nchanged = count(sdf /= before)
+                call MPI_ALLREDUCE(MPI_IN_PLACE, nchanged, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierror)
+                if (nchanged == 0) exit
+            end if
         end do
 #ifdef GPU_SDF
         !$acc end data
 #endif
+        if (allocated(before)) deallocate(before)
+        deallocate(seed)
 
     end subroutine fast_sweep_3d
 

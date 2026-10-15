@@ -4,7 +4,7 @@
 # Sphere: D = 0.1 m, centre at (0.4, 0.4, 0.4) m  (4D from inlet in 16D domain)
 # Domain: Lx=1.6 × Ly=0.8 × Lz=0.8 m
 #
-# Run as:  mpirun -np <N> ../../gensdf_mpi   (N >= 2, from this directory)
+# Run as:  mpirun -np <N> ../../gensdf   (from this directory)
 # Output:  data/sdfu.bin  data/sdfv.bin  data/sdfw.bin  data/sdfp.bin
 #
 # Copy data/sdfp.bin → SDF_in in the solver run directory.
