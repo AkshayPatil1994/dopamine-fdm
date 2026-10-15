@@ -918,7 +918,7 @@ Contains
     !    (reduces to the textbook 2*U_wall - U_I when the image sits at the unclamped 2*dGB, r=0.5) ---
     !$acc parallel loop present(Uext,ghost_u_wgt,ghost_u_img,ghost_img_val)
     Do n = 1, n_ghost_u
-       ghost_img_val(n) = trilinear_interp_u(Uext, ghost_u_wgt(1:8,n), ghost_u_img(:,n), ee)
+       ghost_img_val(n) = trilinear_interp(Uext, ghost_u_wgt(1:8,n), ghost_u_img(:,n), ee)
     End Do
     !$acc end parallel loop
     !$acc parallel loop present(U_,ghost_u_idx,ghost_u_dGB,ghost_u_dGI,ghost_img_val) private(r)
@@ -932,7 +932,7 @@ Contains
     !--- V ghost cells ---
     !$acc parallel loop present(Vext,ghost_v_wgt,ghost_v_img,ghost_img_val)
     Do n = 1, n_ghost_v
-       ghost_img_val(n) = trilinear_interp_v(Vext, ghost_v_wgt(1:8,n), ghost_v_img(:,n), ee)
+       ghost_img_val(n) = trilinear_interp(Vext, ghost_v_wgt(1:8,n), ghost_v_img(:,n), ee)
     End Do
     !$acc end parallel loop
     !$acc parallel loop present(V_,ghost_v_idx,ghost_v_dGB,ghost_v_dGI,ghost_img_val) private(r)
@@ -946,7 +946,7 @@ Contains
     !--- W ghost cells ---
     !$acc parallel loop present(Wext,ghost_w_wgt,ghost_w_img,ghost_img_val)
     Do n = 1, n_ghost_w
-       ghost_img_val(n) = trilinear_interp_w(Wext, ghost_w_wgt(1:8,n), ghost_w_img(:,n), ee)
+       ghost_img_val(n) = trilinear_interp(Wext, ghost_w_wgt(1:8,n), ghost_w_img(:,n), ee)
     End Do
     !$acc end parallel loop
     !$acc parallel loop present(W_,ghost_w_idx,ghost_w_dGB,ghost_w_dGI,ghost_img_val) private(r)
@@ -976,7 +976,7 @@ Contains
     Do n = 1, n_ghost_cc
        i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)
        oid = ghost_cc_objid(n)
-       T_I = trilinear_interp_p(Cext, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ee)
+       T_I = trilinear_interp(Cext, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ee)
        If ( ibm_T_bc_type(oid) == 1 ) Then
           ! isothermal: general two-point mirror, r = dGB/dGI (reduces to 2*T_wall-T_I at r=0.5)
           r = ghost_cc_dGB(n) / ghost_cc_dGI(n)
@@ -1001,7 +1001,7 @@ Contains
     !$acc parallel loop present(C_,Cext,ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc)
     Do n = 1, n_ghost_cc
        i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)
-       C_(i,j,k) = trilinear_interp_p(Cext, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ee)
+       C_(i,j,k) = trilinear_interp(Cext, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ee)
     End Do
     !$acc end parallel loop
 
@@ -1523,68 +1523,22 @@ Contains
     w(7) = (1d0-tx)*     ty *     tz ;  w(8) =      tx *     ty *     tz
   End Subroutine trilinear_weights_w
 
-  !> Trilinear interpolation at image point using stencil anchor (img) and weights (w) from setup_ibm, on the component's staggered grid
-  Real(Int64) Function trilinear_interp_u(U_, w, img, e)
+  !> Trilinear interpolation at the image point of any staggered field F_ (U, V, W or a cell-centred field) from the stencil anchor
+  !  (img) and weights (w) built in setup_ibm for that field's grid
+  Real(Int64) Function trilinear_interp(F_, w, img, e)
     !$acc routine seq
     Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
-    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: U_
+    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: F_
     Real   (Int64), Dimension(8),          Intent(In) :: w
-    Integer(Int32), Dimension(3),          Intent(In) :: img   ! image stencil anchor on U grid
+    Integer(Int32), Dimension(3),          Intent(In) :: img
     Integer(Int32) :: i0, j0, k0
     i0 = img(1);  j0 = img(2);  k0 = img(3)
-    trilinear_interp_u = &
-         w(1)*U_(i0  ,j0  ,k0  ) + w(2)*U_(i0+1,j0  ,k0  ) + &
-         w(3)*U_(i0  ,j0+1,k0  ) + w(4)*U_(i0+1,j0+1,k0  ) + &
-         w(5)*U_(i0  ,j0  ,k0+1) + w(6)*U_(i0+1,j0  ,k0+1) + &
-         w(7)*U_(i0  ,j0+1,k0+1) + w(8)*U_(i0+1,j0+1,k0+1)
-  End Function trilinear_interp_u
-
-  Real(Int64) Function trilinear_interp_v(V_, w, img, e)
-    !$acc routine seq
-    Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
-    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: V_
-    Real   (Int64), Dimension(8),          Intent(In) :: w
-    Integer(Int32), Dimension(3),          Intent(In) :: img   ! image stencil anchor on V grid
-    Integer(Int32) :: i0, j0, k0
-    i0 = img(1);  j0 = img(2);  k0 = img(3)
-    trilinear_interp_v = &
-         w(1)*V_(i0  ,j0  ,k0  ) + w(2)*V_(i0+1,j0  ,k0  ) + &
-         w(3)*V_(i0  ,j0+1,k0  ) + w(4)*V_(i0+1,j0+1,k0  ) + &
-         w(5)*V_(i0  ,j0  ,k0+1) + w(6)*V_(i0+1,j0  ,k0+1) + &
-         w(7)*V_(i0  ,j0+1,k0+1) + w(8)*V_(i0+1,j0+1,k0+1)
-  End Function trilinear_interp_v
-
-  Real(Int64) Function trilinear_interp_w(W_, w, img, e)
-    !$acc routine seq
-    Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
-    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: W_
-    Real   (Int64), Dimension(8),          Intent(In) :: w
-    Integer(Int32), Dimension(3),          Intent(In) :: img   ! image stencil anchor on W grid
-    Integer(Int32) :: i0, j0, k0
-    i0 = img(1);  j0 = img(2);  k0 = img(3)
-    trilinear_interp_w = &
-         w(1)*W_(i0  ,j0  ,k0  ) + w(2)*W_(i0+1,j0  ,k0  ) + &
-         w(3)*W_(i0  ,j0+1,k0  ) + w(4)*W_(i0+1,j0+1,k0  ) + &
-         w(5)*W_(i0  ,j0  ,k0+1) + w(6)*W_(i0+1,j0  ,k0+1) + &
-         w(7)*W_(i0  ,j0+1,k0+1) + w(8)*W_(i0+1,j0+1,k0+1)
-  End Function trilinear_interp_w
-
-  !  Trilinear interpolation of the cell-centred pressure field P
-  !  to an arbitrary point, using the centre-grid stencil.
-  Real(Int64) Function trilinear_interp_p(P_, w, img, e)
-    !$acc routine seq
-    Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
-    Real   (Int64), Dimension(1-e:,:,1-e:), Intent(In) :: P_
-    Real   (Int64), Dimension(8),           Intent(In) :: w
-    Integer(Int32), Dimension(3),           Intent(In) :: img
-    Integer(Int32) :: i0, j0, k0
-    i0 = img(1);  j0 = img(2);  k0 = img(3)
-    trilinear_interp_p = &
-         w(1)*P_(i0  ,j0  ,k0  ) + w(2)*P_(i0+1,j0  ,k0  ) + &
-         w(3)*P_(i0  ,j0+1,k0  ) + w(4)*P_(i0+1,j0+1,k0  ) + &
-         w(5)*P_(i0  ,j0  ,k0+1) + w(6)*P_(i0+1,j0  ,k0+1) + &
-         w(7)*P_(i0  ,j0+1,k0+1) + w(8)*P_(i0+1,j0+1,k0+1)
-  End Function trilinear_interp_p
+    trilinear_interp = &
+         w(1)*F_(i0  ,j0  ,k0  ) + w(2)*F_(i0+1,j0  ,k0  ) + &
+         w(3)*F_(i0  ,j0+1,k0  ) + w(4)*F_(i0+1,j0+1,k0  ) + &
+         w(5)*F_(i0  ,j0  ,k0+1) + w(6)*F_(i0+1,j0  ,k0+1) + &
+         w(7)*F_(i0  ,j0+1,k0+1) + w(8)*F_(i0+1,j0+1,k0+1)
+  End Function trilinear_interp
 
   !> Compute IBM forces every nsampling steps via Method 1 (momentum exchange) and Method 2 (surface integral)
   Subroutine compute_ibm_forces(U_, V_, W_,                           &
@@ -1633,7 +1587,7 @@ Contains
        dGB = ghost_cc_dGB(n)
        dV  = (xg(i+1)-xg(i-1))*0.5d0 * (yg(j+1)-yg(j-1))*0.5d0 * (zg(k+1)-zg(k-1))*0.5d0
        dA  = dV / Max(dGB, 1d-14)
-       p_I = trilinear_interp_p(Pe, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
+       p_I = trilinear_interp(Pe, ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
        lFx_pres = lFx_pres - p_I * ghost_cc_nrm(1,n) * dA
        lFy_pres = lFy_pres - p_I * ghost_cc_nrm(2,n) * dA
        lFz_pres = lFz_pres - p_I * ghost_cc_nrm(3,n) * dA
@@ -1649,7 +1603,7 @@ Contains
        dGB = ghost_u_dGB(n)
        dIB = ghost_u_dGI(n) - dGB
        dA  = (y(j)-y(j-1)) * (z(k)-z(k-1))             ! y-z face area
-       U_I = trilinear_interp_u(Ue, ghost_u_wgt(1:8,n), ghost_u_img(:,n), ibm_E)
+       U_I = trilinear_interp(Ue, ghost_u_wgt(1:8,n), ghost_u_img(:,n), ibm_E)
        nu_t_B = 0.5d0*(nu_t(i,j,k) + nu_t(Min(i+1,nxg),j,k))
        lFx_visc = lFx_visc + (nu + nu_t_B) * (U_I - U_wall) / Max(dIB, 1d-14) * dA
     End Do
@@ -1661,7 +1615,7 @@ Contains
        dGB = ghost_v_dGB(n)
        dIB = ghost_v_dGI(n) - dGB
        dA  = (xg(i+1)-xg(i)) * (z(k)-z(k-1))           ! x-z face area
-       U_I = trilinear_interp_v(Ve, ghost_v_wgt(1:8,n), ghost_v_img(:,n), ibm_E)
+       U_I = trilinear_interp(Ve, ghost_v_wgt(1:8,n), ghost_v_img(:,n), ibm_E)
        nu_t_B = 0.5d0*(nu_t(i,j,k) + nu_t(i,Min(j+1,nyg),k))
        lFy_visc = lFy_visc + (nu + nu_t_B) * (U_I - V_wall) / Max(dIB, 1d-14) * dA
     End Do
@@ -1672,7 +1626,7 @@ Contains
        dGB = ghost_w_dGB(n)
        dIB = ghost_w_dGI(n) - dGB
        dA  = (xg(i+1)-xg(i)) * (y(j)-y(j-1))           ! x-y face area
-       U_I = trilinear_interp_w(We, ghost_w_wgt(1:8,n), ghost_w_img(:,n), ibm_E)
+       U_I = trilinear_interp(We, ghost_w_wgt(1:8,n), ghost_w_img(:,n), ibm_E)
        nu_t_B = 0.5d0*(nu_t(i,j,k) + nu_t(i,j,Min(k+1,nzg)))
        lFz_visc = lFz_visc + (nu + nu_t_B) * (U_I - W_wall) / Max(dIB, 1d-14) * dA
     End Do
@@ -1733,11 +1687,11 @@ Contains
        dA   = dV * invd
 
        ! interpolate pressure, turbulent viscosity and velocity at image point I
-       pB   = trilinear_interp_p(Pe,   ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
-       nutB = trilinear_interp_p(Ne,   ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
-       uI   = trilinear_interp_u(Ue,   ghost_cc_wgt_u (1:8,n), ghost_cc_img_u (:,n), ibm_E)
-       vI   = trilinear_interp_v(Ve,   ghost_cc_wgt_v (1:8,n), ghost_cc_img_v (:,n), ibm_E)
-       wI   = trilinear_interp_w(We,   ghost_cc_wgt_w (1:8,n), ghost_cc_img_w (:,n), ibm_E)
+       pB   = trilinear_interp(Pe,   ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
+       nutB = trilinear_interp(Ne,   ghost_cc_wgt_cc(1:8,n), ghost_cc_img_cc(:,n), ibm_E)
+       uI   = trilinear_interp(Ue,   ghost_cc_wgt_u (1:8,n), ghost_cc_img_u (:,n), ibm_E)
+       vI   = trilinear_interp(Ve,   ghost_cc_wgt_v (1:8,n), ghost_cc_img_v (:,n), ibm_E)
+       wI   = trilinear_interp(We,   ghost_cc_wgt_w (1:8,n), ghost_cc_img_w (:,n), ibm_E)
 
        ! boundary-point coordinates B = cell-centre + dGB*nrm
        lbuf(1,n) = xg(i) + dGB*ghost_cc_nrm(1,n)
