@@ -263,6 +263,7 @@ set(SRCS
     src/particles.f90
     src/boundary_conditions.f90
     src/sgs_model.f90
+    src/adv_hybrid.f90
     src/equations.f90
     src/ibm.f90
     src/scalar_transport.f90
@@ -560,7 +561,7 @@ exec \"$real\" $os \"$@\"
     file(CHMOD "${TEST_MPIRUN}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 endif()
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small ibm_pressure1_small rsb_small)
+    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small adv_hybrid_small adv_hybrid3_small ibm_pressure1_small rsb_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${TEST_MPIRUN} --fields --field-tol 1e-8)
@@ -870,6 +871,14 @@ if(Python3_Interpreter_FOUND)
     # Unsupported feature combinations must abort at input
     add_test(NAME vof_input_aborts
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_input_checks/check_aborts.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
+    # advection_scheme = 2 with zero coefficients is advection_scheme = 0
+    add_test(NAME adv_hybrid_beta0
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/adv_beta0_check.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
+    # Single-phase invalid inputs abort with their message
+    add_test(NAME input_aborts
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/input_checks/check_aborts.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Single-phase staircase IBM (ibm_method = 1) on a flat plate: stream decay by the log-law stress, round-off divergence, same on 1 and 4 ranks
     add_test(NAME ibm_stair_plate

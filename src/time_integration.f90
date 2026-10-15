@@ -6,6 +6,7 @@ Module time_integration
   Use global
   Use mpi
   Use equations
+  Use adv_hybrid, Only : adv_pad
   Use projection
   Use boundary_conditions
   Use wallmodel
@@ -220,6 +221,7 @@ Contains
     Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
+    If ( advection_scheme == 2 ) Call adv_pad(U,V,W)
     Call compute_rhs_u(U,V,W,Fu1)
     Call compute_rhs_v(U,V,W,Fv1)
     Call compute_rhs_w(U,V,W,Fw1)
@@ -354,6 +356,7 @@ Contains
     Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
+    If ( advection_scheme == 2 ) Call adv_pad(U,V,W)
     Call compute_rhs_u(U,V,W,Fu2)
     Call compute_rhs_v(U,V,W,Fv2)
     Call compute_rhs_w(U,V,W,Fw2)
@@ -483,6 +486,7 @@ Contains
     Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)
     Call profiler_start(PROF_RHS)
+    If ( advection_scheme == 2 ) Call adv_pad(U,V,W)
     Call compute_rhs_u(U,V,W,Fu3)
     Call compute_rhs_v(U,V,W,Fv3)
     Call compute_rhs_w(U,V,W,Fw3)

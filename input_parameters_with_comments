@@ -35,7 +35,8 @@
 ! (same in z). T_wave_* = 0 disables the oscillation.
 ! flow_forcing_mode: 0 prescribed dPdx | 1 constant mass flux at Ub_target
 !   (needs x_bc_type=0, no T_wave_x).
-! advection_scheme: 0 skew-symmetric (recommended) | 1 pure central divergence form.
+! advection_scheme: 0 skew-symmetric (recommended) | 1 pure central divergence form | 2 skew-symmetric + upwind-biased
+!   dissipation (adv_order 3|5, adv_beta0, adv_beta_ibm within adv_band cells of a body) to damp ringing at sharp bodies.
 ! flat_wall_model_flag (flat y walls, and z walls if z_bc_type=1): 0 no-slip |
 !   1 smooth log-law EQWM | 2 rough-z0 EQWM (y walls only; needs z0_ylo/yhi>0).
 ! rotation_active=1: rigid rotation Omega_x about the x axis through the domain centreline.
@@ -60,6 +61,7 @@
   flow_forcing_mode    = 0,
   Ub_target            = 0.068,   ! flow_forcing_mode=1 only
   advection_scheme     = 0,
+  ! adv_order = 5, adv_beta0 = 0.05, adv_beta_ibm = 1.0, adv_band = 2,   ! with advection_scheme = 2
   rotation_active      = 0,
   Omega_x              = 0.0,     ! [rad/s]
 /

@@ -51,6 +51,10 @@ Module global
   ! aliasing-driven ringing near sharp/immersed-boundary gradients), 1=pure divergence-form central
   ! Host-only: consumed once per RHS call to derive a blend weight, never referenced on device.
   Integer(Int32) :: advection_scheme = 0
+  ! advection_scheme = 2 (adv_hybrid.f90): upwind-biased dissipation of order adv_order (3 or 5) added to the skew-symmetric scheme with
+  ! coefficient adv_beta0, raised to adv_beta_ibm within adv_band cells of a solid cell
+  Integer(Int32) :: adv_order = 3, adv_band = 2
+  Real   (Int64) :: adv_beta0 = 0.05d0, adv_beta_ibm = 1d0
 
   ! global face points
   Integer(Int32) :: nx_global, ny_global, nz_global

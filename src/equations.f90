@@ -14,6 +14,7 @@ Module equations
                               z_bc_type, tau_zu, tau_zv
   Use decomp, Only : z_periodic_partner
   Use interpolation
+  Use adv_hybrid, Only : adv_add_u, adv_add_v, adv_add_w
   Use ibm_stress, Only : ovr_u, ovr_v, ovr_w, ovr_none
   Use uav_actuator, Only : apply_uav_forcing_u, apply_uav_forcing_v, apply_uav_forcing_w
   
@@ -119,6 +120,8 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+    If ( advection_scheme == 2 ) Call adv_add_u(rhs_u)
 
     ! compute viscous terms
 
@@ -320,6 +323,8 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+    If ( advection_scheme == 2 ) Call adv_add_v(rhs_v)
 
     ! compute viscous terms
 
@@ -523,6 +528,8 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+    If ( advection_scheme == 2 ) Call adv_add_w(rhs_w)
 
     ! compute viscous terms
 

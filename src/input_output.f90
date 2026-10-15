@@ -34,7 +34,7 @@ Contains
     Namelist /PHYSICS/ nu, dPdx, dPdz, Ub_x, Ub_z, T_wave_x, T_wave_z, &
                        phi_wave_x, phi_wave_z, sgs_model, Cs_vreman, flat_wall_model_flag, &
                        z0_ylo, z0_yhi, z0h_ylo, z0h_yhi, &
-                       flow_forcing_mode, Ub_target, advection_scheme, &
+                       flow_forcing_mode, Ub_target, advection_scheme, adv_order, adv_beta0, adv_beta_ibm, adv_band, &
                        rotation_active, Omega_x
 
     Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, &
@@ -122,6 +122,8 @@ Contains
     ic_type       = 1
     noise_percent = 5.0d0
     advection_scheme = 0
+    adv_order = 3;  adv_beta0 = 0.05d0;  adv_beta_ibm = 1d0;  adv_band = 2
+    nu = -1d0;  dt = 0d0;  dPdx = 0d0;  dPdz = 0d0;  Utarget = 0d0   ! nu and dt must be set (checked after the read)
     nsteps = 0; nsave = 0; nmonitor = 0   ! no valid default: must be set in &NUMERICS (checked after the read)
 
     fname = 'input_parameters'
@@ -363,7 +365,9 @@ Contains
        Else
           Write(*,'(A,E12.4)')  '   nu                          = ', nu
        End If
-       Write(*,'(A,I2)')     '   advection_scheme (0=skew-symmetric,1=pure central) = ', advection_scheme
+       Write(*,'(A,I2)')     '   advection_scheme (0=skew-symmetric,1=pure central,2=skew+upwind) = ', advection_scheme
+       If ( advection_scheme == 2 ) Write(*,'(A,I2,A,F6.3,A,F6.3,A,I2)') '   adv_order ', adv_order, '  adv_beta0 ', adv_beta0, &
+            '  adv_beta_ibm ', adv_beta_ibm, '  adv_band ', adv_band
        Write(*,'(A,I2)')     '   flow_forcing_mode (0=dPdx,1=const mass flux) = ', flow_forcing_mode
        If ( flow_forcing_mode == 1 ) Then
           Write(*,'(A,E12.4)') '   Ub_target                   = ', Ub_target
@@ -594,6 +598,10 @@ Contains
     Call Mpi_bcast ( dt,                   1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nu,                   1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( advection_scheme,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( adv_order,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( adv_band,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( adv_beta0,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( adv_beta_ibm,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( dPdx,                 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( dPdx_t,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -854,9 +862,17 @@ Contains
 
     Integer(Int32) :: n
 
+    If ( nu < 0d0 .And. vof_flow < 1 ) Call abort_input( 'ERROR: &PHYSICS nu (kinematic viscosity) must be set' )
+    If ( nu < 0d0 ) nu = 0d0   ! two-fluid runs take the viscosities from &VOF
     If ( sgs_model < 0 .Or. sgs_model > 1 ) Call abort_input( 'ERROR: sgs_model must be 0 (DNS) or 1 (Vreman)' )
-    If ( advection_scheme < 0 .Or. advection_scheme > 1 ) &
-         Call abort_input( 'ERROR: advection_scheme must be 0 (skew-symmetric) or 1 (divergence-form central)' )
+    If ( advection_scheme < 0 .Or. advection_scheme > 2 ) Call abort_input( 'ERROR: advection_scheme must be 0 ' // &
+         '(skew-symmetric), 1 (divergence-form central) or 2 (skew-symmetric + upwind-biased dissipation)' )
+    If ( advection_scheme == 2 ) Then
+       If ( adv_order /= 3 .And. adv_order /= 5 ) Call abort_input( 'ERROR: adv_order must be 3 or 5' )
+       If ( adv_beta0 < 0d0 .Or. adv_beta_ibm < 0d0 ) Call abort_input( 'ERROR: adv_beta0 and adv_beta_ibm must be >= 0' )
+       If ( adv_band < 0 .Or. adv_band > 8 ) Call abort_input( 'ERROR: adv_band must be in 0..8' )
+       If ( vof_flow >= 1 ) Call abort_input( 'ERROR: advection_scheme = 2 is for the single-phase solver (vof_flow = 0)' )
+    End If
     If ( flat_wall_model_flag < 0 .Or. flat_wall_model_flag > 2 ) &
          Call abort_input( 'ERROR: flat_wall_model_flag must be 0 (no-slip), 1 (smooth log law) or 2 (rough log law)' )
     If ( ibm_wall_model_flag < 0 .Or. ibm_wall_model_flag > 1 ) &

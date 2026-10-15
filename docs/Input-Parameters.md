@@ -41,7 +41,11 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `flat_wall_model_flag` | `0` | Wall model on flat y walls (and on z walls if `z_bc_type=1`): `0` no-slip DNS, `1` smooth log-law EQWM, `2` rough-z0 EQWM (y walls only; aborts with z walls). |
 | `z0_ylo, z0_yhi` | `0.0` | Momentum roughness length [m] of the bottom / top wall; mode 2 only, must be `>0` on every no-slip wall (aborts otherwise). |
 | `z0h_ylo, z0h_yhi` | `0.0` | Thermal roughness length [m]; only for `T_bc_bot/top=2`. |
-| `advection_scheme` | `0` | `0` skew-symmetric (energy-conserving, less ringing at sharp IBM gradients; recommended), `1` pure divergence-form central. |
+| `advection_scheme` | `0` | `0` skew-symmetric (energy-conserving, less ringing at sharp IBM gradients; recommended), `1` pure divergence-form central, `2` skew-symmetric plus upwind-biased dissipation of order `adv_order` (see Numerics, convective term; damps grid-scale ringing at sharp bodies; single phase only). |
+| `adv_order` | `3` | `advection_scheme=2`: order of the upwind-biased dissipation, `3` or `5` (5 damps only the highest wavenumbers; needs 3 halo planes). |
+| `adv_beta0` | `0.05` | `advection_scheme=2`: background coefficient β (0 = none, 1 = the dissipation of UP3/UP5 on top of the 2nd-order central scheme; the formal order stays 2); resolved scales change by O(β (kΔx)^order). Wall-modelled channel LES (Re_τ 395, 66³, order 5): β₀ = 0.05 keeps U⁺ within 0.7 % and the stresses within the scatter of the skew-symmetric run, β₀ = 0.1 shifts U⁺ by 1.4 % and u′u′ by 6 %, β₀ = 0.2 by 2.2 %/6 %: keep β₀ ≤ 0.05 and let `adv_beta_ibm` do the work near bodies. |
+| `adv_beta_ibm` | `1.0` | `advection_scheme=2`: β within `adv_band` cells of a solid cell (needs an immersed body). |
+| `adv_band` | `2` | `advection_scheme=2`: width of the near-body band in cells (0..8). |
 | `rotation_active` | `0` | `1` rigid-body rotation about x (Coriolis + centrifugal in the v/w equations); the axis is fixed at the centreline (Ly/2, Lz/2). |
 | `Omega_x` | `0.0` | Rotation rate [rad/s], right-handed about +x (y turning towards z). |
 

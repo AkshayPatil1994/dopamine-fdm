@@ -20,6 +20,7 @@ Module initialization
   Use vof_state, Only : vof_init
   Use vof_pressure, Only : vp_init_masked
   Use ibm, Only : setup_ibm
+  Use adv_hybrid, Only : adv_init
   Use monitor, Only : open_force_csv
   Use ibm_stress, Only : ibm_stress_init
   Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
@@ -833,6 +834,7 @@ Contains
        End If
     End If
 
+    If ( advection_scheme == 2 ) Call adv_init   ! after the IBM setup (phi)
     If ( ibm_method == 1 .And. vof_flow < 1 ) Call vp_init_masked   ! needs the grid spacings, the masks and the weights
     If ( vof_active >= 1 ) Call vof_init
 
