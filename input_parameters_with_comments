@@ -361,13 +361,13 @@
 !  vof_normal_scheme = 1,           ! 1 Youngs | 2 height function
 !  vof_method = 1, vof_beta = 2.0,
 !  vof_mom_scheme = 6, vof_mom_cm0 = 2.0e-3, vof_mom_cm1 = 1.0e-2,
-!  vof_geo_density = 1, vof_inertia = 0, vof_layered_precond = 0,
+!  vof_geo_density = 1, vof_inertia = 0,
 !  vof_rk_mom = 1,                  ! 1 SSP-RK3 | 2 SSP-RK2 (~9% faster per step) | 0 Euler
 !  vof_rk_nth = 0, vof_nsub = 0, vof_co_sub = 0.12, vof_freeze_ut = 1,
 !  vof_pcg_iters = 30, vof_pcg_tol = 0.2, vof_adv_iters = 3, vof_adv_tol = 1.0e-8,
 !  vof_tr_floor = 1.0e-14,          ! with an IBM, 1e-12 saves ~15% of the PCG iterations (~6% of the step)
 !  vof_div_tol = 0.0,
-!  vof_prescribed = 0, vof_presc_T = 8.0, vof_tgv = 0, vof_shear = 0,
-!  vof_hsplit = 0, vof_frozen = 0, vof_selftest = 0,
+!  vof_prescribed = 0, vof_presc_T = 8.0, vof_tgv = 0,
+!  vof_hsplit = 0, vof_selftest = 0,
 !  vof_debug = 0, vof_snap_dt = 0.0,
 !/

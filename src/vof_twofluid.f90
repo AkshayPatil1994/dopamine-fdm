@@ -172,11 +172,6 @@ Contains
              End Do
           End Do
        End Do
-    Else If ( restart == 0 .And. vof_shear == 1 ) Then
-       V = 0d0;  W = 0d0
-       Do j = 1, nyg
-          U(:,j,:) = Merge(vof_u0, 0d0, yg(j) > vof_level)
-       End Do
     Else If ( restart == 0 .And. vof_u0 /= 0d0 ) Then
        U = vof_u0;  V = 0d0;  W = 0d0
     Else If ( restart == 0 .And. current_type > 0 ) Then
@@ -449,7 +444,7 @@ Contains
     !$acc kernels present(vp_mu,vp_mv,vp_mw,U,V,W)
     U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
     !$acc end kernels
-    vp_beta0 = 1d0;  vp_use_layered = .False.
+    vp_beta0 = 1d0
     vp_mg_stale = ( pcg_precond >= 1 )
 
     Call vp_div(U, V, W, fdiv)
@@ -483,7 +478,7 @@ Contains
     Call dev_copy(W, Wtmp)
 
     ! vp_bu.. keep the mask coefficients: every solve with the density coefficients starts with a full vp_set_density
-    vp_beta0 = beta0_save;  vp_use_layered = .True.
+    vp_beta0 = beta0_save
     vp_mg_stale = ( pcg_precond >= 1 )
 
   End Subroutine make_transport_velocity_masked
@@ -1619,14 +1614,12 @@ Contains
     ! the convective outflow relaxation runs once per RK stage inside vof_forces_rk3 (stage shares of dt sum to dt)
     outflow_relax_on = .False.
 
-    If ( vof_frozen == 0 ) Then
-       nsub = vof_nsub
-       If ( nsub <= 0 ) nsub = Max(1, Ceiling( 0.5d0*cfl_conv*dt/dt_in/vof_co_sub ))
-       vof_nsub_last = nsub
-       Do isub = 1, nsub
-          Call vof_advect_half(0.5d0*dt/nsub, keep_transport=( isub > 1 .And. vof_freeze_ut == 1 ))
-       End Do
-    End If
+    nsub = vof_nsub
+    If ( nsub <= 0 ) nsub = Max(1, Ceiling( 0.5d0*cfl_conv*dt/dt_in/vof_co_sub ))
+    vof_nsub_last = nsub
+    Do isub = 1, nsub
+       Call vof_advect_half(0.5d0*dt/nsub, keep_transport=( isub > 1 .And. vof_freeze_ut == 1 ))
+    End Do
     Call apply_boundary_conditions
     Call profiler_start(PROF_VOF_PROJECT)
     Call vof_project(vof_adv_tol, vof_adv_iters)
@@ -1641,13 +1634,11 @@ Contains
     Call vof_forces_rk3(to)
     Call profiler_stop(PROF_VOF_FORCES)
 
-    If ( vof_frozen == 0 ) Then
-       nsub = vof_nsub
-       If ( nsub <= 0 ) nsub = Max(1, Ceiling( 0.5d0*cfl_conv*dt/dt_in/vof_co_sub ))
-       Do isub = 1, nsub
-          Call vof_advect_half(0.5d0*dt/nsub, keep_transport=( isub > 1 .And. vof_freeze_ut == 1 ))
-       End Do
-    End If
+    nsub = vof_nsub
+    If ( nsub <= 0 ) nsub = Max(1, Ceiling( 0.5d0*cfl_conv*dt/dt_in/vof_co_sub ))
+    Do isub = 1, nsub
+       Call vof_advect_half(0.5d0*dt/nsub, keep_transport=( isub > 1 .And. vof_freeze_ut == 1 ))
+    End Do
     t = to + dt
     Call vof_relax(dt)
     Call apply_boundary_conditions

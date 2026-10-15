@@ -673,19 +673,15 @@ Module global
   ! > 0: every pressure solve stops once dt*max|div u| (the CG residual is the divergence left after the correction) is below
   ! this value, instead of the relative tests above; the iteration caps still apply
   Real   (Int64) :: vof_div_tol       = 0d0
-  Integer(Int32) :: vof_layered_precond = 0   ! 1 (CPU, y walls): PCG preconditioner with the row-wise mean density
   ! passive tests: vof_prescribed 1 LeVeque vortex reversal, 2 Enright deformation (C advected by an analytic divergence-free
-  ! field, reversing at t = vof_presc_T/2), 3 steady rigid rotation with period vof_presc_T; vof_tgv 1 Taylor-Green initial velocity (amplitude vof_u0); vof_shear 1 gas above
-  ! y = vof_level starts at vof_u0
+  ! field, reversing at t = vof_presc_T/2), 3 steady rigid rotation with period vof_presc_T; vof_tgv 1 Taylor-Green initial velocity (amplitude vof_u0)
   Integer(Int32) :: vof_prescribed    = 0
   Real   (Int64) :: vof_presc_T       = 8d0
   Integer(Int32) :: vof_tgv           = 0
-  Integer(Int32) :: vof_shear         = 0
   ! diagnostics and development switches
   Integer(Int32) :: vof_debug         = 0     ! 1: vof_dev.dat / vof_prof.dat / vof_front.dat / vof_vmax.dat and, with vof_snap_dt, slices
   Real   (Int64) :: vof_snap_dt       = 0d0   ! (vof_debug = 1, one rank) dump a vof_snap_NNNN.dat every vof_snap_dt
   Integer(Int32) :: vof_selftest      = 0
-  Integer(Int32) :: vof_frozen        = 0     ! 1: density held fixed (no interface transport)
   Integer(Int32) :: vof_hsplit        = 0     ! 1: well-balanced split p = p' - rho g (y - vof_level)
   Real   (Int64) :: vof_smooth_w      = 0d0   ! vof_ic_type 4: smoothed Heaviside of this half-width (cells)
   Procedure(), Pointer :: vof_sync_io_hook => Null()   ! set by vof_init: refreshes Cvof_io from the device just before a snapshot is written

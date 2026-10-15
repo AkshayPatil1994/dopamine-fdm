@@ -15,7 +15,7 @@ Module vof_pressure
   Use boundary_conditions, Only : update_ghost_interior_planes_x, update_ghost_interior_planes, &
                                   apply_periodic_bc_x, apply_periodic_bc_z
   Use scalar_transport, Only : finish_scalar_halos
-  Use projection, Only : compute_projection_step, solve_poisson_equation, pois_layered, pois_bf, pois_bh, poisson_layered_supported
+  Use projection, Only : compute_projection_step, solve_poisson_equation
   Use vof_plic
   Use vof_advect, Only : vof_reconstruct, vof_mx, vof_my, vof_mz, vof_al
   Use halo_pad, Only : pad_field
@@ -38,7 +38,6 @@ Module vof_pressure
   Logical :: vp_masked = .False.
   Logical :: vp_dev = .False.   ! masked single-phase path on the GPU: the PCG vectors and coefficients are device-resident
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_mu, vp_mv, vp_mw, vp_act
-  Logical :: vp_use_layered = .True.   ! .False.: the layered preconditioner is skipped (constant-coefficient solves)
   Logical :: vp_mg_stale = .False.      ! vp_bu/bv/bw changed since the multigrid conductances were built (rebuilt by the next preconditioner call)
 
 Contains
@@ -77,8 +76,6 @@ Contains
     vp_riu = vof_rho_g;  vp_riv = vof_rho_g;  vp_riw = vof_rho_g
     vp_rau = vof_rho_g;  vp_rav = vof_rho_g;  vp_raw = vof_rho_g
     vp_rfu = vof_rho_g;  vp_rfv = vof_rho_g;  vp_rfw = vof_rho_g
-    Allocate( pois_bf(nyg), pois_bh(nyg) )
-    pois_bf = 1d0/vof_rho_g;  pois_bh = 1d0/vof_rho_g
     Do j = 2, nyg-1
        vp_hy(j) = y(j) - y(j-1)
     End Do
@@ -367,43 +364,10 @@ Contains
        vp_bu = vp_bu*vp_mu;  vp_bv = vp_bv*vp_mv;  vp_bw = vp_bw*vp_mw
        !$acc end kernels
     End If
-#ifndef GPU_POISSON
-    If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Call layer_coefficients
-#endif
     vp_mg_stale = ( pcg_precond >= 1 )
     Call profiler_stop(PROF_DENS_COEF)
 
   End Subroutine vp_set_density
-
-
-  !> Row-wise effective coefficients of the layered preconditioner: arithmetic horizontal-mean beta in the plane (parallel
-  !  conduction), harmonic mean of beta across the rows (series), weighted by the cell volumes
-  Subroutine layer_coefficients
-
-    Integer(Int32) :: i, j, k
-    Real(Int64) :: acc(3,nyg), glb(3,nyg), wk
-
-    acc = 0d0
-    Do k = 1, nzg
-       Do j = 1, nyg
-          Do i = 1, nxg
-             wk = vp_w(i,j,k)
-             If ( wk == 0d0 ) Cycle
-             acc(1,j) = acc(1,j) + wk
-             acc(2,j) = acc(2,j) + wk*0.5d0*( vp_bu(Min(i,nx),j,k) + vp_bw(i,j,Min(k,nz)) )
-             If ( j <= ny ) acc(3,j) = acc(3,j) + wk*vp_rfv(i,j,k)
-          End Do
-       End Do
-    End Do
-    Call MPI_Allreduce(acc, glb, 3*nyg, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
-    Do j = 1, nyg
-       If ( glb(1,j) > 0d0 ) Then
-          pois_bh(j) = glb(2,j)/glb(1,j)
-          If ( j <= ny ) pois_bf(j) = glb(1,j)/glb(3,j)
-       End If
-    End Do
-
-  End Subroutine layer_coefficients
 
 
   !> Liquid fraction of the upper (upper=.True.) or lower half of the cell (i,j,k) along direction dir, from its plane
@@ -724,15 +688,8 @@ Contains
        Call mg_precond(r, z)
     Else
        z = 0d0
-       If ( vof_layered_precond >= 1 .And. poisson_layered_supported() .And. vp_use_layered ) Then
-          rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)
-          pois_layered = .True.
-          Call solve_poisson_equation(skip_p_save=.True.)
-          pois_layered = .False.
-       Else
-          rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)/vp_beta0
-          Call solve_poisson_equation(skip_p_save=.True.)
-       End If
+       rhs_p(2:nxg,2:nyg-1,2:nzg) = r(2:nxg,2:nyg-1,2:nzg)/vp_beta0
+       Call solve_poisson_equation(skip_p_save=.True.)
        z(2:nxg,2:nyg-1,2:nzg) = rhs_p(2:nxg,2:nyg-1,2:nzg)
     End If
     ! the fast solver knows nothing of the body: keep the correction out of the solid cells (rows of the operator are empty there)

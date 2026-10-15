@@ -296,7 +296,7 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_nu_l, vof_nu_g` | `1e-6`, `1.5e-5` | Liquid / gas kinematic viscosity. |
 | `vof_grav` | `9.81` | Gravity magnitude along −y. |
 | `vof_sigma` | `0.0` | Surface tension; `>0` adds balanced-force `σκ∇C` and the capillary dt limit. |
-| `vof_u0` | `0.0` | Uniform streamwise velocity at a fresh start (amplitude for `vof_tgv`/`vof_shear`). |
+| `vof_u0` | `0.0` | Uniform streamwise velocity at a fresh start (amplitude for `vof_tgv`). |
 | `vof_mom_scheme` | `6` | Momentum face value: `0` central, `1` upwind, `2` Koren, `4` QUICK, `5` central 4th order, `6` WENO5-Z. |
 | `vof_mom_cm0, vof_mom_cm1` | `2e-3`, `1e-2` | Refill-Courant range over which the face value blends from high order to upwind. |
 | `vof_geo_density` | `1` | `1` face density from the reconstructed planes (hydrostatically exact); `0` arithmetic mean. |
@@ -309,12 +309,9 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_adv_iters, vof_adv_tol` | `3`, `1e-8` | Projection after each advection half-step. |
 | `vof_tr_floor` | `1e-14` | Stopping floor of the transporting-velocity projection (with an immersed body), as a fraction of the largest velocity. `1e-12` saves ~15% of the PCG iterations; the liquid volume then drifts at ~1e-14 instead of ~1e-16. |
 | `vof_div_tol` | `0.0` | `>0`: stop every pressure solve once `dt·max\|div u\|` is below this. |
-| `vof_layered_precond` | `0` | `1` row-mean-density PCG preconditioner (CPU, y walls). |
 | `vof_prescribed, vof_presc_T` | `0`, `8.0` | Passive tests (`vof_flow=0`): `1` LeVeque vortex, `2` Enright deformation (reversing at `T/2`, unit box; `vof_diag.dat` column 28 = L1 error), `3` rigid rotation about (0.5,0.5) of period `T` (Zalesak). |
 | `vof_tgv` | `0` | `1` Taylor–Green initial velocity of amplitude `vof_u0`. |
-| `vof_shear` | `0` | `1` gas above `vof_level` starts at `vof_u0`. |
 | `vof_hsplit` | `0` | `1` well-balanced split `p = p' − ρg(y−vof_level)`. |
-| `vof_frozen` | `0` | `1` hold density fixed (no interface transport; diagnostic). |
 | `vof_selftest` | `0` | `1` run the PCG iteration-count self-test at start-up (development). |
 | `vof_debug` | `0` | `1` write `vof_dev/prof/front/vmax.dat`. |
 | `vof_snap_dt` | `0.0` | With `vof_debug=1`: interval of mid-plane slices `vof_snap_NNNN.dat` of C, u, v. |
