@@ -1491,85 +1491,68 @@ Contains
   End Subroutine open_restart_skip_mesh
 
 
-  !> Read scalar C from a restart file, skipping the mesh and the U, V, W, P blocks
-  Subroutine read_scalar_restart
+  !> Read one block of a restart file into F, skipping the mesh and every block before it. Layout of the file (output_data): U, V, W,
+  !  P, then C (sediment_flag >= 1), nu_t (LES), T (boussinesq_flag >= 1) and the VOF fraction. The optional blocks are located from THIS
+  !  run's flags, not from what the file was written with: restarting with a flag flipped relative to the writing run desyncs the skip
+  !  and misreads everything after it. blk: 1 = P, 2 = C, 3 = T, 4 = VOF fraction.
+  Subroutine read_restart_block(blk, F)
+
+    Integer(Int32), Intent(In) :: blk
+    Real(Int64), Dimension(:,:,:), Intent(InOut) :: F
+
+    Logical :: present_blk(4)
+    Integer(Int32) :: m
 
     Call open_restart_skip_mesh
-
-    ! Skip U, V, W, P blocks (discarded — this restart file's U/V/W/P were already consumed by read_input_data)
+    ! U, V, W (already consumed by read_input_data)
     Call skip_distributed_field_block(2, nyg, .True.,  .False.)
     Call skip_distributed_field_block(2, ny,  .False., .False.)
     Call skip_distributed_field_block(2, nyg, .False., .True.)
-    Call skip_distributed_field_block(2, nyg, .False., .False.)
-
-    ! C block
-    Call read_distributed_field_block(2, Cscal, .False., .False.)
-
+    present_blk = (/ .True., sediment_flag >= 1, boussinesq_flag >= 1, .True. /)
+    Do m = 1, blk
+       If ( m == 3 .And. sgs_model /= 0 ) Call skip_distributed_field_block(2, nyg, .False., .False.)   ! nu_t sits between C and T
+       If ( .Not. present_blk(m) ) Cycle
+       If ( m == blk ) Then
+          Call read_distributed_field_block(2, F, .False., .False.)
+       Else
+          Call skip_distributed_field_block(2, nyg, .False., .False.)
+       End If
+    End Do
     If ( myid == 0 ) Close(2)
+
+  End Subroutine read_restart_block
+
+
+  !> Read scalar C from a restart file
+  Subroutine read_scalar_restart
+
+    Call read_restart_block(2, Cscal)
     Cscal_o = Cscal
 
   End Subroutine read_scalar_restart
 
 
-  !> Read the pressure block of a restart file into P (written there from Pst when ibm_pressure > 0); skips the mesh and U, V, W
+  !> Read the pressure block of a restart file into P (written there from Pst when ibm_pressure > 0)
   Subroutine read_pressure_restart
 
-    Call open_restart_skip_mesh
-
-    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
-    Call skip_distributed_field_block(2, ny,  .False., .False.)
-    Call skip_distributed_field_block(2, nyg, .False., .True.)
-    Call read_distributed_field_block(2, P, .False., .False.)
-
-    If ( myid == 0 ) Close(2)
+    Call read_restart_block(1, P)
 
   End Subroutine read_pressure_restart
 
 
-  ! Read the VOF fraction into Cvof_io and the pressure history into P from a restart file; skips U,V,W and the C/nu_t/T blocks of the other features
+  !> Read the VOF fraction into Cvof_io and the pressure history of the two-fluid step into P from a restart file
   Subroutine read_vof_restart
 
-    Call open_restart_skip_mesh
-
-    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
-    Call skip_distributed_field_block(2, ny,  .False., .False.)
-    Call skip_distributed_field_block(2, nyg, .False., .True.)
-    ! P holds the pressure history of the two-fluid step (the plain solver does not read it back)
-    Call read_distributed_field_block(2, P, .False., .False.)
-    If ( sediment_flag >= 1 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
-    If ( sgs_model /= 0 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
-    If ( boussinesq_flag >= 1 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
-    Call read_distributed_field_block(2, Cvof_io, .False., .False.)
-
-    If ( myid == 0 ) Close(2)
+    Call read_restart_block(1, P)
+    Call read_restart_block(4, Cvof_io)
 
   End Subroutine read_vof_restart
 
 
-  ! Read temperature T from a restart file; skips U,V,W,P and any C/nu_t blocks ahead of it
+  !> Read temperature T from a restart file
   Subroutine read_temperature_restart
 
-    Call open_restart_skip_mesh
-
-    ! U,V,W,P blocks (discarded — already consumed by read_input_data)
-    Call skip_distributed_field_block(2, nyg, .True.,  .False.)
-    Call skip_distributed_field_block(2, ny,  .False., .False.)
-    Call skip_distributed_field_block(2, nyg, .False., .True.)
-    Call skip_distributed_field_block(2, nyg, .False., .False.)
-
-    ! C block (only present if sediment was active when the file was written) — discarded.
-    ! NOTE: gated on THIS run's sediment_flag/sgs_model, not what the file was actually written
-    ! with -- restarting with either flag flipped relative to the writing run desyncs this skip
-    ! from the file's real layout and silently misreads everything after it, including T below.
-    If ( sediment_flag >= 1 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
-
-    ! nu_t block (only present if LES was active when the file was written) — discarded
-    If ( sgs_model /= 0 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
-
-    ! T block
-    Call read_distributed_field_block(2, Tscal, .False., .False.)
-
-    If ( myid == 0 ) Close(2)
+    Call read_restart_block(3, Tscal)
     Tscal_o = Tscal
     ! Device copy deferred: Tscal/Tscal_o are not yet `!$acc enter data create`d at this point in startup (that happens later, unconditionally, in initialization.f90), so updating the device here would be undefined behavior.
 
