@@ -16,7 +16,7 @@ Module time_integration
   Use vof_pressure,     Only : vp_project_staircase, vp_mu, vp_mv, vp_mw
   Use scalar_transport,  Only : compute_rhs_scalar, apply_scalar_bc
   Use thermal_transport, Only : compute_rhs_temperature, apply_temperature_bc
-  Use monitor,          Only : compute_cfl, write_force_csv, compute_bulk_velocity
+  Use monitor,          Only : compute_cfl, select_dt, write_force_csv, compute_bulk_velocity
   Use particles,        Only : advance_particles
   Use vof_state,        Only : vof_advance_substep, vof_save_stage, vof_end_step, vof_output_monitor
   Use profiler
@@ -111,7 +111,7 @@ Contains
     Real(Int64) :: Fx_ibm,  Fy_ibm,  Fz_ibm
     Real(Int64) :: Fx_pres, Fy_pres, Fz_pres
     Real(Int64) :: Fx_visc, Fy_visc, Fz_visc
-    Real(Int64) :: cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap
+    Real(Int64) :: cfl_conv, cfl_visc, cfl_accel, dt_presnap
     Real(Int64) :: Ub_now, dU_cmfr
     Logical     :: needs_final_sync
 
@@ -141,20 +141,8 @@ Contains
        cfl_accel_last = cfl_accel
        cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
     End If
-    If ( cfl_adaptive == 1 .And. cfl_current > 0d0 ) Then
-       dt_new = dt * cfl_target / cfl_current * cfl_safety
-       dt = Max(dt_min, Min(dt_max, dt_new))
-    End If
-
-    ! nsave<0: shrink dt (even below dt_min) so t lands exactly on tsave_next, keeping physical-time-based snapshots uniformly spaced under adaptive dt
-    ! nsteps<0: likewise shrink dt so t lands exactly on sim_end_time instead of overshooting it under adaptive dt
-    dt_presnap = dt
-    If ( nsave < 0 .And. t + dt > tsave_next ) Then
-       dt = tsave_next - t
-    End If
-    If ( nsteps < 0 .And. t + dt > sim_end_time ) Then
-       dt = sim_end_time - t
-    End If
+    ! nsave<0 / nsteps<0: dt is shrunk so t lands exactly on tsave_next / sim_end_time (physical-time snapshots stay uniformly spaced under adaptive dt)
+    Call select_dt(cfl_current, dt_presnap)
 
     ! save previous state
     to = t

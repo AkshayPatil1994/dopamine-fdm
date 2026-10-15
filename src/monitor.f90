@@ -372,6 +372,20 @@ Contains
 
   End Subroutine compute_cfl
 
+  !> Time step of the coming step: adaptive dt from the CFL number (cfl_adaptive = 1), then shrunk (even below dt_min) so that t lands
+  !  exactly on tsave_next (nsave < 0) or sim_end_time (nsteps < 0). dt_presnap is the step before the shrinking, restored after the step
+  Subroutine select_dt(cfl_now, dt_presnap)
+
+    Real(Int64), Intent(In)  :: cfl_now
+    Real(Int64), Intent(Out) :: dt_presnap
+
+    If ( cfl_adaptive == 1 .And. cfl_now > 0d0 ) dt = Max(dt_min, Min(dt_max, dt*cfl_target/cfl_now*cfl_safety))
+    dt_presnap = dt
+    If ( nsave < 0 .And. t + dt > tsave_next ) dt = tsave_next - t
+    If ( nsteps < 0 .And. t + dt > sim_end_time ) dt = sim_end_time - t
+
+  End Subroutine select_dt
+
   !> Volume-weighted (non-uniform y and z, IBM-solid-excluded) domain bulk streamwise velocity, for constant-mass-flux forcing
   Subroutine compute_bulk_velocity(Ub_out)
 

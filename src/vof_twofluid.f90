@@ -23,7 +23,7 @@ Module vof_twofluid
   Use wallmodel, Only : compute_wall_model, solve_u_tau_wall
   Use ibm_stress
   Use waves, Only : wave_eta, wave_profile_at, current_profile
-  Use monitor, Only : compute_cfl, write_force_csv
+  Use monitor, Only : compute_cfl, select_dt, write_force_csv
   Use vof_plic
   Use vof_normals
   Use vof_advect
@@ -1578,7 +1578,7 @@ Contains
   !> One two-fluid time step: dt from the CFL (the Courant limit sees the gas currents too), then the Strang sequence
   Subroutine compute_time_step_vof
 
-    Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_new, dt_presnap, dt_in, hmin_w, om2
+    Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_presnap, dt_in, hmin_w, om2
     Integer(Int32) :: isub, nsub
 
     ibm_sampling_now = ( ibm_input_mode >= 1 .And. nsampling > 0 )
@@ -1603,13 +1603,7 @@ Contains
     End If
     cfl_current    = Max(cfl_conv, cfl_visc, cfl_accel)
     dt_in = dt
-    If ( cfl_adaptive == 1 .And. cfl_current > 0d0 ) Then
-       dt_new = dt * cfl_target / cfl_current * cfl_safety
-       dt = Max(dt_min, Min(dt_max, dt_new))
-    End If
-    dt_presnap = dt
-    If ( nsave < 0 .And. t + dt > tsave_next ) dt = tsave_next - t
-    If ( nsteps < 0 .And. t + dt > sim_end_time ) dt = sim_end_time - t
+    Call select_dt(cfl_current, dt_presnap)
     to = t
     ! the convective outflow relaxation runs once per RK stage inside vof_forces_rk3 (stage shares of dt sum to dt)
     outflow_relax_on = .False.
