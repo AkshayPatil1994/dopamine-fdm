@@ -547,7 +547,7 @@ Contains
     Call trace_stage('s3_bc_post1')
     Call profiler_stop(PROF_BC)
 
-    ! Constant-mass-flux forcing: shift U by a uniform constant so the volume-averaged bulk velocity hits Ub_target exactly (div-free preserved since the shift is spatially uniform); dPdx tracks the equivalent forcing for diagnostics
+    ! Constant-mass-flux forcing: shift U by a uniform constant so the volume-averaged bulk velocity hits Ub_target exactly (div-free preserved since the shift is spatially uniform)
     If ( flow_forcing_mode == 1 ) Then
        Call profiler_start(PROF_CMFR)
        Call compute_bulk_velocity(Ub_now)
