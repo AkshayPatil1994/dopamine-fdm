@@ -29,6 +29,7 @@ fdm-dopamine/
 │   ├── genGridandIC.f90     # Grid generation and initial conditions
 │   ├── input_output.f90     # Namelist reader and field I/O
 │   ├── initialization.f90
+│   ├── adv_hybrid.f90       # advection_scheme=2: conservative higher-order dissipative flux added to the skew-symmetric central scheme (CPU and GPU)
 │   ├── scalar_transport.f90 # Suspended sediment: van Leer MUSCL advection, settling
 │   ├── thermal_transport.f90 # Passive thermal scalar transport
 │   ├── wallmodel.f90        # Flat-wall and IBM EQWM

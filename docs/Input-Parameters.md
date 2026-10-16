@@ -19,7 +19,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
 | `nx, ny, nz` | required | Face points per direction (interior cells = n−1). |
-| `Lx, Ly, Lz` | required | Domain lengths [m]. |
+| `Lx, Ly, Lz` | `1.0` | Domain lengths [m] (set them; the default is only a placeholder). |
 | `grid_type` | `1` | Wall-normal (y) grid: 1 uniform; 2 tanh, fine at both walls; 3 tanh, fine at bottom; 4 tanh, fine at top; 5 uniform sublayer `[0,ks]` (`nks` cells, set in `&IBM`) then tanh fine at the interface and the top wall; 6 same, coarse at the top; 7 same, coarse at the interface and fine at the top. |
 | `alpha_grid` | `1.0` | Stretching strength for `grid_type` 2–7 (larger = stronger clustering). Ignored for type 1. |
 | `alpha_grid_z` | `0.0` | Spanwise stretching: `0` uniform, `>0` symmetric tanh clustering at both z walls. Needs `z_bc_type=1` (aborts with periodic z). |
@@ -30,8 +30,8 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
 | `nu` | required | Kinematic viscosity [m²/s]. With `vof_flow=1` it is not used (the echo says so): the two-fluid viscosities `vof_nu_l/g` apply, and the larger of them enters the viscous CFL limit. |
-| `dPdx, dPdz` | required | Mean streamwise / spanwise pressure gradient (kinematic, m/s²) that drives the flow. `dPdx` is ignored if `flow_forcing_mode=1`; `dPdx` also sets `u_tau` for `ic_type` 1 and 4. |
-| `flow_forcing_mode` | `0` | `0` drive with `dPdx`/`dPdz`; `1` constant mass flux: a uniform shift of U each step holds the bulk velocity at `Ub_target` (needs `x_bc_type=0`, no `T_wave_x`; aborts otherwise). `dPdx` then only reports the equivalent forcing. |
+| `dPdx, dPdz` | `0.0` | Mean streamwise / spanwise pressure gradient (kinematic, m/s²) that drives the flow. `dPdx` is ignored if `flow_forcing_mode=1`; `dPdx` also sets `u_tau` for `ic_type` 1 and 4. |
+| `flow_forcing_mode` | `0` | `0` drive with `dPdx`/`dPdz`; `1` constant mass flux: a uniform shift of U each step holds the bulk velocity at `Ub_target` (needs `x_bc_type=0`, no `T_wave_x`; aborts otherwise). |
 | `Ub_target` | `0.0` | Target bulk streamwise velocity [m/s] for `flow_forcing_mode=1`. |
 | `Ub_x, Ub_z` | `0.0` | Amplitude of oscillatory (wave) forcing: `dP/dx(t) = dPdx + Ub_x·ω_x·cos(ω_x t + φ_x)` (same in z). |
 | `T_wave_x, T_wave_z` | `0.0` | Oscillation period [s]; `0` = steady. ω = 2π/T. |
@@ -134,7 +134,7 @@ Ghost-cell or staircase immersed boundaries from a precomputed signed-distance f
 |---|---|---|
 | `ibm_input_mode` | `0` | `0` no body; `1` read the cell-centre SDF `ibm_sdf_file` (solid where `phi<0`). |
 | `ibm_method` | `0` | `0` ghost-cell (image-point mirror; resolve walls with ≥2 cells); `1` staircase (zero velocity in solid, fast whole-box projection with the closed faces zeroed, log-law stress as viscous flux with `ibm_wall_model_flag=1`; needs `ibm_input_mode≥1`; not for `vof_flow=1`, which always uses the staircase stress). |
-| `ibm_pressure` | `0` | Pressure treatment of the fast whole-box projection (`ibm_method=0` or `1`). `0` pressure-free predictor: the solve removes the whole pressure gradient and the faces of the body are zeroed again afterwards, discarding the pressure-gradient flux across them (cells next to the body end up with divergence of order 1 s⁻¹ and the velocity next to sharp or thin geometry can grow without bound). `1` incremental: the predictor carries −∇ of the last stage pressure, so the solve only supplies the increment and the discarded flux is the increment's. `2` as `1`, and the body faces also keep the flux of the solve, so the fluid cells stay divergence-free to round-off (staircase `ibm_method=1` with `ibm_projection=1` only). **Recommended for urban/rough-terrain LES: `ibm_method=1, ibm_projection=1, ibm_pressure=2`.** `ibm_method=0` does not profit (its ghost values are rewritten after the solve). Costs one extra array and a gradient per stage, no extra Poisson solve. Single-phase only; see [Numerics §6.4](Numerics.md#64-staircase-method-ibm_method--1). |
+| `ibm_pressure` | `0` | Pressure treatment of the fast whole-box projection (`ibm_method=0` or `1`). `0` pressure-free predictor: the solve removes the whole pressure gradient and the faces of the body are zeroed again afterwards, discarding the pressure-gradient flux across them (cells next to the body end up with divergence of order 1 s⁻¹ and the velocity next to sharp or thin geometry can grow without bound). `1` incremental: the predictor carries −∇ of the last stage pressure, so the solve only supplies the increment and the discarded flux is the increment's. `2` as `1`, and the body faces also keep the flux of the solve, so the fluid cells stay divergence-free to round-off (staircase `ibm_method=1` only). **Recommended for urban/rough-terrain LES: `ibm_method=1, ibm_pressure=2`.** `ibm_method=0` does not profit (its ghost values are rewritten after the solve). Costs one extra array and a gradient per stage, no extra Poisson solve. Single-phase only; see [Numerics §6.4](Numerics.md#64-staircase-method-ibm_method--1). |
 | `ibm_wall_model_flag` | `0` | `0` no-slip; `1` log-law EQWM on IBM surfaces. With `ibm_method=0` it only rewrites ghost velocities and carries almost no stress in near-1-D shear: use `ibm_method=1` (or `vof_flow=1`) for a wall-modelled IBM. |
 | `ibm_sdf_file` | `'SDF_in'` | Path of the SDF file. |
 | `ibm_objid_file` | `''` | Optional per-solid ID field (GenSDF `sdfp_objid.bin`) enabling per-object settings below; empty = one condition for all solids. |
@@ -151,14 +151,14 @@ Ghost-cell or staircase immersed boundaries from a precomputed signed-distance f
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
 | `ic_type` | `1` | `1` log-law + noise; `2` linear/tent + noise; `3` zero mean + noise; `4` Reichardt channel profile (u_τ=√(\|dPdx\|Ly/2)) + structured waves; `5` inverse-linear (anti-tent, `Utarget` at walls) + noise, for fast transition; `6` Taylor–Green vortex of amplitude `Utarget` (analytic; needs `x_bc_type=0`, `y_bc_type=0`); `7` deterministic two-mode perturbation on uniform `Utarget` (ε₁=`noise_percent`/100, ε₂=0.04ε₁). |
-| `Utarget` | required | Target bulk or centreline velocity [m/s] (vortex amplitude for type 6). |
+| `Utarget` | `0.0` | Target bulk or centreline velocity [m/s] (vortex amplitude for type 6). |
 | `noise_percent` | `5.0` | Noise amplitude as % of `Utarget` (types 1–3, 5; ignored for 4 and 6). |
 | `restart` | `0` | `1` hot-start from `filein`. |
 | `nstep_init` | `0` | Starting step number for a restart. |
 | `t_start` | `-1.0` | Restart time [s]; `-1` uses `nstep_init·dt`. Needed with `cfl_adaptive=1`. |
+| `scalar_restart` | `1` | `1` read C from the restart file; `0` re-initialise C even when `restart=1` (file has no scalar block). |
 
 On `restart=1` the time-series outputs are continued, not rewritten: `vof_diag.dat`, `vof_gauges.dat` and `ibm_forces.csv` lose the rows later than the restart time and are appended to (one header), and the line/slice probe files (`n_lines`, `n_slices`) keep their first `nstep_init/line_freq` (`/slice_freq`) records and are appended to. The step counter restarts at 0, so the probe interval counts from the first step of the restarted run; `nstep_init` must be the step of the snapshot (the number in its file name) and, for the probe records, the earlier run must have started at step 0.
-| `scalar_restart` | `1` | `1` read C from the restart file; `0` re-initialise C even when `restart=1` (file has no scalar block). |
 
 ## IO
 
@@ -290,9 +290,9 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_ic_type` | `1` | Initial interface: `1` plane below `y=vof_level`; `2` sphere; `3` gas bubble; `4` standing/progressive wave; `5` dam-break box `x<vof_center(1), y<vof_center(2)` (`vof_radius>0` adds the periodic mirror); `6` disk in x–y; `7` Zalesak slotted disk (slot width `vof_radius/3`). |
 | `vof_level` | `0.0` | Interface height. |
 | `vof_center(3), vof_radius` | `0.0` | Centre and radius of the initial shape. |
-| `vof_wave_amp, vof_wave_lambda` | `0.0` | `ic_type=4`: amplitude and wavelength (periodic length). |
+| `vof_wave_amp, vof_wave_lambda` | `0.0` | `vof_ic_type=4`: amplitude and wavelength (periodic length). |
 | `vof_wave_stokes` | `0` | `1` adds the 2nd-order Stokes harmonic and deep-water velocity (breaking-wave start, steepness `ka=2π·amp/λ`). |
-| `vof_smooth_w` | `0.0` | `ic_type=4`: smoothed Heaviside half-width [cells]. |
+| `vof_smooth_w` | `0.0` | `vof_ic_type=4`: smoothed Heaviside half-width [cells]. |
 | `vof_normal_scheme` | `1` | Interface normal: `1` Youngs, `2` height function. |
 | `vof_method` | `1` | `C` fluxes: `1` PLIC (sharp), `2` THINC (diffuse over 2–3 cells). |
 | `vof_beta` | `2.0` | THINC steepness. |
@@ -351,6 +351,7 @@ Numerical wave flume: Dirichlet wave inlet plus relaxation zones. Needs `vof_flo
 | DNS periodic channel | `nx,ny,nz,Lx,Ly,Lz`, `grid_type=2`+`alpha_grid`, `nu`, `dPdx` (or `flow_forcing_mode=1`+`Ub_target`), `dt` or `cfl_adaptive=1`, `nsteps`, `nsave`, `nmonitor`, `Utarget`, `fileout` |
 | Wall-modelled LES | as above plus `sgs_model=1`, `flat_wall_model_flag=1` (or 2 with `z0_ylo/yhi`), coarser grid |
 | Rough wall (IBM) | `&IBM`: `ibm_input_mode=1`, `ibm_sdf_file`; for a wall model add `ibm_wall_model_flag=1`, `ibm_method=1`, `ibm_z0` |
+| Urban / rough-terrain LES | `&IBM` as above with `ibm_pressure=2`; `sgs_model=1`; optionally `advection_scheme=2, adv_order=5, adv_beta0=0.05, adv_beta_ibm=1, adv_band=2` |
 | Restart | `restart=1`, `filein`, `nstep_init` (and `t_start` if adaptive dt) |
 | Inflow/outflow | `x_bc_type=1`, `&INFLOW inflow_type`, `Utarget` |
 | Sediment / thermal | `sediment_flag=1` + `grav`, or `boussinesq_flag=1` + `beta_T`, `T_ref`, `grav` |

@@ -12,7 +12,7 @@ A parallel finite-difference solver for the 3-D incompressible Navier–Stokes e
 
 - **Numerics**: staggered MAC grid, second-order central differences, low-storage RK3, fractional-step projection with a spectral pressure solver (FFTW3 + 2decomp&fft transposes); stretched wall-normal and spanwise grids.
 - **Boundaries**: periodic, no-slip or free-slip walls, 4-wall ducts, inflow/outflow with constant, synthetic-eddy (ESEM) or recycled-precursor inflow.
-- **Walls and turbulence**: DNS, Vreman LES, flat-wall and IBM equilibrium wall models (smooth and rough), ghost-cell or staircase IBM from precomputed signed-distance fields.
+- **Walls and turbulence**: DNS, Vreman LES, flat-wall and IBM equilibrium wall models (smooth and rough), ghost-cell or staircase IBM from precomputed signed-distance fields (incremental-pressure projection and an optional upwind-biased dissipation for urban and rough-terrain LES).
 - **Physics modules**: Boussinesq temperature, suspended sediment, Lagrangian particles, rotation, oscillatory forcing, UAV actuator disk (static or path-following).
 - **Two-phase flow**: PLIC-VOF, consistent momentum transport (WENO5-Z), surface tension, wave-flume inlet and relaxation zones; off by default and then a strict no-op.
 - **Diagnostics**: full Pope §7.4 Reynolds-stress budget, line/slice probes, per-stage profiler.
@@ -39,6 +39,7 @@ ctest --test-dir build               # optional: regression suite
 | [Numerics](docs/Numerics.md) | governing equations, discretisation, solvers, models, validation |
 | [Two-Phase VOF](docs/Two-Phase-VOF.md) | the air–water solver: method, waves, validation, limits |
 | [Examples](docs/Examples.md) | bundled example cases |
+| [Pre-Processing](docs/Pre-Processing.md) | GenSDF input format and usage |
 | [Tools](docs/Tools.md) | GenSDF, `dopamine_post`, dopamine-ESEM, and the scripts behind the animations above |
 | [Development](docs/Development.md) | code structure, CPU/GPU consistency tools, contributing |
 | [References](docs/References.md) | published methods implemented |

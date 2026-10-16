@@ -82,7 +82,7 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
   like the CPU build (`p_row`/`p_col`): periodic/wall `y`, periodic (FFT) or inflow/outflow
   (`x_bc_type=1`, DCT-IV) `x`, periodic `z`, a spanwise wall alone (`z_bc_type=1`, `y_bc_type=0`, `x_bc_type=0`), and the 4-wall duct (`y_bc_type=1`, `z_bc_type=1`,
   `x_bc_type=0`; `p_col=1` is forced, `x` is split). Wall models, SGS, scalars etc. work as on
-  one GPU, including the ghost-cell IBM and point particles (results match the CPU build and every rank layout; see
+  one GPU, including the ghost-cell and staircase IBM, `advection_scheme = 2` and point particles (results match the CPU build and every rank layout; see
   [Decomposition Consistency](Development.md#decomposition-consistency-cpu--multi-cpu--gpu--multi-gpu)). The IBM needs a few interior cells per rank in x and z (checked at start-up).
 - **Two-phase VOF (`vof_flow=1`)**: the two-fluid flow, its wave inlet and relaxation zones, an immersed body, sediment, Boussinesq temperature and
   point particles run on the GPU (it needs `pcg_precond=1`, the default for wall-bounded y; the GPU build uses the multigrid V-cycle, `mg_cycle=-1`).
@@ -145,7 +145,7 @@ added to the total.
 
 `ctest` (in the build directory) runs the unit drivers plus deterministic regression
 cases in `tests/regression/` (TGV, LES/DNS channel, 4-wall duct, inflow/outflow, passive
-scalar, Boussinesq temperature, UAV actuator disk, IBM sphere, Reynolds-stress budget) and point-particle cases
+scalar, Boussinesq temperature, UAV actuator disk, IBM sphere (ghost-cell and staircase, `ibm_pressure`), higher-order advection (`advection_scheme = 2`), input-validation aborts, Reynolds-stress budget) and point-particle cases
 (tracers, inertial, Boussinesq-coupled, IBM collisions, inflow/outflow with reinjection; compared by particle ID).
 Each case is run on 1 rank and on `TEST_PARITY_NPROCS` ranks (default 2), plus explicit
 4-rank `2x2` and `4x1` pencil layouts (particles also on 3 ranks), and must agree within tolerance on the per-step
@@ -187,7 +187,8 @@ Each field block is preceded by a 3-integer size header. The layout is:
 | P | `nxg × nyg × nzg` | always |
 | C | `nxg × nyg × nzg` | only when `sediment_flag >= 1` |
 | ν_t | `nxg × nyg × nzg` | only when `sgs_model /= 0` |
-| T | `nxg × nyg × nzg` | only when `boussinesq_flag >= 1` (written last) |
+| T | `nxg × nyg × nzg` | only when `boussinesq_flag >= 1` |
+| liquid fraction | `nxg × nyg × nzg` | only when `vof_active >= 1` (written last) |
 
 ```python
 import numpy as np

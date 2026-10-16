@@ -4,7 +4,7 @@
 
 `preProcessing/GenSDF/` is a standalone MPI-Fortran signed-distance-field (SDF) generator. It turns
 a surface mesh (STL or OBJ) into the cell-centre SDF that the solver's IBM reads via `ibm_sdf_file`
-(`&IBM` namelist — see [Input Parameters](Input-Parameters.md#ibm-optional)), optionally with the
+(`&IBM` namelist — see [Input Parameters](Input-Parameters.md#ibm)), optionally with the
 face-staggered SDFs and a per-solid object-ID field. It is the only supported way to produce an IBM
 geometry. (Post-processing scripts live on the [Tools](Tools.md) page.)
 

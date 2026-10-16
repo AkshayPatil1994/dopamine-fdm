@@ -31,8 +31,7 @@ Alternatively, `flow_forcing_mode = 1` (constant mass flux, CMFR) replaces the
 prescribed-`dPdx` forcing above with a bulk-velocity constraint: after each RK
 sub-stage, $U$ is shifted by a spatially uniform constant so the volume-averaged
 streamwise velocity exactly equals `Ub_target` (a uniform shift stays divergence-free,
-so this needs no extra projection); `dPdx` is diagnostic only in this mode, tracking the
-equivalent forcing. Requires `x_bc_type = 0` (periodic) and is incompatible with the
+so this needs no extra projection); `dPdx` is not used in this mode. Requires `x_bc_type = 0` (periodic) and is incompatible with the
 oscillatory forcing above.
 
 The convective term $\partial(u_i u_j)/\partial x_j$ is discretised in either
@@ -44,7 +43,15 @@ better conserves kinetic energy) or pure central-difference (divergence) form
 
 *Numerical diffusion and truncation error.* With $\delta^3\phi = \Delta x^3\phi''' + O(\Delta x^5)$ and constant $u$, the added term is $\partial_t\phi = -(\beta|u|\Delta x^3/12)\,\partial_x^4\phi$ (order 3) or $-(\beta|u|\Delta x^5/60)\,\partial_x^6\phi$ (order 5): a bi- resp. tri-harmonic hyperdiffusion with a real, strictly damping symbol and no phase error. A mode of phase angle $\theta=k\Delta x$ decays at the rate $(4/3)\,\beta\,(|u|/\Delta x)\sin^4(\theta/2)$ (order 3) or $(16/15)\,\beta\,(|u|/\Delta x)\sin^6(\theta/2)$ (order 5), bounded by $1.33$ resp. $1.07\,\beta|u|/\Delta x$ at the grid scale; resolved scales ($k\Delta x\lesssim 0.5$) see only $\beta(|u|/\Delta x)(k\Delta x)^4/12$ resp. $(k\Delta x)^6/60$. The leading truncation error of the scheme is that of the central part, the dispersive $(u\Delta x^2/6)\,\partial_x^3\phi$ (phase speed $u(1-(k\Delta x)^2/6)$), so the formal order stays two; the added error is $O(\Delta x^3)$ resp. $O(\Delta x^5)$, a fraction $\beta k\Delta x/2$ of the dispersive one. The term is a flux difference, so momentum is conserved, and for constant $|u|$ it removes kinetic energy ($\int\phi\,\partial_x^4\phi = \int(\partial_x^2\phi)^2\ge 0$); with variable $|u_f|$ global dissipativity is not proved (it was measured: 0.3 % kinetic-energy change in the block test). The difference is taken in index space (a damping operator, not an interpolation, so the stretched wall-normal grid needs no special weights), and next to the y walls the stencil is reduced from order 5 to 3 and then dropped. The coefficient is $\beta = \max(\texttt{adv\_beta0},\ \texttt{adv\_beta\_ibm}\cdot s_{ibm})$, with $s_{ibm} = 1$ within `adv_band` cells of a solid cell and 0 elsewhere, so the damping is strongest where the ringing is produced. With $\beta = 0$ the scheme is `advection_scheme = 0` bit for bit.
 
-Measured effect (CPU, `adv_order = 3`/`5`): on an 18³/34³/66³ Taylor–Green vortex the change of the maximum velocity at $\beta_0 = 0.5$ is 3.4/0.9/0.15 ×10⁻³ (order 3) and 7.5/0.4/0.02 ×10⁻³ (order 5), i.e. it vanishes under refinement. For a 12×10-cell block in a channel (staircase IBM, `ibm_pressure = 2`, 300 steps) the number of local extrema of $u$ on the line one cell above the roof falls from 53 (skew-symmetric) to 49 with the IBM band alone, 25 with also $\beta_0 = 0.1$ and 15 with $\beta_0 = 0.3$ (order 3; order 5: 49/34/16), the total variation of that line from 30.5 to 23.4/18.3/16.1, and the grid-scale energy near the block by 40 %, while the kinetic energy changes by 0.3 %. The cost on the Chicago grid is about 12 % more per step (order 3, CPU, 8 ranks, loaded machine; order 5 is slightly higher). Resolved-scale check (wall-modelled channel LES, Re_τ 395, 66³ cells, order 5, 70 time units, statistics over the second half): β₀ = 0.05 changes the mean profile by 0.7 % and the Reynolds stresses by less than the run-to-run scatter of the reference (2–7 %), β₀ = 0.1 by 1.4 % and up to 6 %, β₀ = 0.2 by 2.2 % and up to 8 %; the step costs about 42 % more on that small grid (about 12 % on the Chicago grid, where the projection and IBM dominate); this cost is accepted. A second geometry, a row of three 9×8-cell cubes (same setup, 300 steps), reproduces the damping of grid-scale energy (−37 % with the IBM band, kinetic energy −0.6 %) but the reduction of the oscillations of $u$ one cell above the roofs is weaker with order 5 (47.5 → 42.5 extrema, total variation 49.5 → 47.5 at $\beta_0 = 0.05$) than with order 3 (35 extrema, total variation 33.0): the $(k\Delta x)^6$ damping of order 5 is gentler at moderate wavenumbers, so use `adv_order = 3` or a larger `adv_beta_ibm`/`adv_band` where ringing persists; order 3 was not checked on the channel statistics. Recommended for urban LES: `advection_scheme = 2, adv_order = 5, adv_beta0 = 0.05, adv_beta_ibm = 1, adv_band = 2`. Not available with `vof_flow >= 1`. GPU: written with device kernels and padded halos (`pad_field_dev`) but not yet run on a GPU.
+*Measured effect* (CPU):
+
+- **Taylor–Green vortex** (18³/34³/66³): at $\beta_0 = 0.5$ the change of the maximum velocity is 3.4/0.9/0.15 ×10⁻³ (order 3) and 7.5/0.4/0.02 ×10⁻³ (order 5), so it vanishes under refinement.
+- **Wall-modelled channel LES** (Re_τ 395, 66³ cells, order 5, 70 time units, statistics over the second half): $\beta_0 = 0.05$ changes the mean profile by 0.7 % and the Reynolds stresses by less than the run-to-run scatter of the reference (2–7 %); $\beta_0 = 0.1$ by 1.4 % and up to 6 %; $\beta_0 = 0.2$ by 2.2 % and up to 8 %. Order 3 was not checked on the channel statistics.
+- **12×10-cell block in a channel** (staircase IBM, `ibm_pressure = 2`, 300 steps): the local extrema of $u$ on the line one cell above the roof fall from 53 (skew-symmetric) to 49 with the IBM band alone, 25 with also $\beta_0 = 0.1$ and 15 with $\beta_0 = 0.3$ (order 3; order 5: 49/34/16); the total variation of that line falls from 30.5 to 23.4/18.3/16.1 and the grid-scale energy near the block by 40 %, while the kinetic energy changes by 0.3 %.
+- **Row of three 9×8-cell cubes** (same setup): the grid-scale energy falls by 37 % with the IBM band (kinetic energy −0.6 %), but the reduction of the oscillations one cell above the roofs is weaker with order 5 (47.5 → 42.5 extrema, total variation 49.5 → 47.5 at $\beta_0 = 0.05$) than with order 3 (35 extrema, total variation 33.0): the $(k\Delta x)^6$ damping of order 5 is gentler at moderate wavenumbers, so use `adv_order = 3` or a larger `adv_beta_ibm`/`adv_band` where ringing persists.
+- **Cost:** about 42 % more per step on the small 66³ channel, about 12 % on the Chicago grid (514×93×514, where the projection and the IBM dominate; order 5 slightly more).
+
+Recommended for urban LES: `advection_scheme = 2, adv_order = 5, adv_beta0 = 0.05, adv_beta_ibm = 1, adv_band = 2`. Not available with `vof_flow >= 1`. Like scheme 0 it is not momentum conserving on a coarse near-wall grid (§7.1). Combinations with the ghost-cell IBM (`ibm_method = 0`), spanwise walls, the UAV and particles have not been tested. GPU: device kernels with padded halos (`pad_field_dev`); `adv_hybrid_small` and its CPU-vs-GPU parity tests pass on a GPU build.
 
 **Rigid-body rotation about the streamwise axis** (`rotation_active = 1`, e.g. for a
 rotating duct) adds Coriolis and centrifugal forcing to the $v$- and $w$-momentum
@@ -258,8 +265,9 @@ The LES is validated against a standard turbulent channel flow case used in the 
 
 ## 6. Immersed boundary method (IBM)
 
-Complex solid geometries (e.g. rough surfaces) are represented via a **ghost-cell
-immersed boundary method** following Tseng & Ferziger (2003).
+Complex solid geometries (e.g. rough surfaces, buildings) are represented either by a **ghost-cell
+immersed boundary method** following Tseng & Ferziger (2003) (`ibm_method = 0`, §6.1–6.3) or by the
+**staircase method** (`ibm_method = 1`, §6.4).
 
 ### 6.1 Signed-distance function
 
@@ -337,7 +345,7 @@ The second IBM method does not interpolate. It treats the body as the set of gri
 
 1. **Closed faces.** A velocity face is *closed* if either of the two cells it joins has $\phi < 0$. A one-cell-thick wall therefore blocks the flow, which the ghost-cell method cannot resolve.
 2. **Velocity.** The velocity on closed faces is held at zero after every update (no penetration, no slip). No ghost values and no image-point interpolation are used.
-3. **Projection.** The fast Poisson solver of §4 is applied to the whole box as if the body were not there (the same whole-box solve as direct-forcing and ghost-cell codes, and as uDALES). The closed faces are zeroed in the predictor, and, with `ibm_pressure < 2`, again after the solve. With `ibm_pressure = 0` this discards the pressure-gradient flux across the closed faces, so the cells next to the body are not divergence-free (order $U/\Delta x$) and the velocity can grow next to sharp or thin geometry; `ibm_pressure = 2` (below) removes that error and is the recommended setting. A projection that solves the pressure on the fluid cells only (a masked PCG, divergence-free to a tolerance) was available earlier; it was about ten times slower per step and agrees with `ibm_pressure = 2` to 0.1 m/s on the Chicago case, so it was removed. The two-fluid solver keeps its own masked PCG (see [Two-Phase-VOF](Two-Phase-VOF.md)).
+3. **Projection.** The fast Poisson solver of §4 is applied to the whole box as if the body were not there (the same whole-box solve as direct-forcing and ghost-cell codes, and as uDALES). The closed faces are zeroed in the predictor, and, with `ibm_pressure < 2`, again after the solve. With `ibm_pressure = 0` this discards the pressure-gradient flux across the closed faces, so the cells next to the body are not divergence-free (order $U/\Delta x$) and the velocity can grow next to sharp or thin geometry; `ibm_pressure = 2` (below) removes that error and is the recommended setting. (A pressure solve on the fluid cells only, a masked PCG, agrees with `ibm_pressure = 2` to 0.1 m/s on the Chicago case at ten times the cost per step; only the two-fluid solver uses one, see [Two-Phase-VOF](Two-Phase-VOF.md).)
 
 4. **Viscous stress.** The viscous flux through every edge between a fluid face and a closed face is the no-slip stencil flux, or, with `ibm_wall_model_flag = 1`, the log-law wall shear of §7.1b, with per-object roughness `ibm_z0`.
 
@@ -367,21 +375,17 @@ no-penetration — the direct $y$-wall analogue of §7.1 below, with $y \leftrig
 The log law gives the friction velocity $u_\tau$ from the first-cell tangential speed, and the modelled wall shear
 $\tau_w = u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$ (kinematic) replaces the molecular wall-edge flux of the viscous term in
 `compute_rhs_u` / `compute_rhs_w` (arrays `tau_x`, `tau_z`, set in `compute_flat_wall_eqwm`; at the $z$ walls `tau_zu`, `tau_zv` replace the $z$-edge flux of `compute_rhs_u` / `compute_rhs_v`, set in `compute_flat_wall_eqwm_z` on the ranks owning the wall). The ghost rows keep the no-slip
-mirror ($\alpha = 0$). An earlier version imposed the stress through a Robin slip length
-$\alpha = \nu u_\text{ref}/u_\tau^2 - \Delta y/2$; since $u^+ \le y^+$ this is never positive, so with the zero floor it was a plain no-slip
-wall whenever the first cell is at $y^+ \gtrsim 10$, and without the floor the ghost value is many times the interior one and corrupts
-the SGS gradient in the first cell. Free-slip walls take no stress. This applies to the $y$ walls (smooth and rough) and to the spanwise ($z$) walls of `z_bc_type = 1` (smooth only). Check: a uniform stream between two modelled walls decays as the
+mirror ($\alpha = 0$). Free-slip walls take no stress. This applies to the $y$ walls (smooth and rough) and to the spanwise ($z$) walls of `z_bc_type = 1` (smooth only). Check: a uniform stream between two modelled walls decays as the
 integrated log law (`wm_stream`, `wm_stream_z`, `wm_stream_duct`), and a coarse channel ($Re_\tau = 395$, first cell at $y^+ \approx 25$) holds a mean wall stress equal to
 $dP/dx\,h$. The skew-symmetric convective form (`advection_scheme = 0`) is not momentum conserving on such a coarse near-wall grid (a
-spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES.
+spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES (scheme 2 inherits the skew-symmetric base).
 
 ### 7.1b Wall stress on an immersed body (staircase IBM, `ibm_method = 1`)
 
 The ghost-cell IBM of §6 only rewrites the ghost velocities with a log-law mirror, so the stress it delivers is
 $(\nu+\nu_t)\,\partial u/\partial n$ through the viscous stencil. In near-1-D shear $\nu_t \approx 0$ there, and a flat plate under a uniform stream
 decays about 40 times too slowly. The staircase method (`ibm_method = 1`, and the two-fluid solver always) instead keeps the velocity
-exactly zero on the closed faces (a face is closed if either cell it joins has $\phi < 0$, so a one-cell wall blocks the flow), projects with a PCG on the masked operator (no flux through the body, divergence at
-round-off also next to it), and replaces the viscous flux through every edge between a fluid face and a closed face (`ibm_stress_update`,
+exactly zero on the closed faces (a face is closed if either cell it joins has $\phi < 0$, so a one-cell wall blocks the flow), projects with the fast whole-box solve (§6.4; with `ibm_pressure = 2` the fluid cells are divergence-free to round-off), and replaces the viscous flux through every edge between a fluid face and a closed face (`ibm_stress_update`,
 `ibm_stress.f90`) by the log-law wall shear $u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$. $u_\tau$ is solved at half a cell from the closed face from the
 tangential velocity of the fluid face; `ibm_z0` gives the per-object roughness. The stress of a staircase corner adds up over its faces. The
 staircase is first order in the geometry. Check: a flat plate under a uniform stream decays as the integrated log law (`ibm_stair_plate`).
@@ -453,8 +457,7 @@ this coupling.
 
 The wall heat flux $u_\tau\theta_\tau$ at the matching height replaces the diffusive flux
 $\kappa\,\partial T/\partial y$ through the wall face of the first-cell temperature balance
-(as the stress does for momentum, §7.1), and the ghost row is zero-gradient. An earlier
-Robin slip-length form could floor to an isothermal wall and not apply the modelled flux.
+(as the stress does for momentum, §7.1), and the ghost row is zero-gradient.
 
 The stability correction also sets the momentum stress on the same walls: under `T_bc_* = 2` the
 wall stress uses $u_\tau = \kappa u/(\ln(y/z_0)-\psi_m(y/L))$ with the Obukhov length $L$ of the previous step
@@ -694,6 +697,7 @@ With the default `inflow_opt_max_iter = 1` the profile freezes after the single 
 | 3 | Zero mean + white noise |
 | 4 | Reichardt (1951) composite law-of-the-wall + structured perturbation |
 | 5 | Inverse-linear (anti-tent, promotes rapid transition) + white noise |
+| 6 | Taylor–Green vortex of amplitude `Utarget` (analytic, periodic x and y) |
 | 7 | Uniform `Utarget` + two deterministic sin/cos modes (α,β)=(3,2) and (17,6.5) in (y,x); amplitudes ε₁=`noise_percent`/100, ε₂=0.04ε₁ |
 
 The Reichardt (1951) profile for IC type 4:
@@ -712,5 +716,5 @@ Configured via `&INITIAL_CONDITIONS` — see
 
 With `vof_active = 1`, `vof_flow = 1` the code solves the incompressible two-fluid equations in conservative one-fluid form: a liquid
 fraction $C$ is advected by geometric PLIC sweeps, the momentum is transported with the same mass fluxes as the density, and the
-variable-density pressure equation is solved by PCG preconditioned with the mask-aware multigrid of §6.4 (`pcg_precond = 1`, the default with y walls) or the fast Poisson solver of §4. The single-phase solver of
+variable-density pressure equation is solved by PCG preconditioned with the mask-aware multigrid (`pcg_precond = 1`, the default with y walls) or the fast Poisson solver of §4. The single-phase solver of
 §§1–12 is untouched when `vof_active = 0`. Equations, method, validation and limits: [Two-Phase VOF](Two-Phase-VOF.md).
