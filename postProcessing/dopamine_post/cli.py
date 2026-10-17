@@ -283,11 +283,6 @@ def _inflow_check_donor(a):
     inflow.check_donor(donor, reference=a.reference, grid=a.grid, output=a.out)
 
 
-def _inflow_opt(a):
-    state = inflow.read_inflow_opt(a.case_dir)
-    print(state.summary())
-
-
 def _add_inflow(sub):
     p = sub.add_parser("mirror", help="mirror a half-channel SEM inflow profile to a full channel")
     p.add_argument("input")
@@ -301,10 +296,6 @@ def _add_inflow(sub):
     p.add_argument("--grid", default="fields/grid.out")
     p.add_argument("--out", default="inflow_donor_check.png")
     p.set_defaults(func=_inflow_check_donor)
-
-    p = sub.add_parser("opt-state", help="summarize a SEM inflow-optimization restart file")
-    p.add_argument("--case-dir", default=".")
-    p.set_defaults(func=_inflow_opt)
 
 
 # ── runlog ─────────────────────────────────────────────────────────────────

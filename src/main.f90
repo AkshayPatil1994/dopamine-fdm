@@ -14,7 +14,6 @@ Program dopamine
   Use probe_output
   Use restart_output, Only : trim_restart_text_files
   Use vof_twofluid, Only : vof_flow_init, compute_time_step_vof
-  Use synthetic_eddy_method, Only : accumulate_inflow_opt, advance_inflow_opt
   
   ! prevent implicit typing
   Implicit None
@@ -73,12 +72,6 @@ Program dopamine
           n_accum > 0 .And. Mod(istep - rsb_nstart + rsb_freq, rsb_freq) == 0 ) Then
         Call output_rsb
      End If
-
-     ! accumulate SEM inflow-optimization statistics (no-op when inflow_opt_active==0)
-     Call accumulate_inflow_opt
-
-     ! advance the inflow-optimization phase machine once a full measurement window has accumulated
-     Call advance_inflow_opt
 
      ! output some key values
      Call output_monitor

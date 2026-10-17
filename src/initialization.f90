@@ -23,7 +23,7 @@ Module initialization
   Use adv_hybrid, Only : adv_init
   Use monitor, Only : open_force_csv
   Use ibm_stress, Only : ibm_stress_init
-  Use synthetic_eddy_method, Only : init_inflow, init_inflow_opt
+  Use synthetic_eddy_method, Only : init_inflow
   Use uav_actuator, Only : setup_uav
 #ifdef GPU_POISSON
   Use gpu_device, Only : assign_gpu_device, assign_gpu_device_pre_mpi
@@ -290,9 +290,6 @@ Contains
     ! SEM inflow profile + eddy population (no-op unless x_bc_type==1 and
     ! inflow_type==1): must come after y_global/z_global/Ly/Lz are set
     Call init_inflow
-
-    ! inflow-optimization setup (no-op unless inflow_opt_active==1); must come after init_inflow (needs prof_R11/22/33 already read)
-    Call init_inflow_opt
 
     ! Boundary-condition z-plane buffers: only depend on grid-size integers (already
     ! set), not on xg/yg/zg contents; allocated here (ahead of IBM setup below) because

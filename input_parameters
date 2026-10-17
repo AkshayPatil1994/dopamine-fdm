@@ -145,15 +145,3 @@
   T_ic_grad       = 0.0,
 /
 
-&INFLOW_OPT
-  inflow_opt_active = 0,
-  inflow_opt_x      = 20.0,
-  inflow_opt_nstart = -1,
-  inflow_opt_window = -1,
-  n_bezier          = 8,
-  inflow_opt_wall_exclude = 1.0,
-  inflow_opt_trust     = 0.5,
-  inflow_opt_max_iter = 1,
-  inflow_opt_relax    = 0.7,
-  inflow_opt_tol      = 0.1,
-/

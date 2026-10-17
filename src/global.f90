@@ -530,39 +530,14 @@ Module global
   Character(200) :: rsb_hom_dir = 'x,z'
   Character(200) :: rsb_fileout = 'rsb'
 
-  ! Bezier-parametrised SEM inflow Reynolds-stress optimisation: single-run (online) version of Lamberti et al. 2018
-  ! (JWEIA 177:32-44) Sections 5-6.1. step0 (baseline) and step1 (v'^2 and w'^2 doubled together) give a scalar secant slope per
-  ! control point and component, then ONE corrected profile is applied and verified. v'^2 and w'^2 are corrected independently:
-  ! the paper's coupled 2x2 fit (Eq. 5) was ill-conditioned in practice (nearly collinear Jacobian columns, unstable under
-  ! measurement noise even with Tikhonov). inflow_opt_max_iter=1 (default) stops after the one step the paper validates;
-  ! inflow_opt_max_iter>1 is this code's own extension: secant-refined slopes and a Robbins-Monro step size inflow_opt_relax/iter,
-  Real   (Int64) :: slice_interval = 0d0   ! slice_freq<0: write every slice_interval time units
-  Real   (Int64) :: slice_tnext    = 0d0
-  ! with the same best-iterate/stall safeguard. u'^2, shear stress and the mean are not decision variables.
-  ! See docs/design-notes/sem.md.
-  Integer(Int32) :: inflow_opt_active = 0
-  Real   (Int64) :: inflow_opt_x      = 0d0
-  Integer(Int32) :: inflow_opt_nstart = -1     ! <0: auto-tuned from advection time and wall-shear timescale
-  Integer(Int32) :: inflow_opt_window = -1     ! <=0: auto-tuned from the SEM eddy turnover time; steps averaged per measurement phase
-  Integer(Int32) :: n_bezier          = 8      ! Bezier control points spanning prof_y; endpoints fixed to the target
-  ! Control points within wall_exclude_factor*wall_Ltaper_{lo,hi} of a no-slip wall lie in sem_fluctuation's taper zone, which
-  ! suppresses the injected stress there whatever the target; no correction can close that gap, so they are excluded from the
-  ! correction and the residual check (no counterpart in the paper, needed for an unattended run).
-  Real   (Int64) :: inflow_opt_wall_exclude = 1d0
-  ! A secant slope from one short online window can be near zero at some control points, which blows up the Newton step
-  ! dx=-(measured-target)/slope (corrections up to ~30x target were seen). Robustness safeguard: the applied step is capped at
-  ! +-inflow_opt_trust of the target value at each control point.
-  Real   (Int64) :: inflow_opt_trust    = 0.5d0
-  Integer(Int32) :: inflow_opt_max_iter = 1    ! 1 (default): the paper's validated single corrected step. >1: this codebase's own experimental extension (see above)
-  Real   (Int64) :: inflow_opt_relax    = 0.7d0 ! base step-size scale for the experimental iter>1 extension only (effective scale = inflow_opt_relax/iter); unused when inflow_opt_max_iter=1
-  Real   (Int64) :: inflow_opt_tol      = 0.1d0 ! experimental extension only: stop iterating once the worst-case relative residual (|measured-target|/target, over u'^2/v'^2/w'^2 and all interior control points) drops below this
-
   ! 2-D planar slice probes: config and output file layout
   Integer(Int32), Parameter :: MAX_PROBES = 30
   Integer(Int32), Parameter :: MAX_WAVEGAUGES = 32
 
   Integer(Int32) :: n_slices   = 0
   Integer(Int32) :: slice_freq = 100
+  Real   (Int64) :: slice_interval = 0d0   ! slice_freq<0: write every slice_interval time units
+  Real   (Int64) :: slice_tnext    = 0d0
   Character(4)   :: slice_dir    (MAX_PROBES) = 'z'
   Real   (Int64) :: slice_pos    (MAX_PROBES) = 0d0
   Character(8)   :: slice_comps  (MAX_PROBES) = 'UVW'
@@ -700,8 +675,6 @@ Module global
   Real   (Int64) :: wave_period       = 1d0
   Real   (Int64) :: wave_phase        = 0d0
   Integer(Int32) :: wave_sf_n         = 16
-  Real   (Int64) :: line_interval = 0d0    ! line_freq<0: write every line_interval time units
-  Real   (Int64) :: line_tnext    = 0d0
   Integer(Int32) :: wave_current_mode = 1
   Real   (Int64) :: wave_Hs           = 0d0
   Real   (Int64) :: wave_Tp           = 1d0
@@ -727,6 +700,8 @@ Module global
   ! 1-D line probes: config and output file layout
   Integer(Int32) :: n_lines   = 0
   Integer(Int32) :: line_freq = 100
+  Real   (Int64) :: line_interval = 0d0    ! line_freq<0: write every line_interval time units
+  Real   (Int64) :: line_tnext    = 0d0
   Character(4)   :: line_dir    (MAX_PROBES) = 'y'
   Real   (Int64) :: line_pos1   (MAX_PROBES) = 0d0
   Real   (Int64) :: line_pos2   (MAX_PROBES) = 0d0

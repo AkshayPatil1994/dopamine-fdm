@@ -12,7 +12,7 @@ All settings live in the Fortran namelist file `input_parameters` (read from the
 - A default of **required** means there is none: set it. Lengths are in metres, times in seconds, temperatures in K. There is no explicit density: pressure gradients and thrusts are kinematic (divided by density).
 - Quick start: the "Recipes" section at the end lists the few parameters to change for common cases.
 
-Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [BOUNDARY_CONDITIONS](#boundary_conditions) · [INFLOW](#inflow) · [INFLOW_OPT](#inflow_opt) · [IBM](#ibm) · [INITIAL_CONDITIONS](#initial_conditions) · [IO](#io) · [SEDIMENT](#sediment) · [BOUSSINESQ](#boussinesq) · [STATISTICS](#statistics) · [UAV](#uav) · [PARTICLES](#particles) · [VOF](#vof) · [WAVES](#waves) · [Recipes](#recipes) · [RSB output](#rsb-output-files)
+Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [BOUNDARY_CONDITIONS](#boundary_conditions) · [INFLOW](#inflow) · [IBM](#ibm) · [INITIAL_CONDITIONS](#initial_conditions) · [IO](#io) · [SEDIMENT](#sediment) · [BOUSSINESQ](#boussinesq) · [STATISTICS](#statistics) · [UAV](#uav) · [PARTICLES](#particles) · [VOF](#vof) · [WAVES](#waves) · [Recipes](#recipes) · [RSB output](#rsb-output-files)
 
 ## DOMAIN
 
@@ -108,23 +108,6 @@ Used when `x_bc_type=1`; omitted = `inflow_type=0`.
 | `inflow_recycle_seed` | `12345` | Seed of that shift (restart-safe). |
 
 Producing a donor slice: in the donor run set in `&STATISTICS` `n_slices=1, slice_dir(1)='x', slice_pos(1)=<x>, slice_comps(1)='UVW', slice_fileout(1)='fields/recycle_slice'`. The slice holds cell-centre values, so V and W are imposed slightly off their staggered faces. If `boussinesq_flag` or `sediment_flag` is on, `slice_comps` must also contain `T` / `C` or the run aborts (`T` otherwise falls back to `inflow_temperature_file` / `T_ref`; `C` to `C_ref`). The `sem_*` settings are unused for type 2. Details: [Numerics §11](Numerics.md#11-streamwise-inflowoutflow-bc-x_bc_type--1).
-
-## INFLOW_OPT
-
-Optional, with `inflow_type=1`: tunes the inflow v′² and w′² profiles (Lamberti et al. 2018) so the statistics at a downstream station match the target. Phases: baseline measurement, doubled-v′²/w′² measurement, one secant correction, verification (reverts to the baseline if the correction is worse). Method and rationale: [Numerics §11.3](Numerics.md#113-inflow-reynolds-stress-optimisation-inflow_opt).
-
-| Parameter | Default | Meaning / how to use |
-|---|---|---|
-| `inflow_opt_active` | `0` | `1` enable. |
-| `inflow_opt_x` | `0.0` | Station [m] where statistics are matched (nearest cell centre). |
-| `inflow_opt_nstart` | `-1` | Step at which sampling begins; `<0` auto from the advection and wall-shear times. |
-| `inflow_opt_window` | `-1` | Steps per measurement; `<=0` auto from the SEM eddy turnover time. |
-| `n_bezier` | `8` | Bezier control points over the height (end points fixed; n−2 optimised). |
-| `inflow_opt_wall_exclude` | `1.0` | Control points within this factor of the wall taper length are excluded (their variance is suppressed by construction). |
-| `inflow_opt_trust` | `0.5` | Caps each applied step to ±this fraction of the target (guards against noisy slopes). |
-| `inflow_opt_max_iter` | `1` | `1` is the validated single corrected step; `>1` is an experimental iterative extension (each costs another window). |
-| `inflow_opt_relax` | `0.7` | Step scale / iteration for `max_iter>1`. |
-| `inflow_opt_tol` | `0.1` | Stop when the worst relative residual falls below this (`max_iter>1`). |
 
 ## IBM
 

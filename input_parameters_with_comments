@@ -271,23 +271,6 @@
   T_ic_grad       = 0.0,
 /
 
-! SEM inflow Reynolds-stress optimisation (inflow_type=1 only; Lamberti et al. 2018).
-! Fits Bezier control points on the inflow v'^2, w'^2 so the statistics at the
-! station inflow_opt_x match the target. nstart/window <0 = automatic.
-! inflow_opt_max_iter=1 is the validated single corrected step; >1 is experimental.
-&INFLOW_OPT
-  inflow_opt_active = 0,
-  inflow_opt_x      = 20.0,
-  inflow_opt_nstart = -1,
-  inflow_opt_window = -1,
-  n_bezier          = 8,
-  inflow_opt_wall_exclude = 1.0,
-  inflow_opt_trust     = 0.5,
-  inflow_opt_max_iter = 1,
-  inflow_opt_relax    = 0.7,
-  inflow_opt_tol      = 0.1,
-/
-
 ! Lagrangian point particles. With vof_flow=1 they are liquid-only (particle_rho_f = vof_rho_l)
 ! and reflect at the free surface. n_particles_init>0 with particles_active=0 prints a warning.
 ! bc_particle_*: -1 auto | 0 periodic | 1 exit | 2 reflect | 3 absorb.

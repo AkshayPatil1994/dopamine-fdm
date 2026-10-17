@@ -77,10 +77,6 @@ Contains
                    uav_path_active, uav_path_file, uav_thrust_active, uav_thrust_file, &
                    uav_load_profile, uav_tilt_active, uav_tilt_tau, uav_grav, uav_swirl_frac
 
-    Namelist /INFLOW_OPT/ inflow_opt_active, inflow_opt_x, inflow_opt_nstart, inflow_opt_window, &
-                          n_bezier, inflow_opt_wall_exclude, inflow_opt_trust, inflow_opt_max_iter, &
-                          inflow_opt_relax, inflow_opt_tol
-
     Namelist /PARTICLES/ particles_active, n_particles_init, &
                          particle_seed_xmin, particle_seed_xmax, particle_seed_ymin, particle_seed_ymax, &
                          particle_seed_zmin, particle_seed_zmax, particle_seed_seed, &
@@ -226,13 +222,6 @@ Contains
        Else
           Write(*,'(A)') ' INFO: no &UAV found, UAV actuator disk disabled'
        End If
-
-       If ( namelist_group_present(unit_in, 'INFLOW_OPT') ) Then
-          Rewind(unit_in)
-          Read(unit_in, nml=INFLOW_OPT,          iostat=ios)
-          If (ios /= 0) Call abort_input( 'ERROR: &INFLOW_OPT present but failed to parse (check variable names)' )
-       End If
-
        ! particle_seed_*max defaults to the full domain; resolved here (using the DOMAIN
        ! group's local Lx/Ly/Lz aliases, already read above) rather than in the declaration
        ! block, since the domain size isn't known until DOMAIN is read.
@@ -259,10 +248,6 @@ Contains
           If (ios /= 0) Call abort_input( 'ERROR: &WAVES present but failed to parse (check variable names)' )
        End If
 
-       If ( n_slices > 0 .And. slice_freq < 0 .And. slice_interval <= 0d0 ) &
-          Call abort_input( 'ERROR: &STATISTICS slice_freq<0 requires slice_interval > 0' )
-       If ( n_lines > 0 .And. line_freq < 0 .And. line_interval <= 0d0 ) &
-          Call abort_input( 'ERROR: &STATISTICS line_freq<0 requires line_interval > 0' )
        If ( namelist_group_present(unit_in, 'VOF') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=VOF,                 iostat=ios)
@@ -274,6 +259,10 @@ Contains
        Close(unit_in)
 
        If ( nsteps == 0 ) Call abort_input( 'ERROR: &NUMERICS nsteps must be set (>0 fixed step count, <0 run until sim_end_time)' )
+       If ( n_slices > 0 .And. slice_freq < 0 .And. slice_interval <= 0d0 ) &
+          Call abort_input( 'ERROR: &STATISTICS slice_freq<0 requires slice_interval > 0' )
+       If ( n_lines > 0 .And. line_freq < 0 .And. line_interval <= 0d0 ) &
+          Call abort_input( 'ERROR: &STATISTICS line_freq<0 requires line_interval > 0' )
        If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
        If ( nmonitor <= 0 ) Call abort_input( 'ERROR: &NUMERICS nmonitor must be set to a positive step interval' )
        ! Map short namelist names to the global variable names
@@ -462,18 +451,6 @@ Contains
              If ( sem_wall_damping == 1 ) Then
                 Write(*,'(A,F6.2)') '   sem_wall_damping=1, sem_wall_damping_Aplus = ', sem_wall_damping_Aplus
              End If
-             If ( inflow_opt_active == 1 ) Then
-                Write(*,'(A,F10.4)') '   inflow_opt_active=1, inflow_opt_x = ', inflow_opt_x
-                Write(*,'(A,I8)')    '   inflow_opt_nstart           = ', inflow_opt_nstart
-                Write(*,'(A,I8)')    '   inflow_opt_window           = ', inflow_opt_window
-                Write(*,'(A,I4)')    '   n_bezier                    = ', n_bezier
-                Write(*,'(A,F6.3)')  '   inflow_opt_wall_exclude     = ', inflow_opt_wall_exclude
-                Write(*,'(A,F6.3)')  '   inflow_opt_trust            = ', inflow_opt_trust
-                Write(*,'(A,I4)')    '   inflow_opt_max_iter         = ', inflow_opt_max_iter
-                If ( inflow_opt_max_iter > 1 ) Write(*,'(A,F6.3)') &
-                     '   inflow_opt_relax (experimental iter>1 extension) = ', inflow_opt_relax
-                Write(*,'(A,F6.3)')  '   inflow_opt_tol              = ', inflow_opt_tol
-             End If
           End If
        End If
        Write(*,'(A,I2)')     '   ibm_input_mode              = ', ibm_input_mode
@@ -508,12 +485,10 @@ Contains
        End If
        If ( boussinesq_flag >= 1 ) Then
           Write(*,'(A,I2)')    '   boussinesq_flag              = ', boussinesq_flag
-          If ( slice_freq < 0 ) Write(*,'(A,E12.4)') '   slice_interval              = ', slice_interval
           Write(*,'(A,E12.4)') '   beta_T                       = ', beta_T
           Write(*,'(A,E12.4)') '   T_ref                        = ', T_ref
           Write(*,'(A,E12.4)') '   grav                         = ', grav
           Write(*,'(A,F6.3)')  '   Pr                           = ', Pr
-          If ( line_freq < 0 ) Write(*,'(A,E12.4)') '   line_interval               = ', line_interval
           Write(*,'(A,F6.3)')  '   Pr_t                         = ', Pr_t
           Write(*,'(A,2I3)')   '   T_bc (bot/top, 0=adiabatic,1=isothermal) = ', T_bc_bot, T_bc_top
        End If
@@ -533,10 +508,12 @@ Contains
        If ( n_slices > 0 ) Then
           Write(*,'(A,I4)')  '   n_slices                    = ', n_slices
           Write(*,'(A,I8)')  '   slice_freq                  = ', slice_freq
+          If ( slice_freq < 0 ) Write(*,'(A,E12.4)') '   slice_interval              = ', slice_interval
        End If
        If ( n_lines > 0 ) Then
           Write(*,'(A,I4)')  '   n_lines                     = ', n_lines
           Write(*,'(A,I8)')  '   line_freq                   = ', line_freq
+          If ( line_freq < 0 ) Write(*,'(A,E12.4)') '   line_interval               = ', line_interval
        End If
        If ( particles_active >= 1 ) Then
           Write(*,'(A,I2)')    '   particles_active            = ', particles_active
@@ -714,7 +691,6 @@ Contains
     Call Mpi_bcast ( uav_grav,             1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_swirl_frac,       1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
-    Call Mpi_bcast ( slice_interval,       1,              MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( boussinesq_flag,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( beta_T,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_ref,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -722,7 +698,6 @@ Contains
     Call Mpi_bcast ( Pr_t,                 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_bc_bot,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_bc_top,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( line_interval,        1,              MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_wall_bot,           1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_wall_top,           1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_ic_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -739,6 +714,7 @@ Contains
 
     Call Mpi_bcast ( n_slices,             1,              MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( slice_freq,           1,              MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( slice_interval,       1,              MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( slice_dir,    Len(slice_dir(1))*MAX_PROBES,   MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( slice_pos,            MAX_PROBES,     MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( slice_comps,  Len(slice_comps(1))*MAX_PROBES, MPI_character, 0, MPI_COMM_WORLD, ierr )
@@ -746,6 +722,7 @@ Contains
 
     Call Mpi_bcast ( n_lines,              1,              MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( line_freq,            1,              MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( line_interval,        1,              MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( line_dir,     Len(line_dir(1))*MAX_PROBES,    MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( line_pos1,            MAX_PROBES,     MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( line_pos2,            MAX_PROBES,     MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -753,17 +730,6 @@ Contains
     Call Mpi_bcast ( line_end,             MAX_PROBES,     MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( line_comps,   Len(line_comps(1))*MAX_PROBES,  MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( line_fileout, Len(line_fileout(1))*MAX_PROBES,MPI_character, 0, MPI_COMM_WORLD, ierr )
-
-    Call Mpi_bcast ( inflow_opt_active,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( inflow_opt_x,        1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( inflow_opt_nstart,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( inflow_opt_window,   1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( n_bezier,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( inflow_opt_wall_exclude, 1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( inflow_opt_trust,    1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( inflow_opt_relax,    1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( inflow_opt_max_iter, 1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( inflow_opt_tol,      1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( particles_active,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( n_particles_init,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
@@ -1041,8 +1007,8 @@ Contains
        If ( z_bc_type /= 0 ) Call abort_input( 'ERROR: vof_flow=1 supports periodic z only (z_bc_type=0)' )
        If ( x_bc_type == 1 .And. inflow_type /= 3 .And. inflow_type /= 0 ) &
             Call abort_input( 'ERROR: vof_flow=1 with an x inlet supports only inflow_type=3 (wave inlet) or 0 (uniform)' )
-       If ( rsb_active == 1 .Or. inflow_opt_active == 1 ) &
-            Call abort_input( 'ERROR: vof_flow=1 does not support the Reynolds-stress budget or the inflow optimisation' )
+       If ( rsb_active == 1 ) &
+            Call abort_input( 'ERROR: vof_flow=1 does not support the Reynolds-stress budget' )
        If ( ibm_method == 1 ) &
             Call abort_input( 'ERROR: vof_flow=1 always uses the staircase wall stress; leave ibm_method = 0' )
        If ( ibm_input_mode >= 1 .And. ibm_surface_nsampling > 0 ) &

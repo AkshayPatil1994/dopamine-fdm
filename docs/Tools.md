@@ -105,7 +105,7 @@ directly — read those instead of `--help` output to see idiomatic library usag
 | `dopamine_post.sdf` | Signed-distance-field reading and slice plotting | `SDF` |
 | `dopamine_post.uav` | UAV actuator-disk path + scaled quadcopter body animation | `UAVPath` |
 | `dopamine_post.rsb` | Reynolds-stress budget statistics | `RSBStats` |
-| `dopamine_post.inflow` | SEM/ESEM inflow tooling: half-channel mirroring, donor-plane verification, inflow-optimization state | `mirror_half_channel`, `InflowDonor`/`check_donor`, `InflowOptState`/`read_inflow_opt` |
+| `dopamine_post.inflow` | SEM/ESEM inflow tooling: half-channel mirroring, donor-plane verification | `mirror_half_channel`, `InflowDonor`/`check_donor` |
 | `dopamine_post.runlog` | Solver diagnostics parsed from a run's stdout log | `RunLog` |
 | `dopamine_post.vortex` | Q-criterion vortex identification and iso-surface movies | `q_criterion`, `q_volume_fraction`, `animate_q_isosurface` |
 
@@ -197,8 +197,7 @@ cell-centre SDF (`SDF_in`) for sanity-checking a `GenSDF` output before a run.
 `mirror_half_channel` mirrors a half-channel SEM inflow profile into a full-channel one
 (handling the sign flip of $V$ and any $v$-linear correlations under the reflection);
 `InflowDonor`/`check_donor` verifies a SEM/ESEM inflow donor plane against a reference
-profile; `InflowOptState`/`read_inflow_opt` reads/summarizes a SEM inflow-optimization
-restart file.
+profile.
 
 ### `dopamine_post.runlog`
 

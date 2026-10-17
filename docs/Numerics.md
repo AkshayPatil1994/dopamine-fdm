@@ -676,18 +676,6 @@ which discretises $\partial F/\partial t + U_c\partial F/\partial x = 0$ by
 first-order upwinding; clamping $C$ to $[0,1]$ keeps the update stable and avoids
 pulling from outside the domain under local backflow.
 
-### 11.3 Inflow Reynolds-stress optimisation (`&INFLOW_OPT`)
-
-The ESEM inlet Reynolds-stress profile adjusts as it convects downstream, so the statistics at a measurement station differ from the wind-tunnel target. An optional online realisation of Lamberti et al. (2018, JWEIA **177**, 32–44, §5–6.1) fits Bezier control points on the inflow $v'^2$ and $w'^2$ profiles (`n_bezier`; end points fixed to the target) so that the resolved statistics at `inflow_opt_x` match the target. It runs in three stages:
-
-1. **step0**: baseline, inflow = target, measured over `inflow_opt_window` steps;
-2. **step1**: inflow $v'^2$ and $w'^2$ doubled together (the paper's combined perturbation), measured over the same window;
-3. **correction 1**: a per-control-point scalar secant Newton step, independent for $v'^2$ and $w'^2$, applied and then verified. If the verification measures worse than the baseline, the profile reverts to the baseline.
-
-$v'^2$ and $w'^2$ are corrected independently rather than by the paper's coupled two-variable weighted least-squares fit (Eq. 5): in practice that solve can be ill-conditioned (the two variables tend to move all three downstream statistics together, so their sensitivities are nearly collinear at some heights) and amplifies measurement noise into unstable corrections. The scalar secant needs no matrix inversion. Control points within `inflow_opt_wall_exclude` times the no-slip wall taper length are excluded from the correction and the residual check, since the injected variance there is suppressed toward zero regardless of the target. `inflow_opt_trust` bounds each applied step to $\pm$ that fraction of the target value, because a slope estimated from one short online window can be noisy enough to blow up the raw Newton step.
-
-With the default `inflow_opt_max_iter = 1` the profile freezes after the single verify measurement, which is what the paper validates (it lists further iteration and an automatic stopping criterion as future work). `inflow_opt_max_iter > 1` is this code's own experimental extension: it secant-refines the slopes after each applied correction with a Robbins–Monro decaying step (`inflow_opt_relax` / iteration), stops at `inflow_opt_tol` (worst relative residual over $u'^2, v'^2, w'^2$ and all interior control points), at `inflow_opt_max_iter`, or on a stalled residual, and reverts to the best measured iterate. Check the printed per-iteration residuals. Parameters: [Input Parameters](Input-Parameters.md#inflow_opt).
-
 ## 12. Initial conditions
 
 | `ic_type` | Profile |
