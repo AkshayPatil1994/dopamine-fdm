@@ -213,13 +213,15 @@ Reynolds-stress budget and probes. Omit to disable.
 | `rsb_hom_dir` | `'x,z'` | Homogeneous averaging directions: `''` none, `'x'`, `'z'`, `'x,z'` (channel). |
 | `rsb_fileout` | `'rsb'` | Output base path, e.g. `'stats/rsb'`. |
 | `n_slices` | `0` | Number of 2-D slice probes (max 8). |
-| `slice_freq` | `100` | Output every this many steps (shared). |
+| `slice_freq` | `100` | Output every this many steps (shared). Negative: write every `slice_interval` time units instead (dt is shrunk to land on those times, as for `nsave<0`). |
+| `slice_interval` | `0.0` | Time between slice outputs when `slice_freq<0`; the first is due one interval after the start time. |
 | `slice_dir(n)` | `'z'` | Normal direction `'x'`, `'y'` or `'z'`. |
 | `slice_pos(n)` | `0.0` | Position along the normal [m]. |
 | `slice_comps(n)` | `'UVW'` | Any of `U V W P T C` concatenated (`T` needs Boussinesq, `C` needs sediment; dropped with a warning otherwise). |
 | `slice_fileout(n)` | `'slice'` | Base path. Writes `.bin` (appended `(ncomp,n1,n2)` big-endian float64 per output), `_meta.txt` and `_times.bin` (exact time of each snapshot, used by `inflow_type=2`). Cell-centre values; (n1,n2) = (ny,nz) for x-normal, (nx,nz) for y-normal, (nx,ny) for z-normal. |
 | `n_lines` | `0` | Number of 1-D line probes (max 8). |
-| `line_freq` | `100` | Output interval (shared). |
+| `line_freq` | `100` | Output interval in steps (shared). Negative: write every `line_interval` time units instead. |
+| `line_interval` | `0.0` | Time between line outputs when `line_freq<0`. |
 | `line_dir(n)` | `'y'` | Direction along the line. |
 | `line_pos1(n), line_pos2(n)` | `0.0` | Transverse coordinates: x-line (y, z); y-line (x, z); z-line (x, y). |
 | `line_start(n), line_end(n)` | `0.0`, `1e30` | Extent along the line (default full). |

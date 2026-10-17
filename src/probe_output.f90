@@ -45,6 +45,7 @@ Contains
     Character(8)   :: cstr
 
     sli_funit = 0;  sli_tunit = 0;  sli_nwrit = 0
+    slice_tnext = t + slice_interval;  line_tnext = t + line_interval
     lin_funit = 0;  lin_nwrit = 0
 
     ! ── 2-D slices ─────────────────────────────────────────────────────────
@@ -78,6 +79,7 @@ Contains
         If ( restart == 1 .And. file_exists_nonempty(Trim(fname)) .And. file_exists_nonempty(Trim(tname)) ) Then
           nkeep = Min( records_in(Trim(fname), 8_Int64*sli_ncomp(n)*sli_n1(n)*sli_n2(n)), records_in(Trim(tname), 8_Int64) )
           If ( slice_freq > 0 ) nkeep = Min(nkeep, Int(nstep_init/slice_freq, Int64))
+          If ( slice_freq < 0 ) nkeep = Min(nkeep, Int(t/slice_interval + 1d-6, Int64))
         End If
         sli_nwrit(n) = Int(nkeep, Int32)
         Call open_probe_stream(sli_funit(n), Trim(fname), nkeep*8_Int64*sli_ncomp(n)*sli_n1(n)*sli_n2(n))
@@ -140,6 +142,7 @@ Contains
         If ( restart == 1 .And. file_exists_nonempty(Trim(fname)) ) Then
           nkeep = records_in(Trim(fname), 8_Int64*lin_ncomp(n)*lin_npts(n))
           If ( line_freq > 0 ) nkeep = Min(nkeep, Int(nstep_init/line_freq, Int64))
+          If ( line_freq < 0 ) nkeep = Min(nkeep, Int(t/line_interval + 1d-6, Int64))
         End If
         lin_nwrit(n) = Int(nkeep, Int32)
         Call open_probe_stream(lin_funit(n), Trim(fname), nkeep*8_Int64*lin_ncomp(n)*lin_npts(n))
@@ -168,35 +171,39 @@ Contains
   Subroutine write_probes
 
     Integer(Int32) :: n
+    Logical :: slice_due, line_due
 
-    If ( n_slices > 0 .And. slice_freq > 0 ) Then
-      If ( Mod(istep, slice_freq) == 0 ) Then
-        !$acc update host(U,V,W,P)
-        If ( sediment_flag >= 1 ) Then
-           !$acc update host(Cscal)
-        End If
-        If ( boussinesq_flag >= 1 ) Then
-           !$acc update host(Tscal)
-        End If
-        Do n = 1, n_slices
-          Call write_slice_n(n)
-        End Do
+    slice_due = ( n_slices > 0 .And. slice_freq > 0 .And. Mod(istep, slice_freq) == 0 ) .Or. &
+                ( n_slices > 0 .And. slice_freq < 0 .And. t >= slice_tnext - 1d-10 )
+    line_due  = ( n_lines  > 0 .And. line_freq  > 0 .And. Mod(istep, line_freq)  == 0 ) .Or. &
+                ( n_lines  > 0 .And. line_freq  < 0 .And. t >= line_tnext  - 1d-10 )
+
+    If ( slice_due ) Then
+      If ( slice_freq < 0 ) slice_tnext = slice_tnext + slice_interval
+      !$acc update host(U,V,W,P)
+      If ( sediment_flag >= 1 ) Then
+         !$acc update host(Cscal)
       End If
+      If ( boussinesq_flag >= 1 ) Then
+         !$acc update host(Tscal)
+      End If
+      Do n = 1, n_slices
+        Call write_slice_n(n)
+      End Do
     End If
 
-    If ( n_lines > 0 .And. line_freq > 0 ) Then
-      If ( Mod(istep, line_freq) == 0 ) Then
-        !$acc update host(U,V,W,P)
-        If ( sediment_flag >= 1 ) Then
-           !$acc update host(Cscal)
-        End If
-        If ( boussinesq_flag >= 1 ) Then
-           !$acc update host(Tscal)
-        End If
-        Do n = 1, n_lines
-          Call write_line_n(n)
-        End Do
+    If ( line_due ) Then
+      If ( line_freq < 0 ) line_tnext = line_tnext + line_interval
+      !$acc update host(U,V,W,P)
+      If ( sediment_flag >= 1 ) Then
+         !$acc update host(Cscal)
       End If
+      If ( boussinesq_flag >= 1 ) Then
+         !$acc update host(Tscal)
+      End If
+      Do n = 1, n_lines
+        Call write_line_n(n)
+      End Do
     End If
 
   End Subroutine write_probes

@@ -536,6 +536,8 @@ Module global
   ! the paper's coupled 2x2 fit (Eq. 5) was ill-conditioned in practice (nearly collinear Jacobian columns, unstable under
   ! measurement noise even with Tikhonov). inflow_opt_max_iter=1 (default) stops after the one step the paper validates;
   ! inflow_opt_max_iter>1 is this code's own extension: secant-refined slopes and a Robbins-Monro step size inflow_opt_relax/iter,
+  Real   (Int64) :: slice_interval = 0d0   ! slice_freq<0: write every slice_interval time units
+  Real   (Int64) :: slice_tnext    = 0d0
   ! with the same best-iterate/stall safeguard. u'^2, shear stress and the mean are not decision variables.
   ! See docs/design-notes/sem.md.
   Integer(Int32) :: inflow_opt_active = 0
@@ -698,6 +700,8 @@ Module global
   Real   (Int64) :: wave_period       = 1d0
   Real   (Int64) :: wave_phase        = 0d0
   Integer(Int32) :: wave_sf_n         = 16
+  Real   (Int64) :: line_interval = 0d0    ! line_freq<0: write every line_interval time units
+  Real   (Int64) :: line_tnext    = 0d0
   Integer(Int32) :: wave_current_mode = 1
   Real   (Int64) :: wave_Hs           = 0d0
   Real   (Int64) :: wave_Tp           = 1d0

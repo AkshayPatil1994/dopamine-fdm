@@ -223,11 +223,13 @@
   rsb_hom_dir = 'x,z',
   rsb_fileout = 'stats/rsb',
   ! n_slices = 2,
-  ! slice_freq = 50,
+  ! slice_freq = 50,                ! steps; negative = every slice_interval time units
+  ! slice_interval = 0.1,           ! used only when slice_freq < 0
   ! slice_dir(1) = 'z',  slice_pos(1) = 0.5,  slice_comps(1) = 'UVW',  slice_fileout(1) = 'slices/z05',
   ! slice_dir(2) = 'y',  slice_pos(2) = 1.0,  slice_comps(2) = 'UVWP', slice_fileout(2) = 'slices/y10',
   ! n_lines = 1,
-  ! line_freq = 50,
+  ! line_freq = 50,                 ! steps; negative = every line_interval time units
+  ! line_interval = 0.1,            ! used only when line_freq < 0
   ! line_dir(1) = 'y',  line_pos1(1) = 0.5, line_pos2(1) = 0.5,
   ! line_start(1) = 0.0, line_end(1) = 2.0,
   ! line_comps(1) = 'UVW',  line_fileout(1) = 'lines/centerline',

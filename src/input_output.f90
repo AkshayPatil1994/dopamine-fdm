@@ -68,8 +68,8 @@ Contains
                            T_ic_type, T_ic_grad
 
     Namelist /STATISTICS/ rsb_active, rsb_freq, rsb_nstart, rsb_hom_dir, rsb_fileout, &
-                          n_slices, slice_freq, slice_dir, slice_pos, slice_comps, slice_fileout, &
-                          n_lines,  line_freq,  line_dir,  line_pos1,  line_pos2,   &
+                          n_slices, slice_freq, slice_interval, slice_dir, slice_pos, slice_comps, slice_fileout, &
+                          n_lines,  line_freq,  line_interval, line_dir,  line_pos1,  line_pos2,   &
                           line_start, line_end, line_comps, line_fileout
 
     Namelist /UAV/ uav_active, uav_xc, uav_yc, uav_zc, uav_disk_radius, &
@@ -259,6 +259,10 @@ Contains
           If (ios /= 0) Call abort_input( 'ERROR: &WAVES present but failed to parse (check variable names)' )
        End If
 
+       If ( n_slices > 0 .And. slice_freq < 0 .And. slice_interval <= 0d0 ) &
+          Call abort_input( 'ERROR: &STATISTICS slice_freq<0 requires slice_interval > 0' )
+       If ( n_lines > 0 .And. line_freq < 0 .And. line_interval <= 0d0 ) &
+          Call abort_input( 'ERROR: &STATISTICS line_freq<0 requires line_interval > 0' )
        If ( namelist_group_present(unit_in, 'VOF') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=VOF,                 iostat=ios)
@@ -504,10 +508,12 @@ Contains
        End If
        If ( boussinesq_flag >= 1 ) Then
           Write(*,'(A,I2)')    '   boussinesq_flag              = ', boussinesq_flag
+          If ( slice_freq < 0 ) Write(*,'(A,E12.4)') '   slice_interval              = ', slice_interval
           Write(*,'(A,E12.4)') '   beta_T                       = ', beta_T
           Write(*,'(A,E12.4)') '   T_ref                        = ', T_ref
           Write(*,'(A,E12.4)') '   grav                         = ', grav
           Write(*,'(A,F6.3)')  '   Pr                           = ', Pr
+          If ( line_freq < 0 ) Write(*,'(A,E12.4)') '   line_interval               = ', line_interval
           Write(*,'(A,F6.3)')  '   Pr_t                         = ', Pr_t
           Write(*,'(A,2I3)')   '   T_bc (bot/top, 0=adiabatic,1=isothermal) = ', T_bc_bot, T_bc_top
        End If
@@ -708,6 +714,7 @@ Contains
     Call Mpi_bcast ( uav_grav,             1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_swirl_frac,       1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
+    Call Mpi_bcast ( slice_interval,       1,              MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( boussinesq_flag,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( beta_T,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_ref,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -715,6 +722,7 @@ Contains
     Call Mpi_bcast ( Pr_t,                 1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_bc_bot,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_bc_top,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( line_interval,        1,              MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_wall_bot,           1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_wall_top,           1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( T_ic_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )

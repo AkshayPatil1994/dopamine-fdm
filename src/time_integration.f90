@@ -570,7 +570,9 @@ Contains
          ( nsave > 0 .And. Mod(istep, nsave) == 0 ) .Or. &
          ( nsave < 0 .And. t >= tsave_next - 1d-10 ) .Or. &
          ( n_slices > 0 .And. slice_freq > 0 .And. Mod(istep, slice_freq) == 0 ) .Or. &
-         ( n_lines  > 0 .And. line_freq  > 0 .And. Mod(istep, line_freq)  == 0 )
+         ( n_slices > 0 .And. slice_freq < 0 .And. t >= slice_tnext - 1d-10 ) .Or. &
+         ( n_lines  > 0 .And. line_freq  > 0 .And. Mod(istep, line_freq)  == 0 ) .Or. &
+         ( n_lines  > 0 .And. line_freq  < 0 .And. t >= line_tnext  - 1d-10 )
     If ( needs_final_sync ) Then
        Call profiler_start(PROF_RK_UPDATE)
        If ( ibm_input_mode == 0 ) Then

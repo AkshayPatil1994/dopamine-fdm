@@ -121,6 +121,11 @@ Contains
     ! time-based save cadence (only meaningful when nsave < 0): first
     ! snapshot is due one tsave interval after the run's starting time
     If ( nsave < 0 ) tsave_next = t + tsave
+
+    ! sim_end_time and the time-based intervals are absolute / relative to this start time: an end time at or before it would give a negative dt
+    If ( nsteps < 0 .And. sim_end_time <= t ) &
+         Call abort_input( 'ERROR: &NUMERICS sim_end_time (absolute, not a duration) must exceed the start time' )
+    If ( nsave < 0 .And. tsave <= 0d0 ) Call abort_input( 'ERROR: &NUMERICS nsave<0 requires tsave > 0' )
     
     ! restrictions
     If ( Mod( nx_global, 2 )/=0 ) Call abort_input( 'Error: nx must be even' )

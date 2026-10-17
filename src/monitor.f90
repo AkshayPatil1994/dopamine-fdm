@@ -382,6 +382,8 @@ Contains
     If ( cfl_adaptive == 1 .And. cfl_now > 0d0 ) dt = Max(dt_min, Min(dt_max, dt*cfl_target/cfl_now*cfl_safety))
     dt_presnap = dt
     If ( nsave < 0 .And. t + dt > tsave_next ) dt = tsave_next - t
+    If ( n_slices > 0 .And. slice_freq < 0 .And. t + dt > slice_tnext ) dt = slice_tnext - t
+    If ( n_lines  > 0 .And. line_freq  < 0 .And. t + dt > line_tnext )  dt = line_tnext - t
     If ( nsteps < 0 .And. t + dt > sim_end_time ) dt = sim_end_time - t
 
   End Subroutine select_dt
