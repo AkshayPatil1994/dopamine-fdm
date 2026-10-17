@@ -130,11 +130,11 @@ Contains
           str_ibmwm = '1  (log-law EQWM)'
        End If
 
-       If (flat_wall_model_flag == 0) Then
-          str_wm = '0  (no-slip, DNS)'
-       Else
-          str_wm = '1  (log-law EQWM)'
-       End If
+       Select Case (flat_wall_model_flag)
+       Case (0);        str_wm = '0  (no-slip, DNS)'
+       Case (1);        str_wm = '1  (smooth log-law EQWM)'
+       Case Default;    str_wm = '2  (rough log-law EQWM, z0)'
+       End Select
 
        If ( y_bc_type == 1 ) Then
           If (bc_face_yhi == 1) Then
