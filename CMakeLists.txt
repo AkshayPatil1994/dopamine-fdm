@@ -446,6 +446,8 @@ add_executable(dopamine-ESEM
     src/sem.f90
     src/particles.f90
     src/genGridandIC.f90
+    src/reynolds_stress_budget.f90
+    src/time_stats.f90
     src/input_output.f90
     src/dopamine_esem_main.f90
 )
