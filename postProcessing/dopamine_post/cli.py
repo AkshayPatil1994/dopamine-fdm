@@ -113,6 +113,10 @@ def _fields_xmf(a):
     fields.write_field_xmf(a.case_dir, a.prefix, a.out)
 
 
+def _fields_box_xmf(a):
+    fields.write_box_xmf(a.case_dir, a.prefix, a.out)
+
+
 def _add_fields(sub):
     p = sub.add_parser("profile", help="wall-normal profile plot from one snapshot")
     p.add_argument("--case-dir", default=".")
@@ -135,6 +139,12 @@ def _add_fields(sub):
     p.add_argument("--prefix", default=None)
     p.add_argument("--out", default=None)
     p.set_defaults(func=_fields_xmf)
+
+    p = sub.add_parser("box-xmf", help="write a ParaView XDMF time series for chunked (<fileout>Block.<step>) snapshots")
+    p.add_argument("--case-dir", default=".")
+    p.add_argument("--prefix", default=None, help="exact file prefix (default: every <prefix>Block.<step>)")
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=_fields_box_xmf)
 
 
 # ── vortex ─────────────────────────────────────────────────────────────────

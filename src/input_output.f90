@@ -12,6 +12,8 @@ Module input_output
   ! prevent implicit typing
   Implicit None
 
+  Integer(Int32), Parameter :: snap_magic = -4242   ! first word of a box snapshot; a restart file starts with nx_global > 0
+
 Contains
 
   !  Read input parameters from a Fortran-namelist file. Defaults to
@@ -59,7 +61,8 @@ Contains
     Namelist /INITIAL_CONDITIONS/ Utarget, nstep_init, restart, t_start, &
                                    scalar_restart, ic_type, noise_percent
 
-    Namelist /IO/ filein, fileout
+    Namelist /IO/ filein, fileout, full_snapshot, chunked_snapshot, snapshot_location, &
+                  x_start, x_end, y_start, y_end, z_start, z_end
 
     Namelist /SEDIMENT/ sediment_flag, d_s, rho_s, rho_f, grav, Sc, Sc_t, C_ref, sed_bc_bot, &
                          C_ic_type, C_ic_height
@@ -399,6 +402,11 @@ Contains
        Else
           Write(*,'(A,I10)')   '   nsave                       = ', nsave
        End If
+       Write(*,'(A,L2,A,L2,A,I2)') '   full_snapshot, chunked, location = ', full_snapshot, ',', chunked_snapshot, ',', &
+            snapshot_location
+       If ( .Not. full_snapshot ) Write(*,'(A)') '   NOTE: full_snapshot = F, no restart file will be written'
+       If ( full_snapshot .And. snapshot_location == 1 ) &
+            Write(*,'(A)') '   NOTE: snapshot_location = 1 writes a cell-centred full snapshot that cannot be used for restart'
        Write(*,'(A,I2)')     '   sgs_model                   = ', sgs_model
        Write(*,'(A,E12.4)')  '   Cs_vreman                   = ', Cs_vreman
        Write(*,'(A,I2)')     '   flat_wall_model_flag        = ', flat_wall_model_flag
@@ -619,6 +627,15 @@ Contains
     Call Mpi_bcast ( t_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nsteps,               1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nsave,                1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( full_snapshot,        1, MPI_logical,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( chunked_snapshot,     1, MPI_logical,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( snapshot_location,    1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( x_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( x_end,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( y_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( y_end,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( z_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( z_end,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nmonitor,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( sim_end_time,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( tsave,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -852,10 +869,26 @@ Contains
   Subroutine check_run_inputs
 
     Call check_numerics
+    Call check_snapshot_inputs
     Call check_physics_and_bc
     Call check_combination_warnings
 
   End Subroutine check_run_inputs
+
+
+  !> snapshot_location range and the sign convention of the chunk box (all six negative = face indices, none negative = lengths)
+  Subroutine check_snapshot_inputs
+
+    Integer(Int32) :: nneg
+
+    If ( snapshot_location < 0 .Or. snapshot_location > 1 ) &
+         Call abort_input( 'ERROR: &IO snapshot_location must be 0 (staggered) or 1 (cell-centred)' )
+    If ( .Not. chunked_snapshot ) Return
+    nneg = Count( [ x_start, x_end, y_start, y_end, z_start, z_end ] < 0d0 )
+    If ( nneg /= 0 .And. nneg /= 6 ) &
+         Call abort_input( 'ERROR: &IO chunk box x/y/z_start/end must be all lengths (>= 0) or all negative face indices' )
+
+  End Subroutine check_snapshot_inputs
 
 
   !> Required values, ranges of the time stepping and the momentum convection
@@ -1118,6 +1151,15 @@ Contains
 
        Write(*,'(A,A,A)') '  Reading restart file: ', Trim(Adjustl(filein)), ' ...'
 
+       Open(1,file=filein,access='stream',form='unformatted',action='Read',convert='little_endian')
+       Read(1) nx_global_f
+       Close(1)
+       If ( nx_global_f == snap_magic ) Then
+          Write(*,'(A,A)') ' ERROR: filein is a cell-centred/chunked box snapshot and cannot be used for restart: ', &
+               Trim(Adjustl(filein))
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+
        ! ── file-size sanity check: verify expected byte layout ──────────────
        file_size_expected = &
             Int(6,  Int64)*4_Int64 + &
@@ -1375,6 +1417,249 @@ Contains
 
   End Subroutine write_distributed_field_block
 
+  !> Coordinate-mode face range f1:f2 of the box s:e on the faces xf(1:nf): nearest faces, clipped to the domain, at least one cell
+  !  wide; ok = .False. if s > e or the box lies outside the domain
+  Subroutine coordinate_face_range(xf, nf, s, e, f1, f2, ok)
+
+    Integer(Int32), Intent(In)  :: nf
+    Real(Int64),    Intent(In)  :: xf(nf), s, e
+    Integer(Int32), Intent(Out) :: f1, f2
+    Logical,        Intent(Out) :: ok
+
+    ok = ( s <= e .And. e >= xf(1) .And. s <= xf(nf) )
+    f1 = Minloc( Abs(xf - Min(Max(s, xf(1)), xf(nf))), 1 )
+    f2 = Minloc( Abs(xf - Min(Max(e, xf(1)), xf(nf))), 1 )
+    If ( f2 <= f1 ) Then
+       If ( f1 < nf ) Then
+          f2 = f1 + 1
+       Else
+          f1 = f2 - 1
+       End If
+    End If
+
+  End Subroutine coordinate_face_range
+
+
+  !> Resolve the chunk box inputs into global 1-based face indices chunk_f1/chunk_f2 (cells f1..f2-1 lie inside), aborting if the
+  !  box is empty or outside the domain. Index mode (all six inputs negative) maps v to the 0-based face index -v-1.
+  Subroutine resolve_chunk_box
+
+    Logical        :: index_mode, ok
+    Integer(Int32) :: a, nf(3), n1, n2
+    Real(Int64)    :: s(3), e(3)
+
+    If ( .Not. chunked_snapshot ) Return
+
+    index_mode = ( x_start < 0d0 )
+    s  = [ x_start, y_start, z_start ]
+    e  = [ x_end,   y_end,   z_end   ]
+    nf = [ nx_global, ny_global, nz_global ]
+
+    Do a = 1, 3
+       If ( index_mode ) Then
+          n1 = Nint(-s(a)) - 1
+          n2 = Nint(-e(a)) - 1
+          ok = ( n1 >= 0 .And. n2 <= nf(a)-1 .And. n1 < n2 )
+          chunk_f1(a) = n1 + 1
+          chunk_f2(a) = n2 + 1
+       Else
+          Select Case (a)
+          Case (1);  Call coordinate_face_range(x_global, nf(a), s(a), e(a), chunk_f1(a), chunk_f2(a), ok)
+          Case (2);  Call coordinate_face_range(y_global, nf(a), s(a), e(a), chunk_f1(a), chunk_f2(a), ok)
+          Case (3);  Call coordinate_face_range(z_global, nf(a), s(a), e(a), chunk_f1(a), chunk_f2(a), ok)
+          End Select
+       End If
+       If ( .Not. ok ) Then
+          If ( myid == 0 ) Write(*,'(A,I0,A)') ' ERROR: chunk box is empty or outside the domain in direction ', a, &
+               ' (index mode needs 0 <= start < end <= n_faces-1)'
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+    End Do
+
+    If ( myid == 0 ) Then
+       Write(*,'(A,3(1X,I0,A,I0))') '   chunk box face indices (1-based)  :', &
+            chunk_f1(1), ':', chunk_f2(1), chunk_f1(2), ':', chunk_f2(2), chunk_f1(3), ':', chunk_f2(3)
+       Write(*,'(A,3(1X,ES11.4,A,ES11.4))') '   chunk box extent                  :', &
+            x_global(chunk_f1(1)), ':', x_global(chunk_f2(1)), y_global(chunk_f1(2)), ':', y_global(chunk_f2(2)), &
+            z_global(chunk_f1(3)), ':', z_global(chunk_f2(3))
+    End If
+
+  End Subroutine resolve_chunk_box
+
+
+  !> Stagger flags st and global index range gl:gh of field kind ic (0 scalar, 1/2/3 = U/V/W) over the face box f1:f2:
+  !  a staggered direction holds faces f1..f2, a centred one holds cells f1..f2-1
+  Subroutine field_box(ic, f1, f2, st, gl, gh)
+
+    Integer(Int32), Intent(In)  :: ic, f1(3), f2(3)
+    Integer(Int32), Intent(Out) :: st(3), gl(3), gh(3)
+
+    st = 0
+    If ( snapshot_location == 0 .And. ic > 0 ) st(ic) = 1
+    gl = f1
+    gh = f2 - 1 + st
+
+  End Subroutine field_box
+
+
+  !> Part of the field box gl:gh owned by rank r (first global index lo, counts n; n = 0 when it owns none): cells ig1..ig2-2 in x,
+  !  kg1..kg2-2 in z, all of y; the closing face of a staggered direction belongs to the last rank
+  Subroutine box_extent(r, st, gl, gh, lo, n)
+
+    Integer(Int32), Intent(In)  :: r, st(3), gl(3), gh(3)
+    Integer(Int32), Intent(Out) :: lo(3), n(3)
+    Integer(Int32) :: own_lo(3), own_hi(3)
+
+    own_lo = [ ig1_global(r), 1, kg1_global(r) ]
+    own_hi = [ ig2_global(r)-2, nym_global, kg2_global(r)-2 ]
+    If ( st(1) == 1 .And. own_hi(1) == nxm_global ) own_hi(1) = nx_global
+    If ( st(2) == 1 ) own_hi(2) = ny_global
+    If ( st(3) == 1 .And. own_hi(3) == nzm_global ) own_hi(3) = nz_global
+
+    lo = Max(gl, own_lo)
+    n  = Max(0, Min(gh, own_hi) - lo + 1)
+
+  End Subroutine box_extent
+
+
+  !> Fill buf with this rank's share lo:lo+n-1 of field A; velocities are averaged to cell centres when snapshot_location = 1
+  Subroutine fill_box_block(A, ic, st, lo, n, buf)
+
+    Real(Int64),    Intent(In)  :: A(:,:,:)
+    Integer(Int32), Intent(In)  :: ic, st(3), lo(3), n(3)
+    Real(Int64),    Intent(Out) :: buf(:,:,:)
+
+    Integer(Int32) :: i, j, k, ia, ja, ka, ox, oy, oz
+    Logical        :: centred
+
+    centred = ( snapshot_location == 1 )
+    ox = 2 - ig1_global(myid) - st(1)
+    oy = 1 - st(2)
+    oz = 2 - kg1_global(myid) - st(3)
+
+    Do k = 1, n(3)
+       ka = lo(3) + k - 1 + oz
+       Do j = 1, n(2)
+          ja = lo(2) + j - 1 + oy
+          Do i = 1, n(1)
+             ia = lo(1) + i - 1 + ox
+             If ( centred .And. ic == 1 ) Then
+                buf(i,j,k) = 0.5d0*( A(ia-1,ja,ka) + A(ia,ja,ka) )
+             Else If ( centred .And. ic == 2 ) Then
+                buf(i,j,k) = 0.5d0*( A(ia,ja-1,ka) + A(ia,ja,ka) )
+             Else If ( centred .And. ic == 3 ) Then
+                buf(i,j,k) = 0.5d0*( A(ia,ja,ka-1) + A(ia,ja,ka) )
+             Else
+                buf(i,j,k) = A(ia,ja,ka)
+             End If
+          End Do
+       End Do
+    End Do
+
+  End Subroutine fill_box_block
+
+
+  !> Collective: gather one field of the box f1:f2 onto rank 0 and append it to the stream unit_no open there
+  Subroutine write_box_field(unit_no, A, ic, f1, f2)
+
+    Integer(Int32), Intent(In) :: unit_no, ic, f1(3), f2(3)
+    Real(Int64),    Intent(In) :: A(:,:,:)
+
+    Integer(Int32) :: st(3), gl(3), gh(3), lo(3), n(3), r
+    Real(Int64), Allocatable :: buf(:,:,:), gbuf(:,:,:), rbuf(:,:,:)
+
+    Call field_box(ic, f1, f2, st, gl, gh)
+    Call box_extent(myid, st, gl, gh, lo, n)
+    If ( All(n > 0) ) Then
+       Allocate( buf(n(1),n(2),n(3)) )
+       Call fill_box_block(A, ic, st, lo, n, buf)
+    End If
+
+    If ( myid == 0 ) Then
+       Allocate( gbuf(gh(1)-gl(1)+1, gh(2)-gl(2)+1, gh(3)-gl(3)+1) )
+       Do r = 0, nprocs-1
+          Call box_extent(r, st, gl, gh, lo, n)
+          If ( Any(n <= 0) ) Cycle
+          If ( r == 0 ) Then
+             gbuf(lo(1)-gl(1)+1:lo(1)-gl(1)+n(1), lo(2)-gl(2)+1:lo(2)-gl(2)+n(2), lo(3)-gl(3)+1:lo(3)-gl(3)+n(3)) = buf
+          Else
+             Allocate( rbuf(n(1),n(2),n(3)) )
+             Call Mpi_recv(rbuf, n(1)*n(2)*n(3), Mpi_real8, r, r, MPI_COMM_WORLD, istat, ierr)
+             gbuf(lo(1)-gl(1)+1:lo(1)-gl(1)+n(1), lo(2)-gl(2)+1:lo(2)-gl(2)+n(2), lo(3)-gl(3)+1:lo(3)-gl(3)+n(3)) = rbuf
+             Deallocate( rbuf )
+          End If
+       End Do
+       Write(unit_no) gbuf
+       Deallocate( gbuf )
+    Else If ( All(n > 0) ) Then
+       Call Mpi_send(buf, n(1)*n(2)*n(3), Mpi_real8, 0, myid, MPI_COMM_WORLD, ierr)
+    End If
+
+  End Subroutine write_box_field
+
+
+  !> Collective: write the face box f1:f2 of every field to fname. Layout (little-endian stream): snap_magic, snapshot_location,
+  !  step, nfields (Int32); t; f1, f2; per direction x_global(f1:f2) then xm_global(f1:f2-1); per field name(8), st, gl, gh;
+  !  then the field blocks in the same order, each (gh-gl+1) column-major
+  Subroutine write_box_snapshot(fname, f1, f2)
+
+    Character(*),   Intent(In) :: fname
+    Integer(Int32), Intent(In) :: f1(3), f2(3)
+
+    Character(8)   :: names(8)
+    Integer(Int32) :: fid(8), nf, q, st(3), gl(3), gh(3), unit_no, ios
+    Integer(Int64) :: fsize
+
+    names(1) = 'U';  names(2) = 'V';  names(3) = 'W';  names(4) = 'P'
+    fid = [ 1, 2, 3, 4, 0, 0, 0, 0 ]
+    nf  = 4
+    If ( sediment_flag >= 1 )   Then;  nf = nf + 1;  names(nf) = 'C';     fid(nf) = 5;  End If
+    If ( sgs_model /= 0 )       Then;  nf = nf + 1;  names(nf) = 'nu_t';  fid(nf) = 6;  End If
+    If ( boussinesq_flag >= 1 ) Then;  nf = nf + 1;  names(nf) = 'T';     fid(nf) = 7;  End If
+    If ( vof_active >= 1 )      Then;  nf = nf + 1;  names(nf) = 'Cvof';  fid(nf) = 8;  End If
+
+    If ( myid == 0 ) Then
+       Write(*,'(A,A,A)') '  Writing snapshot: ', Trim(Adjustl(fname)), ' ...'
+       Open(newunit=unit_no, file=Trim(Adjustl(fname)), access='stream', form='unformatted', action='write', &
+            status='replace', convert='little_endian', iostat=ios)
+       If ( ios /= 0 ) Then
+          Write(*,'(A,A)') ' ERROR: cannot open snapshot file ', Trim(Adjustl(fname))
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+       Write(unit_no) snap_magic, snapshot_location, istep + nstep_init, nf
+       Write(unit_no) t
+       Write(unit_no) f1, f2
+       Write(unit_no) x_global(f1(1):f2(1)), xm_global(f1(1):f2(1)-1)
+       Write(unit_no) y_global(f1(2):f2(2)), ym_global(f1(2):f2(2)-1)
+       Write(unit_no) z_global(f1(3):f2(3)), zm_global(f1(3):f2(3)-1)
+       Do q = 1, nf
+          Call field_box(Merge(fid(q), 0, fid(q) <= 3), f1, f2, st, gl, gh)
+          Write(unit_no) names(q), st, gl, gh
+       End Do
+    End If
+
+    Do q = 1, nf
+       Select Case ( fid(q) )
+       Case (1);  Call write_box_field(unit_no, U,       1, f1, f2)
+       Case (2);  Call write_box_field(unit_no, V,       2, f1, f2)
+       Case (3);  Call write_box_field(unit_no, W,       3, f1, f2)
+       Case (4);  Call write_box_field(unit_no, P,       0, f1, f2)
+       Case (5);  Call write_box_field(unit_no, Cscal,   0, f1, f2)
+       Case (6);  Call write_box_field(unit_no, nu_t,    0, f1, f2)
+       Case (7);  Call write_box_field(unit_no, Tscal,   0, f1, f2)
+       Case (8);  Call write_box_field(unit_no, Cvof_io, 0, f1, f2)
+       End Select
+    End Do
+
+    If ( myid == 0 ) Then
+       Close(unit_no)
+       Inquire(file=Trim(Adjustl(fname)), size=fsize)
+       Write(*,'(A,A,A,F8.3,A)') '  Wrote ', Trim(Adjustl(fname)), '  (', fsize/1e9, ' GB)'
+    End If
+
+  End Subroutine write_box_snapshot
+
+
   ! Input: U,V,W,x,y,z,xm,ym,zm
   ! Output: fileout
   Subroutine output_data
@@ -1403,17 +1688,40 @@ Contains
        If ( boussinesq_flag >= 1 ) Then
           !$acc update host(Tscal)
        End If
+#ifdef GPU_POISSON
+       !$acc update host(U,V,W,P)
+       If ( sgs_model /= 0 ) Then
+          !$acc update host(nu_t)
+       End If
+#endif
+
+       Write(ext,'(I8)') istep + nstep_init
+
+       If ( myid==0 ) Then
+          !Create a directory to store the data, if needed
+          inquire(file=trim("fields")//'/.', exist=dirExists)   !Works for gfortran
+          If ( .not. dirExists ) call system('mkdir -p fields/')
+       End If
+
+       ! only the staggered full snapshot is the restart format; the centred full snapshot reuses the box writer on the whole domain
+       If ( full_snapshot .And. snapshot_location == 1 ) Then
+          fname = 'fields/'//Trim(Adjustl(fileout))//'.'//Trim(Adjustl(ext))
+          Call write_box_snapshot(fname, [1, 1, 1], [nx_global, ny_global, nz_global])
+       End If
+
+       ! with both snapshots on, the chunk gets the Block suffix so it cannot clobber the full file
+       If ( chunked_snapshot ) Then
+          fname = 'fields/'//Trim(Adjustl(fileout))//'.'//Trim(Adjustl(ext))
+          If ( full_snapshot ) fname = 'fields/'//Trim(Adjustl(fileout))//'Block.'//Trim(Adjustl(ext))
+          Call write_box_snapshot(fname, chunk_f1, chunk_f2)
+       End If
+
+       If ( full_snapshot .And. snapshot_location == 0 ) Then
 
        ! processor 0 writes the data
        If ( myid==0 ) Then
 
-          !Create a directory to store the data, if needed
-          inquire(file=trim("fields")//'/.', exist=dirExists)   !Works for gfortran
-          If ( .not. dirExists ) call system('mkdir -p fields/')
-
-          Write(ext,'(I8)') istep + nstep_init
-
-	  fname = 'fields/'//Trim(Adjustl(fileout))//'.'//Trim(Adjustl(ext))
+          fname = 'fields/'//Trim(Adjustl(fileout))//'.'//Trim(Adjustl(ext))
 
           Write(*,'(A,A,A)') '  Writing snapshot: ', Trim(Adjustl(fname)), ' ...'
           Open(1,file=fname,access='stream',form='unformatted',action='write')
@@ -1429,15 +1737,9 @@ Contains
 
        End If
 
-#ifdef GPU_POISSON
-       !$acc update host(U,V,W)
-#endif
        Call write_distributed_field_block(1, U, nx_global,  nyg_global, nzg_global, .True.,  .False.)
        Call write_distributed_field_block(1, V, nxg_global, ny_global,  nzg_global, .False., .False.)
        Call write_distributed_field_block(1, W, nxg_global, nyg_global, nz_global,  .False., .True.)
-#ifdef GPU_POISSON
-       !$acc update host(P)
-#endif
        Call write_distributed_field_block(1, P, nxg_global, nyg_global, nzg_global, .False., .False.)
 
        ! C (scalar concentration, cell-centred)
@@ -1447,9 +1749,6 @@ Contains
 
        ! nu_t (SGS turbulent viscosity, cell-centred) — only written when LES is active
        If ( sgs_model /= 0 ) Then
-#ifdef GPU_POISSON
-          !$acc update host(nu_t)
-#endif
           Call write_distributed_field_block(1, nu_t, nxg_global, nyg_global, nzg_global, .False., .False.)
        End If
 
@@ -1463,18 +1762,6 @@ Contains
           Call write_distributed_field_block(1, Cvof_io, nxg_global, nyg_global, nzg_global, .False., .False.)
        End If
 
-       ! Particle state (src/particles.f90): separate latest-state restart file plus a timestamped snapshot for ParaView
-       ! (postProcessing/generate_particles_xmf.py). ext is assigned on rank 0 only, so pext/pfname are recomputed on every rank:
-       ! write_particle_snapshot is collective and all ranks must agree on the filename.
-       If ( particles_active >= 1 ) Then
-          Call write_particle_restart
-          Write(pext,'(I8)') istep + nstep_init
-          pfname = 'fields/'//Trim(Adjustl(fileout))//'_particles.'//Trim(Adjustl(pext))
-          Call write_particle_snapshot(pfname)
-       End If
-
-       Call write_tavg(istep + nstep_init)
-
        ! close file and report size
        If (myid==0) Then
           Close(1)
@@ -1484,6 +1771,19 @@ Contains
                   '  (', fsize/1e9, ' GiB)'
           End If
        End If
+
+       End If
+
+       ! Particle state (src/particles.f90): separate latest-state restart file plus a timestamped snapshot for ParaView
+       ! (postProcessing/generate_particles_xmf.py). write_particle_snapshot is collective and all ranks must agree on the filename.
+       If ( particles_active >= 1 ) Then
+          Call write_particle_restart
+          Write(pext,'(I8)') istep + nstep_init
+          pfname = 'fields/'//Trim(Adjustl(fileout))//'_particles.'//Trim(Adjustl(pext))
+          Call write_particle_snapshot(pfname)
+       End If
+
+       Call write_tavg(istep + nstep_init)
 
     End If
 

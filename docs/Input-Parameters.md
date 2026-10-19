@@ -149,6 +149,12 @@ On `restart=1` the time-series outputs are continued, not rewritten: `vof_diag.d
 |---|---|---|
 | `filein` | required for restart | Restart file read when `restart=1`. |
 | `fileout` | required | Base name of the output snapshots. |
+| `full_snapshot` | `.true.` | Write the full-domain snapshot `fields/<fileout>.<step>` (staggered, `snapshot_location=0`, is the only restartable file). With `.false.` no restart file is written. |
+| `chunked_snapshot` | `.false.` | Also write a sub-box of the domain at the same cadence. Named `fields/<fileout>Block.<step>` when `full_snapshot=.true.`, otherwise `fields/<fileout>.<step>`. |
+| `snapshot_location` | `0` | `0` = staggered (U, V, W on their faces), `1` = cell-centred (velocities averaged to centres). Applies to both snapshots; a centred full snapshot is written in the box format and cannot be used for restart. |
+| `x_start`, `x_end`, `y_start`, `y_end`, `z_start`, `z_end` | `0`, `1e30` | Chunk box. Non-negative values are lengths (snapped to the nearest cell faces, clipped to the domain, at least one cell wide). If all six are negative they are 0-based face indices encoded as `-(n+1)` (`-1` = first boundary face), e.g. `x_start=-1, x_end=-65` spans faces 0 to 64. Mixed signs, an empty box or a box outside the domain abort the run. |
+
+Box snapshot layout (little-endian, Fortran stream): `int32 -4242, snapshot_location, step, nfields`; `float64 t`; `int32 f1(3), f2(3)` (1-based global face indices); per direction the faces `x_global(f1:f2)` then the centres `xm_global(f1:f2-1)`; per field `char(8) name, int32 st(3), gl(3), gh(3)` (`st=1` where the field sits on faces); then each field as a `(gh-gl+1)` Fortran-order block (order `U V W P [C] [nu_t] [T] [Cvof]`). Read with `dopamine_post.fields.read_box_snapshot`.
 
 ## SEDIMENT
 

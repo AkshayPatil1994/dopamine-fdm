@@ -98,7 +98,7 @@ directly — read those instead of `--help` output to see idiomatic library usag
 
 | Module | Covers | Key classes/functions |
 |---|---|---|
-| `dopamine_post.fields` | Binary field snapshots, time-averaged statistics, DNS comparison, XDMF export | `FieldSnapshot`, `FieldSeries`, `FieldStats`, `plot_profile`, `plot_stats`, `write_field_xmf` |
+| `dopamine_post.fields` | Binary field snapshots, time-averaged statistics, DNS comparison, XDMF export | `FieldSnapshot`, `FieldSeries`, `FieldStats`, `plot_profile`, `plot_stats`, `write_field_xmf`, `read_box_snapshot`, `write_box_xmf` |
 | `dopamine_post.particles` | Lagrangian point particles (`src/particles.f90`), including the solver-computed per-step acceleration (`ax`/`ay`/`az`, added alongside position/velocity/age) | `ParticleData`, `Geometry`, `plot_tracks`, `animate_tracks`, `animate_cloud`, `write_particles_xmf` |
 | `dopamine_post.probes` | Line and slice probe output, XDMF export for slices | `LineProbe`, `SliceProbe` |
 | `dopamine_post.ibm_surface` | Per-point IBM surface samples (pressure/viscous force) | `IBMSurface` |
@@ -172,6 +172,12 @@ Moser–Kim–Mansour DNS and/or a measured wind-tunnel inflow — resolved stre
 wall-modelled/coarse LES carries part of the stress in the SGS model, so a near-wall
 deficit vs. DNS is expected). `FieldSeries.write_xmf()` writes `paraview/channel_test.xmf`
 via the same zero-copy byte-seek approach as `dopamine_post.particles`.
+
+Chunked snapshots (`chunked_snapshot=.true.`, `&IO`) are read with `read_box_snapshot(path)`, which returns the box
+coordinates and every field with its stagger flags, and exported with `write_box_xmf(case_dir)` (CLI:
+`dopamine_post fields box-xmf --case-dir <case>`), writing `paraview/box.xmf` for all `<fileout>Block.<step>` files. Fields
+are shown on the box's cell centres; staggered velocities take the lower face of each cell. Examples:
+`postProcessing/examples/fields_example.py` and `particles_example.py` (the latter also writes `particles.xmf`).
 
 ### `dopamine_post.probes`
 

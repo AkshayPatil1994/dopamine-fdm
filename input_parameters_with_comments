@@ -186,6 +186,12 @@
 &IO
   filein  = 'restart/channel_test.1',
   fileout = 'channel_test',
+  ! full_snapshot = .true.,        ! restartable full-domain snapshot
+  ! chunked_snapshot = .false.,    ! .true.: also write a sub-box (<fileout>Block.<step> when full_snapshot is on)
+  ! snapshot_location = 0,         ! 0=staggered, 1=cell-centred (both snapshots; centred is not restartable)
+  ! x_start = 0.0, x_end = 1.0,    ! box in lengths (>=0), or all six negative: 0-based face indices as -(n+1), -1 = first face
+  ! y_start = 0.0, y_end = 1.0,
+  ! z_start = 0.0, z_end = 1.0,
 /
 
 ! UAV actuator disk. Thrust is kinematic (physical thrust / density) [m^4/s^2].

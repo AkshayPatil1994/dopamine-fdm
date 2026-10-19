@@ -23,6 +23,14 @@ Module global
 
   ! files
   Character(200) :: filein, fileout
+
+  ! Field snapshots (input_output.f90): full_snapshot is the restartable full-domain file; chunked_snapshot a sub-box of it.
+  ! snapshot_location 0 = staggered (native), 1 = cell-centred. Box start/end are lengths (>=0) or, when all six are negative,
+  ! 0-based face indices encoded as -(n+1); chunk_f1/chunk_f2 are the resolved global 1-based face indices of the box.
+  Logical        :: full_snapshot = .True., chunked_snapshot = .False.
+  Integer(Int32) :: snapshot_location = 0
+  Real   (Int64) :: x_start = 0d0, x_end = 1d30, y_start = 0d0, y_end = 1d30, z_start = 0d0, z_end = 1d30
+  Integer(Int32) :: chunk_f1(3) = 1, chunk_f2(3) = 2
   Integer(Int32) :: nsave, nmonitor
 
   ! domain size

@@ -281,6 +281,8 @@ Contains
     yg = yg_global
     zg = zg_global( kg1_global(myid):kg2_global(myid) )
 
+    Call resolve_chunk_box
+
     ! local minimum grid size for CFL
     dxmin = Minval ( xg_global(2:nxg_global) - xg_global(1:nxg_global-1) )
     dymin = Minval ( yg_global(2:nyg_global) - yg_global(1:nyg_global-1) )

@@ -96,9 +96,115 @@ def _step_from_name(name):
 def _detect_prefix(fields_dir):
     for p in Path(fields_dir).iterdir():
         m = _PAT.match(p.name)
-        if m:
+        if m and not m.group(1).endswith("Block"):
             return m.group(1)
     return None
+
+
+def _read_box_header(f):
+    """Parse a box snapshot header from an open file; returns (dict, [(name, st, shape, byte_offset)])."""
+    magic, loc, step, nf = np.fromfile(f, "<i4", 4)
+    if magic != -4242:
+        raise ValueError(f"{f.name} is not a box snapshot")
+    t = float(np.fromfile(f, "<f8", 1)[0])
+    f1 = np.fromfile(f, "<i4", 3)
+    f2 = np.fromfile(f, "<i4", 3)
+    out = dict(t=t, step=int(step), location=int(loc), f1=f1, f2=f2)
+    for a, d in enumerate("xyz"):
+        n = f2[a] - f1[a] + 1
+        out[d] = np.fromfile(f, "<f8", n)
+        out[d + "m"] = np.fromfile(f, "<f8", n - 1)
+    tab = []
+    for _ in range(nf):
+        name = f.read(8).decode().strip()
+        st, gl, gh = (np.fromfile(f, "<i4", 3) for _ in range(3))
+        tab.append([name, st, gh - gl + 1])
+    pos = f.tell()
+    for e in tab:
+        e.append(pos)
+        pos += 8 * int(np.prod(e[2]))
+    return out, tab
+
+
+def read_box_snapshot(path):
+    """Read a chunked or cell-centred box snapshot (<fileout>Block.<step>, see docs/Input-Parameters.md, IO).
+
+    Returns a dict: t, step, location (0 staggered, 1 centred), f1/f2 (1-based global face indices), x/y/z (faces) and
+    xm/ym/zm (centres) of the box, and fields {name: (array, st)} where st flags the directions the field sits on faces.
+    """
+    with open(path, "rb") as f:
+        out, tab = _read_box_header(f)
+        out["fields"] = {}
+        for name, st, sh, off in tab:
+            f.seek(off)
+            out["fields"][name] = (np.fromfile(f, "<f8", int(np.prod(sh))).reshape(sh, order="F"), st)
+    return out
+
+
+def write_box_xmf(case_dir=".", prefix=None, out=None):
+    """Write a ParaView XDMF time series (default 'paraview/box.xmf') for the box snapshots '<prefix>Block.<step>'
+    (chunked_snapshot with full_snapshot on), or for a box file named '<prefix>.<step>' when prefix is given explicitly.
+
+    Points straight at the binary files via byte-seek HyperSlabs, like write_field_xmf. Fields sit on the box's cell centres;
+    staggered velocities take the lower face of each cell (no averaging), as write_field_xmf does. Time Value is the step.
+    """
+    case = Path(case_dir)
+    out_dir = case / "paraview"
+    out_dir.mkdir(exist_ok=True)
+    out_path = Path(out) if out else out_dir / "box.xmf"
+    pat = re.compile(r"^(.+)\.(\d+)$")
+    snaps = sorted((int(m.group(2)), p) for p in (case / "fields").iterdir() if (m := pat.match(p.name))
+                   and (prefix is None and m.group(1).endswith("Block") or prefix == m.group(1)))
+    if not snaps:
+        raise FileNotFoundError(f"no box snapshots (<prefix>Block.<step>) found in {case / 'fields'}")
+
+    body, nc = [], None
+    for step, fpath in snaps:
+        with open(fpath, "rb") as f:
+            h, tab = _read_box_header(f)
+        if nc is None:
+            nc = [int(h["f2"][a] - h["f1"][a]) for a in range(3)]
+            for d in "xyz":
+                (out_dir / f"box_{d}m.bin").write_bytes(h[d + "m"].astype("<f8").tobytes())
+        frel = os.path.relpath(fpath, out_path.parent)
+        count = f"{nc[2]} {nc[1]} {nc[0]}"
+
+        def slab(item, name_sh, off, indent):
+            sh = f"{name_sh[2]} {name_sh[1]} {name_sh[0]}"
+            pad = " " * indent
+            return [f'{pad}<DataItem ItemType="HyperSlab" Dimensions="{count}" Type="HyperSlab">',
+                    f'{pad}  <DataItem Dimensions="3 3" Format="XML">',
+                    f'{pad}    0 0 0', f'{pad}    1 1 1', f'{pad}    {count}', f'{pad}  </DataItem>',
+                    f'{pad}  <DataItem Dimensions="{sh}" Format="Binary" DataType="Float" Precision="8" '
+                    f'Endian="Little" Seek="{off}">',
+                    f'{pad}    {frel}', f'{pad}  </DataItem>', f'{pad}</DataItem>']
+
+        info = {name: (sh, off) for name, st, sh, off in tab}
+        body += ['', f'      <Grid Name="t{step}">', f'        <Time Value="{step}"/>',
+                 '        <Topology Reference="/Xdmf/Domain/Topology[1]"/>',
+                 '        <Geometry Reference="/Xdmf/Domain/Geometry[1]"/>']
+        body += ['        <Attribute Name="Velocity" Center="Node" AttributeType="Vector">',
+                 f'          <DataItem ItemType="Function" Dimensions="{count} 3" Function="JOIN($0, $1, $2)">']
+        for c in "UVW":
+            body += slab(c, *info[c], 12)
+        body += ['          </DataItem>', '        </Attribute>']
+        for name, (sh, off) in info.items():
+            if name in "UVW":
+                continue
+            body += [f'        <Attribute Name="{name}" Center="Node" AttributeType="Scalar">'] + slab(name, sh, off, 10) \
+                    + ['        </Attribute>']
+        body.append('      </Grid>')
+
+    geo = [f'      <DataItem Name="V{d}" Dimensions="{n}" Format="Binary" DataType="Float" Precision="8" Endian="Little">'
+           f'box_{d}m.bin</DataItem>' for d, n in zip("xyz", nc)]
+    lines = ['<?xml version="1.0" ?>', '<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>', '<Xdmf Version="2.0">', '  <Domain>',
+             f'    <Topology name="topo" TopologyType="3DRECTMesh" Dimensions="{nc[2]} {nc[1]} {nc[0]}"/>',
+             '    <Geometry name="geo" Type="VxVyVz">'] + geo + ['    </Geometry>',
+             '    <Grid Name="TimeSeries" GridType="Collection" CollectionType="Temporal">'] + body \
+        + ['    </Grid>', '  </Domain>', '</Xdmf>']
+    out_path.write_text("\n".join(lines) + "\n")
+    print(f"Wrote {out_path}  ({len(snaps)} snapshots)")
+    return out_path
 
 
 class FieldSnapshot:
