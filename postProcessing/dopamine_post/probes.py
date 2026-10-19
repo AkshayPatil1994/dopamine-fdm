@@ -176,6 +176,16 @@ class SliceProbe:
         if times is None:
             times = t0 + np.arange(nsnaps) * dt
 
+        # a restart that kept stale frames (e.g. a new slice written by an aborted attempt) repeats earlier times: keep the last frame written at each time
+        frames, t_next = [], np.inf
+        for s in range(nsnaps - 1, -1, -1):
+            if times[s] < t_next:
+                frames.append(s)
+                t_next = times[s]
+        frames.reverse()
+        if len(frames) < nsnaps:
+            warnings.warn(f"{meta_path.name}: {nsnaps - len(frames)} frame(s) with repeated/non-monotonic times skipped")
+
         # ── physical coordinates ──
         xm = ym = zm = None
         if snap_path is not None:
@@ -257,7 +267,7 @@ class SliceProbe:
         parts = [f'<?xml version="1.0" ?>\n<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>\n'
                  f'<Xdmf Version="2.0">\n<Domain>\n'
                  f'  <Grid Name="{base.name}" GridType="Collection" CollectionType="Temporal">\n']
-        for s in range(nsnaps):
+        for s in frames:
             seek = s * snap_bytes
             parts.append(
                 f'    <Grid Name="t{s:06d}">\n'
@@ -271,7 +281,7 @@ class SliceProbe:
         parts.append('  </Grid>\n</Domain>\n</Xdmf>\n')
 
         xmf_path.write_text(''.join(parts))
-        print(f"Wrote {xmf_path}  ({nsnaps} snaps, comps={comps})")
+        print(f"Wrote {xmf_path}  ({len(frames)} snaps, comps={comps})")
         return xmf_path
 
 
