@@ -486,7 +486,7 @@ Contains
 
     Integer(Int32) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy, n2_unique
     Logical :: v_native
-    Real(Int64), Allocatable :: frame_U(:,:)
+    Real(Int64), Allocatable :: frame_U(:,:), frame_il(:,:,:)
     Character(300) :: fname
 
     Call read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native)
@@ -510,7 +510,14 @@ Contains
        Open(newunit=unit_in, file=Trim(fname), access='stream', form='unformatted', &
             status='old', action='read', iostat=ios)
        If ( ios /= 0 ) Call sem_abort('ERROR: cannot open inflow_recycle_file data (expected <inflow_recycle_file>.bin)')
-       Read(unit_in) frame_U   ! U is always the first block of the first frame
+       If ( v_native ) Then
+          Read(unit_in) frame_U   ! U is always the first block of the first frame
+       Else
+          Allocate( frame_il(ncomp,n1,n2) )
+          Read(unit_in) frame_il
+          frame_U = frame_il(1,:,:)
+          Deallocate(frame_il)
+       End If
        Close(unit_in)
        Do jy = 1, n1
           prof_U(jy) = Sum(frame_U(jy,:)) / Real(n2,8)
@@ -579,6 +586,12 @@ Contains
     rec_off_T = rec_off_W + 8_Int64*Int(rec_n1,  Int64)*Int(rec_n2_global,Int64)
     rec_off_C = rec_off_T + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, has_T)
     rec_frame_bytes = rec_off_C + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, has_C)
+    If ( .Not. rec_v_native ) Then
+       ! probe_output.f90 slices are interleaved (ncomp,n1,n2): rec_off_* hold the 0-based component column instead of a byte offset
+       rec_off_U = 0_Int64;  rec_off_V = 1_Int64;  rec_off_W = 2_Int64
+       rec_off_T = 3_Int64;  rec_off_C = Merge(4_Int64, 3_Int64, has_T)
+       rec_frame_bytes = 8_Int64*Int(rec_ncomp,Int64)*Int(rec_n1,Int64)*Int(rec_n2_global,Int64)
+    End If
 
     Write(fname,'(A,A)') Trim(inflow_recycle_file), '.bin'
     Open(newunit=rec_unit, file=Trim(fname), access='stream', form='unformatted', &
@@ -612,8 +625,17 @@ Contains
     Real   (Int64), Intent(InOut) :: buf(:,:)
 
     Integer(Int64) :: byte_pos
+    Real   (Int64), Allocatable :: il(:,:,:)
 
     If ( count < 1 ) Return
+    If ( .Not. rec_v_native ) Then
+       Allocate( il(rec_ncomp, comp_n1, count) )
+       byte_pos = Int(frame_idx-1,Int64)*rec_frame_bytes + &
+                  Int(z0-1,Int64)*8_Int64*Int(rec_ncomp,Int64)*Int(comp_n1,Int64) + 1_Int64
+       Read(rec_unit, pos=byte_pos) il
+       buf(:,zoff:zoff+count-1) = il(comp_off+1,:,:)
+       Return
+    End If
     byte_pos = Int(frame_idx-1,Int64)*rec_frame_bytes + comp_off + &
                Int(z0-1,Int64)*8_Int64*Int(comp_n1,Int64) + 1_Int64
     Read(rec_unit, pos=byte_pos) buf(:,zoff:zoff+count-1)
