@@ -80,6 +80,7 @@ Contains
           nkeep = Min( records_in(Trim(fname), 8_Int64*sli_ncomp(n)*sli_n1(n)*sli_n2(n)), records_in(Trim(tname), 8_Int64) )
           If ( slice_freq > 0 ) nkeep = Min(nkeep, Int(nstep_init/slice_freq, Int64))
           If ( slice_freq < 0 ) nkeep = Min(nkeep, Int(t/slice_interval + 1d-6, Int64))
+          nkeep = Min(nkeep, leading_times_le(Trim(tname), t))
         End If
         sli_nwrit(n) = Int(nkeep, Int32)
         Call open_probe_stream(sli_funit(n), Trim(fname), nkeep*8_Int64*sli_ncomp(n)*sli_n1(n)*sli_n2(n))
@@ -541,6 +542,26 @@ Contains
     records_in = sz/rec
 
   End Function records_in
+
+
+  !> Number of leading records of a Real64 time log that are <= tmax: frames a failed attempt left beyond the restart time are not kept
+  Integer(Int64) Function leading_times_le(fname, tmax)
+
+    Character(*), Intent(In) :: fname
+    Real(Int64),  Intent(In) :: tmax
+    Integer(Int32) :: unit, ios
+    Real(Int64)    :: tr
+
+    leading_times_le = 0
+    Open(newunit=unit, file=fname, access='stream', form='unformatted', status='old', action='read')
+    Do
+       Read(unit, iostat=ios) tr
+       If ( ios /= 0 .Or. tr > tmax + 1d-6 ) Exit
+       leading_times_le = leading_times_le + 1
+    End Do
+    Close(unit)
+
+  End Function leading_times_le
 
 
   !> Stream file for appending: a fresh file when nbytes = 0, else the existing one cut to nbytes (the snapshots of a restart)
