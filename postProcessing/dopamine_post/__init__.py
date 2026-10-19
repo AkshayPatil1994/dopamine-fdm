@@ -17,6 +17,7 @@ Submodules (also reachable directly, e.g. `from dopamine_post.particles import P
     uav           UAV actuator-disk path + drone geometry
     vortex        Q-criterion + iso-surface movies
     rsb           Reynolds-stress budget
+    tavg          on-the-fly time-averaged statistics
     inflow        SEM/ESEM inflow tooling
     runlog        run.log diagnostics
 """
@@ -29,11 +30,12 @@ from . import (
     rsb,
     runlog,
     sdf,
+    tavg,
     uav,
     vortex,
 )
 
 __all__ = [
     "fields", "particles", "probes", "ibm_surface", "sdf", "uav", "rsb",
-    "inflow", "runlog", "vortex",
+    "inflow", "runlog", "vortex", "tavg",
 ]

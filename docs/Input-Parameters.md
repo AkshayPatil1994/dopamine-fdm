@@ -12,7 +12,7 @@ All settings live in the Fortran namelist file `input_parameters` (read from the
 - A default of **required** means there is none: set it. Lengths are in metres, times in seconds, temperatures in K. There is no explicit density: pressure gradients and thrusts are kinematic (divided by density).
 - Quick start: the "Recipes" section at the end lists the few parameters to change for common cases.
 
-Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [BOUNDARY_CONDITIONS](#boundary_conditions) · [INFLOW](#inflow) · [IBM](#ibm) · [INITIAL_CONDITIONS](#initial_conditions) · [IO](#io) · [SEDIMENT](#sediment) · [BOUSSINESQ](#boussinesq) · [STATISTICS](#statistics) · [UAV](#uav) · [PARTICLES](#particles) · [VOF](#vof) · [WAVES](#waves) · [Recipes](#recipes) · [RSB output](#rsb-output-files)
+Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [BOUNDARY_CONDITIONS](#boundary_conditions) · [INFLOW](#inflow) · [IBM](#ibm) · [INITIAL_CONDITIONS](#initial_conditions) · [IO](#io) · [SEDIMENT](#sediment) · [BOUSSINESQ](#boussinesq) · [STATISTICS](#statistics) · [UAV](#uav) · [PARTICLES](#particles) · [VOF](#vof) · [WAVES](#waves) · [Recipes](#recipes) · [Time-averaged output](#time-averaged-statistics-output) · [RSB output](#rsb-output-files)
 
 ## DOMAIN
 
@@ -186,10 +186,14 @@ Immersed-body and inflow thermal conditions are set in `&IBM` and `&INFLOW`.
 
 ## STATISTICS
 
-Reynolds-stress budget and probes. Omit to disable.
+Time-averaged statistics, Reynolds-stress budget and probes. Omit to disable.
 
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
+| `tavg_active` | `0` | `1` accumulate time-averaged `U,V,W` and the Reynolds stresses on the fly (device-resident, no per-step host copy); see [Time-averaged statistics](#time-averaged-statistics-output). Not available with `vof_flow=1`. |
+| `tavg_nstart` | `0` | First step (counting `nstep_init`) that is accumulated (skip spin-up). |
+| `tavg_reset` | `0` | `0` cumulative average from `tavg_nstart` (continues over a restart); `1` every output is an independent window and the sums restart after each write. |
+| `tavg_T`, `tavg_C` | `0` | `1` also average the Boussinesq temperature / sediment concentration: mean, variance and the fluxes `u'T'`, `v'T'`, `w'T'` (needs `boussinesq_flag>=1` / `sediment_flag>=1`). |
 | `rsb_active` | `0` | `1` accumulate the Pope §7.4 budget. |
 | `rsb_freq` | `10` | Window length in steps; one sample is written (and the accumulators reset) per window. |
 | `rsb_nstart` | `0` | Step at which accumulation starts (skip spin-up). |
@@ -341,7 +345,11 @@ Numerical wave flume: Dirichlet wave inlet plus relaxation zones. Needs `vof_flo
 | Inflow/outflow | `x_bc_type=1`, `&INFLOW inflow_type`, `Utarget` |
 | Sediment / thermal | `sediment_flag=1` + `grav`, or `boussinesq_flag=1` + `beta_T`, `T_ref`, `grav` |
 | Two-phase wave flume | `&VOF vof_active=1, vof_flow=1, vof_ic_type=1, vof_level, vof_sigma`; `&WAVES wave_type, wave_height, wave_period, wave_gen_len, wave_abs_len`; `x_bc_type=1`, `inflow_type=3` |
-| Profiles and budgets | `&STATISTICS rsb_active=1` / `n_slices` / `n_lines` |
+| Profiles and budgets | `&STATISTICS tavg_active=1` / `rsb_active=1` / `n_slices` / `n_lines` |
+
+## Time-averaged statistics output
+
+With `tavg_active=1` one file `fields/<fileout>_tavg.<step>` is written next to every field snapshot (same `nsave`/`tsave` cadence), little-endian float64, interior cell centres, whole domain (solid IBM cells are 0). Layout: `int32 nxm,nym,nzm,nf`; `float64 t_avg`; `nf` names of 8 characters; then `nf` blocks of `(nxm,nym,nzm)` in Fortran order. Fields: `U V W`, `u'u' v'v' w'w' u'v' u'w' v'w'` (central moments, so `urms = sqrt(u'u')`), then for `T` and/or `C`: `S`, `S'S'`, `u'S'`, `v'S'`, `w'S'`. Averages are resolved only (no SGS contribution) and weighted by the time step, so adaptive `dt` does not bias them. On `restart=1` the sums are reloaded from `<fileout>_tavg.<nstep_init>` (a missing file starts the average fresh); `tavg_reset=1` always starts fresh, which is exact because the window begins at the snapshot. Read with `dopamine_post.tavg.read_tavg`.
 
 ## RSB output files
 

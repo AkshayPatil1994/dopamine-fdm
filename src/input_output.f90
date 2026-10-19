@@ -7,6 +7,7 @@ Module input_output
   Use mpi
   Use genGridAndIC
   Use particles, Only : write_particle_restart, write_particle_snapshot
+  Use time_stats, Only : write_tavg
 
   ! prevent implicit typing
   Implicit None
@@ -68,6 +69,7 @@ Contains
                            T_ic_type, T_ic_grad
 
     Namelist /STATISTICS/ rsb_active, rsb_freq, rsb_nstart, rsb_hom_dir, rsb_fileout, &
+                          tavg_active, tavg_nstart, tavg_reset, tavg_T, tavg_C, &
                           n_slices, slice_freq, slice_interval, slice_dir, slice_pos, slice_comps, slice_fileout, &
                           n_lines,  line_freq,  line_interval, line_dir,  line_pos1,  line_pos2,   &
                           line_start, line_end, line_comps, line_fileout
@@ -487,6 +489,11 @@ Contains
           Write(*,'(A,A)')      '   rsb_hom_dir                 = ', Trim(rsb_hom_dir)
           Write(*,'(A,A)')      '   rsb_fileout                 = ', Trim(rsb_fileout)
        End If
+       If ( tavg_active == 1 ) Then
+          Write(*,'(A,I8)')     '   tavg_nstart                 = ', tavg_nstart
+          Write(*,'(A,I2)')     '   tavg_reset                  = ', tavg_reset
+          Write(*,'(A,2I2)')    '   tavg_T, tavg_C              = ', tavg_T, tavg_C
+       End If
        If ( boussinesq_flag >= 1 ) Then
           Write(*,'(A,I2)')    '   boussinesq_flag              = ', boussinesq_flag
           Write(*,'(A,E12.4)') '   beta_T                       = ', beta_T
@@ -716,6 +723,11 @@ Contains
     Call Mpi_bcast ( rsb_nstart,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( rsb_hom_dir, Len(rsb_hom_dir), MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( rsb_fileout, Len(rsb_fileout), MPI_character, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( tavg_active,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( tavg_nstart,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( tavg_reset,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( tavg_T,               1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( tavg_C,               1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( n_slices,             1,              MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( slice_freq,           1,              MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -1014,6 +1026,8 @@ Contains
             Call abort_input( 'ERROR: vof_flow=1 with an x inlet supports only inflow_type=3 (wave inlet) or 0 (uniform)' )
        If ( rsb_active == 1 ) &
             Call abort_input( 'ERROR: vof_flow=1 does not support the Reynolds-stress budget' )
+       If ( tavg_active == 1 ) &
+            Call abort_input( 'ERROR: vof_flow=1 does not support the time-averaged statistics (tavg_active)' )
        If ( ibm_method == 1 ) &
             Call abort_input( 'ERROR: vof_flow=1 always uses the staircase wall stress; leave ibm_method = 0' )
        If ( ibm_input_mode >= 1 .And. ibm_surface_nsampling > 0 ) &
@@ -1458,6 +1472,8 @@ Contains
           pfname = 'fields/'//Trim(Adjustl(fileout))//'_particles.'//Trim(Adjustl(pext))
           Call write_particle_snapshot(pfname)
        End If
+
+       Call write_tavg(istep + nstep_init)
 
        ! close file and report size
        If (myid==0) Then

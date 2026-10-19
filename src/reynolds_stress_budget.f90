@@ -10,6 +10,7 @@ Module reynolds_stress_budget
 
   ! ── public interface ─────────────────────────────────────────────────────
   Public :: init_rsb, accumulate_rsb, output_rsb, finalize_rsb
+  Public :: reduce_to_rank0_4d
   Public :: n_accum    ! exposed so main.f90 can gate output_rsb calls
 
   ! component index helpers: 6 independent symmetric-tensor components in order 1=11,2=22,3=33,4=12,5=13,6=23

@@ -215,8 +215,14 @@
 
 ! Statistics. rsb_hom_dir: homogeneous averaging directions ('', 'x', 'z', 'x,z').
 ! Output files and layout: docs/Input-Parameters.md ("RSB output files").
+! tavg_*: on-the-fly time-averaged U,V,W and Reynolds stresses (+ T/C mean, variance, fluxes), written with every field
+! snapshot as fields/<fileout>_tavg.<step> (docs/Input-Parameters.md, "Time-averaged statistics output").
 ! Probes (up to 8 each): slice_comps/line_comps = any of U V W P T C.
 &STATISTICS
+  tavg_active = 0,
+  tavg_nstart = 0,
+  tavg_reset  = 0,                  ! 1: each output is an independent window
+  tavg_T = 0, tavg_C = 0,           ! also average the temperature / sediment scalar
   rsb_active  = 0,
   rsb_freq    = 100,
   rsb_nstart  = 5000,

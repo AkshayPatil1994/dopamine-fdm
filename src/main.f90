@@ -11,6 +11,7 @@ Program dopamine
   Use monitor
   Use finalization
   Use reynolds_stress_budget
+  Use time_stats
   Use probe_output
   Use restart_output, Only : trim_restart_text_files
   Use vof_twofluid, Only : vof_flow_init, compute_time_step_vof
@@ -33,6 +34,9 @@ Program dopamine
 
   ! initialise Reynolds stress budget module (allocates accumulators)
   Call init_rsb
+
+  ! time-averaged statistics (allocates the device sums, reloads them on a restart)
+  Call init_tavg
 
   ! initialise slice/line probe output (resolve grid indices, open files)
   Call init_probes
@@ -73,6 +77,8 @@ Program dopamine
         Call output_rsb
      End If
 
+     Call accumulate_tavg
+
      ! output some key values
      Call output_monitor
 
@@ -95,6 +101,7 @@ Program dopamine
   ! finalize stuff
   Call finalize_probes
   Call finalize_rsb
+  Call finalize_tavg
   Call finalize
 
 End program dopamine

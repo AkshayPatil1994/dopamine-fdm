@@ -308,6 +308,7 @@ list(APPEND SRCS
     src/vof_twofluid.f90
     src/time_integration.f90
     src/reynolds_stress_budget.f90
+    src/time_stats.f90
     src/restart_output.f90
     src/probe_output.f90
     src/main.f90
@@ -503,6 +504,7 @@ add_test(NAME vof_advect_prescribed COMMAND $<TARGET_FILE:test_vof_advect>)
 #   ibm_small      LES channel + ghost-cell IBM sphere (synthetic SDF_in, 34x17x34) straddling the rank seam
 #   ibm_wm_small   ibm_small with the IBM wall model on (ibm_wall_model_flag=1)
 #   rsb_small      chan_les_small + Reynolds-stress-budget statistics (stats/rsb_*.bin compared too)
+#   tavg_small     bouss_small + on-the-fly time-averaged statistics incl. T (fields/tavg.20 compared too)
 # The tests also compare the final snapshot field-by-field, ghost layers excluded (compare_monitor.py --fields),
 # and restart == uninterrupted (restart_check.py), not just the monitor columns. nsave=nsteps in every case.
 # Every build: np=1 vs np=TEST_PARITY_NPROCS of this same executable. GPU build additionally
@@ -529,7 +531,7 @@ exec \"$real\" $os \"$@\"
     file(CHMOD "${TEST_MPIRUN}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 endif()
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small adv_hybrid_small adv_hybrid3_small ibm_pressure1_small rsb_small)
+    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small adv_hybrid_small adv_hybrid3_small ibm_pressure1_small rsb_small tavg_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${TEST_MPIRUN} --fields --field-tol 1e-8)
@@ -542,6 +544,9 @@ if(Python3_Interpreter_FOUND)
         set(_extra "")
         if(case STREQUAL "rsb_small")
             set(_extra --files stats/rsb_*.bin)
+        endif()
+        if(case STREQUAL "tavg_small")
+            set(_extra --files fields/*_tavg.*)
         endif()
         add_test(NAME ${case}_${_kind}_np1_vs_np${TEST_PARITY_NPROCS}
             COMMAND ${_cmp} --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine>

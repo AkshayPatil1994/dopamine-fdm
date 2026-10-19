@@ -538,6 +538,13 @@ Module global
   Character(200) :: rsb_hom_dir = 'x,z'
   Character(200) :: rsb_fileout = 'rsb'
 
+  ! On-the-fly time-averaged statistics (time_stats.f90): written next to every field snapshot
+  Integer(Int32) :: tavg_active = 0
+  Integer(Int32) :: tavg_nstart = 0     ! first step (counting nstep_init) that is accumulated
+  Integer(Int32) :: tavg_reset  = 0     ! 1: each output is an independent window (sums restart after every write)
+  Integer(Int32) :: tavg_T      = 0     ! 1: also T mean, variance and fluxes (boussinesq_flag >= 1)
+  Integer(Int32) :: tavg_C      = 0     ! 1: also C mean, variance and fluxes (sediment_flag >= 1)
+
   ! 2-D planar slice probes: config and output file layout
   Integer(Int32), Parameter :: MAX_PROBES = 30
   Integer(Int32), Parameter :: MAX_WAVEGAUGES = 32

@@ -109,6 +109,10 @@
 /
 
 &STATISTICS
+  tavg_active = 0,
+  tavg_nstart = 0,
+  tavg_reset  = 0,
+  tavg_T = 0, tavg_C = 0,
   rsb_active  = 0,
   rsb_freq    = 100,
   rsb_nstart  = 5000,

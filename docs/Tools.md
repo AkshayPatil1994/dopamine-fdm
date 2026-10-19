@@ -105,6 +105,7 @@ directly — read those instead of `--help` output to see idiomatic library usag
 | `dopamine_post.sdf` | Signed-distance-field reading and slice plotting | `SDF` |
 | `dopamine_post.uav` | UAV actuator-disk path + scaled quadcopter body animation | `UAVPath` |
 | `dopamine_post.rsb` | Reynolds-stress budget statistics | `RSBStats` |
+| `dopamine_post.tavg` | On-the-fly time-averaged statistics (`fields/<fileout>_tavg.<step>`) | `read_tavg` |
 | `dopamine_post.inflow` | SEM/ESEM inflow tooling: half-channel mirroring, donor-plane verification | `mirror_half_channel`, `InflowDonor`/`check_donor` |
 | `dopamine_post.runlog` | Solver diagnostics parsed from a run's stdout log | `RunLog` |
 | `dopamine_post.vortex` | Q-criterion vortex identification and iso-surface movies | `q_criterion`, `q_volume_fraction`, `animate_q_isosurface` |
