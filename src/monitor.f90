@@ -381,12 +381,28 @@ Contains
 
     If ( cfl_adaptive == 1 .And. cfl_now > 0d0 ) dt = Max(dt_min, Min(dt_max, dt*cfl_target/cfl_now*cfl_safety))
     dt_presnap = dt
-    If ( nsave < 0 .And. t + dt > tsave_next ) dt = tsave_next - t
-    If ( n_slices > 0 .And. slice_freq < 0 .And. t + dt > slice_tnext ) dt = slice_tnext - t
-    If ( n_lines  > 0 .And. line_freq  < 0 .And. t + dt > line_tnext )  dt = line_tnext - t
-    If ( nsteps < 0 .And. t + dt > sim_end_time ) dt = sim_end_time - t
+    If ( nsave < 0 ) dt = landing_dt(dt, tsave_next - t)
+    If ( n_slices > 0 .And. slice_freq < 0 ) dt = landing_dt(dt, slice_tnext - t)
+    If ( n_lines  > 0 .And. line_freq  < 0 ) dt = landing_dt(dt, line_tnext - t)
+    If ( nsteps < 0 ) dt = landing_dt(dt, sim_end_time - t)
 
   End Subroutine select_dt
+
+  !> Step size that lands on a target a time rem ahead without ever leaving a step much shorter than dt_now: a remainder between dt_now
+  !  and 2 dt_now is split into two equal steps (each at least dt_now/2), a shorter one is taken in one step. A sliver step (a landing
+  !  remainder of rounding size) would make dt change by orders of magnitude from one step to the next, which the incremental pressure
+  !  of ibm_pressure = 2 amplifies by dt_prev/dt (see docs/Numerics.md 6.4)
+  Real(Int64) Function landing_dt(dt_now, rem)
+
+    Real(Int64), Intent(In) :: dt_now, rem
+
+    landing_dt = dt_now
+    If ( rem < 2d0*dt_now ) Then
+       landing_dt = rem
+       If ( rem > dt_now ) landing_dt = 0.5d0*rem
+    End If
+
+  End Function landing_dt
 
   !> Volume-weighted (non-uniform y and z, IBM-solid-excluded) domain bulk streamwise velocity, for constant-mass-flux forcing
   Subroutine compute_bulk_velocity(Ub_out)

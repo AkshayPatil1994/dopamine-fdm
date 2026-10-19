@@ -139,9 +139,14 @@ available:
   time reaches `sim_end_time` (checked once per step, after `t` is advanced).
 - **`nsave < 0`** — the step count is ignored; a snapshot is instead written every
   `tsave` physical time units. Because `dt` can vary (`cfl_adaptive = 1`, or a fixed `dt`
-  that does not divide `tsave` evenly), the step immediately before a save is shrunk —
-  `dt = tsave_next - t` — so that `t` lands exactly on multiples of `tsave` and the
-  physical-time spacing between snapshots stays perfectly uniform.
+  that does not divide `tsave` evenly), the last steps before a save are shortened so that
+  `t` lands exactly on multiples of `tsave` and the physical-time spacing between snapshots
+  stays perfectly uniform. A remainder `r = tsave_next - t` shorter than `2 dt` is taken in
+  one step if `r <= dt` and split into two equal steps of `r/2` if `dt < r < 2 dt`, so the
+  step that lands is never shorter than `dt/2`: a step of rounding size (for example
+  `1e-9 s`) would change `dt` by orders of magnitude from one step to the next, which the
+  incremental pressure of `ibm_pressure = 2` amplifies (§6.4). The same rule applies to
+  `slice_freq < 0`, `line_freq < 0` and `sim_end_time`.
 
 These two switches are independent: `nsteps` and `nsave` can each be positive or
 negative in any combination. Configured via `&NUMERICS` — see
@@ -353,6 +358,7 @@ The second IBM method does not interpolate. It treats the body as the set of gri
 
 1. *Incremental form* (`ibm_pressure ≥ 1`): the predictor carries $-\Delta t\,a_{ss}\nabla P_{st}$, with $P_{st}$ the pressure of the previous stage (`Pst`, started at zero, so the first stage of a run is unchanged), and the solve returns the increment $\varphi$, after which $P_{st} \leftarrow P_{st} + \varphi/(\Delta t\,a_{ss})$. With an exact solve this is the same method; with the body faces zeroed it is not, because the flux through them is now only that of the increment. The body faces are zeroed in the predictor, so the right-hand side is the divergence of a field with no flux through the body.
 2. *No second zeroing* (`ibm_pressure = 2`, staircase): the body faces keep the flux of the solve, so every fluid cell is divergence-free to round-off at the end of each stage; the faces are zeroed again at the start of the next stage, before the predictor is built.
+3. *Step-size dependence* (`ibm_pressure = 2`): the flux the last solve leaves through the body faces is proportional to that step's $\Delta t$, but the divergence its zeroing leaves in the fluid cells enters every solve of the next step divided by the new $\Delta t\,a_{ss}$, so the $P_{st}$ update picks up a term $\propto \Delta t_{prev}/\Delta t$. Consecutive steps of similar size (the CFL-adaptive $\Delta t$ changes by a few per cent) are harmless, but a step that is orders of magnitude shorter multiplies $P_{st}$ by the ratio while the velocity stays divergence-free and sane, and the next step fails: a restart from a healthy urban snapshot with a $10^{-8}$ s landing step reached $\max|P| = 5\times10^{6}$ in that snapshot (normally 25) and aborted five steps later, and the production case that crashed at $t = 2300$ s (snapshot $\max|P| = 3\times10^8$) did the same. The time-stepping therefore never creates such a step: the landing step on a save time is at least $\Delta t/2$ (§3). An attempt to compensate the ratio inside the solve was rejected because the flux left by a very short step is not proportional to its $\Delta t$, so a $\Delta t$-ratio weight cannot be defined; keep $\Delta t$ changes between consecutive steps moderate (`cfl_adaptive` does). Regression: `ibm_stair_tiny_step`.
 
 Measured on the Chicago case (514×93×514, 3 m cells, buildings and terrain from GenSDF, `ibm_method=1, ibm_pressure=2, ibm_wall_model_flag=1`, 8 ranks, cold start, 80 steps at $\Delta t = 5\times10^{-3}$): the maximum velocity stays at 34.7 m/s at step 30 and 33.3 m/s at step 80, within 0.1 m/s of the masked-PCG solution at the same steps (34.68, 33.34) and at the cost of the fast solve (2.5 s/step); without `ibm_pressure` it climbs past 49 m/s. The first 10 steps of a zero-velocity, zero-pressure start still show an overshoot (peak 46 m/s at step 3 with a capped $\Delta t$, 35 m/s with the adaptive $\Delta t$ of the case) because $P_{st}$ is zero and the impulsive-start pressure scales as $1/\Delta t$; starting from a developed field avoids it. With `ibm_method=0` the ghost-cell values are rewritten after the solve, which has the same effect as the second zeroing, and the maximum velocity still grew (64 m/s in 60 steps): use the staircase method for rough terrain and buildings.
 

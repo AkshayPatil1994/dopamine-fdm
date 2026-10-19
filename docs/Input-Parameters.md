@@ -55,7 +55,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 |---|---|---|
 | `dt` | required | Time step [s] (initial step if `cfl_adaptive=1`). |
 | `nsteps` | required | `>0` run exactly this many steps; `<0` ignore the count and run until `t ≥ sim_end_time`. |
-| `nsave` | required | `>0` write a snapshot every `nsave` steps; `<0` every `tsave` time units (dt is shortened to land on multiples of `tsave`). |
+| `nsave` | required | `>0` write a snapshot every `nsave` steps; `<0` every `tsave` time units (the last steps are shortened to land on multiples of `tsave`; the landing step is never shorter than `dt/2`, see [Numerics §3](Numerics.md)). |
 | `nmonitor` | required | Print a monitor line every `nmonitor` steps (must be `>0`). |
 | `sim_end_time` | `1e30` | End time; used only when `nsteps<0`. |
 | `tsave` | `1e30` | Save interval; used only when `nsave<0`. |
@@ -117,7 +117,7 @@ Ghost-cell or staircase immersed boundaries from a precomputed signed-distance f
 |---|---|---|
 | `ibm_input_mode` | `0` | `0` no body; `1` read the cell-centre SDF `ibm_sdf_file` (solid where `phi<0`). |
 | `ibm_method` | `0` | `0` ghost-cell (image-point mirror; resolve walls with ≥2 cells); `1` staircase (zero velocity in solid, fast whole-box projection with the closed faces zeroed, log-law stress as viscous flux with `ibm_wall_model_flag=1`; needs `ibm_input_mode≥1`; not for `vof_flow=1`, which always uses the staircase stress). |
-| `ibm_pressure` | `0` | Pressure treatment of the fast whole-box projection (`ibm_method=0` or `1`). `0` pressure-free predictor: the solve removes the whole pressure gradient and the faces of the body are zeroed again afterwards, discarding the pressure-gradient flux across them (cells next to the body end up with divergence of order 1 s⁻¹ and the velocity next to sharp or thin geometry can grow without bound). `1` incremental: the predictor carries −∇ of the last stage pressure, so the solve only supplies the increment and the discarded flux is the increment's. `2` as `1`, and the body faces also keep the flux of the solve, so the fluid cells stay divergence-free to round-off (staircase `ibm_method=1` only). **Recommended for urban/rough-terrain LES: `ibm_method=1, ibm_pressure=2`.** `ibm_method=0` does not profit (its ghost values are rewritten after the solve). Costs one extra array and a gradient per stage, no extra Poisson solve. Single-phase only; see [Numerics §6.4](Numerics.md#64-staircase-method-ibm_method--1). |
+| `ibm_pressure` | `0` | Pressure treatment of the fast whole-box projection (`ibm_method=0` or `1`). `0` pressure-free predictor: the solve removes the whole pressure gradient and the faces of the body are zeroed again afterwards, discarding the pressure-gradient flux across them (cells next to the body end up with divergence of order 1 s⁻¹ and the velocity next to sharp or thin geometry can grow without bound). `1` incremental: the predictor carries −∇ of the last stage pressure, so the solve only supplies the increment and the discarded flux is the increment's. `2` as `1`, and the body faces also keep the flux of the solve, so the fluid cells stay divergence-free to round-off (staircase `ibm_method=1` only). The incremental pressure is sensitive to a step that is much shorter than the previous one (it scales with `dt_prev/dt`): the time stepping therefore never lands on a save/probe time with a step shorter than `dt/2`, and `cfl_adaptive` changes `dt` only moderately; avoid forcing abrupt `dt` changes (see [Numerics §6.4](Numerics.md#64-staircase-method-ibm_method--1)). **Recommended for urban/rough-terrain LES: `ibm_method=1, ibm_pressure=2`.** `ibm_method=0` does not profit (its ghost values are rewritten after the solve). Costs one extra array and a gradient per stage, no extra Poisson solve. Single-phase only; see [Numerics §6.4](Numerics.md#64-staircase-method-ibm_method--1). |
 | `ibm_wall_model_flag` | `0` | `0` no-slip; `1` log-law EQWM on IBM surfaces. With `ibm_method=0` it only rewrites ghost velocities and carries almost no stress in near-1-D shear: use `ibm_method=1` (or `vof_flow=1`) for a wall-modelled IBM. |
 | `ibm_sdf_file` | `'SDF_in'` | Path of the SDF file. |
 | `ibm_objid_file` | `''` | Optional per-solid ID field (GenSDF `sdfp_objid.bin`) enabling per-object settings below; empty = one condition for all solids. |
@@ -196,7 +196,7 @@ Reynolds-stress budget and probes. Omit to disable.
 | `rsb_hom_dir` | `'x,z'` | Homogeneous averaging directions: `''` none, `'x'`, `'z'`, `'x,z'` (channel). |
 | `rsb_fileout` | `'rsb'` | Output base path, e.g. `'stats/rsb'`. |
 | `n_slices` | `0` | Number of 2-D slice probes (max 8). |
-| `slice_freq` | `100` | Output every this many steps (shared). Negative: write every `slice_interval` time units instead (dt is shrunk to land on those times, as for `nsave<0`). |
+| `slice_freq` | `100` | Output every this many steps (shared). Negative: write every `slice_interval` time units instead (the last steps are shortened to land on those times, as for `nsave<0`). |
 | `slice_interval` | `0.0` | Time between slice outputs when `slice_freq<0`; the first is due one interval after the start time. |
 | `slice_dir(n)` | `'z'` | Normal direction `'x'`, `'y'` or `'z'`. |
 | `slice_pos(n)` | `0.0` | Position along the normal [m]. |

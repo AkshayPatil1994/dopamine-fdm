@@ -861,6 +861,11 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/check_div.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_pressure_small
                 --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --max-div 1e-9)
+    # ibm_pressure = 2 with a 1e-9 s landing step (time-based saving): the incremental pressure must not scale with dt_prev/dt
+    add_test(NAME ibm_stair_tiny_step
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/check_tiny_step.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_tiny_step
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # SDF cells at exactly phi = 0 are fluid in every mask (solid is phi < 0)
     add_test(NAME ibm_phi_zero
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_phi_zero/check_phi_zero.py
