@@ -53,6 +53,11 @@ Contains
     !$acc kernels present(rhs_p,Pst)
     rhs_p = dt*c*Pst
     !$acc end kernels
+    If ( outflow_backflow_beta > 0d0 ) Then
+       !$acc kernels present(phib,Pb)
+       phib = dt*c*Pb
+       !$acc end kernels
+    End If
     Call apply_periodic_xz_pressure
     Call update_ghost_interior_planes_pressure
     Call update_ghost_interior_planes_pressure_x
@@ -70,6 +75,11 @@ Contains
     !$acc kernels present(rhs_p,Pst)
     Pst(2:nxg-1,:,2:nzg-1) = Pst(2:nxg-1,:,2:nzg-1) + rhs_p(2:nxg-1,:,2:nzg-1)/(dt*c)
     !$acc end kernels
+    If ( outflow_backflow_beta > 0d0 ) Then
+       !$acc kernels present(phib,Pb)
+       Pb = Pb + phib/(dt*c)
+       !$acc end kernels
+    End If
     If ( rk_step == 3 ) Then
        !$acc kernels present(P,Pst)
        P(2:nxg-1,2:nyg-1,2:nzg-1) = Pst(2:nxg-1,2:nyg-1,2:nzg-1)

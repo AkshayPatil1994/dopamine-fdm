@@ -202,6 +202,7 @@ Contains
        Call apply_inflow_bc_x (V,2)
        Call apply_inflow_bc_x (W,3)
        Uc = outflow_convection_velocity()
+       outflow_Uc = Uc
        If ( .Not. skip_outflow_u ) Call apply_outflow_bc_x(U,Uc)
        ! V/W's convective relaxation isn't idempotent (unlike the zero-gradient BC it replaced), so apply once per RK stage, on the post-projection refresh, not twice
        If ( skip_outflow_u ) Call apply_outflow_bc_x(V,Uc)

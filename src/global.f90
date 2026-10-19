@@ -172,6 +172,14 @@ Module global
   ! streamwise (x) pressure/velocity BC selector: 0=periodic, 1=inflow/outflow
   Integer(Int32) :: x_bc_type  = 0
 
+  ! Outlet backflow stabilisation (x_bc_type==1, ibm_pressure>0): static pressure pb = -beta*|u|^2/2*H(-u_n) on the outlet face of the
+  ! Poisson solve, so fluid re-entering through the outlet carries no net energy (zero total pressure). 0 = off (pb = 0, bit-identical)
+  Real(Int64) :: outflow_backflow_beta = 0d0
+  ! Plane-mean outlet speed of the last apply_boundary_conditions; Pb: outlet-face pressure of the last stage; phib: face value in the
+  ! units of rhs_p (dt*c*Pb for the predictor, the increment of the solve for the projection)
+  Real(Int64) :: outflow_Uc = 0d0
+  Real(Int64), Allocatable, Dimension(:,:) :: Pb, phib
+
   ! wall-normal (y) pressure/velocity BC selector: 0=periodic, 1=wall (uses bc_face_ylo/yhi as today)
   Integer(Int32) :: y_bc_type  = 1
 

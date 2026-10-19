@@ -24,6 +24,7 @@ Contains
 
     Call profiler_start(PROF_PROJECTION)
     Call compute_pseudo_pressure_rhs
+    If ( outflow_backflow_beta > 0d0 ) Call set_outflow_backflow_pressure
     Call profiler_stop(PROF_PROJECTION)
 
     Call solve_poisson_equation
@@ -62,6 +63,38 @@ Contains
     !$acc end parallel loop
 
   End Subroutine compute_pseudo_pressure_rhs
+
+  !> Outlet backflow stabilisation: the face pressure of the solve becomes pb = -beta*|u|^2/2*H(-u_n) from the predicted outlet velocity
+  !  (H smoothed over 5% of the plane-mean outlet speed), so re-entering fluid has zero total pressure. phib is the increment of dt*c*Pb
+  !  that the solve must deliver at the face; the last interior cell's equation takes it as 2*phib/dx^2 on the right-hand side
+  Subroutine set_outflow_backflow_pressure
+
+    Integer(Int32) :: j, k
+    Real   (Int64) :: c, un, vt, wt, th, uref, inv_dx2
+    Logical        :: is_first_x, is_last_x
+    Integer(Int32) :: partner_x
+
+    Call x_periodic_partner(is_first_x, is_last_x, partner_x)
+    If ( .Not. is_last_x ) Return
+
+    c = dt*rk_coef(rk_step,rk_step)
+    uref = 0.05d0*Max(outflow_Uc, 1d-2)
+    inv_dx2 = 1d0/dx**2
+
+    !$acc parallel loop collapse(2) present(U,V,W,rhs_p,Pb,phib)
+    Do k = 2, nzg-1
+       Do j = 2, nyg-1
+          un = U(nx,j,k)
+          vt = 0.5d0*( V(nx,j,k) + V(nx,j-1,k) )
+          wt = 0.5d0*( W(nx,j,k) + W(nx,j,k-1) )
+          th = 0.5d0*( 1d0 - Tanh( un/uref ) )
+          phib(j,k) = c*( -0.5d0*outflow_backflow_beta*( un*un + vt*vt + wt*wt )*th - Pb(j,k) )
+          rhs_p(nx,j,k) = rhs_p(nx,j,k) - 2d0*phib(j,k)*inv_dx2
+       End Do
+    End Do
+    !$acc end parallel loop
+
+  End Subroutine set_outflow_backflow_pressure
 
   !> Solve pseudo-pressure equation (fast Poisson solver)
   !  skip_p_save: leave P untouched (the two-fluid pressure solver calls this as a preconditioner several times per stage)
@@ -537,8 +570,13 @@ Contains
 
     ! Outflow face correction (x_bc_type==1, domain boundary only)
     If ( x_bc_type == 1 .And. is_last_x ) Then
-       U(nx,2:nyg-1,2:nzg-1) = U(nx,2:nyg-1,2:nzg-1) + &
-            2d0 * rhs_p(nx,2:nyg-1,2:nzg-1) * inv_dx_proj
+       If ( outflow_backflow_beta > 0d0 ) Then
+          U(nx,2:nyg-1,2:nzg-1) = U(nx,2:nyg-1,2:nzg-1) + &
+               2d0 * ( rhs_p(nx,2:nyg-1,2:nzg-1) - phib ) * inv_dx_proj
+       Else
+          U(nx,2:nyg-1,2:nzg-1) = U(nx,2:nyg-1,2:nzg-1) + &
+               2d0 * rhs_p(nx,2:nyg-1,2:nzg-1) * inv_dx_proj
+       End If
     End If
 
     ! project V (interior points); yg spacing varies with j

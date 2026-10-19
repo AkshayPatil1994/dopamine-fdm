@@ -40,7 +40,7 @@ Contains
     Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, &
                         cfl_adaptive, cfl_target, cfl_safety, dt_min, dt_max, pcg_precond, mg_cycle, mg_smooth_deg
 
-    Namelist /BOUNDARY_CONDITIONS/ bc_face_ylo, bc_face_yhi, x_bc_type, y_bc_type, z_bc_type
+    Namelist /BOUNDARY_CONDITIONS/ bc_face_ylo, bc_face_yhi, x_bc_type, y_bc_type, z_bc_type, outflow_backflow_beta
 
     Namelist /INFLOW/ inflow_type, inflow_Uconst, inflow_profile_file, inflow_temperature_file, &
                        sem_profile_format, sem_Lscale_ratio_y, sem_Lscale_ratio_z, &
@@ -291,6 +291,9 @@ Contains
        If ( ibm_pressure < 0 .Or. ibm_pressure > 2 ) Call abort_input( 'ERROR: ibm_pressure must be 0, 1 or 2' )
        If ( ibm_pressure > 0 .And. ibm_input_mode < 1 ) &
             Call abort_input( 'ERROR: ibm_pressure > 0 needs an immersed body (ibm_input_mode >= 1)' )
+       If ( outflow_backflow_beta < 0d0 ) Call abort_input( 'ERROR: outflow_backflow_beta must be >= 0' )
+       If ( outflow_backflow_beta > 0d0 .And. ( x_bc_type /= 1 .Or. ibm_pressure < 1 ) ) &
+            Call abort_input( 'ERROR: outflow_backflow_beta > 0 needs x_bc_type = 1 and ibm_pressure >= 1' )
        If ( ibm_pressure == 2 .And. ibm_method /= 1 ) &
             Call abort_input( 'ERROR: ibm_pressure = 2 needs the staircase method (ibm_method = 1)' )
        If ( ibm_method == 1 .And. ibm_input_mode < 1 ) &
@@ -403,6 +406,7 @@ Contains
        End If
        Write(*,'(A,2I3)')    '   BC y-walls (ylo/yhi)        = ', bc_face_ylo, bc_face_yhi
        Write(*,'(A,I2)')     '   x_bc_type (0=periodic,1=inflow/outflow) = ', x_bc_type
+       If ( outflow_backflow_beta > 0d0 ) Write(*,'(A,E12.4)') '   outflow_backflow_beta       = ', outflow_backflow_beta
        Write(*,'(A,I2)')     '   y_bc_type (0=periodic,1=wall)           = ', y_bc_type
        Write(*,'(A,I2)')     '   z_bc_type (0=periodic,1=wall DNS no-slip) = ', z_bc_type
        If ( z_bc_type == 1 .And. alpha_grid_z > 0d0 ) Then
@@ -626,6 +630,7 @@ Contains
     Call Mpi_bcast ( bc_face_ylo,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( bc_face_yhi,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( x_bc_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( outflow_backflow_beta, 1, MPI_real8,    0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( y_bc_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z_bc_type,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( inflow_type,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )

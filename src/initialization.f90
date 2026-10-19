@@ -228,6 +228,10 @@ Contains
        Allocate ( Pst ( 2:nxg, 2:nyg-1, 2:nzg ) )
        Pst = 0d0
     End If
+    If ( outflow_backflow_beta > 0d0 ) Then
+       Allocate ( Pb ( 2:nyg-1, 2:nzg-1 ), phib ( 2:nyg-1, 2:nzg-1 ) )
+       Pb = 0d0;  phib = 0d0
+    End If
     
     ! read data
     If ( myid==0 ) Then
@@ -801,6 +805,9 @@ Contains
     !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv,qT_wall)
     If ( ibm_pressure > 0 ) Then
        !$acc enter data copyin(Pst)
+    End If
+    If ( outflow_backflow_beta > 0d0 ) Then
+       !$acc enter data copyin(Pb,phib)
     End If
     ! Boussinesq temperature: stays device-resident end-to-end so compute_rhs_v can read it directly
     If ( boussinesq_flag >= 1 ) Then
