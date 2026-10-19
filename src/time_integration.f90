@@ -66,8 +66,9 @@ Contains
 
     Real(Int64), Intent(In) :: c
 
+    ! interior only: the ghost planes of rhs_p still hold the predictor's dt*c*Pst, so a whole-array update doubled the ghost planes of Pst every stage
     !$acc kernels present(rhs_p,Pst)
-    Pst = Pst + rhs_p/(dt*c)
+    Pst(2:nxg-1,:,2:nzg-1) = Pst(2:nxg-1,:,2:nzg-1) + rhs_p(2:nxg-1,:,2:nzg-1)/(dt*c)
     !$acc end kernels
     If ( rk_step == 3 ) Then
        !$acc kernels present(P,Pst)
