@@ -911,6 +911,14 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME wm_thermal
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_thermal/check_wm_thermal.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
+    # Rough EQWM with the matching height above the first cell: every cell below it follows the closed-form quadratic drag decay, same on 1 and 4 ranks
+    add_test(NAME wm_rough_layer
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_rough_layer/check_wm_rough_layer.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
+    # Rough EQWM on the precursor y grid (j_m = 52): bulk deceleration of a uniform stream equals the matching-height u_tau^2/Ly balance, same on 1 and 4 ranks
+    add_test(NAME wm_rough_bulk
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_rough_bulk/check_wm_rough_bulk.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Wall-modelled bed (smooth log law) under a uniform stream: wall stress rho u_tau^2, density independent, same on 1 and 4 ranks
     add_test(NAME vof_wm_stream
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wm_stream/check_wm_stream.py

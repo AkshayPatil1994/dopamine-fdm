@@ -11,6 +11,7 @@ Module equations
                               advection_scheme, uav_active,           &
                               rotation_active, Omega_x, y0_rot, z0_rot, &
                               y_bc_type, bc_face_ylo, bc_face_yhi, flat_wall_model_flag, tau_x, tau_z, ibm_stress_on, &
+                              j_match_ylo, j_match_yhi, &
                               z_bc_type, tau_zu, tau_zv
   Use decomp, Only : z_periodic_partner
   Use interpolation
@@ -189,10 +190,10 @@ Contains
 
              fy2 = nu_y2*( term_1(i,j  ,k) + (V_(i+1,j  ,k)-V_(i,j  ,k))*inv_dx )
              fy1 = nu_y1*( term_1(i,j-1,k) + (V_(i+1,j-1,k)-V_(i,j-1,k))*inv_dx )
-             ! wall model: the modelled wall shear replaces the molecular flux through the wall edge
+             ! wall model: the molecular flux through the wall edge is dropped; the modelled wall drag is the sink below
              If ( flat_wall_model_flag > 0 ) Then
-                If ( wall_lo .And. j == 2 ) fy1 = tau_x(i,1,k)
-                If ( wall_hi .And. j == nyg-1 ) fy2 = tau_x(i,2,k)
+                If ( wall_lo .And. j == 2 ) fy1 = 0d0
+                If ( wall_hi .And. j == nyg-1 ) fy2 = 0d0
              End If
              fz2 = nu_z2*( term_2(i,j,k  ) + (W_(i+1,j,k  )-W_(i,j,k  ))*inv_dx )
              fz1 = nu_z1*( term_2(i,j,k-1) + (W_(i+1,j,k-1)-W_(i,j,k-1))*inv_dx )
@@ -212,6 +213,11 @@ Contains
                            inv_dz3*( fz2 - fz1 )                                                   + & !d((nu+nu_t)*(du/dz+dw/dx))/dz
                            dPdx ! constant pressure gradient forcing
 
+             ! wall drag over all cells below the matching height: a stress sampled there would pin a lone first cell to zero
+             If ( flat_wall_model_flag > 0 ) Then
+                If ( wall_lo .And. j <= j_match_ylo ) rhs_u(i,j,k) = rhs_u(i,j,k) - tau_x(i,1,k)*U_(i,j,k)
+                If ( wall_hi .And. j >= j_match_yhi ) rhs_u(i,j,k) = rhs_u(i,j,k) - tau_x(i,2,k)*U_(i,j,k)
+             End If
           End Do
        End Do
     End Do
@@ -595,8 +601,8 @@ Contains
              fy2 = nu_y2*( term_1(i,j  ,k) + (V_(i,j  ,k+1) - V_(i,j  ,k))*inv_dz3 )
              fy1 = nu_y1*( term_1(i,j-1,k) + (V_(i,j-1,k+1) - V_(i,j-1,k))*inv_dz3 )
              If ( flat_wall_model_flag > 0 ) Then
-                If ( wall_lo .And. j == 2 ) fy1 = tau_z(i,1,k)
-                If ( wall_hi .And. j == nyg-1 ) fy2 = tau_z(i,2,k)
+                If ( wall_lo .And. j == 2 ) fy1 = 0d0
+                If ( wall_hi .And. j == nyg-1 ) fy2 = 0d0
              End If
              fx2 = nu_x2*( (W_(i+1,j,k) - W_(i  ,j,k))*inv_dx + (U_(i  ,j,k+1) - U_(i  ,j,k))*inv_dz3 )
              fx1 = nu_x1*( (W_(i  ,j,k) - W_(i-1,j,k))*inv_dx + (U_(i-1,j,k+1) - U_(i-1,j,k))*inv_dz3 )
@@ -613,6 +619,11 @@ Contains
                            inv_dy3*( fy2 - fy1 )                                         + & !d((nu+nu_t)*(dw/dy+dv/dz))/dy
                            two_inv_dz3*(nu_z2*(W_(i,j,k+1)-W_(i,j,k))*inv_dz2 - nu_z1*(W_(i,j,k)-W_(i,j,k-1))*inv_dz1)     + & !d(2(nu+nu_t)*dw/dz)/dz
                            dPdz ! constant pressure gradient forcing
+
+             If ( flat_wall_model_flag > 0 ) Then
+                If ( wall_lo .And. j <= j_match_ylo ) rhs_w(i,j,k) = rhs_w(i,j,k) - tau_z(i,1,k)*W_(i,j,k)
+                If ( wall_hi .And. j >= j_match_yhi ) rhs_w(i,j,k) = rhs_w(i,j,k) - tau_z(i,2,k)*W_(i,j,k)
+             End If
 
           End Do
        End Do
