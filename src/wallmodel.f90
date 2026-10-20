@@ -394,18 +394,16 @@ Contains
   !  Flat-wall equilibrium wall model — local per-point EQWM
   Subroutine compute_flat_wall_eqwm(U_, W_)
 
-    ! Local per-point EQWM for flat channel walls. u_tau comes from the log law at the matching height (nu only: nu_t would
-    ! contaminate the wall law). The drag rate u_tau^2 / (integral of |u| dy below the matching height, floored at u_match*H/2)
-    ! goes to tau_x / tau_z; compute_rhs_u / _w apply it as a linear sink on every cell below the matching height, in place of
-    ! the molecular wall-edge flux, so the column loses u_tau^2 in total and no lone first cell is pinned to zero.
-    ! The ghost rows stay a no-slip mirror (alpha = 0): a Robin slip length that reproduced the stress would be negative for
-    ! y+ > ~10, and a ghost far from the interior value corrupts the SGS gradient at j=2.
+    ! Local per-point EQWM for flat channel walls. u_tau comes from the log law at the matching height (nu only: nu_t would contaminate
+    ! the wall law); the wall shear u_tau^2 along the first-cell velocity goes to tau_x / tau_z, which compute_rhs_u / _w use in place of
+    ! the molecular wall-edge flux. The ghost rows stay a no-slip mirror (alpha = 0): a Robin slip length that reproduced the stress
+    ! would be negative for y+ > ~10, and a ghost far from the interior value corrupts the SGS gradient at j=2.
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(In) :: W_
 
-    Integer(Int32) :: i, j, k
-    Real   (Int64) :: h_layer, u_int, u_match, y_match_lo, y_match_hi, u_tau, W_match
+    Integer(Int32) :: i, k
+    Real   (Int64) :: u_ref, u_match, y_match_lo, y_match_hi, u_tau, W_at_pt, W_match
     Logical        :: most_lo, most_hi
 
     most_lo = boussinesq_flag >= 1 .And. flat_wall_model_flag == 2 .And. T_bc_bot == 2
@@ -415,11 +413,13 @@ Contains
     y_match_hi = Max(Ly - yg(j_match_yhi), 1d-14)
 
     !  U faces (nx × nyg × nzg)
-    !$acc parallel loop collapse(2) present(U_,W_,y,alpha_x,tau_x,L_obukhov_ylo,L_obukhov_yhi)
+    !$acc parallel loop collapse(2) present(U_,W_,alpha_x,tau_x,L_obukhov_ylo,L_obukhov_yhi)
     Do k = 2, nzg-1
        Do i = 2, nx-1
           alpha_x(i, 1, k) = 1.0e10_8;  tau_x(i, 1, k) = 0d0     ! free-slip: Neumann, no stress
           If ( bc_face_ylo /= 2 ) Then
+             W_at_pt = 0.5d0*(W_(i, 2, k-1) + W_(i, 2, k))
+             u_ref   = Sqrt(U_(i, 2, k)**2 + W_at_pt**2)
              W_match = 0.5d0*(W_(i, j_match_ylo, k-1) + W_(i, j_match_ylo, k))
              u_match = Sqrt(U_(i, j_match_ylo, k)**2 + W_match**2)
              If ( most_lo ) Then
@@ -428,15 +428,13 @@ Contains
                 Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
              End If
              alpha_x(i, 1, k) = 0d0
-             h_layer = y(j_match_ylo);  u_int = 0d0
-             Do j = 2, j_match_ylo
-                u_int = u_int + Sqrt(U_(i, j, k)**2 + (0.5d0*(W_(i, j, k-1) + W_(i, j, k)))**2)*(y(j) - y(j-1))
-             End Do
-             tau_x(i, 1, k)   = u_tau**2 / Max(u_int, 0.5d0*u_match*h_layer)
+             tau_x(i, 1, k)   = u_tau**2 * U_(i, 2, k) / Max(u_ref, 1d-30)
           End If
 
           alpha_x(i, 2, k) = 1.0e10_8;  tau_x(i, 2, k) = 0d0
           If ( bc_face_yhi /= 2 ) Then
+             W_at_pt = 0.5d0*(W_(i, nyg-1, k-1) + W_(i, nyg-1, k))
+             u_ref   = Sqrt(U_(i, nyg-1, k)**2 + W_at_pt**2)
              W_match = 0.5d0*(W_(i, j_match_yhi, k-1) + W_(i, j_match_yhi, k))
              u_match = Sqrt(U_(i, j_match_yhi, k)**2 + W_match**2)
              If ( most_hi ) Then
@@ -445,11 +443,7 @@ Contains
                 Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
              End If
              alpha_x(i, 2, k) = 0d0
-             h_layer = Ly - y(j_match_yhi-1);  u_int = 0d0
-             Do j = j_match_yhi, nyg-1
-                u_int = u_int + Sqrt(U_(i, j, k)**2 + (0.5d0*(W_(i, j, k-1) + W_(i, j, k)))**2)*(y(j) - y(j-1))
-             End Do
-             tau_x(i, 2, k)   = u_tau**2 / Max(u_int, 0.5d0*u_match*h_layer)
+             tau_x(i, 2, k)   = -u_tau**2 * U_(i, nyg-1, k) / Max(u_ref, 1d-30)
           End If
        End Do
     End Do
@@ -468,11 +462,12 @@ Contains
     !$acc end kernels
 
     !  W faces (nxg × nyg × nz)
-    !$acc parallel loop collapse(2) present(U_,W_,y,alpha_z,tau_z,L_obukhov_ylo,L_obukhov_yhi)
+    !$acc parallel loop collapse(2) present(U_,W_,alpha_z,tau_z,L_obukhov_ylo,L_obukhov_yhi)
     Do k = 2, nz-1
        Do i = 2, nxg-1
           alpha_z(i, 1, k) = 1.0e10_8;  tau_z(i, 1, k) = 0d0
           If ( bc_face_ylo /= 2 ) Then
+             u_ref   = Sqrt((0.5d0*(U_(i-1, 2, k) + U_(i, 2, k)))**2 + W_(i, 2, k)**2)
              u_match = Sqrt((0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k)))**2 + W_(i, j_match_ylo, k)**2)
              If ( most_lo ) Then
                 Call solve_u_tau_most(u_match, y_match_lo, z0_ylo, L_obukhov_ylo(i,k), u_tau)
@@ -480,15 +475,12 @@ Contains
                 Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
              End If
              alpha_z(i, 1, k) = 0d0
-             h_layer = y(j_match_ylo);  u_int = 0d0
-             Do j = 2, j_match_ylo
-                u_int = u_int + Sqrt((0.5d0*(U_(i-1, j, k) + U_(i, j, k)))**2 + W_(i, j, k)**2)*(y(j) - y(j-1))
-             End Do
-             tau_z(i, 1, k)   = u_tau**2 / Max(u_int, 0.5d0*u_match*h_layer)
+             tau_z(i, 1, k)   = u_tau**2 * W_(i, 2, k) / Max(u_ref, 1d-30)
           End If
 
           alpha_z(i, 2, k) = 1.0e10_8;  tau_z(i, 2, k) = 0d0
           If ( bc_face_yhi /= 2 ) Then
+             u_ref   = Sqrt((0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k)))**2 + W_(i, nyg-1, k)**2)
              u_match = Sqrt((0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k)))**2 + W_(i, j_match_yhi, k)**2)
              If ( most_hi ) Then
                 Call solve_u_tau_most(u_match, y_match_hi, z0_yhi, L_obukhov_yhi(i,k), u_tau)
@@ -496,11 +488,7 @@ Contains
                 Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
              End If
              alpha_z(i, 2, k) = 0d0
-             h_layer = Ly - y(j_match_yhi-1);  u_int = 0d0
-             Do j = j_match_yhi, nyg-1
-                u_int = u_int + Sqrt((0.5d0*(U_(i-1, j, k) + U_(i, j, k)))**2 + W_(i, j, k)**2)*(y(j) - y(j-1))
-             End Do
-             tau_z(i, 2, k)   = u_tau**2 / Max(u_int, 0.5d0*u_match*h_layer)
+             tau_z(i, 2, k)   = -u_tau**2 * W_(i, nyg-1, k) / Max(u_ref, 1d-30)
           End If
        End Do
     End Do

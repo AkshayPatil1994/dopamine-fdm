@@ -379,7 +379,7 @@ no-penetration — the direct $y$-wall analogue of §7.1 below, with $y \leftrig
 ### 7.1 Wall-stress boundary condition (flat walls)
 
 The log law gives the friction velocity $u_\tau$ from the first-cell tangential speed, and the modelled wall shear
-$\tau_w = u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$ (kinematic) replaces the molecular wall-edge flux of the viscous term (applied over the cells below the matching height, §7.4) in
+$\tau_w = u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$ (kinematic) replaces the molecular wall-edge flux of the viscous term in
 `compute_rhs_u` / `compute_rhs_w` (arrays `tau_x`, `tau_z`, set in `compute_flat_wall_eqwm`; at the $z$ walls `tau_zu`, `tau_zv` replace the $z$-edge flux of `compute_rhs_u` / `compute_rhs_v`, set in `compute_flat_wall_eqwm_z` on the ranks owning the wall). The ghost rows keep the no-slip
 mirror ($\alpha = 0$). Free-slip walls take no stress. This applies to the $y$ walls (smooth and rough) and to the spanwise ($z$) walls of `z_bc_type = 1` (smooth only). Check: a uniform stream between two modelled walls decays as the
 integrated log law (`wm_stream`, `wm_stream_z`, `wm_stream_duct`), and a coarse channel ($Re_\tau = 395$, first cell at $y^+ \approx 25$) holds a mean wall stress equal to
@@ -437,11 +437,8 @@ run, the literal first grid cell can violate this badly (e.g. $y_\text{ref}/z_0
 $u_\tau$ becomes extremely sensitive to noise in the sampled velocity). To avoid
 this, `flat_wall_model_flag = 2` resolves a **matching-height** grid index once at
 startup -- the nearest interior point whose distance to the wall clears
-$20\,z_0$ -- and samples $u_\tau$/$\theta_\tau$ there instead of at $j=2$. The stress is then applied as a linear drag on every cell between the wall and the matching height,
-$-c\,\mathbf{u}$ with $c = u_\tau^2 / \max(\int_0^{y_m}|\mathbf{u}|\,dy,\ u_m y_m/2)$, so the column loses $u_\tau^2$ in total
-(the floor only bounds the drag rate, which keeps the explicit update stable). A stress sampled at $y_m$ and imposed on the
-first cell alone would pin that cell to zero velocity and remove only what the (small) near-wall eddy viscosity can
-supply. For $j_m = 2$ this reduces to the single-cell stress of §7.1. A startup warning is printed if no grid point within
+$20\,z_0$ -- and samples $u_\tau$/$\theta_\tau$ there instead of at $j=2$. The stress direction still follows the first interior cell; only the log-law solve benefits from the
+better-conditioned sample point. A startup warning is printed if no grid point within
 the half-channel clears the ratio.
 
 ### 7.5 MOST stability coupling (isothermal flat walls, `T_bc_bot/top = 2`)

@@ -98,9 +98,7 @@ try:
         qm, ut = most(u, tm - twall, ym)
         qm = -qm                                      # heat gained by the fluid per unit area: -u_tau*theta_tau
         err = abs(heat - qm)/max(abs(qm), 1e-12)
-        # the wall drag also slows the matching cells themselves, so the time-mean stress follows the mean of the initial (U = 1) and final speed
-        ut = most(0.5*(1.0 + u), tm - twall, ym)[1]
-        un = KAPPA*0.5*(1.0 + u_other)/math.log(ym/Z0)  # the other wall keeps the neutral rough law
+        un = KAPPA*u_other/math.log(ym/Z0)            # the other wall keeps the neutral rough law
         expected = ut**2 + un**2                      # momentum lost by the column = sum of both applied wall stresses
         errm = abs(drag - expected)/expected
         print('%-8s applied %.5e  MOST %.5e  rel.err %.3f | stress %.5e  MOST stress %.5e  rel.err %.3f' % (tag, heat, qm, err, drag, expected, errm))
