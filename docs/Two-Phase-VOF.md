@@ -74,10 +74,9 @@ the density is advected by the interface method and the momentum by an independe
 only for `ν_eff = μ_l / (2ρ_g)` — it diverges at density ratio ≥ 1e5. An SGS model (`sgs_model`) acts on the mixture, with
 `ν_t` weighted by the local density.
 
-**Wall model (`flat_wall_model_flag = 1` smooth, `2` rough with `z0_ylo`/`z0_yhi`).** At a no-slip y wall the log-law (Reichardt, or rough `z0`) wall stress `ρ u_τ²` is applied
-as a linear drag `-ρ c u` on every cell between the wall and the matching height (`c = u_τ²/max(∫|u|dy, u_m H/2)`, so the layer loses
-`ρ u_τ²` in total; a single first cell would be pinned to zero when the matching height is above it) and replaces the molecular stress at
-the wall edge of `viscous_accel` (`set_wall_stress`); `ρ` is the local face density and `u_τ` is solved with the viscosity of the phase at the wall. The single-phase Robin slip length is not used:
+**Wall model (`flat_wall_model_flag = 1` smooth, `2` rough with `z0_ylo`/`z0_yhi`).** At a no-slip y wall the log-law (Reichardt, or rough `z0`) wall stress `ρ u_τ²`, directed along the
+tangential velocity of the first interior row, replaces the molecular stress at the wall edge of `viscous_accel` (`set_wall_stress`);
+`ρ` is the face density and `u_τ` is solved with the viscosity of the phase at the wall. The single-phase Robin slip length is not used:
 its floor at zero leaves it a plain no-slip condition on a grid whose first cell is at `y⁺ ≳ 10`, and without the floor the ghost
 value is many times the interior one and corrupts the SGS gradient. The log law holds in one fluid only, so a column keeps no-slip
 where the interface lies within the first two rows or one cell sideways (the `C` gate is 0.05 / 0.95). There is no contact-line
