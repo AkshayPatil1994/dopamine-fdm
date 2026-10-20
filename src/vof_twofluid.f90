@@ -918,17 +918,19 @@ Contains
   End Subroutine set_cell_phase_nu
 
 
-  !> Flat-wall EQWM stress at the y walls: wt_u / wt_w are the tangential stress fluxes (rho u_tau**2 along the local tangential velocity,
-  !  signed as the momentum flux through the wall-edge of the first interior row) that viscous_accel uses in place of the molecular
-  !  edge flux. u_tau is solved from the first interior row with the viscosity of the phase there. The log law holds in a single
+  !> Flat-wall EQWM drag at the y walls: wt_u / wt_w are the drag rates u_tau**2 / max(int |u| dy, u_m*H/2) over the layer
+  !  below the matching height (H = its depth) that viscous_accel applies as -rho*rate*u on every cell of that layer, in place of the
+  !  molecular wall-edge flux, so the layer loses u_tau**2 in total (a lone first cell would be pinned to zero when the matching height is
+  !  above it). u_tau is solved at the matching height with the viscosity of the phase there. The log law holds in a single
   !  fluid only: where the interface lies within the wall cell, the one above it or one cell sideways the face stays no-slip.
   Subroutine set_wall_stress
 
     Real(Int64), Parameter :: cgate = 0.05d0
-    Integer(Int32) :: i, k, iw, jw, jn, jm, ia, ib, ka, kb, ii, kk, ph(nxg,nzg), pa, pb, ph_keep
-    Real(Int64) :: ym, z0w, ut, ux, wz, ur, um, nul, rhof, sgn
+    Integer(Int32) :: i, j, k, iw, jw, jn, jm, j1, j2, ia, ib, ka, kb, ii, kk, ph(nxg,nzg), pa, pb, ph_keep
+    Real(Int64) :: li(nxg,nzg)
+    Real(Int64) :: ym, hl, z0w, ut, ux, wz, um, ui, nul
 
-    !$acc data create(ph) present(Cv,U,V,W,vp_rfu,vp_rfw,wt_u,wt_w,wt_on_u,wt_on_w)
+    !$acc data create(ph,li) present(Cv,U,V,W,vp_rfu,vp_rfw,wt_u,wt_w,wt_on_u,wt_on_w)
     !$acc kernels
     wt_on_u = .False.;  wt_on_w = .False.
     !$acc end kernels
@@ -936,7 +938,8 @@ Contains
        If ( Merge(bc_face_ylo, bc_face_yhi, iw == 1) == 2 ) Cycle
        jw = Merge(2, nyg-1, iw == 1);  jn = Merge(3, nyg-2, iw == 1)
        jm = Merge(j_match_ylo, j_match_yhi, iw == 1);  z0w = Merge(z0_ylo, z0_yhi, iw == 1)
-       ym = Merge(yg(jm), Ly - yg(jm), iw == 1);  sgn = Merge(1d0, -1d0, iw == 1)
+       ym = Merge(yg(jm), Ly - yg(jm), iw == 1)
+       j1 = Merge(2, jm, iw == 1);  j2 = Merge(jm, nyg-1, iw == 1);  hl = Merge(y(jm), Ly - y(jm-1), iw == 1)
        !$acc parallel loop collapse(2) default(present)
        Do k = 1, nzg
           Do i = 1, nxg
@@ -960,32 +963,50 @@ Contains
           End Do
        End Do
        !$acc end serial
-       !$acc parallel loop collapse(2) default(present) private(pa,pb,ux,wz,ur,nul,um,ut,rhof)
+       ! integral of the tangential speed over the layer below the matching height (its own kernel: inside the u_tau kernel it
+       ! made the device u_tau come back zero, nvfortran 23.3)
+       !$acc parallel loop collapse(2) default(present) private(ui)
+       Do k = 2, nzg-1
+          Do i = 2, nx-1
+             ui = 0d0
+             Do j = j1, j2
+                ui = ui + Sqrt(U(i,j,k)**2 + (0.5d0*( W(i,j,k-1) + W(i,j,k) ))**2)*( y(j) - y(j-1) )
+             End Do
+             li(i,k) = ui
+          End Do
+       End Do
+       !$acc parallel loop collapse(2) default(present) private(pa,pb,ux,wz,nul,um,ut)
        Do k = 2, nzg-1
           Do i = 2, nx-1
              pa = ph(i,k);  pb = ph(i+1,k)
              If ( pa == 0 .Or. pa /= pb ) Cycle
-             ux = U(i,jw,k);  wz = 0.5d0*( W(i,jw,k-1) + W(i,jw,k) );  ur = Sqrt(ux*ux + wz*wz)
-             If ( ur == 0d0 ) Cycle
-             nul = Merge(vof_nu_l, vof_nu_g, pa == 1)
              um = Sqrt(U(i,jm,k)**2 + (0.5d0*( W(i,jm,k-1) + W(i,jm,k) ))**2)
+             If ( um == 0d0 ) Cycle
+             nul = Merge(vof_nu_l, vof_nu_g, pa == 1)
              Call solve_u_tau_wall(um, ym, z0w, nul, ut)
-             rhof = vp_rfu(i,jw,k)
-             wt_u(i,k,iw) = sgn*rhof*ut*ut*ux/ur;  wt_on_u(i,k,iw) = .True.
+             wt_u(i,k,iw) = ut*ut/Max(li(i,k), 0.5d0*um*hl);  wt_on_u(i,k,iw) = .True.
           End Do
        End Do
-       !$acc parallel loop collapse(2) default(present) private(pa,pb,ux,wz,ur,nul,um,ut,rhof)
+       !$acc parallel loop collapse(2) default(present) private(ui)
+       Do k = 2, nz-1
+          Do i = 2, nxg-1
+             ui = 0d0
+             Do j = j1, j2
+                ui = ui + Sqrt(W(i,j,k)**2 + (0.5d0*( U(i-1,j,k) + U(i,j,k) ))**2)*( y(j) - y(j-1) )
+             End Do
+             li(i,k) = ui
+          End Do
+       End Do
+       !$acc parallel loop collapse(2) default(present) private(pa,pb,ux,wz,nul,um,ut)
        Do k = 2, nz-1
           Do i = 2, nxg-1
              pa = ph(i,k);  pb = ph(i,k+1)
              If ( pa == 0 .Or. pa /= pb ) Cycle
-             wz = W(i,jw,k);  ux = 0.5d0*( U(i-1,jw,k) + U(i,jw,k) );  ur = Sqrt(ux*ux + wz*wz)
-             If ( ur == 0d0 ) Cycle
-             nul = Merge(vof_nu_l, vof_nu_g, pa == 1)
              um = Sqrt(W(i,jm,k)**2 + (0.5d0*( U(i-1,jm,k) + U(i,jm,k) ))**2)
+             If ( um == 0d0 ) Cycle
+             nul = Merge(vof_nu_l, vof_nu_g, pa == 1)
              Call solve_u_tau_wall(um, ym, z0w, nul, ut)
-             rhof = vp_rfw(i,jw,k)
-             wt_w(i,k,iw) = sgn*rhof*ut*ut*wz/ur;  wt_on_w(i,k,iw) = .True.
+             wt_w(i,k,iw) = ut*ut/Max(li(i,k), 0.5d0*um*hl);  wt_on_w(i,k,iw) = .True.
           End Do
        End Do
     End Do
@@ -1004,7 +1025,7 @@ Contains
 
     Integer(Int32) :: i, j, k
     Real(Int64) :: inv_dx, inv_dx2, mx1, mx2, my1, my2, mz1, mz2, hyj, hzk, ihy, ihz
-    Real(Int64) :: dy1, dy2, dyc, dz1, dz2, dzc, fx1, fx2, fy1, fy2, fz1, fz2
+    Real(Int64) :: dy1, dy2, dyc, dz1, dz2, dzc, fx1, fx2, fy1, fy2, fz1, fz2, ws
 
     inv_dx = 1d0/dx
     inv_dx2 = inv_dx*inv_dx
@@ -1013,7 +1034,7 @@ Contains
     !$acc end kernels
 
     ! ---- u faces
-    !$acc parallel loop collapse(3) private(hzk,ihz,hyj,ihy,mx1,mx2,my1,my2,mz1,mz2,fy1,fy2,fz1,fz2) &
+    !$acc parallel loop collapse(3) private(hzk,ihz,hyj,ihy,mx1,mx2,my1,my2,mz1,mz2,fy1,fy2,fz1,fz2,ws) &
     !$acc& present(Fu,U,V,W,mu_c,mr_c,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg,wt_on_u,wt_u,vp_rfu,vp_riu,ovr_u)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
@@ -1031,8 +1052,11 @@ Contains
                    + mr_c(i+1,j,k+1) ) ) )
              fy2 = my2*( ( U(i,j+1,k) - U(i,j,k) )/( yg(j+1) - yg(j) ) + ( V(i+1,j,k) - V(i,j,k) )*inv_dx )
              fy1 = my1*( ( U(i,j,k) - U(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i+1,j-1,k) - V(i,j-1,k) )*inv_dx )
-             If ( j == nyg-1 ) Then;  If ( wt_on_u(i,k,2) ) fy2 = wt_u(i,k,2);  End If
-             If ( j == 2 ) Then;  If ( wt_on_u(i,k,1) ) fy1 = wt_u(i,k,1);  End If
+             ws = 0d0
+             If ( j == nyg-1 ) Then;  If ( wt_on_u(i,k,2) ) fy2 = 0d0;  End If
+             If ( j == 2 ) Then;  If ( wt_on_u(i,k,1) ) fy1 = 0d0;  End If
+             If ( j <= j_match_ylo ) Then;  If ( wt_on_u(i,k,1) ) ws = ws - vp_rfu(i,j,k)*wt_u(i,k,1)*U(i,j,k);  End If
+             If ( j >= j_match_yhi ) Then;  If ( wt_on_u(i,k,2) ) ws = ws - vp_rfu(i,j,k)*wt_u(i,k,2)*U(i,j,k);  End If
              fz2 = mz2*( ( U(i,j,k+1) - U(i,j,k) )/( zg(k+1) - zg(k) ) + ( W(i+1,j,k) - W(i,j,k) )*inv_dx )
              fz1 = mz1*( ( U(i,j,k) - U(i,j,k-1) )/( zg(k) - zg(k-1) ) + ( W(i+1,j,k-1) - W(i,j,k-1) )*inv_dx )
              If ( ibm_wm_on ) Then
@@ -1042,7 +1066,7 @@ Contains
                 If ( ovr_u(i,j,k,4) < ovr_none ) fz2 = ovr_u(i,j,k,4)*vp_rfu(i,j,k)
              End If
              Fu(i,j,k) = ( 2d0*inv_dx2*( mx2*( U(i+1,j,k) - U(i,j,k) ) - mx1*( U(i,j,k) - U(i-1,j,k) ) )              &
-                  + ihy*( fy2 - fy1 ) + ihz*( fz2 - fz1 ) )/vp_riu(i,j,k)
+                  + ihy*( fy2 - fy1 ) + ihz*( fz2 - fz1 ) + ws )/vp_riu(i,j,k)
           End Do
        End Do
     End Do
@@ -1082,7 +1106,7 @@ Contains
     End Do
 
     ! ---- w faces
-    !$acc parallel loop collapse(3) private(dz1,dz2,dzc,hyj,ihy,mx1,mx2,my1,my2,mz1,mz2,fx1,fx2,fy1,fy2) &
+    !$acc parallel loop collapse(3) private(dz1,dz2,dzc,hyj,ihy,mx1,mx2,my1,my2,mz1,mz2,fx1,fx2,fy1,fy2,ws) &
     !$acc& present(Fw,U,V,W,mu_c,mr_c,weight_y_0,weight_y_1,weight_z_0,weight_z_1,y,yg,z,zg,wt_on_w,wt_w,vp_rfw,vp_riw,ovr_w)
     Do k = 2, nz-1
        Do j = 2, nyg-1
@@ -1100,8 +1124,11 @@ Contains
              mz1 = mu_c(i,j,k);  mz2 = mu_c(i,j,k+1)
              fy2 = my2*( ( W(i,j+1,k) - W(i,j,k) )/( yg(j+1) - yg(j) ) + ( V(i,j,k+1) - V(i,j,k) )/dzc )
              fy1 = my1*( ( W(i,j,k) - W(i,j-1,k) )/( yg(j) - yg(j-1) ) + ( V(i,j-1,k+1) - V(i,j-1,k) )/dzc )
-             If ( j == nyg-1 ) Then;  If ( wt_on_w(i,k,2) ) fy2 = wt_w(i,k,2);  End If
-             If ( j == 2 ) Then;  If ( wt_on_w(i,k,1) ) fy1 = wt_w(i,k,1);  End If
+             ws = 0d0
+             If ( j == nyg-1 ) Then;  If ( wt_on_w(i,k,2) ) fy2 = 0d0;  End If
+             If ( j == 2 ) Then;  If ( wt_on_w(i,k,1) ) fy1 = 0d0;  End If
+             If ( j <= j_match_ylo ) Then;  If ( wt_on_w(i,k,1) ) ws = ws - vp_rfw(i,j,k)*wt_w(i,k,1)*W(i,j,k);  End If
+             If ( j >= j_match_yhi ) Then;  If ( wt_on_w(i,k,2) ) ws = ws - vp_rfw(i,j,k)*wt_w(i,k,2)*W(i,j,k);  End If
              fx2 = mx2*( ( W(i+1,j,k) - W(i,j,k) )*inv_dx + ( U(i,j,k+1) - U(i,j,k) )/dzc )
              fx1 = mx1*( ( W(i,j,k) - W(i-1,j,k) )*inv_dx + ( U(i-1,j,k+1) - U(i-1,j,k) )/dzc )
              If ( ibm_wm_on ) Then
@@ -1111,7 +1138,7 @@ Contains
                 If ( ovr_w(i,j,k,4) < ovr_none ) fy2 = ovr_w(i,j,k,4)*vp_rfw(i,j,k)
              End If
              Fw(i,j,k) = ( inv_dx*( fx2 - fx1 )                                                                       &
-                  + ihy*( fy2 - fy1 )  &
+                  + ihy*( fy2 - fy1 ) + ws  &
                   + 2d0/dzc*( mz2*( W(i,j,k+1) - W(i,j,k) )/dz2 - mz1*( W(i,j,k) - W(i,j,k-1) )/dz1 )                 &
                   )/vp_riw(i,j,k)
           End Do
