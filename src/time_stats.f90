@@ -1,6 +1,8 @@
 !> On-the-fly time-averaged velocity statistics (mean, Reynolds stresses) and optional scalar statistics (mean, variance, flux),
 !  accumulated on the device each step and written, little-endian, next to every field snapshot as fields/<fileout>_tavg.<step>.
 !  File layout: Int32 nxm,nym,nzm,nf; Real64 t_acc; nf x Character(8) names; then nf blocks of Real64 (nxm,nym,nzm), Fortran order.
+!  With chunked_snapshot the same layout holds for the chunk box (sizes of the box) plus a trailer:
+!  Int32 f1(3), f2(3); Real64 xm, ym, zm of the box cells.
 Module time_stats
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -73,8 +75,9 @@ Contains
        Call MPI_Bcast(have, 1, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr)
        If ( have ) Then
           Call read_tavg(path)
-       Else If ( myid == 0 ) Then
-          Write(*,'(A,A,A)') ' tavg restart: ', Trim(path), ' not found; averaging starts fresh.'
+       Else If ( tavg_nstart <= nstep_init ) Then
+          Call tavg_abort('restart file ' // Trim(path) // ' is missing and the earlier average would be lost; ' &
+               // 'set tavg_reset = 1 or tavg_nstart > nstep_init to start fresh')
        End If
     End If
 
@@ -160,50 +163,24 @@ Contains
   End Subroutine accumulate_scalar
 
 
-  !> Collective: write the averages as of now to fields/<fileout>_tavg.<step>; with tavg_reset = 1 the sums restart from zero
+  !> Collective: write the averages as of now to fields/<fileout>_tavg.<step> (full domain) and/or, with chunked_snapshot, the
+  !  chunk box to fields/<fileout>_tavgBlock.<step> (plain _tavg when full_snapshot is off); with tavg_reset = 1 the sums restart
   Subroutine write_tavg(step)
 
     Integer(Int32), Intent(In) :: step
-
-    Real(Int64), Allocatable :: buf(:,:,:,:), gbuf(:,:,:,:)
-    Real(Int64)    :: dn
-    Integer(Int32) :: c, unit_no
-    Character(300) :: path
 
     If ( tavg_active /= 1 ) Return
     If ( t_acc <= 0d0 ) Return
 
     !$acc update host(acc)
-    dn = 1d0 / t_acc
-    path = tavg_path(step)
-
-    Allocate( buf(1, nxm, nym_global, nzm) )
-    If ( myid == 0 ) Then
-       Allocate( gbuf(1, nxm_global, nym_global, nzm_global) )
-       Open(newunit=unit_no, file=Trim(path), access='stream', form='unformatted', action='write', status='replace', &
-            convert='little_endian')
-       Write(unit_no) nxm_global, nym_global, nzm_global, nf
-       Write(unit_no) t_acc
-       Write(unit_no) tname
-    Else
-       Allocate( gbuf(1,1,1,1) )
-    End If
-
-    Do c = 1, nf
-       buf(1,:,:,:) = acc(:,:,:,c) * dn
-       If ( mp(c) > 0 ) buf(1,:,:,:) = buf(1,:,:,:) - acc(:,:,:,mp(c)) * acc(:,:,:,mq(c)) * dn * dn
-       If ( ibm_input_mode >= 1 ) Then
-          Where ( phi(2:nxg-1,2:nyg-1,2:nzg-1) < 0d0 ) buf(1,:,:,:) = 0d0
+    If ( full_snapshot .Or. .Not. chunked_snapshot ) Call write_tavg_file(tavg_path(step), .False.)
+    If ( chunked_snapshot ) Then
+       If ( full_snapshot ) Then
+          Call write_tavg_file(tavg_path(step, 'Block'), .True.)
+       Else
+          Call write_tavg_file(tavg_path(step), .True.)
        End If
-       Call reduce_to_rank0_4d(buf, gbuf, 1, nxm, nym_global, nzm)
-       If ( myid == 0 ) Write(unit_no) gbuf
-    End Do
-
-    If ( myid == 0 ) Then
-       Close(unit_no)
-       Write(*,'(A,A,A,ES10.3)') '  Wrote ', Trim(path), '  (averaging time ', t_acc
     End If
-    Deallocate( buf, gbuf )
 
     If ( tavg_reset == 1 ) Then
        t_acc = 0d0
@@ -213,6 +190,103 @@ Contains
     End If
 
   End Subroutine write_tavg
+
+
+  !> Collective: write all fields of the whole domain, or of the chunk box followed by the trailer f1, f2, xm, ym, zm of its cells
+  Subroutine write_tavg_file(path, box)
+
+    Character(*), Intent(In) :: path
+    Logical,      Intent(In) :: box
+
+    Real(Int64), Allocatable :: buf(:,:,:,:), gbuf(:,:,:,:), bbuf(:,:,:)
+    Real(Int64)    :: dn
+    Integer(Int32) :: c, unit_no, nb(3)
+
+    dn = 1d0 / t_acc
+    nb = [ nxm_global, nym_global, nzm_global ]
+    If ( box ) nb = chunk_f2 - chunk_f1
+
+    Allocate( buf(1, nxm, nym_global, nzm) )
+    If ( myid == 0 ) Then
+       If ( box ) Then
+          Allocate( bbuf(nb(1), nb(2), nb(3)) )
+       Else
+          Allocate( gbuf(1, nb(1), nb(2), nb(3)) )
+       End If
+       Open(newunit=unit_no, file=Trim(path), access='stream', form='unformatted', action='write', status='replace', &
+            convert='little_endian')
+       Write(unit_no) nb, nf
+       Write(unit_no) t_acc
+       Write(unit_no) tname
+    Else
+       Allocate( gbuf(1,1,1,1), bbuf(1,1,1) )
+    End If
+
+    Do c = 1, nf
+       buf(1,:,:,:) = acc(:,:,:,c) * dn
+       If ( mp(c) > 0 ) buf(1,:,:,:) = buf(1,:,:,:) - acc(:,:,:,mp(c)) * acc(:,:,:,mq(c)) * dn * dn
+       If ( ibm_input_mode >= 1 ) Then
+          Where ( phi(2:nxg-1,2:nyg-1,2:nzg-1) < 0d0 ) buf(1,:,:,:) = 0d0
+       End If
+       If ( box ) Then
+          Call gather_box(buf(1,:,:,:), bbuf)
+          If ( myid == 0 ) Write(unit_no) bbuf
+       Else
+          Call reduce_to_rank0_4d(buf, gbuf, 1, nxm, nym_global, nzm)
+          If ( myid == 0 ) Write(unit_no) gbuf
+       End If
+    End Do
+
+    If ( myid == 0 ) Then
+       If ( box ) Write(unit_no) chunk_f1, chunk_f2, xm_global(chunk_f1(1):chunk_f2(1)-1), &
+            ym_global(chunk_f1(2):chunk_f2(2)-1), zm_global(chunk_f1(3):chunk_f2(3)-1)
+       Close(unit_no)
+       Write(*,'(A,A,A,ES10.3)') '  Wrote ', Trim(path), '  (averaging time ', t_acc
+    End If
+
+  End Subroutine write_tavg_file
+
+
+  !> Global cell range lo:hi of the chunk box owned by rank r (empty when any hi < lo)
+  Subroutine box_cells(r, lo, hi)
+
+    Integer(Int32), Intent(In)  :: r
+    Integer(Int32), Intent(Out) :: lo(3), hi(3)
+
+    lo = [ Max(chunk_f1(1), ig1_global(r)), chunk_f1(2), Max(chunk_f1(3), kg1_global(r)) ]
+    hi = [ Min(chunk_f2(1)-1, ig2_global(r)-2), chunk_f2(2)-1, Min(chunk_f2(3)-1, kg2_global(r)-2) ]
+
+  End Subroutine box_cells
+
+
+  !> Collective: assemble the chunk-box cells of the local field buf(nxm,nym_global,nzm) in gbuf on rank 0
+  Subroutine gather_box(buf, gbuf)
+
+    Real(Int64), Intent(In)    :: buf(:,:,:)
+    Real(Int64), Intent(InOut) :: gbuf(:,:,:)
+
+    Real(Int64), Allocatable :: tmp(:,:,:)
+    Integer(Int32) :: r, lo(3), hi(3), i0, k0
+
+    Do r = 0, nprocs-1
+       If ( myid /= 0 .And. myid /= r ) Cycle
+       Call box_cells(r, lo, hi)
+       If ( Any(hi < lo) ) Cycle
+       i0 = ig1_global(r) - 1
+       k0 = kg1_global(r) - 1
+       Allocate( tmp(hi(1)-lo(1)+1, hi(2)-lo(2)+1, hi(3)-lo(3)+1) )
+       If ( myid == r ) tmp = buf(lo(1)-i0:hi(1)-i0, lo(2):hi(2), lo(3)-k0:hi(3)-k0)
+       If ( myid == r .And. r /= 0 ) Then
+          Call MPI_Send(tmp, Size(tmp), MPI_REAL8, 0, r, MPI_COMM_WORLD, ierr)
+       Else If ( myid == 0 .And. r /= 0 ) Then
+          Call MPI_Recv(tmp, Size(tmp), MPI_REAL8, r, r, MPI_COMM_WORLD, istat, ierr)
+       End If
+       If ( myid == 0 ) gbuf(lo(1)-chunk_f1(1)+1:hi(1)-chunk_f1(1)+1, lo(2)-chunk_f1(2)+1:hi(2)-chunk_f1(2)+1, &
+                             lo(3)-chunk_f1(3)+1:hi(3)-chunk_f1(3)+1) = tmp
+       Deallocate( tmp )
+    End Do
+
+  End Subroutine gather_box
 
 
   !> Reload the sums from a file written by write_tavg: rank 0 reads, each rank receives its block
@@ -289,14 +363,17 @@ Contains
   End Subroutine scatter_from_rank0
 
 
-  Function tavg_path(step) Result(path)
+  Function tavg_path(step, tag) Result(path)
 
     Integer(Int32), Intent(In) :: step
+    Character(*), Intent(In), Optional :: tag
     Character(300) :: path
     Character(12)  :: ext
 
     Write(ext,'(I0)') step
-    path = 'fields/' // Trim(Adjustl(fileout)) // '_tavg.' // Trim(ext)
+    path = 'fields/' // Trim(Adjustl(fileout)) // '_tavg'
+    If ( Present(tag) ) path = Trim(path) // tag
+    path = Trim(path) // '.' // Trim(ext)
 
   End Function tavg_path
 

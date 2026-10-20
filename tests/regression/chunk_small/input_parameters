@@ -67,3 +67,7 @@
   T_ic_type = 1,
   T_ic_grad = -0.5,
 /
+
+&STATISTICS
+  tavg_active = 1, tavg_T = 1,
+/

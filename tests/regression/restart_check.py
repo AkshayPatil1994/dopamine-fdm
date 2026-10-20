@@ -6,9 +6,11 @@ scalars, nu_t). Catches state that is not saved/restored (or not re-uploaded to 
 The case input must have nsteps = nsave = N (as the tgv/chan/... parity cases do) and a deterministic IC.
 """
 import argparse
+import array
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -28,6 +30,18 @@ def run(mpirun, exe, np, cwd, env_extra):
         sys.exit(f'ERROR: run exited {r.returncode}')
 
 
+def read_tavg_file(path):
+    """(averaging time, [per-field list of values]) of a fields/<fileout>_tavg.<step> file (src/time_stats.f90)."""
+    raw = open(path, 'rb').read()
+    nx, ny, nz, nf = struct.unpack('<4i', raw[:16])
+    t_avg = struct.unpack('<d', raw[16:24])[0]
+    vals = array.array('d')
+    off = 24 + 8 * nf
+    vals.frombytes(raw[off:off + 8 * nx * ny * nz * nf])
+    n = nx * ny * nz
+    return t_avg, [vals[i * n:(i + 1) * n] for i in range(nf)]
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--case-dir', required=True)
@@ -35,6 +49,8 @@ def main():
     p.add_argument('--exe', required=True)
     p.add_argument('--np', type=int, default=1)
     p.add_argument('--tol', type=float, default=1e-12, help='per-block max|a-b|/max|a| bound (default 1e-12)')
+    p.add_argument('--tavg-tol', type=float, default=1e-10,
+                   help='bound on the time-averaged statistics (central moments lose digits through the restart)')
     p.add_argument('--particles', action='store_true', help='also compare the particles_restart state by particle ID')
     p.add_argument('--env', action='append', default=[], help='KEY=VALUE, repeatable')
     args = p.parse_args()
@@ -68,16 +84,23 @@ def main():
         run(args.mpirun, args.exe, args.np, tmp, env)
         straight = read_snapshot(tmp, interior_only=True)
         straight_p = read_particles(os.path.join(tmp, 'particles_restart')) if args.particles else None
+        tavg_path = lambda step: os.path.join(tmp, 'fields', f'{fileout}_tavg.{step}')
+        straight_tavg = read_tavg_file(tavg_path(2 * n)) if os.path.exists(tavg_path(2 * n)) else None
 
         clear_snapshots(tmp)
         write(make_input(n, False))
         run(args.mpirun, args.exe, args.np, tmp, env)
+        # clear_snapshots below would delete the average the restart must reload
+        tavg_n = open(tavg_path(n), 'rb').read() if straight_tavg else None
         shutil.copy(os.path.join(tmp, 'fields', f'{fileout}.{n}'), os.path.join(tmp, 'restart', f'{fileout}.{n}'))
 
         clear_snapshots(tmp)
+        if tavg_n:
+            open(tavg_path(n), 'wb').write(tavg_n)
         write(make_input(n, True))
         run(args.mpirun, args.exe, args.np, tmp, env)
         restarted = read_snapshot(tmp, interior_only=True)
+        restarted_tavg = read_tavg_file(tavg_path(2 * n)) if straight_tavg else None
         restarted_p = read_particles(os.path.join(tmp, 'particles_restart')) if args.particles else None
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -90,6 +113,15 @@ def main():
         d = max(abs(x - y) for x, y in zip(a, b)) / scale
         print(f'  field block {i}: restart vs straight max|a-b|/max|a| = {d:.3E}')
         failed |= d > args.tol
+    if straight_tavg:
+        dt_avg = abs(straight_tavg[0] - restarted_tavg[0]) / straight_tavg[0]
+        print(f'  tavg averaging time: restart vs straight relative difference = {dt_avg:.3E}')
+        failed |= dt_avg > 1e-12
+        for i, (a, b) in enumerate(zip(straight_tavg[1], restarted_tavg[1])):
+            scale = max(max(abs(v) for v in a), 1e-30)
+            d = max(abs(x - y) for x, y in zip(a, b)) / scale
+            print(f'  tavg field {i}: restart vs straight max|a-b|/max|a| = {d:.3E}')
+            failed |= d > args.tavg_tol
     if args.particles:
         if set(straight_p) != set(restarted_p):
             sys.exit('FAIL: the particle ID sets differ')
