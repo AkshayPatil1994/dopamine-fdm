@@ -216,6 +216,7 @@ Contains
     rk_step = 1
     ! nu_t, U,V,W stay device-resident throughout; compute_wall_model is device-resident too (except the host-only compute_pseudo_pressure_bc_for_robin_bc), so no update device needed here
     Call profiler_start(PROF_WALLMODEL)
+    Call update_wm_filter(U,W)
     Call compute_wall_model(U,V,W) ! sets the wall stress + EQWM ghost cells on old velocity
     Call update_ibm_stress
     Call profiler_stop(PROF_WALLMODEL)

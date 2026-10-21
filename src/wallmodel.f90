@@ -391,6 +391,53 @@ Contains
 
   End Subroutine compute_ibm_wall_model
 
+  !> Advance the temporal filter of the flat-wall EQWM input by one time step (wm_filter_mode == 1): the tangential velocity vector
+  !  at the matching height is relaxed with eps = dt/Tf, Tf = wm_filter_Tf_fac*y_match/(kappa*u_tau) from the u_tau of the last
+  !  wall-model call. Called once per step, so the RK stages all see the same filtered input. The first call seeds with the raw field.
+  Subroutine update_wm_filter(U_, W_)
+
+    Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
+    Real(Int64), Dimension(nxg, nyg, nz ), Intent(In) :: W_
+
+    Integer(Int32) :: i, k, iw, jm
+    Real   (Int64) :: eps, ym, kap
+    Logical        :: seed
+
+    If ( wm_filter_mode /= 1 ) Return
+    seed = .Not. wmf_seeded
+    kap  = kappa_wm
+
+    Do iw = 1, 2
+       jm = Merge(j_match_ylo, j_match_yhi, iw == 1)
+       ym = Max(Merge(yg(jm), Ly - yg(jm), iw == 1), 1d-14)
+
+       !$acc parallel loop collapse(2) present(U_,W_,wmf_ux,wmf_wx,wmf_tx)
+       Do k = 2, nzg-1
+          Do i = 2, nx-1
+             eps = 1d0
+             If ( .Not. seed .And. wmf_tx(i,iw,k) > 0d0 ) eps = Min(1d0, dt*kap*wmf_tx(i,iw,k)/(wm_filter_Tf_fac*ym))
+             wmf_ux(i,iw,k) = (1d0-eps)*wmf_ux(i,iw,k) + eps*U_(i,jm,k)
+             wmf_wx(i,iw,k) = (1d0-eps)*wmf_wx(i,iw,k) + eps*0.5d0*(W_(i,jm,k-1) + W_(i,jm,k))
+          End Do
+       End Do
+       !$acc end parallel loop
+
+       !$acc parallel loop collapse(2) present(U_,W_,wmf_uz,wmf_wz,wmf_tz)
+       Do k = 2, nz-1
+          Do i = 2, nxg-1
+             eps = 1d0
+             If ( .Not. seed .And. wmf_tz(i,iw,k) > 0d0 ) eps = Min(1d0, dt*kap*wmf_tz(i,iw,k)/(wm_filter_Tf_fac*ym))
+             wmf_uz(i,iw,k) = (1d0-eps)*wmf_uz(i,iw,k) + eps*0.5d0*(U_(i-1,jm,k) + U_(i,jm,k))
+             wmf_wz(i,iw,k) = (1d0-eps)*wmf_wz(i,iw,k) + eps*W_(i,jm,k)
+          End Do
+       End Do
+       !$acc end parallel loop
+    End Do
+
+    wmf_seeded = .True.
+
+  End Subroutine update_wm_filter
+
   !  Flat-wall equilibrium wall model — local per-point EQWM
   Subroutine compute_flat_wall_eqwm(U_, W_)
 
@@ -403,7 +450,7 @@ Contains
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(In) :: W_
 
     Integer(Int32) :: i, k
-    Real   (Int64) :: u_ref, u_match, y_match_lo, y_match_hi, u_tau, W_at_pt, W_match
+    Real   (Int64) :: u_ref, u_match, y_match_lo, y_match_hi, u_tau, W_at_pt, W_match, num
     Logical        :: most_lo, most_hi
 
     most_lo = boussinesq_flag >= 1 .And. flat_wall_model_flag == 2 .And. T_bc_bot == 2
@@ -413,7 +460,7 @@ Contains
     y_match_hi = Max(Ly - yg(j_match_yhi), 1d-14)
 
     !  U faces (nx × nyg × nzg)
-    !$acc parallel loop collapse(2) present(U_,W_,alpha_x,tau_x,L_obukhov_ylo,L_obukhov_yhi)
+    !$acc parallel loop collapse(2) present(U_,W_,alpha_x,tau_x,L_obukhov_ylo,L_obukhov_yhi,wmf_ux,wmf_wx,wmf_tx)
     Do k = 2, nzg-1
        Do i = 2, nx-1
           alpha_x(i, 1, k) = 1.0e10_8;  tau_x(i, 1, k) = 0d0     ! free-slip: Neumann, no stress
@@ -422,13 +469,19 @@ Contains
              u_ref   = Sqrt(U_(i, 2, k)**2 + W_at_pt**2)
              W_match = 0.5d0*(W_(i, j_match_ylo, k-1) + W_(i, j_match_ylo, k))
              u_match = Sqrt(U_(i, j_match_ylo, k)**2 + W_match**2)
+             num     = U_(i, 2, k)
+             If ( wm_filter_mode == 1 ) Then
+                u_match = Sqrt(wmf_ux(i,1,k)**2 + wmf_wx(i,1,k)**2)
+                num     = wmf_ux(i,1,k);  u_ref = u_match
+             End If
              If ( most_lo ) Then
                 Call solve_u_tau_most(u_match, y_match_lo, z0_ylo, L_obukhov_ylo(i,k), u_tau)
              Else
                 Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
              End If
              alpha_x(i, 1, k) = 0d0
-             tau_x(i, 1, k)   = u_tau**2 * U_(i, 2, k) / Max(u_ref, 1d-30)
+             wmf_tx(i, 1, k)  = u_tau
+             tau_x(i, 1, k)   = u_tau**2 * num / Max(u_ref, 1d-30)
           End If
 
           alpha_x(i, 2, k) = 1.0e10_8;  tau_x(i, 2, k) = 0d0
@@ -437,13 +490,19 @@ Contains
              u_ref   = Sqrt(U_(i, nyg-1, k)**2 + W_at_pt**2)
              W_match = 0.5d0*(W_(i, j_match_yhi, k-1) + W_(i, j_match_yhi, k))
              u_match = Sqrt(U_(i, j_match_yhi, k)**2 + W_match**2)
+             num     = U_(i, nyg-1, k)
+             If ( wm_filter_mode == 1 ) Then
+                u_match = Sqrt(wmf_ux(i,2,k)**2 + wmf_wx(i,2,k)**2)
+                num     = wmf_ux(i,2,k);  u_ref = u_match
+             End If
              If ( most_hi ) Then
                 Call solve_u_tau_most(u_match, y_match_hi, z0_yhi, L_obukhov_yhi(i,k), u_tau)
              Else
                 Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
              End If
              alpha_x(i, 2, k) = 0d0
-             tau_x(i, 2, k)   = -u_tau**2 * U_(i, nyg-1, k) / Max(u_ref, 1d-30)
+             wmf_tx(i, 2, k)  = u_tau
+             tau_x(i, 2, k)   = -u_tau**2 * num / Max(u_ref, 1d-30)
           End If
        End Do
     End Do
@@ -462,33 +521,45 @@ Contains
     !$acc end kernels
 
     !  W faces (nxg × nyg × nz)
-    !$acc parallel loop collapse(2) present(U_,W_,alpha_z,tau_z,L_obukhov_ylo,L_obukhov_yhi)
+    !$acc parallel loop collapse(2) present(U_,W_,alpha_z,tau_z,L_obukhov_ylo,L_obukhov_yhi,wmf_uz,wmf_wz,wmf_tz)
     Do k = 2, nz-1
        Do i = 2, nxg-1
           alpha_z(i, 1, k) = 1.0e10_8;  tau_z(i, 1, k) = 0d0
           If ( bc_face_ylo /= 2 ) Then
              u_ref   = Sqrt((0.5d0*(U_(i-1, 2, k) + U_(i, 2, k)))**2 + W_(i, 2, k)**2)
              u_match = Sqrt((0.5d0*(U_(i-1, j_match_ylo, k) + U_(i, j_match_ylo, k)))**2 + W_(i, j_match_ylo, k)**2)
+             num     = W_(i, 2, k)
+             If ( wm_filter_mode == 1 ) Then
+                u_match = Sqrt(wmf_uz(i,1,k)**2 + wmf_wz(i,1,k)**2)
+                num     = wmf_wz(i,1,k);  u_ref = u_match
+             End If
              If ( most_lo ) Then
                 Call solve_u_tau_most(u_match, y_match_lo, z0_ylo, L_obukhov_ylo(i,k), u_tau)
              Else
                 Call solve_u_tau_wall(u_match, y_match_lo, z0_ylo, nu, u_tau)
              End If
              alpha_z(i, 1, k) = 0d0
-             tau_z(i, 1, k)   = u_tau**2 * W_(i, 2, k) / Max(u_ref, 1d-30)
+             wmf_tz(i, 1, k)  = u_tau
+             tau_z(i, 1, k)   = u_tau**2 * num / Max(u_ref, 1d-30)
           End If
 
           alpha_z(i, 2, k) = 1.0e10_8;  tau_z(i, 2, k) = 0d0
           If ( bc_face_yhi /= 2 ) Then
              u_ref   = Sqrt((0.5d0*(U_(i-1, nyg-1, k) + U_(i, nyg-1, k)))**2 + W_(i, nyg-1, k)**2)
              u_match = Sqrt((0.5d0*(U_(i-1, j_match_yhi, k) + U_(i, j_match_yhi, k)))**2 + W_(i, j_match_yhi, k)**2)
+             num     = W_(i, nyg-1, k)
+             If ( wm_filter_mode == 1 ) Then
+                u_match = Sqrt(wmf_uz(i,2,k)**2 + wmf_wz(i,2,k)**2)
+                num     = wmf_wz(i,2,k);  u_ref = u_match
+             End If
              If ( most_hi ) Then
                 Call solve_u_tau_most(u_match, y_match_hi, z0_yhi, L_obukhov_yhi(i,k), u_tau)
              Else
                 Call solve_u_tau_wall(u_match, y_match_hi, z0_yhi, nu, u_tau)
              End If
              alpha_z(i, 2, k) = 0d0
-             tau_z(i, 2, k)   = -u_tau**2 * W_(i, nyg-1, k) / Max(u_ref, 1d-30)
+             wmf_tz(i, 2, k)  = u_tau
+             tau_z(i, 2, k)   = -u_tau**2 * num / Max(u_ref, 1d-30)
           End If
        End Do
     End Do

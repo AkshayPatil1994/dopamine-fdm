@@ -36,7 +36,7 @@ Contains
 
     Namelist /PHYSICS/ nu, dPdx, dPdz, Ub_x, Ub_z, T_wave_x, T_wave_z, &
                        phi_wave_x, phi_wave_z, sgs_model, Cs_vreman, flat_wall_model_flag, &
-                       z0_ylo, z0_yhi, z0h_ylo, z0h_yhi, &
+                       z0_ylo, z0_yhi, z0h_ylo, z0h_yhi, wm_filter_mode, wm_filter_Tf_fac, &
                        flow_forcing_mode, Ub_target, advection_scheme, adv_order, adv_beta0, adv_beta_ibm, adv_band, &
                        rotation_active, Omega_x
 
@@ -414,6 +414,8 @@ Contains
           Write(*,'(A,E12.4,A,E12.4)') '   z0_ylo, z0_yhi              = ', z0_ylo,  ', ', z0_yhi
           Write(*,'(A,E12.4,A,E12.4)') '   z0h_ylo, z0h_yhi            = ', z0h_ylo, ', ', z0h_yhi
        End If
+       If ( wm_filter_mode > 0 ) Write(*,'(A,I2,A,F8.3)') '   wm_filter_mode, Tf_fac      = ', &
+          wm_filter_mode, ', ', wm_filter_Tf_fac
        Write(*,'(A,2I3)')    '   BC y-walls (ylo/yhi)        = ', bc_face_ylo, bc_face_yhi
        Write(*,'(A,I2)')     '   x_bc_type (0=periodic,1=inflow/outflow) = ', x_bc_type
        If ( outflow_backflow_beta > 0d0 ) Write(*,'(A,E12.4)') '   outflow_backflow_beta       = ', outflow_backflow_beta
@@ -688,6 +690,8 @@ Contains
     Call Mpi_bcast ( z0_yhi,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z0h_ylo,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z0h_yhi,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wm_filter_mode,       1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wm_filter_Tf_fac,     1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( sediment_flag,        1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( sed_bc_bot,           1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -920,6 +924,10 @@ Contains
 
     If ( flat_wall_model_flag < 0 .Or. flat_wall_model_flag > 2 ) &
          Call abort_input( 'ERROR: flat_wall_model_flag must be 0 (no-slip), 1 (smooth log law) or 2 (rough log law)' )
+    If ( wm_filter_mode < 0 .Or. wm_filter_mode > 1 ) &
+         Call abort_input( 'ERROR: wm_filter_mode must be 0 (raw wall-model input) or 1 (temporal filter)' )
+    If ( wm_filter_mode == 1 .And. ( flat_wall_model_flag == 0 .Or. wm_filter_Tf_fac <= 0d0 .Or. z_bc_type == 1 ) ) &
+         Call abort_input( 'ERROR: wm_filter_mode=1 needs flat_wall_model_flag>0, wm_filter_Tf_fac>0 and no z walls (z_bc_type=0)' )
     If ( ibm_wall_model_flag < 0 .Or. ibm_wall_model_flag > 1 ) &
          Call abort_input( 'ERROR: ibm_wall_model_flag must be 0 (no-slip) or 1 (log-law EQWM)' )
     If ( ibm_input_mode < 0 .Or. ibm_input_mode > 1 ) &

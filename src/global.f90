@@ -318,6 +318,14 @@ Module global
   ! place of the molecular wall-edge flux of compute_rhs_u / compute_rhs_w when flat_wall_model_flag > 0
   Real   (Int64), Allocatable, Dimension(:,:,:) :: tau_x, tau_z
 
+  ! Temporal filter of the flat-wall EQWM input (Yang, Park & Moin 2017): wm_filter_mode 0 = raw matching-height velocity, 1 = first-order
+  ! filter u_f = (1-eps) u_f + eps u with eps = dt/Tf, Tf = wm_filter_Tf_fac * y_match/(kappa u_tau). wmf_u*/wmf_w* hold the filtered
+  ! tangential vector at the U faces (*x) and W faces (*z) of both walls, wmf_t* the u_tau that sets Tf; seeded on the first step (also after a restart)
+  Integer(Int32) :: wm_filter_mode = 0
+  Real   (Int64) :: wm_filter_Tf_fac = 1d0
+  Logical        :: wmf_seeded = .False.
+  Real   (Int64), Allocatable, Dimension(:,:,:) :: wmf_ux, wmf_wx, wmf_tx, wmf_uz, wmf_wz, wmf_tz
+
   ! IBM method: 0 = ghost-cell (image-point mirror), 1 = staircase (zero velocity in the solid, masked projection, wall-model stress as the
   ! flux through the edges next to closed faces, see ibm_stress); ibm_stress_on: the viscous terms read the flux overrides of ibm_stress
   Integer(Int32) :: ibm_method = 0

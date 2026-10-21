@@ -743,6 +743,10 @@ Contains
     tau_zv    = 0d0
     tau_x     = 0d0
     tau_z     = 0d0
+    Allocate( wmf_ux(1:nx ,1:2,1:nzg), wmf_wx(1:nx ,1:2,1:nzg), wmf_tx(1:nx ,1:2,1:nzg) )
+    Allocate( wmf_uz(1:nxg,1:2,1:nz ), wmf_wz(1:nxg,1:2,1:nz ), wmf_tz(1:nxg,1:2,1:nz ) )
+    wmf_ux = 0d0;  wmf_wx = 0d0;  wmf_tx = 0d0
+    wmf_uz = 0d0;  wmf_wz = 0d0;  wmf_tz = 0d0
 
     Allocate( qT_wall(1:nxg,1:2,1:nzg) )
     qT_wall = 0d0
@@ -804,7 +808,7 @@ Contains
     ! nu_t too: DNS (sgs_model==0) never writes it on device, but the viscous stencils read it (incl. z wrap ghost planes)
     !$acc update device(U,V,W,nu_t)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
-    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv,qT_wall)
+    !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv,qT_wall,wmf_ux,wmf_wx,wmf_tx,wmf_uz,wmf_wz,wmf_tz)
     If ( ibm_pressure > 0 ) Then
        !$acc enter data copyin(Pst)
     End If
