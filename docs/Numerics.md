@@ -51,7 +51,7 @@ better conserves kinetic energy) or pure central-difference (divergence) form
 - **Row of three 9×8-cell cubes** (same setup): the grid-scale energy falls by 37 % with the IBM band (kinetic energy −0.6 %), but the reduction of the oscillations one cell above the roofs is weaker with order 5 (47.5 → 42.5 extrema, total variation 49.5 → 47.5 at $\beta_0 = 0.05$) than with order 3 (35 extrema, total variation 33.0): the $(k\Delta x)^6$ damping of order 5 is gentler at moderate wavenumbers, so use `adv_order = 3` or a larger `adv_beta_ibm`/`adv_band` where ringing persists.
 - **Cost:** about 42 % more per step on the small 66³ channel, about 12 % on the Chicago grid (514×93×514, where the projection and the IBM dominate; order 5 slightly more).
 
-Recommended for urban LES: `advection_scheme = 2, adv_order = 5, adv_beta0 = 0.05, adv_beta_ibm = 1, adv_band = 2`. Not available with `vof_flow >= 1`. Like scheme 0 it is not momentum conserving on a coarse near-wall grid (§7.1). Combinations with the ghost-cell IBM (`ibm_method = 0`), spanwise walls, the UAV and particles have not been tested. GPU: device kernels with padded halos (`pad_field_dev`); `adv_hybrid_small` and its CPU-vs-GPU parity tests pass on a GPU build.
+Recommended for urban LES: `advection_scheme = 2, adv_order = 5, adv_beta0 = 0.05, adv_beta_ibm = 1, adv_band = 2`. Not available with `vof_flow >= 1`. Next to a wall-modelled wall it uses the divergence-form layers of §7.1 (`adv_wall_layers`). Combinations with the ghost-cell IBM (`ibm_method = 0`), spanwise walls, the UAV and particles have not been tested. GPU: device kernels with padded halos (`pad_field_dev`); `adv_hybrid_small` and its CPU-vs-GPU parity tests pass on a GPU build.
 
 **Rigid-body rotation about the streamwise axis** (`rotation_active = 1`, e.g. for a
 rotating duct) adds Coriolis and centrifugal forcing to the $v$- and $w$-momentum
@@ -383,8 +383,16 @@ $\tau_w = u_\tau^2\,\mathbf{u}_t/|\mathbf{u}_t|$ (kinematic) replaces the molecu
 `compute_rhs_u` / `compute_rhs_w` (arrays `tau_x`, `tau_z`, set in `compute_flat_wall_eqwm`; at the $z$ walls `tau_zu`, `tau_zv` replace the $z$-edge flux of `compute_rhs_u` / `compute_rhs_v`, set in `compute_flat_wall_eqwm_z` on the ranks owning the wall). The ghost rows keep the no-slip
 mirror ($\alpha = 0$). Free-slip walls take no stress. This applies to the $y$ walls (smooth and rough) and to the spanwise ($z$) walls of `z_bc_type = 1` (smooth only). Check: a uniform stream between two modelled walls decays as the
 integrated log law (`wm_stream`, `wm_stream_z`, `wm_stream_duct`), and a coarse channel ($Re_\tau = 395$, first cell at $y^+ \approx 25$) holds a mean wall stress equal to
-$dP/dx\,h$. The skew-symmetric convective form (`advection_scheme = 0`) is not momentum conserving on such a coarse near-wall grid (a
-spurious source of about 40 % of the wall stress was measured); use `advection_scheme = 1` for wall-modelled LES (scheme 2 inherits the skew-symmetric base).
+$dP/dx\,h$ with `advection_scheme = 1`. The skew-symmetric convective form (`advection_scheme = 0`, and scheme 2 on top of it) is not
+momentum conserving where the velocity gradients are under-resolved: the residual is the product of the second $y$-difference of $u$ and the
+$y$-gradient of $v$, which is small for resolved fields and large in the first cells next to a wall model (a spurious source of 12 to 40 % of the wall stress was
+measured). Switching only the wall cell is not enough. `adv_wall_layers` (default automatic: 8 with a flat-wall model and scheme 0 or 2) makes
+that many cells next to the wall use the pure divergence form in every direction, which removes the imbalance (below); the skew-symmetric form is kept above.
+Measured (rough EQWM, $z_0 = 6.77\cdot 10^{-5}\delta$, $Re_\tau \approx 2000$, 64×128×64, 5.4 time units from a stationary scheme-1 state): scheme 0 with no
+layers had a wall stress of 0.70 of the forcing (earlier 20-time-unit runs) and scheme 2 (order 5, $\beta_0 = 0.05$) 0.88 to 0.92, the bulk velocity falling by 1.9;
+scheme 0 with 1, 2 and 4 layers fell by 1.9, 1.3 and 0.35, and 6 or more layers kept the bulk velocity and the profile within 0.3 of the scheme-1 run
+(scheme 2 with 8 layers behaves the same). Immersed bodies
+are not covered: the staircase and ghost-cell IBM faces use the same blend and have not been measured.
 
 ### 7.1b Wall stress on an immersed body (staircase IBM, `ibm_method = 1`)
 

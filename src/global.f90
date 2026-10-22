@@ -59,6 +59,8 @@ Module global
   ! aliasing-driven ringing near sharp/immersed-boundary gradients), 1=pure divergence-form central
   ! Host-only: consumed once per RHS call to derive a blend weight, never referenced on device.
   Integer(Int32) :: advection_scheme = 0
+  ! cells next to a wall-modelled wall (flat_wall_model_flag > 0) that use the divergence form instead of the skew-symmetric blend
+  Integer(Int32) :: adv_wall_layers = -1   ! -1: automatic, 8 with a flat-wall model and advection_scheme /= 1, else 0
   ! advection_scheme = 2 (adv_hybrid.f90): upwind-biased dissipation of order adv_order (3 or 5) added to the skew-symmetric scheme with
   ! coefficient adv_beta0, raised to adv_beta_ibm within adv_band cells of a solid cell
   Integer(Int32) :: adv_order = 3, adv_band = 2

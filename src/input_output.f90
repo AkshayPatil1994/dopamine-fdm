@@ -37,7 +37,8 @@ Contains
     Namelist /PHYSICS/ nu, dPdx, dPdz, Ub_x, Ub_z, T_wave_x, T_wave_z, &
                        phi_wave_x, phi_wave_z, sgs_model, Cs_vreman, flat_wall_model_flag, &
                        z0_ylo, z0_yhi, z0h_ylo, z0h_yhi, wm_filter_mode, wm_filter_Tf_fac, &
-                       flow_forcing_mode, Ub_target, advection_scheme, adv_order, adv_beta0, adv_beta_ibm, adv_band, &
+                       flow_forcing_mode, Ub_target, advection_scheme, adv_wall_layers, adv_order, adv_beta0, adv_beta_ibm, &
+                       adv_band, &
                        rotation_active, Omega_x
 
     Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, &
@@ -122,7 +123,7 @@ Contains
     nks = 0
     ic_type       = 1
     noise_percent = 5.0d0
-    advection_scheme = 0
+    advection_scheme = 0;  adv_wall_layers = -1
     adv_order = 3;  adv_beta0 = 0.05d0;  adv_beta_ibm = 1d0;  adv_band = 2
     nu = -1d0;  dt = 0d0;  dPdx = 0d0;  dPdz = 0d0;  Utarget = 0d0   ! nu and dt must be set (checked after the read)
     nsteps = 0; nsave = 0; nmonitor = 0   ! no valid default: must be set in &NUMERICS (checked after the read)
@@ -367,6 +368,7 @@ Contains
           Write(*,'(A,E12.4)')  '   nu                          = ', nu
        End If
        Write(*,'(A,I2)')     '   advection_scheme (0=skew-symmetric,1=pure central,2=skew+upwind) = ', advection_scheme
+       If ( adv_wall_layers > 0 ) Write(*,'(A,I3)') '   adv_wall_layers             = ', adv_wall_layers
        If ( advection_scheme == 2 ) Write(*,'(A,I2,A,F6.3,A,F6.3,A,I2)') '   adv_order ', adv_order, '  adv_beta0 ', adv_beta0, &
             '  adv_beta_ibm ', adv_beta_ibm, '  adv_band ', adv_band
        Write(*,'(A,I2)')     '   flow_forcing_mode (0=dPdx,1=const mass flux) = ', flow_forcing_mode
@@ -602,6 +604,7 @@ Contains
     Call Mpi_bcast ( dt,                   1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nu,                   1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( advection_scheme,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( adv_wall_layers,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( adv_order,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( adv_band,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( adv_beta0,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -901,6 +904,11 @@ Contains
     If ( nu < 0d0 .And. vof_flow < 1 ) Call abort_input( 'ERROR: &PHYSICS nu (kinematic viscosity) must be set' )
     If ( nu < 0d0 ) nu = 0d0   ! two-fluid runs take the viscosities from &VOF
     If ( sgs_model < 0 .Or. sgs_model > 1 ) Call abort_input( 'ERROR: sgs_model must be 0 (DNS) or 1 (Vreman)' )
+    If ( adv_wall_layers < -1 ) Call abort_input( 'ERROR: adv_wall_layers must be >= 0 (or -1 for automatic)' )
+    If ( adv_wall_layers < 0 ) Then   ! automatic: 8 cells keep the wall stress balanced (see docs/Numerics.md 7.1)
+       adv_wall_layers = 0
+       If ( flat_wall_model_flag > 0 .And. advection_scheme /= 1 ) adv_wall_layers = 8
+    End If
     If ( advection_scheme < 0 .Or. advection_scheme > 2 ) Call abort_input( 'ERROR: advection_scheme must be 0 ' // &
          '(skew-symmetric), 1 (divergence-form central) or 2 (skew-symmetric + upwind-biased dissipation)' )
     If ( advection_scheme == 2 ) Then

@@ -8,7 +8,7 @@ Module equations
                               nu, dPdx, dPdz, nu_t, in1, in2,    &
                               weight_y_0, weight_y_1, weight_z_0, weight_z_1, dx, dz,         &
                               boussinesq_flag, beta_T, grav, T_ref, Tscal, &
-                              advection_scheme, uav_active,           &
+                              advection_scheme, adv_wall_layers, uav_active, &
                               rotation_active, Omega_x, y0_rot, z0_rot, &
                               y_bc_type, bc_face_ylo, bc_face_yhi, flat_wall_model_flag, tau_x, tau_z, ibm_stress_on, &
                               z_bc_type, tau_zu, tau_zv
@@ -42,12 +42,20 @@ Contains
     Real   (Int64) :: inv_dy3    ! 1/dy_3
     Real   (Int64) :: inv_dz3    ! 1/dz_3
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
+    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure divergence form in every
+    ! direction (skew-symmetric form is not momentum conserving where the gradients are under-resolved)
+    Real   (Int64) :: wa, wd
+    Integer(Int32) :: nwl
+    Logical        :: wcell
+    Logical        :: wm_lo, wm_hi  ! wall-modelled y walls
     Logical        :: wall_lo, wall_hi   ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
     Logical        :: zwall_lo, zwall_hi   ! this rank owns a modelled z wall
     Integer(Int32) :: partner
 
     wall_lo = ( y_bc_type == 1 .And. bc_face_ylo == 1 )
     wall_hi = ( y_bc_type == 1 .And. bc_face_yhi == 1 )
+    wm_lo = wall_lo .And. flat_wall_model_flag > 0
+    wm_hi = wall_hi .And. flat_wall_model_flag > 0
     Call z_periodic_partner(zwall_lo, zwall_hi, partner)
     zwall_lo = zwall_lo .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
     zwall_hi = zwall_hi .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
@@ -58,6 +66,7 @@ Contains
     ! advective-form weight: 0.5 gives skew-symmetric (default), 0 gives pure divergence-form central
     w_adv = 0.5d0
     If ( advection_scheme == 1 ) w_adv = 0d0
+    nwl = adv_wall_layers   ! host copy: the module variable is not on the device
     w_div = 1d0 - w_adv
 
     ! compute convective terms
@@ -72,8 +81,13 @@ Contains
     Do k=2,nzg-1
        Do j=2,nyg-1
           Do i=2,nx-1
-             rhs_u(i,j,k) = -( w_div*( term_1(i,j,k)*term_1(i,j,k) - term_1(i-1,j,k)*term_1(i-1,j,k) ) + &
-                                w_adv*U_(i,j,k)*( term_1(i,j,k) - term_1(i-1,j,k) ) )*inv_dx
+             wcell = ( wm_lo .And. j <= 1+nwl ) .Or. ( wm_hi .And. j >= nyg-nwl ) .Or. &
+                  ( zwall_lo .And. k <= 1+nwl ) .Or. ( zwall_hi .And. k >= nzg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_u(i,j,k) = -( wd*( term_1(i,j,k)*term_1(i,j,k) - term_1(i-1,j,k)*term_1(i-1,j,k) ) + &
+                                wa*U_(i,j,k)*( term_1(i,j,k) - term_1(i-1,j,k) ) )*inv_dx
           End Do
        End Do
     End Do
@@ -92,8 +106,13 @@ Contains
     Do k=2,nzg-1
        Do j=2,nyg-1
           Do i=2,nx-1
-             rhs_u(i,j,k) = rhs_u(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j-1,k)*term_2(i,j-1,k) ) + &
-                  w_adv*0.5d0*(term_2(i,j-1,k)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j-1,k) ) ) &
+             wcell = ( wm_lo .And. j <= 1+nwl ) .Or. ( wm_hi .And. j >= nyg-nwl ) .Or. &
+                  ( zwall_lo .And. k <= 1+nwl ) .Or. ( zwall_hi .And. k >= nzg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_u(i,j,k) = rhs_u(i,j,k) - ( wd*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j-1,k)*term_2(i,j-1,k) ) + &
+                  wa*0.5d0*(term_2(i,j-1,k)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j-1,k) ) ) &
                   / ( y(j) - y(j-1) )
           End Do
        End Do
@@ -113,8 +132,13 @@ Contains
     Do k=2,nzg-1
        Do j=2,nyg-1
           Do i=2,nx-1
-             rhs_u(i,j,k) = rhs_u(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j,k-1)*term_2(i,j,k-1) ) + &
-                  w_adv*0.5d0*(term_2(i,j,k-1)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j,k-1) ) ) &
+             wcell = ( wm_lo .And. j <= 1+nwl ) .Or. ( wm_hi .And. j >= nyg-nwl ) .Or. &
+                  ( zwall_lo .And. k <= 1+nwl ) .Or. ( zwall_hi .And. k >= nzg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_u(i,j,k) = rhs_u(i,j,k) - ( wd*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j,k-1)*term_2(i,j,k-1) ) + &
+                  wa*0.5d0*(term_2(i,j,k-1)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j,k-1) ) ) &
                   / ( z(k) - z(k-1) )
           End Do
        End Do
@@ -251,6 +275,11 @@ Contains
     Real   (Int64) :: inv_dz3    ! 1/dz_3; z spacing varies with k (z_bc_type==1, alpha_grid_z>0)
     Real   (Int64) :: inv_dzg1, inv_dzg2   ! 1/(zg(k)-zg(k-1)), 1/(zg(k+1)-zg(k))
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
+    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure divergence form in every
+    ! direction (skew-symmetric form is not momentum conserving where the gradients are under-resolved)
+    Real   (Int64) :: wa, wd
+    Integer(Int32) :: nwl
+    Logical        :: wcell
 
     Call z_periodic_partner(zwall_lo, zwall_hi, partner)
     zwall_lo = zwall_lo .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
@@ -262,6 +291,7 @@ Contains
     ! advective-form weight: 0.5 gives skew-symmetric (default), 0 gives pure divergence-form central
     w_adv = 0.5d0
     If ( advection_scheme == 1 ) w_adv = 0d0
+    nwl = adv_wall_layers   ! host copy: the module variable is not on the device
     w_div = 1d0 - w_adv
 
     ! compute convective terms
@@ -276,8 +306,12 @@ Contains
     Do k=2,nzg-1
        Do j=2,ny-1
           Do i=2,nxg-1
-             rhs_v(i,j,k) = -( w_div*( term_1(i,j,k)*term_1(i,j,k) - term_1(i,j-1,k)*term_1(i,j-1,k) ) + &
-                                w_adv*V_(i,j,k)*( term_1(i,j,k) - term_1(i,j-1,k) ) ) / ( yg(j+1) - yg(j) )
+             wcell = ( zwall_lo .And. k <= 1+nwl ) .Or. ( zwall_hi .And. k >= nzg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_v(i,j,k) = -( wd*( term_1(i,j,k)*term_1(i,j,k) - term_1(i,j-1,k)*term_1(i,j-1,k) ) + &
+                                wa*V_(i,j,k)*( term_1(i,j,k) - term_1(i,j-1,k) ) ) / ( yg(j+1) - yg(j) )
           End Do
        End Do
     End Do
@@ -296,8 +330,12 @@ Contains
     Do k=2,nzg-1
        Do j=2,ny-1
           Do i=2,nxg-1
-             rhs_v(i,j,k) = rhs_v(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i-1,j,k)*term_2(i-1,j,k) ) + &
-                  w_adv*0.5d0*(term_1(i-1,j,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i-1,j,k) ) )*inv_dx
+             wcell = ( zwall_lo .And. k <= 1+nwl ) .Or. ( zwall_hi .And. k >= nzg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_v(i,j,k) = rhs_v(i,j,k) - ( wd*( term_1(i,j,k)*term_2(i,j,k) - term_1(i-1,j,k)*term_2(i-1,j,k) ) + &
+                  wa*0.5d0*(term_1(i-1,j,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i-1,j,k) ) )*inv_dx
           End Do
        End Do
     End Do
@@ -316,8 +354,12 @@ Contains
     Do k=2,nzg-1
        Do j=2,ny-1
           Do i=2,nxg-1
-             rhs_v(i,j,k) = rhs_v(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j,k-1)*term_2(i,j,k-1) ) + &
-                  w_adv*0.5d0*(term_2(i,j,k-1)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j,k-1) ) ) &
+             wcell = ( zwall_lo .And. k <= 1+nwl ) .Or. ( zwall_hi .And. k >= nzg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_v(i,j,k) = rhs_v(i,j,k) - ( wd*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j,k-1)*term_2(i,j,k-1) ) + &
+                  wa*0.5d0*(term_2(i,j,k-1)+term_2(i,j,k))*( term_1(i,j,k) - term_1(i,j,k-1) ) ) &
                   / ( z(k) - z(k-1) )
           End Do
        End Do
@@ -456,16 +498,25 @@ Contains
     Real   (Int64) :: inv_dy3    ! 1/dy_3
     Real   (Int64) :: inv_dz1, inv_dz2, inv_dz3, two_inv_dz3  ! z-spacing inverses
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
+    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure divergence form in every
+    ! direction (skew-symmetric form is not momentum conserving where the gradients are under-resolved)
+    Real   (Int64) :: wa, wd
+    Integer(Int32) :: nwl
+    Logical        :: wcell
+    Logical        :: wm_lo, wm_hi  ! wall-modelled y walls
     Logical        :: wall_lo, wall_hi   ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
 
     wall_lo = ( y_bc_type == 1 .And. bc_face_ylo == 1 )
     wall_hi = ( y_bc_type == 1 .And. bc_face_yhi == 1 )
+    wm_lo = wall_lo .And. flat_wall_model_flag > 0
+    wm_hi = wall_hi .And. flat_wall_model_flag > 0
 
     inv_dx  = 1d0 / dx
 
     ! advective-form weight: 0.5 gives skew-symmetric (default), 0 gives pure divergence-form central
     w_adv = 0.5d0
     If ( advection_scheme == 1 ) w_adv = 0d0
+    nwl = adv_wall_layers   ! host copy: the module variable is not on the device
     w_div = 1d0 - w_adv
 
     ! compute convective terms
@@ -480,8 +531,12 @@ Contains
     Do k=2,nz-1
        Do j=2,nyg-1
           Do i=2,nxg-1
-             rhs_w(i,j,k) = -( w_div*( term_1(i,j,k)*term_1(i,j,k) - term_1(i,j,k-1)*term_1(i,j,k-1) ) + &
-                                w_adv*W_(i,j,k)*( term_1(i,j,k) - term_1(i,j,k-1) ) ) &
+             wcell = ( wm_lo .And. j <= 1+nwl ) .Or. ( wm_hi .And. j >= nyg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_w(i,j,k) = -( wd*( term_1(i,j,k)*term_1(i,j,k) - term_1(i,j,k-1)*term_1(i,j,k-1) ) + &
+                                wa*W_(i,j,k)*( term_1(i,j,k) - term_1(i,j,k-1) ) ) &
                                 / ( zg(k+1) - zg(k) )
           End Do
        End Do
@@ -501,8 +556,12 @@ Contains
     Do k=2,nz-1
        Do j=2,nyg-1
           Do i=2,nxg-1
-             rhs_w(i,j,k) = rhs_w(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i-1,j,k)*term_2(i-1,j,k) ) + &
-                  w_adv*0.5d0*(term_1(i-1,j,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i-1,j,k) ) )*inv_dx
+             wcell = ( wm_lo .And. j <= 1+nwl ) .Or. ( wm_hi .And. j >= nyg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_w(i,j,k) = rhs_w(i,j,k) - ( wd*( term_1(i,j,k)*term_2(i,j,k) - term_1(i-1,j,k)*term_2(i-1,j,k) ) + &
+                  wa*0.5d0*(term_1(i-1,j,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i-1,j,k) ) )*inv_dx
           End Do
        End Do
     End Do
@@ -521,8 +580,12 @@ Contains
     Do k=2,nz-1
        Do j=2,nyg-1
           Do i=2,nxg-1
-             rhs_w(i,j,k) = rhs_w(i,j,k) - ( w_div*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j-1,k)*term_2(i,j-1,k) ) + &
-                  w_adv*0.5d0*(term_1(i,j-1,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i,j-1,k) ) ) &
+             wcell = ( wm_lo .And. j <= 1+nwl ) .Or. ( wm_hi .And. j >= nyg-nwl )
+             wa = w_adv
+             If ( wcell ) wa = 0d0
+             wd = 1d0 - wa
+             rhs_w(i,j,k) = rhs_w(i,j,k) - ( wd*( term_1(i,j,k)*term_2(i,j,k) - term_1(i,j-1,k)*term_2(i,j-1,k) ) + &
+                  wa*0.5d0*(term_1(i,j-1,k)+term_1(i,j,k))*( term_2(i,j,k) - term_2(i,j-1,k) ) ) &
                   / ( y(j) - y(j-1) )
           End Do
        End Do
