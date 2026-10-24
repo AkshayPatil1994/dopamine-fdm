@@ -4,6 +4,7 @@ Module sgs_models
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
+  Use wallmodel, Only : kappa_wm, solve_u_tau_wall
   Use decomp, Only : z_periodic_partner, x_periodic_partner
   Use boundary_conditions, Only : apply_periodic_bc_z, update_ghost_interior_planes_x, update_ghost_interior_planes
 #ifdef GPU_POISSON
@@ -90,9 +91,13 @@ Contains
     Real   (Int64) :: b11, b12, b13, b22, b23, b33  ! beta_mn
     Real   (Int64) :: B_beta, alpha_sq, c_V, nu_t_loc
     Logical        :: ibm_active               ! Guard Umask_cc accesses
+    Logical        :: wm_lo, wm_hi             ! flat-wall EQWM on the low / high y wall
+    Real   (Int64) :: u_c, w_c, u_mag, u_tau, fac_w, y_w   ! first-cell tangential velocity, friction velocity, wall distance
 
     c_V = 2.5d0 * Cs_vreman**2
     ibm_active = ibm_input_mode >= 1 .And. Allocated(Umask_cc)
+    wm_lo = vof_flow < 1 .And. flat_wall_model_flag > 0 .And. y_bc_type == 1 .And. bc_face_ylo == 1
+    wm_hi = vof_flow < 1 .And. flat_wall_model_flag > 0 .And. y_bc_type == 1 .And. bc_face_yhi == 1
 
     inv_dx = 1d0 / dx
     dx2    = dx * dx
@@ -136,6 +141,21 @@ Contains
                            ( W_(i,j+1,k) - W_(i,j,  k)  ) * inv_yg_jp )
              ! W on z-faces
              a33 = ( W_(i,j,k)   - W_(i,j,k-1)   ) * inv_dz_k
+
+             ! wall cell of a wall-modelled wall: the no-slip mirror ghost overstates du/dy several-fold at y+ ~ 50-100, so use the
+             ! log-law gradient u_tau/(kappa y) along the first-cell velocity (u_tau re-solved from it, so no dependence on the wall-stress halos)
+             If ( (wm_lo .And. j == 2) .Or. (wm_hi .And. j == nyg-1) ) Then
+                y_w   = Merge(yg(2), Ly - yg(nyg-1), j == 2)
+                u_c   = 0.5d0*( U_(i-1,j,k) + U_(i,j,k) )
+                w_c   = 0.5d0*( W_(i,j,k-1) + W_(i,j,k) )
+                u_mag = Sqrt(u_c**2 + w_c**2)
+                If ( u_mag > 1d-14 ) Then
+                   Call solve_u_tau_wall(u_mag, y_w, Merge(z0_ylo, z0_yhi, j == 2), nu, u_tau)
+                   fac_w = Merge(1d0, -1d0, j == 2) * u_tau / (kappa_wm*y_w*u_mag)
+                   a21 = fac_w*u_c
+                   a23 = fac_w*w_c
+                End If
+             End If
 
              ! ------ beta_mn (standard: dx_c=dx, dz_c=z(k)-z(k-1), dy_c=y(j)-y(j-1)) --
              b11 = dx2*(a11*a11) + dy2_c*(a21*a21) + dz2*(a31*a31)
