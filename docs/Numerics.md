@@ -258,9 +258,31 @@ All velocity gradients are evaluated at cell centres by second-order central
 differences; off-diagonal gradients are averaged from the two adjacent face-point
 values. Configured via `&PHYSICS` — see [Input Parameters](Input-Parameters.md#physics).
 
+**Wall cell of a wall-modelled wall.** The no-slip mirror ghost row would give $\partial u/\partial y \approx 2u_1/\Delta y$ in the first cell, several times
+the log-law value at $y^+ \sim 50$–$100$ and so an inflated $\nu_t$ there. With a flat-wall model (`flat_wall_model_flag > 0`, no-slip wall, single-phase) the two
+wall-normal gradients $\partial u/\partial y$, $\partial w/\partial y$ of the first cell are instead set to the log-law
+value $u_\tau/(\kappa y)$ along the first-cell velocity, with $u_\tau$ solved again from that velocity by the wall law of §7.2/7.3 (a local solve: it does not read the wall-stress
+arrays, so it is independent of the rank decomposition). The eddy viscosity is still zero on the wall face itself (§7.1).
+
+**AMD closure (`sgs_model = 2`).** The anisotropic minimum-dissipation model (Rozema et al. 2015) shares the gradient tensor, the IBM near-body pass,
+the wall-cell gradient override and the ghost/halo handling of the Vreman routine, and writes the same cell-centred $\nu_t$, so the wall model, IBM, Boussinesq and
+two-fluid VOF paths use it unchanged:
+
+$$\nu_t = C_{\mathrm{amd}}\,\frac{\max\!\big(0,\,-\beta_{mn} S_{mn}\big)}{\alpha_{ij}\alpha_{ij}},\qquad
+S_{mn} = \tfrac12(\alpha_{mn}+\alpha_{nm}),$$
+
+with $\beta_{mn}$ the same $\Delta$-scaled gradient product as above, using the true per-direction cell widths $\Delta_x,\Delta_y(j),\Delta_z(k)$ (no cube-root filter
+width). $C_{\mathrm{amd}} = 1/3$ is the Poincaré constant of second-order central differences. Like Vreman, $\nu_t$ is zero in pure shear. Values below $10^{-12}$ of the Smagorinsky-type scale $\Delta^2|\alpha|$ (the numerator cancels to round-off in near-irrotational flow) are set to zero.
+
+Scalars (temperature, sediment, the two-fluid scalars) use the AMD scalar closure (Abkar, Bae & Moin 2016) instead of the constant $Pr_t$ / $Sc_t$:
+$\kappa_t = C_{\mathrm{amd}} \max(0, -\sum_k\Delta_k^2\,\partial_k u_i\,\partial_k S\,\partial_i S)/(\partial_l S\,\partial_l S)$, evaluated on the scalar being advanced
+(`compute_scalar_diffusivity`; `kappa_t` is a work array, not stored in snapshots). Cells next to an immersed body keep $\nu_t/Pr_t$. With `boussinesq_flag >= 1`
+(single phase) the momentum numerator gains the buoyancy production $+\beta g\sum_k\Delta_k^2\,\partial_k v\,\partial_k\theta'$, $\theta' = T - \langle T\rangle_{xz}$ (Abkar & Moin 2017);
+`amd_buoyancy = 0` omits it. Internal check on a stratified LES channel ($Re_\tau\approx 395$, 34×33×34, wall model, $Ri_\tau = 0.1$ and $5$, one realisation each): the term is negative for stable and positive for unstable stratification (about 2 % of the shear numerator in the core at $Ri_\tau = 5$, 0.1 % at $Ri_\tau = 0.1$ where it has no measurable effect), so the eddy viscosity is reduced when stable (core $\nu_t/\nu$ 0.81 against 0.89) and raised when unstable (1.39 against 0.95); this is a consistency check against the model's design, not a comparison with published stratified-channel data. The Vreman and DNS paths keep $\nu_t/Pr_t$. Check: the `*_amd_small` cases are identical on 1, 2 and 4 ranks.
+
 ### 5.1 Validation — turbulent channel flow 
 
-The LES is validated against a standard turbulent channel flow case used in the Vreman (2004) manuscript. See the profile comparison below that shows excellent agreement between the reference DNS dataset and the LES results using `dopamine-fdm`.
+The Vreman LES is validated against a standard turbulent channel flow case used in the Vreman (2004) manuscript (the AMD model is validated for the wall-modelled channel in §7.8). See the profile comparison below that shows excellent agreement between the reference DNS dataset and the LES results using `dopamine-fdm`.
 
 ![LES validation results: Mean velocity profile, resolved-RMS velocity profiles, and resolved-stress profile comparison](LES_validation.png)
 
@@ -412,9 +434,9 @@ The load and the flow close the same faces (either neighbouring cell has $\phi <
 ### 7.2 Log-law Newton iteration
 
 The friction velocity $u_\tau$ is obtained by a Newton iteration on the log-law /
-viscous-sublayer composite:
+viscous-sublayer composite (Reichardt 1951):
 
-$$u^+ = \begin{cases} y^+ & y^+ < 5 \\\\ \frac{1}{\kappa}\ln(y^+) + B & y^+ \geq 5 \end{cases}$$
+$$u^+ = \frac{1}{\kappa}\ln(1+\kappa y^+) + \left(B - \frac{\ln\kappa}{\kappa}\right)\left(1 - e^{-y^+/11} - \frac{y^+}{11}e^{-0.33y^+}\right)$$
 
 with $\kappa = 0.41$ and $B = 5.2$ (Prandtl–Kármán constants). The iteration uses up to
 20 Newton steps; the wall stress $u_\tau^2$ then follows directly.
@@ -490,6 +512,39 @@ doesn't reference temperature. There is currently no IBM counterpart to §7.4 or
 the thermal ghost-cell BC (`ibm_T_bc_type`/`ibm_T_wall`) remains a plain Dirichlet
 mirror with no wall-model path, since it lacks the reference-cell/`yref` concept the
 momentum ghost lists already have.
+
+
+### 7.7 Temporal filter of the flat-wall wall-model input (`wm_filter_mode`)
+
+An instantaneous wall stress $\tau_w \propto u^2$ from the first-cell velocity couples the stress fluctuations to the velocity fluctuations and damps the
+near-wall turbulence, which lowers $-\langle u'v'\rangle$ and shifts the log layer upward (log-layer mismatch, Yang, Park & Moin 2017). The wall-model input is therefore
+low-pass filtered, once per time step,
+
+$$\bar u^{\,n} = (1-\epsilon)\,\bar u^{\,n-1} + \epsilon\, u^{\,n},\qquad \epsilon = \min\!\left(1, \frac{\Delta t}{T_f}\right),\qquad T_f = f\,\frac{y_m}{\kappa\,u_\tau},$$
+
+applied to the tangential velocity vector at the matching height (`wm_filter_Tf_fac` $= f$, default 1 = the paper's $T_i$; $u_\tau$ is the value of the previous wall-model call).
+Magnitude and direction of the wall stress both come from the filtered vector. The default `wm_filter_mode = -1` switches it on for `flat_wall_model_flag > 0` with `z_bc_type = 0`
+and `vof_flow = 0`; it is not applied to IBM surfaces, the two-fluid solver, or z walls. The filter state is stored next to every full snapshot as `<snapshot>.wmf` and restored on restart
+(without the file it is re-seeded from the raw field). Limitation: the filter removes the $\langle u'^2\rangle$ contribution to the mean stress, a bias of about
+$\langle u'^2\rangle/\langle u\rangle^2$ (4 to 5 %) that is invisible in a body-force-driven channel but not in flows without a prescribed mean stress.
+
+### 7.8 Validation: wall-modelled channel at $Re_\tau = 2000$
+
+Half channel of 64³ cells (free-slip centreline), rough wall model with $z_0 = 6.77\cdot10^{-5}\delta$, `advection_scheme = 1`, averages over about 14 to 24 time units after a stationary state.
+$U-U_{DNS}$ (Hoyas & Jiménez DNS as digitised in the reference paper) at $y/\delta = 0.1,\,0.5,\,0.99$:
+
+| SGS model | wall-model input | $y/\delta=0.1$ | 0.5 | 0.99 | log-layer-mismatch strength |
+|---|---|---|---|---|---|
+| Vreman | raw | +3.87 | +3.06 | +2.58 | +0.18 |
+| Vreman | filtered, $T_f = T_i$ | +2.04 | +1.39 | +0.89 | +0.08 |
+| AMD | raw | +2.99 | +2.68 | +2.26 | +0.16 |
+| AMD (default) | filtered, $T_f = T_i$ (default) | +0.27 | +0.02 | −0.39 | +0.04 |
+
+(strength = $(\Delta U_{LES} - \Delta U_{log})/U_{2,log}$ between the first two cells; the reference paper reports 0.07 raw and 0.01 filtered.) The default combination matches the DNS log layer to about 0.3
+but is slightly low in the outer region and has a bulk velocity about 3 below the Vreman runs, so $C_{\mathrm{amd}}$ has not been tuned for coarse grids. The first-cell wall-normal gradient of the strain used by both
+models is the log-law value $u_\tau/(\kappa y)$ (§5), not the no-slip ghost value.
+
+![Re_tau = 2000 wall-modelled LES: mean velocity and difference to DNS for Vreman and AMD, with and without the wall-model filter](Re2000_AMD_filter_validation.png)
 
 ## 8. Scalar transport (suspended sediment)
 

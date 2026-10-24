@@ -22,7 +22,7 @@ A canonical **wall-resolved LES channel flow** at $Re_\tau \approx 395$.
 
 - `nx,ny,nz = 66,65,66`, `Lx,Ly,Lz = 6.0,2.0,2.0`, `grid_type = 2` (symmetric tanh)
 - `nu = 1/395`, `dPdx = 1.0` — non-dimensionalised so $u_\tau = 1$, $H = 1$
-- `sgs_model = 1` (Vreman LES)
+- `sgs_model = 2` (AMD LES, the default; the validation image in [Numerics § 5.1](Numerics.md#51-validation--turbulent-channel-flow) was produced with `sgs_model = 1`, Vreman)
 - `ic_type = 5` (inverse-linear profile to accelerate transition — see
   [Numerics § Initial conditions](Numerics.md#12-initial-conditions))
 - Fixed `dt = 1.0`, `nsteps = 120000`

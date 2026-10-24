@@ -88,6 +88,9 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
   point particles run on the GPU (it needs `pcg_precond=1`, the default for wall-bounded y; the GPU build uses the multigrid V-cycle, `mg_cycle=-1`).
   Verified at one rank against the CPU build; multi-rank GPU runs are covered only partly (see [Two-Phase-VOF](Two-Phase-VOF.md#42-not-supported)).
   The scalar boundary conditions (sediment, temperature) are device-resident for one rank only; with several ranks they stage the whole field through the host every RK stage.
+- **Verification status**: the GPU regression suite (single-phase cases, AMD closure and scalar diffusivity, wall-model filter with restart, IBM, Boussinesq, particles, and the two-fluid cases at one rank) passes against the CPU build on one RTX 3060
+  when the build is configured with `-DCPU_REFERENCE_EXE=<CPU build>/dopamine` (the CPU-vs-GPU comparisons). The two-fluid solver with an immersed body at 4 ranks on one GPU shows a volume drift of 4.6e-9 (also in the code
+  before the AMD work); multi-GPU transfers with several physical GPUs have not been exercised.
 - **CPU-only**: a duct with
   `x_bc_type=1`. Unsupported combinations abort at input with an explanatory message.
 

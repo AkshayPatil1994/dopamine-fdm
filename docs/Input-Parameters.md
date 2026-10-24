@@ -36,12 +36,16 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `Ub_x, Ub_z` | `0.0` | Amplitude of oscillatory (wave) forcing: `dP/dx(t) = dPdx + Ub_x·ω_x·cos(ω_x t + φ_x)` (same in z). |
 | `T_wave_x, T_wave_z` | `0.0` | Oscillation period [s]; `0` = steady. ω = 2π/T. |
 | `phi_wave_x, phi_wave_z` | `0.0` | Phase offset [rad] (π/2 gives sine forcing; φ_z−φ_x sets the cross-wave lag). |
-| `sgs_model` | `0` | `0` DNS, `1` Vreman LES. |
-| `Cs_vreman` | `0.17` | Vreman constant (c_V = 2.5·Cs²). |
+| `sgs_model` | `2` | `0` DNS, `1` Vreman LES, `2` AMD (anisotropic minimum dissipation) LES (default). Set `0` explicitly for DNS. |
+| `C_amd` | `1/3` | AMD constant (Poincaré constant of second-order central differences), used when `sgs_model=2`. |
+| `amd_buoyancy` | `1` | With `sgs_model=2` and `boussinesq_flag >= 1` (single phase): `1` adds the buoyancy production $+\beta g\,\Delta_k^2\,\partial_k v\,\partial_k\theta'$ (θ′ = T minus its horizontal mean) to the AMD eddy-viscosity numerator (Abkar & Moin 2017), `0` omits it (plain AMD). |
+| `Cs_vreman` | `0.17` | Vreman constant (c_V = 2.5·Cs²). With a flat-wall model the first cell next to a no-slip wall uses the log-law wall-normal gradient u_τ/(κy) instead of the mirror-ghost one (Numerics §5). |
 | `flat_wall_model_flag` | `0` | Wall model on flat y walls (and on z walls if `z_bc_type=1`): `0` no-slip DNS, `1` smooth log-law EQWM, `2` rough-z0 EQWM (y walls only; aborts with z walls). |
 | `z0_ylo, z0_yhi` | `0.0` | Momentum roughness length [m] of the bottom / top wall; mode 2 only, must be `>0` on every no-slip wall (aborts otherwise). |
 | `z0h_ylo, z0h_yhi` | `0.0` | Thermal roughness length [m]; only for `T_bc_bot/top=2`. |
 | `advection_scheme` | `0` | `0` skew-symmetric (energy-conserving, less ringing at sharp IBM gradients), `1` pure divergence-form central, `2` skew-symmetric plus upwind-biased dissipation of order `adv_order` (see Numerics, convective term; damps grid-scale ringing at sharp bodies; single phase only). |
+| `wm_filter_mode` | `-1` | Temporal filter of the flat-wall EQWM input (Yang, Park & Moin 2017, PRF 2, 104601): `0` raw matching-height velocity, `1` first-order filter $u_f \leftarrow (1-\epsilon)u_f + \epsilon u$, $\epsilon = \Delta t/T_f$, $T_f$ = `wm_filter_Tf_fac`·$y_m/(\kappa u_\tau)$ (the paper's $T_i$), `-1` automatic: `1` with `flat_wall_model_flag > 0`, `z_bc_type = 0` and `vof_flow = 0`, else `0`. Not applied to IBM, VOF or z walls (explicit `1` there aborts). The filter state is written next to every full snapshot as `<snapshot>.wmf` and read back on restart (keep it with the snapshot; without it the filter re-seeds from the raw field). |
+| `wm_filter_Tf_fac` | `1.0` | Filter time scale in units of $T_i = y_m/(\kappa u_\tau)$. |
 | `adv_wall_layers` | `-1` | Cells next to a wall-modelled wall (`flat_wall_model_flag > 0`: both $y$ walls, and the $z$ walls of `z_bc_type=1`) that use the pure divergence form in every direction instead of the skew-symmetric blend. The skew-symmetric form is not momentum conserving where the gradients are under-resolved, so with a wall model the wall stress no longer balances the forcing (measured 0.70 to 0.88 of it at Re_τ 2000, first cell $y^+\approx 30$); with 6 or more layers it does. `-1` = automatic: `8` when `flat_wall_model_flag > 0` and `advection_scheme` is `0` or `2`, otherwise `0` (scheme 1 is already conservative). See Numerics §7.1. |
 | `adv_order` | `3` | `advection_scheme=2`: order of the upwind-biased dissipation, `3` or `5` (5 damps only the highest wavenumbers; needs 3 halo planes). |
 | `adv_beta0` | `0.05` | `advection_scheme=2`: background coefficient β (0 = none, 1 = the dissipation of UP3/UP5 on top of the 2nd-order central scheme; the formal order stays 2); resolved scales change by O(β (kΔx)^order). Wall-modelled channel LES (Re_τ 395, 66³, order 5): β₀ = 0.05 keeps U⁺ within 0.7 % and the stresses within the scatter of the skew-symmetric run, β₀ = 0.1 shifts U⁺ by 1.4 % and u′u′ by 6 %, β₀ = 0.2 by 2.2 %/6 %: keep β₀ ≤ 0.05 and let `adv_beta_ibm` do the work near bodies. |
@@ -74,6 +78,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 |---|---|---|
 | `bc_face_ylo, bc_face_yhi` | `1, 1` | Bottom / top wall: `1` no-slip, `2` free-slip. Ignored if `y_bc_type=0`. |
 | `x_bc_type` | `0` | Streamwise: `0` periodic (FFT pressure solve); `1` inflow/outflow (Dirichlet inflow from `&INFLOW`, convective outflow `dF/dt+Uc dF/dx=0` with `Uc` the outlet mean clipped to `[0,dx/dt]`, DCT-IV pressure solve; the outflow face is divergence-corrected so mass is conserved). |
+| `outflow_backflow_beta` | `0.0` | Outlet backflow stabilisation for `x_bc_type = 1` with `ibm_pressure >= 1` (the outlet pressure carries a term that bounds reversed flow through the outlet; `1.0` is the value that was used for the check, `0` is the plain Dirichlet `p = 0` outlet). Aborts for `x_bc_type /= 1` or `ibm_pressure < 1`. No regression test since the SGS wall-cell change. |
 | `y_bc_type` | `1` | Wall-normal: `0` periodic (needs `grid_type=1`; required for Taylor–Green `ic_type=6`), `1` walls. |
 | `z_bc_type` | `0` | Spanwise: `0` periodic; `1` wall (no-slip or smooth EQWM only; no free-slip, no rough EQWM). With `y_bc_type=1` this is a 4-wall duct (coupled 2-D y–z pressure solve, needs `p_col=1`). |
 
@@ -167,7 +172,7 @@ Suspended-sediment passive scalar with Soulsby (1997) settling. Omit to disable.
 | `d_s` | `1e-4` | Particle diameter [m]. |
 | `rho_s, rho_f` | `2650`, `1000` | Particle and fluid density [kg/m³]. |
 | `grav` | `0.0` | Gravity [m/s²], shared with `&BOUSSINESQ` and inertial `&PARTICLES` (warning if the groups disagree; `&BOUSSINESQ` wins). Set it for any of them. |
-| `Sc, Sc_t` | `1.0`, `0.7` | Molecular / turbulent Schmidt numbers. |
+| `Sc, Sc_t` | `1.0`, `0.7` | Molecular / turbulent Schmidt numbers. `Sc_t` is used with `sgs_model = 1` (Vreman) and `0`; with `sgs_model = 2` (AMD) the turbulent diffusivity comes from the AMD scalar closure and `Sc_t` is ignored (Numerics §5). |
 | `sed_bc_bot` | `0` | Bottom BC: `0` zero flux, `1` fixed `C_ref`. |
 | `C_ref` | `0.0` | Near-bed reference concentration (also the inflow value for `x_bc_type=1`). |
 | `C_ic_type` | `0` | Initial C: `0` uniform `C_ref`, `1` Rouse, `2` linear ramp `C_ref`→0, `3` slab. |
@@ -183,7 +188,7 @@ Temperature transport with buoyancy in the y-momentum equation (gravity along �
 | `beta_T` | `0.0` | Thermal expansion coefficient [1/K]. |
 | `T_ref` | `0.0` | Reference temperature [K] for buoyancy and the uniform IC. |
 | `grav` | `0.0` | Gravity [m/s²] (see `&SEDIMENT`). |
-| `Pr, Pr_t` | `0.7`, `0.85` | Molecular / turbulent Prandtl numbers. |
+| `Pr, Pr_t` | `0.7`, `0.85` | Molecular / turbulent Prandtl numbers. `Pr_t` is used with `sgs_model = 1` (Vreman) and `0`; with `sgs_model = 2` (AMD) the AMD scalar closure supplies the turbulent diffusivity and `Pr_t` is ignored; the buoyancy production term of the AMD eddy viscosity needs `boussinesq_flag >= 1` and is not available in the GPU build (Numerics §5). |
 | `T_bc_bot, T_bc_top` | `0, 0` | Wall BC: `0` adiabatic, `1` isothermal at `T_wall_*`, `2` rough-EQWM flux with Monin–Obukhov stability coupling (needs `flat_wall_model_flag=2` and `z0h_*>0`; the momentum stress uses the previous step's Obukhov length). |
 | `T_wall_bot, T_wall_top` | `0.0` | Wall temperature [K] for BC types 1 and 2. |
 | `T_ic_type` | `0` | `0` uniform `T_ref`; `1` linear gradient. |
@@ -345,9 +350,9 @@ Numerical wave flume: Dirichlet wave inlet plus relaxation zones. Needs `vof_flo
 | Case | Set these |
 |---|---|
 | DNS periodic channel | `nx,ny,nz,Lx,Ly,Lz`, `grid_type=2`+`alpha_grid`, `nu`, `dPdx` (or `flow_forcing_mode=1`+`Ub_target`), `dt` or `cfl_adaptive=1`, `nsteps`, `nsave`, `nmonitor`, `Utarget`, `fileout` |
-| Wall-modelled LES | as above plus `sgs_model=1`, `flat_wall_model_flag=1` (or 2 with `z0_ylo/yhi`), coarser grid |
+| Wall-modelled LES | as above plus `sgs_model=2` (AMD, default; `1` Vreman), `flat_wall_model_flag=1` (or 2 with `z0_ylo/yhi`), coarser grid |
 | Rough wall (IBM) | `&IBM`: `ibm_input_mode=1`, `ibm_sdf_file`; for a wall model add `ibm_wall_model_flag=1`, `ibm_method=1`, `ibm_z0` |
-| Urban / rough-terrain LES | `&IBM` as above with `ibm_pressure=2`; `sgs_model=1`; optionally `advection_scheme=2, adv_order=5, adv_beta0=0.05, adv_beta_ibm=1, adv_band=2` |
+| Urban / rough-terrain LES | `&IBM` as above with `ibm_pressure=2`; `sgs_model=2`; optionally `advection_scheme=2, adv_order=5, adv_beta0=0.05, adv_beta_ibm=1, adv_band=2` |
 | Restart | `restart=1`, `filein`, `nstep_init` (and `t_start` if adaptive dt) |
 | Inflow/outflow | `x_bc_type=1`, `&INFLOW inflow_type`, `Utarget` |
 | Sediment / thermal | `sediment_flag=1` + `grav`, or `boussinesq_flag=1` + `beta_T`, `T_ref`, `grav` |

@@ -23,7 +23,7 @@ A parallel finite-difference solver for the 3-D incompressible Navier–Stokes e
 
 - **Numerics**: staggered MAC grid, second-order central differences, low-storage RK3, fractional-step projection with a spectral pressure solver (FFTW3 + [2decomp&fft](https://github.com/2decomp-fft/2decomp-fft) transposes), stretched wall-normal and spanwise grids.
 - **Boundaries**: periodic, no-slip or free-slip walls, 4-wall ducts, inflow/outflow with constant, synthetic-eddy (ESEM) or recycled-precursor inflow.
-- **Walls and turbulence**: DNS, Vreman LES, flat-wall and IBM equilibrium wall models (smooth and rough), ghost-cell or staircase IBM from signed-distance fields.
+- **Walls and turbulence**: DNS, LES with the AMD (default) or Vreman eddy viscosity, flat-wall and IBM equilibrium wall models (smooth and rough), ghost-cell or staircase IBM from signed-distance fields.
 - **Physics modules**: Boussinesq temperature, suspended sediment, Lagrangian particles, rotation, oscillatory forcing, UAV actuator disk.
 - **Two-phase flow**: PLIC-VOF, consistent momentum transport (WENO5-Z), surface tension, wave-flume inlet and relaxation zones; off by default and then a strict no-op.
 - **Diagnostics**: full Pope §7.4 Reynolds-stress budget, line/slice probes, per-stage profiler.

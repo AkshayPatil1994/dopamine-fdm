@@ -161,7 +161,7 @@ replays `uav_disk_state`'s auto-tilt low-pass filter (only meaningful with
 ### `dopamine_post.fields`
 
 `FieldSeries(case_dir).latest()` / `.read(step)` returns a `FieldSnapshot` (cell-centred
-U,V,W,P and, when active, C/nu_t/T, ghost layers stripped) for wall-normal profile plots
+U,V,W,P and, when active, C/nu_t/T and the two-fluid liquid fraction `vof`, ghost layers stripped) for wall-normal profile plots
 (`plot_profile`) or arbitrary planes (`FieldSnapshot.plane`). `FieldSeries.time_average(
 step_range, interval)` reproduces the former `compute_stats.py` (mean profiles, resolved
 Reynolds stresses, resolved+SGS dissipation, centreline symmetry fold) as a `FieldStats`
@@ -173,11 +173,23 @@ wall-modelled/coarse LES carries part of the stress in the SGS model, so a near-
 deficit vs. DNS is expected). `FieldSeries.write_xmf()` writes `paraview/channel_test.xmf`
 via the same zero-copy byte-seek approach as `dopamine_post.particles`.
 
-Chunked snapshots (`chunked_snapshot=.true.`, `&IO`) are read with `read_box_snapshot(path)`, which returns the box
+**Which optional blocks a full snapshot holds** (C, nu_t, T, vof, in that order after U, V, W, P) is taken from `<case>/input_parameters` (`sediment_flag`, `sgs_model`, `boussinesq_flag`, `vof_active`); a missing
+`sgs_model` means the solver default, AMD (`sgs_model = 2`, so a `nu_t` block exists). When all flags come from the input file and the file holds a different number of blocks, `FieldSnapshot.read` raises a `ValueError`
+instead of shifting the blocks (a wrong `sgs_model` used to read `nu_t` as `T`); pass `sgs_model=`, `sediment_flag=`, `boussinesq_flag=`, `vof_active=` explicitly to override, or to skip trailing blocks. The wall-model
+filter sidecars `<snapshot>.wmf`, time-average files (`*_tavg.*`), particle files and box files (`*Block.*`) are never taken for a field snapshot when the prefix is detected.
+
+Chunked snapshots (`chunked_snapshot=.true.`, `&IO`) are read with `FieldSnapshot.from_box(path)` (a `FieldSnapshot` on the box's cell centres, staggered velocities averaged to the centres) or `read_box_snapshot(path)`, which returns the box
 coordinates and every field with its stagger flags, and exported with `write_box_xmf(case_dir)` (CLI:
 `dopamine_post fields box-xmf --case-dir <case>`), writing `paraview/box.xmf` for all `<fileout>Block.<step>` files. Fields
 are shown on the box's cell centres; staggered velocities take the lower face of each cell. Examples:
 `postProcessing/examples/fields_example.py` and `particles_example.py` (the latter also writes `particles.xmf`).
+
+### Interactive plotting (Jupyter / scripts)
+
+The library never selects a matplotlib backend: `import dopamine_post` leaves the notebook's inline/widget backend (or `MPLBACKEND`) untouched, figure functions (`plot_profile`, `plot_stats`, `plot_tracks`,
+`SDF.plot_xz`, ...) return the live `Figure`, so it is displayed inline in JupyterLab or by `plt.show()` in a script with a display. Headless scripts get matplotlib's own fallback (Agg) and can still pass `save=`.
+`plot_stats` only closes its figure when the backend cannot display it. Movie rendering (`render_movie`) draws frames in forked workers with Agg and does not affect the caller's backend. The `dopamine-post` command line
+sets Agg because it only writes files.
 
 ### `dopamine_post.probes`
 
