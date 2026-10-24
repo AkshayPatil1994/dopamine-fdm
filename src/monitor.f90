@@ -115,6 +115,7 @@ Contains
        Select Case (sgs_model)
        Case (0);        str_sgs   = '0  (DNS — no eddy viscosity)'
        Case (1);        str_sgs   = '1  (Vreman)'
+       Case (2);        str_sgs   = '2  (AMD)'
        Case Default; Write(str_sgs,'(I2,A)') sgs_model, '  (unknown)'
        End Select
 
@@ -207,6 +208,8 @@ Contains
        Write(*,'(A,A)') '    SGS model          :  ', Trim(str_sgs)
        If (sgs_model == 1) &
           Write(*,'(A,E12.4)') '    Cs_vreman          :  ', Cs_vreman
+       If (sgs_model == 2) &
+          Write(*,'(A,E12.4)') '    C_amd              :  ', C_amd
        Write(*,'(A,A)') '    Flat-wall model    :  ', Trim(str_wm)
        Write(*,'(A,A)') '    IBM mode           :  ', Trim(str_ibm)
        If (ibm_input_mode >= 1) &

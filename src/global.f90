@@ -292,10 +292,13 @@ Module global
 
   !	Eddy Viscosity
   Real   (Int64), Allocatable, Dimension(:,:,:)   :: nu_t
+  Real   (Int64), Allocatable, Dimension(:,:,:)   :: kappa_t   ! turbulent scalar diffusivity of the scalar being advanced (see compute_scalar_diffusivity); not stored in snapshots
 
-  ! SGS model control: sgs_model 0=DNS,1=Vreman; Cs_vreman is Smagorinsky-equivalent constant (c_V = 2.5*Cs_vreman^2)
-  Integer(Int32) :: sgs_model  = 0       ! default: DNS
+  ! SGS model control: sgs_model 0=DNS,1=Vreman,2=AMD; Cs_vreman is Smagorinsky-equivalent constant (c_V = 2.5*Cs_vreman^2)
+  Integer(Int32) :: sgs_model  = 2       ! default: AMD
   Real   (Int64) :: Cs_vreman  = 0.17d0   ! default Vreman constant
+  Real   (Int64) :: C_amd      = 1d0/3d0  ! AMD (sgs_model=2) Poincare constant, 1/3 for second-order central differences
+  Integer(Int32) :: amd_buoyancy = 1      ! AMD with boussinesq_flag >= 1: 1 adds the buoyancy production of Abkar & Moin (2017) to the eddy-viscosity numerator, 0 omits it
 
   ! Flat-wall equilibrium wall model flag: 0=DNS no-slip (default), 1=smooth log-law EQWM, 2=rough z0 EQWM
   Integer(Int32) :: flat_wall_model_flag = 0

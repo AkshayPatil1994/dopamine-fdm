@@ -25,7 +25,7 @@
   nu                   = 1.5e-5,
   dPdx                 = 0.0,
   dPdz                 = 0.0,
-  sgs_model            = 1,
+  sgs_model            = 2,
   Cs_vreman            = 0.17,
   flat_wall_model_flag = 0,
 /

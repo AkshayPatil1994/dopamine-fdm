@@ -4,6 +4,7 @@ Module scalar_transport
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
+  Use sgs_models, Only : compute_scalar_diffusivity
   Use decomp, Only : z_halo_neighbors, x_halo_neighbors, x_periodic_partner, z_periodic_partner
   Use boundary_conditions, Only : apply_periodic_bc_z, apply_periodic_bc_x, update_ghost_interior_planes_x, &
                                   update_ghost_interior_planes, apply_inflow_bc_scalar_x_C, outflow_convection_velocity, &
@@ -93,9 +94,10 @@ Contains
     wall_q_lo = temp_wall_flux .And. T_bc_bot == 2
     wall_q_hi = temp_wall_flux .And. T_bc_top == 2
 
+    Call compute_scalar_diffusivity(U_, V_, W_, C_, kappa_t_inv)
     Call scalar_fill_pad(C_)
 
-    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,nu_t,qT_wall,phi,x,xg,y,yg,z,zg,kfield, &
+    !$acc parallel loop collapse(3) present(Cpad,U_,V_,W_,Fc_,kappa_t,qT_wall,phi,x,xg,y,yg,z,zg,kfield, &
     !$acc& weight_y_0,weight_y_1,weight_z_0,weight_z_1)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
@@ -225,8 +227,8 @@ Contains
                 km_hi = 2d0*kfield(i,j,k)*kfield(i+1,j,k)/( kfield(i,j,k) + kfield(i+1,j,k) )
                 km_lo = 2d0*kfield(i,j,k)*kfield(i-1,j,k)/( kfield(i,j,k) + kfield(i-1,j,k) )
              End If
-             kappa_hi = km_hi + 0.5d0*(nu_t(i,j,k) + nu_t(i+1,j,k))*kappa_t_inv
-             kappa_lo = km_lo + 0.5d0*(nu_t(i,j,k) + nu_t(i-1,j,k))*kappa_t_inv
+             kappa_hi = km_hi + 0.5d0*(kappa_t(i,j,k) + kappa_t(i+1,j,k))
+             kappa_lo = km_lo + 0.5d0*(kappa_t(i,j,k) + kappa_t(i-1,j,k))
              diff_x = ( kappa_hi*(Cpad(i+1,j,k) - Cpad(i,j,k))/(xg(i+1)-xg(i)) &
                       - kappa_lo*(Cpad(i,j,k) - Cpad(i-1,j,k))/(xg(i)-xg(i-1)) ) / dx_f
 
@@ -236,8 +238,8 @@ Contains
                 km_hi = 2d0*kfield(i,j,k)*kfield(i,j+1,k)/( kfield(i,j,k) + kfield(i,j+1,k) )
                 km_lo = 2d0*kfield(i,j,k)*kfield(i,j-1,k)/( kfield(i,j,k) + kfield(i,j-1,k) )
              End If
-             kappa_hi = km_hi + ( weight_y_0(j  )*nu_t(i,j,k) + weight_y_1(j  )*nu_t(i,j+1,k) )*kappa_t_inv
-             kappa_lo = km_lo + ( weight_y_0(j-1)*nu_t(i,j-1,k) + weight_y_1(j-1)*nu_t(i,j,k) )*kappa_t_inv
+             kappa_hi = km_hi + ( weight_y_0(j  )*kappa_t(i,j,k) + weight_y_1(j  )*kappa_t(i,j+1,k) )
+             kappa_lo = km_lo + ( weight_y_0(j-1)*kappa_t(i,j-1,k) + weight_y_1(j-1)*kappa_t(i,j,k) )
              flux_hi = kappa_hi*(Cpad(i,j+1,k) - Cpad(i,j,k))/(yg(j+1)-yg(j))
              flux_lo = kappa_lo*(Cpad(i,j,k) - Cpad(i,j-1,k))/(yg(j)-yg(j-1))
              If ( wall_q_lo .And. j == 2     ) flux_lo = qT_wall(i,1,k)
@@ -250,8 +252,8 @@ Contains
                 km_hi = 2d0*kfield(i,j,k)*kfield(i,j,k+1)/( kfield(i,j,k) + kfield(i,j,k+1) )
                 km_lo = 2d0*kfield(i,j,k)*kfield(i,j,k-1)/( kfield(i,j,k) + kfield(i,j,k-1) )
              End If
-             kappa_hi = km_hi + ( weight_z_0(k  )*nu_t(i,j,k) + weight_z_1(k  )*nu_t(i,j,k+1) )*kappa_t_inv
-             kappa_lo = km_lo + ( weight_z_0(k-1)*nu_t(i,j,k-1) + weight_z_1(k-1)*nu_t(i,j,k) )*kappa_t_inv
+             kappa_hi = km_hi + ( weight_z_0(k  )*kappa_t(i,j,k) + weight_z_1(k  )*kappa_t(i,j,k+1) )
+             kappa_lo = km_lo + ( weight_z_0(k-1)*kappa_t(i,j,k-1) + weight_z_1(k-1)*kappa_t(i,j,k) )
              diff_z = ( kappa_hi*(Cpad(i,j,k+1) - Cpad(i,j,k))/(zg(k+1)-zg(k)) &
                       - kappa_lo*(Cpad(i,j,k) - Cpad(i,j,k-1))/(zg(k)-zg(k-1)) ) / dz_f
 

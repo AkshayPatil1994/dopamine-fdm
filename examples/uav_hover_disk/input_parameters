@@ -24,7 +24,7 @@
   nu                   = 1.5e-5,   ! air kinematic viscosity [m^2/s]
   dPdx                 = 0.0,
   dPdz                 = 0.0,
-  sgs_model            = 1,        ! Vreman -- rotor wake is turbulent even from a laminar IC
+  sgs_model            = 2,        ! AMD -- rotor wake is turbulent even from a laminar IC
   Cs_vreman            = 0.17,
   flat_wall_model_flag = 0,        ! walls are free-slip here (see &BOUNDARY_CONDITIONS), so unused
 /

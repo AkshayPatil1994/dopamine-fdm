@@ -682,9 +682,11 @@ Contains
 
     ! Eddy viscosity
     Allocate( nu_t     (1:nxg,1:nyg,1:nzg) )
+    Allocate( kappa_t  (1:nxg,1:nyg,1:nzg) )
 
     !	Define eddy viscosity to 0
     nu_t = 0d0
+    kappa_t = 0d0
 
     ! incremental pressure (ibm_pressure > 0): continue from the stage pressure stored in the restart file's P block
     If ( restart == 1 .And. ibm_pressure > 0 ) Then
@@ -804,10 +806,10 @@ Contains
     term_1 = 0d0; term_2 = 0d0
     !$acc update device(term_1,term_2)
     ! Evolving per-substage fields: allocated here (create, not copyin) so time_integration.f90's per-RK-substage update device/host calls have a target
-    !$acc enter data create(U,V,W,nu_t,Fu1,Fv1,Fw1,Fu2,Fv2,Fw2,Fu3,Fv3,Fw3)
+    !$acc enter data create(U,V,W,nu_t,kappa_t,Fu1,Fv1,Fw1,Fu2,Fv2,Fw2,Fu3,Fv3,Fw3)
     ! One-time initial sync: enter data create only allocates, so push host U,V,W or step 1 runs on uninitialized device data
     ! nu_t too: DNS (sgs_model==0) never writes it on device, but the viscous stencils read it (incl. z wrap ghost planes)
-    !$acc update device(U,V,W,nu_t)
+    !$acc update device(U,V,W,nu_t,kappa_t)
     ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
     !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv,qT_wall,wmf_ux,wmf_wx,wmf_tx,wmf_uz,wmf_wz,wmf_tz)
     !$acc update device(wmf_ux,wmf_wx,wmf_tx,wmf_uz,wmf_wz,wmf_tz)

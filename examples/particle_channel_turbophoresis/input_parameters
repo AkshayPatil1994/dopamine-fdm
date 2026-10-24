@@ -48,7 +48,7 @@
   nu                   = 0.002531645569620253,      ! Re_tau = 395, H = 1.0, u_tau = 1.0, nu = 1/Re_tau
   dPdx                 = 1.0,
   dPdz                 = 0.0,
-  sgs_model            = 1,       ! 0=DNS, 1=Vreman
+  sgs_model            = 2,       ! 0=DNS, 1=Vreman, 2=AMD
   Cs_vreman            = 0.17,
   flat_wall_model_flag = 1,       ! 0=no-slip, 1=log-law EQWM
 /

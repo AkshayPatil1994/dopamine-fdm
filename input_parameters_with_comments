@@ -54,8 +54,12 @@
   T_wave_z             = 0.0,
   phi_wave_x           = 0.0,     ! phase offset [rad]
   phi_wave_z           = 0.0,
-  sgs_model            = 0,       ! 0=DNS, 1=Vreman
-  Cs_vreman            = 0.17,
+  sgs_model            = 2,       ! 0=DNS, 1=Vreman, 2=AMD (default)
+  C_amd                = 0.3333333333333333,  ! AMD constant (sgs_model=2)
+  amd_buoyancy         = 1,       ! AMD + Boussinesq: 1 buoyancy production in nu_t (Abkar & Moin 2017), 0 plain AMD
+  Cs_vreman            = 0.17,    ! Vreman constant; wall cell of a wall-modelled wall uses the log-law du/dy
+  wm_filter_mode       = -1,      ! flat-wall EQWM input filter: -1 auto (1 with flat_wall_model_flag>0, no z walls, vof_flow=0), 0 off, 1 on
+  wm_filter_Tf_fac     = 1.0,     ! filter time scale in units of y_match/(kappa*u_tau)
   flat_wall_model_flag = 0,
   z0_ylo               = 0.0,     ! momentum roughness [m], flat_wall_model_flag=2
   z0_yhi               = 0.0,
@@ -100,6 +104,7 @@
   x_bc_type   = 0,
   y_bc_type   = 1,
   z_bc_type   = 0,
+  outflow_backflow_beta = 0.0,   ! >0: outlet backflow stabilisation (x_bc_type=1 and ibm_pressure>=1)
 /
 
 ! Only read when x_bc_type=1.
@@ -261,7 +266,7 @@
   rho_f         = 1000.0,
   grav          = 9.81,
   Sc            = 1.0,
-  Sc_t          = 0.7,
+  Sc_t          = 0.7,   ! used with sgs_model=0/1; ignored with sgs_model=2 (AMD scalar closure)
   C_ref         = 0.0,
   sed_bc_bot    = 0,
   C_ic_type     = 0,
@@ -278,7 +283,7 @@
   T_ref           = 0.0,
   grav            = 9.81,
   Pr              = 0.7,
-  Pr_t            = 0.85,
+  Pr_t            = 0.85,   ! used with sgs_model=0/1; ignored with sgs_model=2 (AMD scalar closure)
   T_bc_bot        = 0,
   T_bc_top        = 0,
   T_wall_bot      = 0.0,

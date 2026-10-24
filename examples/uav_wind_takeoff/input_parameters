@@ -24,7 +24,7 @@
 
 &PHYSICS
   nu                   = 1.5e-5,
-  sgs_model            = 1,
+  sgs_model            = 2,
   Cs_vreman            = 0.17,
   flat_wall_model_flag = 1,     ! smooth log-law EQWM at the ground -- resolves the mean-wind profile at this coarse a grid
   flow_forcing_mode    = 1,     ! constant mass flux: solve for dPdx internally, hold bulk streamwise velocity at Ub_target

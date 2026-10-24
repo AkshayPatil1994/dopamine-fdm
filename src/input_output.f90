@@ -35,7 +35,7 @@ Contains
     Namelist /DOMAIN/ nx, ny, nz, Lx, Ly, Lz, alpha_grid, grid_type, p_row, p_col, alpha_grid_z
 
     Namelist /PHYSICS/ nu, dPdx, dPdz, Ub_x, Ub_z, T_wave_x, T_wave_z, &
-                       phi_wave_x, phi_wave_z, sgs_model, Cs_vreman, flat_wall_model_flag, &
+                       phi_wave_x, phi_wave_z, sgs_model, Cs_vreman, C_amd, amd_buoyancy, flat_wall_model_flag, &
                        z0_ylo, z0_yhi, z0h_ylo, z0h_yhi, wm_filter_mode, wm_filter_Tf_fac, &
                        flow_forcing_mode, Ub_target, advection_scheme, adv_wall_layers, adv_order, adv_beta0, adv_beta_ibm, &
                        adv_band, &
@@ -411,6 +411,7 @@ Contains
             Write(*,'(A)') '   NOTE: snapshot_location = 1 writes a cell-centred full snapshot that cannot be used for restart'
        Write(*,'(A,I2)')     '   sgs_model                   = ', sgs_model
        Write(*,'(A,E12.4)')  '   Cs_vreman                   = ', Cs_vreman
+       If ( sgs_model == 2 ) Write(*,'(A,E12.4,A,I2)') '   C_amd, amd_buoyancy         = ', C_amd, ', ', amd_buoyancy
        Write(*,'(A,I2)')     '   flat_wall_model_flag        = ', flat_wall_model_flag
        If ( flat_wall_model_flag == 2 ) Then
           Write(*,'(A,E12.4,A,E12.4)') '   z0_ylo, z0_yhi              = ', z0_ylo,  ', ', z0_yhi
@@ -688,6 +689,8 @@ Contains
 
     Call Mpi_bcast ( sgs_model,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( Cs_vreman,            1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( C_amd,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( amd_buoyancy,         1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( flat_wall_model_flag, 1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z0_ylo,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z0_yhi,               1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -903,7 +906,8 @@ Contains
 
     If ( nu < 0d0 .And. vof_flow < 1 ) Call abort_input( 'ERROR: &PHYSICS nu (kinematic viscosity) must be set' )
     If ( nu < 0d0 ) nu = 0d0   ! two-fluid runs take the viscosities from &VOF
-    If ( sgs_model < 0 .Or. sgs_model > 1 ) Call abort_input( 'ERROR: sgs_model must be 0 (DNS) or 1 (Vreman)' )
+    If ( sgs_model < 0 .Or. sgs_model > 2 ) Call abort_input( 'ERROR: sgs_model must be 0 (DNS), 1 (Vreman) or 2 (AMD)' )
+    If ( amd_buoyancy < 0 .Or. amd_buoyancy > 1 ) Call abort_input( 'ERROR: amd_buoyancy must be 0 or 1' )
     If ( adv_wall_layers < -1 ) Call abort_input( 'ERROR: adv_wall_layers must be >= 0 (or -1 for automatic)' )
     If ( adv_wall_layers < 0 ) Then   ! automatic: 8 cells keep the wall stress balanced (see docs/Numerics.md 7.1)
        adv_wall_layers = 0

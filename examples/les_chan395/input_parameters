@@ -23,7 +23,7 @@
   T_wave_z             = 0.0,
   phi_wave_x           = 0.0,     ! phase offset [rad] for x-wave forcing
   phi_wave_z           = 0.0,     ! phase offset [rad] for z-wave forcing
-  sgs_model            = 1,       ! 0=DNS, 1=Vreman
+  sgs_model            = 2,       ! 0=DNS, 1=Vreman, 2=AMD
   Cs_vreman            = 0.17,    ! Vreman tuning coefficient ~ 0.167 for shear flows
   flat_wall_model_flag = 1,       ! 0=no-slip, 1=log-law EQWM
 /
