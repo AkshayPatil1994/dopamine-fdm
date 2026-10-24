@@ -93,6 +93,9 @@ def main():
         # clear_snapshots below would delete the average the restart must reload
         tavg_n = open(tavg_path(n), 'rb').read() if straight_tavg else None
         shutil.copy(os.path.join(tmp, 'fields', f'{fileout}.{n}'), os.path.join(tmp, 'restart', f'{fileout}.{n}'))
+        wmf = os.path.join(tmp, 'fields', f'{fileout}.{n}.wmf')   # wall-model filter state next to the snapshot
+        if os.path.exists(wmf):
+            shutil.copy(wmf, os.path.join(tmp, 'restart', f'{fileout}.{n}.wmf'))
 
         clear_snapshots(tmp)
         if tavg_n:

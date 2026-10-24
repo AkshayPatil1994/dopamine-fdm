@@ -323,7 +323,7 @@ Module global
   ! Temporal filter of the flat-wall EQWM input (Yang, Park & Moin 2017): wm_filter_mode 0 = raw matching-height velocity, 1 = first-order
   ! filter u_f = (1-eps) u_f + eps u with eps = dt/Tf, Tf = wm_filter_Tf_fac * y_match/(kappa u_tau). wmf_u*/wmf_w* hold the filtered
   ! tangential vector at the U faces (*x) and W faces (*z) of both walls, wmf_t* the u_tau that sets Tf; seeded on the first step (also after a restart)
-  Integer(Int32) :: wm_filter_mode = 0
+  Integer(Int32) :: wm_filter_mode = -1   ! -1: automatic, 1 on a flat-wall model with no z walls and vof_flow = 0, else 0
   Real   (Int64) :: wm_filter_Tf_fac = 1d0
   Logical        :: wmf_seeded = .False.
   Real   (Int64), Allocatable, Dimension(:,:,:) :: wmf_ux, wmf_wx, wmf_tx, wmf_uz, wmf_wz, wmf_tz

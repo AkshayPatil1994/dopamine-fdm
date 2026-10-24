@@ -53,7 +53,7 @@ def read_snapshot(case_dir, interior_only=False):
     ghost values (e.g. the wall-ghost row at a rank seam) that the interior update never reads and that depend
     on the order of the BC and halo passes, so they are not a meaningful parity quantity.
     """
-    files = sorted((f for f in glob.glob(os.path.join(case_dir, 'fields', '*.[0-9]*')) if '_particles.' not in f and '_tavg.' not in f and 'Block.' not in f),
+    files = sorted((f for f in glob.glob(os.path.join(case_dir, 'fields', '*.[0-9]*')) if not f.endswith('.wmf') and '_particles.' not in f and '_tavg.' not in f and 'Block.' not in f),
                    key=lambda f: int(f.rsplit('.', 1)[1]))
     if not files:
         print('ERROR: --fields given but no snapshot was written (set nsave in the case input)', file=sys.stderr)

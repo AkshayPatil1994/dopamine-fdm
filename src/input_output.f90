@@ -932,8 +932,12 @@ Contains
 
     If ( flat_wall_model_flag < 0 .Or. flat_wall_model_flag > 2 ) &
          Call abort_input( 'ERROR: flat_wall_model_flag must be 0 (no-slip), 1 (smooth log law) or 2 (rough log law)' )
-    If ( wm_filter_mode < 0 .Or. wm_filter_mode > 1 ) &
-         Call abort_input( 'ERROR: wm_filter_mode must be 0 (raw wall-model input) or 1 (temporal filter)' )
+    If ( wm_filter_mode < -1 .Or. wm_filter_mode > 1 ) &
+         Call abort_input( 'ERROR: wm_filter_mode must be 0 (raw wall-model input), 1 (temporal filter) or -1 (automatic)' )
+    If ( wm_filter_mode < 0 ) Then   ! automatic: the filter is only implemented for the single-phase flat-wall EQWM
+       wm_filter_mode = 0
+       If ( flat_wall_model_flag > 0 .And. z_bc_type == 0 .And. vof_flow < 1 ) wm_filter_mode = 1
+    End If
     If ( wm_filter_mode == 1 .And. ( flat_wall_model_flag == 0 .Or. wm_filter_Tf_fac <= 0d0 .Or. z_bc_type == 1 ) ) &
          Call abort_input( 'ERROR: wm_filter_mode=1 needs flat_wall_model_flag>0, wm_filter_Tf_fac>0 and no z walls (z_bc_type=0)' )
     If ( ibm_wall_model_flag < 0 .Or. ibm_wall_model_flag > 1 ) &
@@ -1387,39 +1391,47 @@ Contains
   End Subroutine skip_distributed_field_block
 
   !> Write one x/z-decomposed field block (3-int header + global-sized data) to a stream unit open on rank 0 only, gathering from every rank's local array. Every non-zero rank's contribution is received into its own buffer via a single posted-up-front Waitall instead of one-at-a-time blocking Mpi_recv, so the gather isn't serialized behind rank 0's receive order. is_x_face/is_z_face as in read_distributed_field_block.
-  Subroutine write_distributed_field_block(unit_no, field_local, nxf_global, nyf_global, nzf_global, is_x_face, is_z_face)
+  Subroutine write_distributed_field_block(unit_no, field_local, nxf_global, nyf_global, nzf_global, is_x_face, is_z_face, &
+                                           interior_only)
 
     Integer(Int32), Intent(In) :: unit_no, nxf_global, nyf_global, nzf_global
     Real(Int64), Dimension(:,:,:), Intent(In) :: field_local
     Logical, Intent(In) :: is_x_face, is_z_face
+    Logical, Intent(In), Optional :: interior_only   ! write only the planes that are not x/z ghosts of this rank (halo planes not kept valid)
 
-    Integer(Int32) :: iproc, ix1, ix2, iz1, iz2, nxl, nzl
-    Real(Int64), Allocatable :: global_buf(:,:,:)
+    Integer(Int32) :: iproc, ix1, ix2, iz1, iz2, nxl, nzl, ng
+    Real(Int64), Allocatable :: global_buf(:,:,:), sbuf(:,:,:)
     Type :: recv_block_t
        Real(Int64), Allocatable :: d(:,:,:)
     End Type recv_block_t
     Type(recv_block_t), Allocatable :: recv_blocks(:)
     Integer(Int32), Allocatable :: reqs(:)
 
+    ng = 0
+    If ( Present(interior_only) ) Then
+       If ( interior_only ) ng = 1
+    End If
+
     If ( myid == 0 ) Then
        Allocate( global_buf(nxf_global, nyf_global, nzf_global) )
 
+       global_buf = 0d0
        Call distributed_block_range(0, is_x_face, is_z_face, ix1, ix2, iz1, iz2)
-       global_buf(ix1:ix2, :, iz1:iz2) = field_local
+       global_buf(ix1+ng:ix2-ng, :, iz1+ng:iz2-ng) = field_local(1+ng:Size(field_local,1)-ng, :, 1+ng:Size(field_local,3)-ng)
 
        If ( nprocs > 1 ) Then
           Allocate( recv_blocks(nprocs-1), reqs(nprocs-1) )
           Do iproc = 1, nprocs-1
              Call distributed_block_range(iproc, is_x_face, is_z_face, ix1, ix2, iz1, iz2)
-             nxl = ix2 - ix1 + 1
-             nzl = iz2 - iz1 + 1
+             nxl = ix2 - ix1 + 1 - 2*ng
+             nzl = iz2 - iz1 + 1 - 2*ng
              Allocate( recv_blocks(iproc)%d(nxl, nyf_global, nzl) )
              Call Mpi_irecv(recv_blocks(iproc)%d, nxl*nyf_global*nzl, Mpi_real8, iproc, iproc, MPI_COMM_WORLD, reqs(iproc), ierr)
           End Do
           Call Mpi_waitall(nprocs-1, reqs, MPI_STATUSES_IGNORE, ierr)
           Do iproc = 1, nprocs-1
              Call distributed_block_range(iproc, is_x_face, is_z_face, ix1, ix2, iz1, iz2)
-             global_buf(ix1:ix2, :, iz1:iz2) = recv_blocks(iproc)%d
+             global_buf(ix1+ng:ix2-ng, :, iz1+ng:iz2-ng) = recv_blocks(iproc)%d
           End Do
           Deallocate(recv_blocks, reqs)
        End If
@@ -1428,7 +1440,14 @@ Contains
        Write(unit_no) global_buf
        Deallocate(global_buf)
     Else
-       Call Mpi_send(field_local, Size(field_local), Mpi_real8, 0, myid, MPI_COMM_WORLD, ierr)
+       If ( ng == 0 ) Then
+          Call Mpi_send(field_local, Size(field_local), Mpi_real8, 0, myid, MPI_COMM_WORLD, ierr)
+       Else
+          Allocate( sbuf(Size(field_local,1)-2*ng, Size(field_local,2), Size(field_local,3)-2*ng) )
+          sbuf = field_local(1+ng:Size(field_local,1)-ng, :, 1+ng:Size(field_local,3)-ng)
+          Call Mpi_send(sbuf, Size(sbuf), Mpi_real8, 0, myid, MPI_COMM_WORLD, ierr)
+          Deallocate(sbuf)
+       End If
     End If
 
   End Subroutine write_distributed_field_block
@@ -1788,6 +1807,8 @@ Contains
           End If
        End If
 
+       Call write_wm_filter_state(Trim(Adjustl(fname)))
+
        End If
 
        ! Particle state (src/particles.f90): separate latest-state restart file plus a timestamped snapshot for ParaView
@@ -1881,6 +1902,49 @@ Contains
     Call read_restart_block(4, Cvof_io)
 
   End Subroutine read_vof_restart
+
+
+  !> Wall-model filter state (wm_filter_mode == 1) next to a staggered snapshot, as <snapshot>.wmf, so a restart continues the filter instead of
+  !  re-seeding it from the raw field; the snapshot layout itself is unchanged
+  Subroutine write_wm_filter_state(snapshot_name)
+
+    Character(*), Intent(In) :: snapshot_name
+
+    If ( wm_filter_mode /= 1 .Or. .Not. wmf_seeded ) Return
+    !$acc update host(wmf_ux,wmf_wx,wmf_tx,wmf_uz,wmf_wz,wmf_tz)
+    If ( myid == 0 ) Open(3, file=snapshot_name//'.wmf', access='stream', form='unformatted', action='write')
+    Call write_distributed_field_block(3, wmf_ux, nx_global,  2, nzg_global, .True.,  .False., .True.)
+    Call write_distributed_field_block(3, wmf_wx, nx_global,  2, nzg_global, .True.,  .False., .True.)
+    Call write_distributed_field_block(3, wmf_tx, nx_global,  2, nzg_global, .True.,  .False., .True.)
+    Call write_distributed_field_block(3, wmf_uz, nxg_global, 2, nz_global,  .False., .True., .True.)
+    Call write_distributed_field_block(3, wmf_wz, nxg_global, 2, nz_global,  .False., .True., .True.)
+    Call write_distributed_field_block(3, wmf_tz, nxg_global, 2, nz_global,  .False., .True., .True.)
+    If ( myid == 0 ) Close(3)
+
+  End Subroutine write_wm_filter_state
+
+
+  !> Read the wall-model filter state written by write_wm_filter_state next to the restart snapshot (host arrays; the caller pushes them to
+  !  the device). Without the file the filter is re-seeded from the raw field on the first step.
+  Subroutine read_wm_filter_state
+
+    Logical :: have
+
+    have = .False.
+    If ( myid == 0 ) Inquire( file=Trim(Adjustl(filein))//'.wmf', exist=have )
+    Call Mpi_bcast( have, 1, MPI_logical, 0, MPI_COMM_WORLD, ierr )
+    If ( .Not. have ) Return
+    If ( myid == 0 ) Open(3, file=Trim(Adjustl(filein))//'.wmf', access='stream', form='unformatted', action='read')
+    Call read_distributed_field_block(3, wmf_ux, .True.,  .False.)
+    Call read_distributed_field_block(3, wmf_wx, .True.,  .False.)
+    Call read_distributed_field_block(3, wmf_tx, .True.,  .False.)
+    Call read_distributed_field_block(3, wmf_uz, .False., .True.)
+    Call read_distributed_field_block(3, wmf_wz, .False., .True.)
+    Call read_distributed_field_block(3, wmf_tz, .False., .True.)
+    If ( myid == 0 ) Close(3)
+    wmf_seeded = .True.
+
+  End Subroutine read_wm_filter_state
 
 
   !> Read temperature T from a restart file
