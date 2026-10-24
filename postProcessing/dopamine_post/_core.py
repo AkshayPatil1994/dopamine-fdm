@@ -155,6 +155,13 @@ class BinaryReader:
         return (n1, n2, n3), data
 
 
+def interactive_backend():
+    """True when matplotlib's current backend can display figures (inline, widget, Qt, ...), False for Agg and other file-only backends."""
+    import matplotlib
+    from matplotlib import rcsetup
+    return matplotlib.get_backend().lower() not in {b.lower() for b in rcsetup.non_interactive_bk}
+
+
 # ── ffmpeg movie encoding ─────────────────────────────────────────────────────
 
 _FRAME_FN = None      # frame builder handed to forked workers (inherited, not pickled)
@@ -162,9 +169,10 @@ _FRAME_FN = None      # frame builder handed to forked workers (inherited, not p
 
 def _job(args):
     i, tmp, dpi = args
+    import matplotlib.pyplot as plt
+    plt.switch_backend("Agg")   # forked worker only: the caller's (possibly GUI) backend is untouched
     fig = _FRAME_FN(i)
     fig.savefig(f"{tmp}/frame_{i:04d}.png", dpi=dpi, facecolor="white")
-    import matplotlib.pyplot as plt
     plt.close(fig)
 
 

@@ -291,11 +291,8 @@ class ParticleData:
 
 
 def _detect_prefix(fields_dir):
-    for p in Path(fields_dir).iterdir():
-        m = _PAT.match(p.name)
-        if m:
-            return m.group(1)
-    return None
+    found = sorted({m.group(1) for p in Path(fields_dir).iterdir() for m in [_PAT.match(p.name)] if m})
+    return found[0] if found else None
 
 
 def _probe_layout(fpath):
@@ -532,9 +529,7 @@ class Geometry:
 # 3b. FIGURES / MOVIES
 # ════════════════════════════════════════════════════════════════════════════
 def _plt():
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt   # the user's backend is never forced: inline/widget/Qt figures display, MPLBACKEND is respected
     return plt
 
 

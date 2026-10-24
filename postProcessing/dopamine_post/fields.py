@@ -64,6 +64,9 @@ import numpy as np
 from . import _core
 from ._core import list_indexed, render_movie
 
+# sgs_model default of the solver (src/global.f90) when `input_parameters` does not set it: it decides whether a nu_t block exists
+SGS_MODEL_DEFAULT = 2
+
 _PAT = re.compile(r"^([A-Za-z0-9_]+)\.(\d+)$")
 _AXIS = {"x": 0, "y": 1, "z": 2}
 
@@ -93,12 +96,14 @@ def _step_from_name(name):
     return int(m.group(2)) if m else None
 
 
+_NOT_FIELD_SUFFIX = ("Block", "_tavg", "_tavgBlock", "_particles")   # other files that share the <prefix>.<step> pattern
+
+
 def _detect_prefix(fields_dir):
-    for p in Path(fields_dir).iterdir():
-        m = _PAT.match(p.name)
-        if m and not m.group(1).endswith("Block"):
-            return m.group(1)
-    return None
+    """Prefix of the full field snapshots in `fields_dir` (deterministic: not the tavg/particle/box files, first in sorted order)."""
+    found = sorted({m.group(1) for p in Path(fields_dir).iterdir()
+                    for m in [_PAT.match(p.name)] if m and not m.group(1).endswith(_NOT_FIELD_SUFFIX)})
+    return found[0] if found else None
 
 
 def _read_box_header(f):
@@ -222,25 +227,32 @@ class FieldSnapshot:
             sgs_model, sediment_flag, boussinesq_flag)
 
     @classmethod
-    def read(cls, path, sgs_model=None, sediment_flag=None, boussinesq_flag=None):
+    def read(cls, path, sgs_model=None, sediment_flag=None, boussinesq_flag=None, vof_active=None):
         """Read one binary snapshot.
 
-        sgs_model/sediment_flag/boussinesq_flag select which optional field blocks
-        (nu_t, C, T) are present; any left as None are looked up from
-        `<case>/input_parameters` (case = the fields/ directory's parent), matching
-        the run that produced the file.  Pass them explicitly to override, or when
-        no input_parameters is available next to the snapshot.
+        sgs_model/sediment_flag/boussinesq_flag/vof_active select which optional field blocks
+        (C, nu_t, T, vof = two-fluid liquid fraction) are present, in that file order; any left as None are
+        looked up from `<case>/input_parameters` (case = the fields/ directory's parent), matching the run that
+        produced the file (a missing sgs_model means the solver default, AMD).  Pass them explicitly to override,
+        or when no input_parameters is available next to the snapshot.
+
+        When every flag comes from input_parameters the number of optional blocks in the file must equal the
+        number the flags imply, otherwise a ValueError says so instead of silently shifting the blocks (a wrong
+        sgs_model would otherwise read nu_t as T).  Explicit flags may deliberately skip trailing blocks.
         """
         path = Path(path)
-        if sgs_model is None or sediment_flag is None or boussinesq_flag is None:
+        strict = sgs_model is None and sediment_flag is None and boussinesq_flag is None and vof_active is None
+        if sgs_model is None or sediment_flag is None or boussinesq_flag is None or vof_active is None:
             prm = _core.read_input(path.parent.parent,
-                                    ("sgs_model", "sediment_flag", "boussinesq_flag"))
+                                    ("sgs_model", "sediment_flag", "boussinesq_flag", "vof_active"))
             if sgs_model is None:
-                sgs_model = int(prm.get("sgs_model", 0))
+                sgs_model = int(prm.get("sgs_model", SGS_MODEL_DEFAULT))
             if sediment_flag is None:
                 sediment_flag = int(prm.get("sediment_flag", 0))
             if boussinesq_flag is None:
                 boussinesq_flag = int(prm.get("boussinesq_flag", 0))
+            if vof_active is None:
+                vof_active = int(prm.get("vof_active", 0))
 
         r = _core.BinaryReader(data=path.read_bytes())
 
@@ -258,19 +270,42 @@ class FieldSnapshot:
         U, V, W, P = _to_cell_centre(U_face, V_face, W_face, P_raw)
         fields = dict(U=U, V=V, W=W, P=P)
 
-        if sediment_flag >= 1:
-            _, C_raw = r.read_field()
-            fields["C"] = C_raw[1:-1, 1:-1, 1:-1]
-        if sgs_model != 0:
-            _, nut_raw = r.read_field()
-            fields["nu_t"] = nut_raw[1:-1, 1:-1, 1:-1]
-        if boussinesq_flag >= 1:
-            _, T_raw = r.read_field()
-            fields["T"] = T_raw[1:-1, 1:-1, 1:-1]
+        names = [n for n, on in (("C", sediment_flag >= 1), ("nu_t", sgs_model != 0),
+                                 ("T", boussinesq_flag >= 1), ("vof", vof_active >= 1)) if on]
+        extra = []
+        while r._p < len(r._d):
+            shape, raw = r.read_field()
+            if shape != P_raw.shape:
+                raise ValueError(f"{path}: optional field block of shape {shape} does not match the cell-centred shape "
+                                 f"{P_raw.shape}; the flags {names} do not describe this file")
+            extra.append(raw)
+        if len(extra) < len(names) or (strict and len(extra) != len(names)):
+            raise ValueError(f"{path}: {len(extra)} optional field blocks follow U,V,W,P but the flags "
+                             f"(sediment_flag, sgs_model, boussinesq_flag, vof_active) imply {len(names)} {names}; "
+                             "pass the flags of the run that wrote the file explicitly")
+        for n, raw in zip(names, extra):
+            fields[n] = raw[1:-1, 1:-1, 1:-1]
 
         return cls(x, y, z, xm, ym, zm, fields, path=path, step=_step_from_name(path.name),
                    sgs_model=sgs_model, sediment_flag=sediment_flag,
                    boussinesq_flag=boussinesq_flag)
+
+    @classmethod
+    def from_box(cls, path):
+        """FieldSnapshot of a chunked or cell-centred box snapshot (<fileout>Block.<step>): every field averaged to the cell
+        centres of the box (staggered U,V,W) so the same profile()/plane() and plotting code works. Box files name their
+        fields, so no input_parameters flags are needed; sgs_model etc. are reported from the field names present."""
+        b = read_box_snapshot(path)
+        fields = {}
+        for name, (a, st) in b["fields"].items():
+            for ax in range(3):
+                if st[ax]:
+                    a = 0.5 * (np.take(a, range(a.shape[ax] - 1), axis=ax) + np.take(a, range(1, a.shape[ax]), axis=ax))
+            fields[name] = a
+        snap = cls(b["x"], b["y"], b["z"], b["xm"], b["ym"], b["zm"], fields, path=path, step=b["step"],
+                   sgs_model=int("nu_t" in fields), sediment_flag=int("C" in fields), boussinesq_flag=int("T" in fields))
+        snap.t, snap.box = b["t"], dict(f1=b["f1"], f2=b["f2"], location=b["location"])
+        return snap
 
     def __repr__(self):
         return (f"FieldSnapshot(step={self.step}, vars={sorted(self.fields)}, "
@@ -310,7 +345,7 @@ class FieldSeries:
     def snapshots(self):
         """Sorted [(step, Path)], auto-detecting the prefix if not given at construction."""
         if self._snaps is None:
-            self._snaps = list_indexed(self.fields_dir, _PAT, self.prefix)
+            self._snaps = list_indexed(self.fields_dir, _PAT, self.prefix or _detect_prefix(self.fields_dir))
         return self._snaps
 
     def steps(self):
@@ -348,7 +383,7 @@ class FieldSeries:
         ip = self.case_dir / "input_parameters"
         prm = _core.parse_input_parameters(ip) if ip.exists() else {}
         nu = nu if nu is not None else float(prm["nu"])
-        sgs_model = 0 if no_sgs else int(prm.get("sgs_model", 0))
+        sgs_model = 0 if no_sgs else int(prm.get("sgs_model", SGS_MODEL_DEFAULT))
         sediment_flag = 0 if no_sediment else int(prm.get("sediment_flag", 0))
         boussinesq_flag = 0 if no_boussinesq else int(prm.get("boussinesq_flag", 0))
 
@@ -471,7 +506,7 @@ class FieldSeries:
         """
         ip = self.case_dir / "input_parameters"
         prm = _core.parse_input_parameters(ip) if ip.exists() else {}
-        sgs_model = sgs_model if sgs_model is not None else int(prm.get("sgs_model", 0))
+        sgs_model = sgs_model if sgs_model is not None else int(prm.get("sgs_model", SGS_MODEL_DEFAULT))
         sediment_flag = sediment_flag if sediment_flag is not None else int(prm.get("sediment_flag", 0))
 
         all_steps = self.steps()
@@ -719,9 +754,7 @@ def load_sdf(sdf_path, nxm, nym, nzm):
 # 3. FIGURES / MOVIES
 # ════════════════════════════════════════════════════════════════════════════
 def _plt():
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt   # the user's backend is never forced: inline/widget/Qt figures display, MPLBACKEND is respected
     return plt
 
 
@@ -957,7 +990,8 @@ def plot_stats(stats, case_dir=".", dns_dir=None, u_tau=1.0, save="plots/stats.p
     fig.suptitle("Channel flow statistics -- wall units", fontsize=12, y=1.01)
     save.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
+    if not _core.interactive_backend():
+        plt.close(fig)   # headless: free the figure; with an interactive backend it stays open so it is displayed
     print(f"Wrote {save}")
     return fig
 
@@ -1029,7 +1063,7 @@ def animate_velocity_slice(series, steps, z_target=None, out="velocity.gif", fps
     ip = series.case_dir / "input_parameters"
     if ip.exists():
         prm = _core.parse_input_parameters(ip)
-    sgs_model = sgs_model if sgs_model is not None else int(prm.get("sgs_model", 0))
+    sgs_model = sgs_model if sgs_model is not None else int(prm.get("sgs_model", SGS_MODEL_DEFAULT))
     sediment_flag = sediment_flag if sediment_flag is not None else int(prm.get("sediment_flag", 0))
     prefix = series.prefix or _detect_prefix(series.fields_dir)
     read_kw = dict(sgs_model=sgs_model, sediment_flag=sediment_flag, boussinesq_flag=0)
@@ -1267,7 +1301,7 @@ def write_field_xmf(case_dir=".", prefix=None, out=None):
     if ip_path.exists():
         prm = _core.parse_input_parameters(ip_path)
         has_sediment = int(prm.get("sediment_flag", 0)) >= 1
-        has_sgs = int(prm.get("sgs_model", 0)) != 0
+        has_sgs = int(prm.get("sgs_model", SGS_MODEL_DEFAULT)) != 0
         has_boussinesq = int(prm.get("boussinesq_flag", 0)) >= 1
 
     info = None

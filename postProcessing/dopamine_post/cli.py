@@ -351,6 +351,8 @@ def main(argv=None):
         add_fn(cmd_sub)
 
     args = ap.parse_args(argv)
+    import matplotlib
+    matplotlib.use("Agg")   # the command line only writes files; library use (notebooks, scripts) keeps its own backend
     args.func(args)
 
 

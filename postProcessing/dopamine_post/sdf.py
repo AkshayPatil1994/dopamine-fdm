@@ -163,8 +163,6 @@ class SDF:
     def plot_xz(self, y=0.05, contour=True):
         """X-Z plane at y nearest `y` (horizontal cut through the rough-wall layer).
         Returns the Figure."""
-        import matplotlib
-        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         y_actual, data = self.slice_xz(y)
@@ -181,8 +179,6 @@ class SDF:
     def plot_xy(self, z=3.0, contour=True):
         """X-Y plane at z nearest `z` (streamwise-wall-normal cross-section).
         Returns the Figure."""
-        import matplotlib
-        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         z_actual, data = self.slice_xy(z)

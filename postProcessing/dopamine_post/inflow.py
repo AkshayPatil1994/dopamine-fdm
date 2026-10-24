@@ -300,8 +300,6 @@ class InflowDonor:
         read_mean_profile). Saves to `output`, prints an error summary vs.
         `reference` if given, and optionally writes the extracted profile to
         `csv`. Returns the Figure."""
-        import matplotlib
-        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         meta = self.meta
