@@ -236,7 +236,7 @@ def main():
             print(f'MISMATCH: snapshot has {len(snap_a)} field blocks vs {len(snap_b)}')
         else:
             for ib, (fa, fb) in enumerate(zip(snap_a, snap_b)):
-                scale = max(max(abs(v) for v in fa), 1e-30)
+                scale = max(max(abs(v) for v in fa), 1e-12)   # round-off-level blocks (e.g. nu_t in a still flow) are compared absolutely
                 dmax = max(abs(x - y) for x, y in zip(fa, fb))
                 print(f'  field block {ib}: max|a-b|/max|a| = {dmax / scale:.3E}')
                 if dmax / scale > args.field_tol:

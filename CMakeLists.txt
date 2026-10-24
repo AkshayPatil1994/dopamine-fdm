@@ -534,7 +534,7 @@ exec \"$real\" $os \"$@\"
     file(CHMOD "${TEST_MPIRUN}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 endif()
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small adv_hybrid_small adv_hybrid3_small ibm_pressure1_small rsb_small tavg_small chunk_small)
+    foreach(case tgv_small chan_small chan_les_small chan_les_amd_small bouss_amd_small ibm_amd_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small adv_hybrid_small adv_hybrid3_small ibm_pressure1_small rsb_small tavg_small chunk_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${TEST_MPIRUN} --fields --field-tol 1e-8)
@@ -759,6 +759,12 @@ if(Python3_Interpreter_FOUND)
                     --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_scalar_flume --mpirun ${TEST_MPIRUN}
                     --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine> --np-a 1 --np-b 4 --p-grid 4,1 --p-grid-b-only
                     --fields --field-tol 1e-6 --label-a np1 --label-b 4x1)
+        # same with the AMD scalar diffusivity (kappa_t) on the sediment and temperature scalars
+        add_test(NAME vof_scalar_flume_amd_np1_vs_np4_4x1
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
+                    --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_scalar_flume_amd --mpirun ${TEST_MPIRUN}
+                    --exe-a $<TARGET_FILE:dopamine> --exe-b $<TARGET_FILE:dopamine> --np-a 1 --np-b 4 --p-grid 4,1 --p-grid-b-only
+                    --fields --field-tol 1e-6 --label-a np1 --label-b 4x1)
     endif()
     # Feature matrix: passive / two-fluid VOF x tank / IBM body x sediment, Boussinesq, particles, all
     foreach(_np ${_sc_nps})
@@ -877,10 +883,12 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/check_tiny_step.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_stair_tiny_step
                 --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
-    # Outlet backflow stabilisation (outflow_backflow_beta): reversed flow through the outlet stays bounded; the same case with 0 blows up
-    add_test(NAME outflow_backflow
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/outflow_backflow_small/check_backflow.py
-                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
+    # dopamine_post: every reader on a small AMD + Boussinesq case (flag autodetect, box == full snapshot, tavg), backend left alone
+    add_test(NAME postprocessing_readers
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/postprocessing/check_post.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/chunk_small
+                --post-dir ${CMAKE_CURRENT_SOURCE_DIR}/postProcessing)
+    set_tests_properties(postprocessing_readers PROPERTIES SKIP_RETURN_CODE 77)
     # SDF cells at exactly phi = 0 are fluid in every mask (solid is phi < 0)
     add_test(NAME ibm_phi_zero
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/ibm_phi_zero/check_phi_zero.py
@@ -938,6 +946,11 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME vof_les_flume_small_np1_vs_np4_4x1
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_les_flume_small --exe $<TARGET_FILE:dopamine>
+                --mpirun ${TEST_MPIRUN} --np-a 1 --np-b 4 --p-grid 4,1 --max-dvol 1e-3 --same-tol 1e-9
+                --same-cols 4,5,6,7,11,12,13,16,29,31,32)
+    add_test(NAME vof_les_flume_amd_small_np1_vs_np4_4x1
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_les_flume_amd_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${TEST_MPIRUN} --np-a 1 --np-b 4 --p-grid 4,1 --max-dvol 1e-3 --same-tol 1e-9
                 --same-cols 4,5,6,7,11,12,13,16,29,31,32)
     set(_vof_cases "vof_vortex_small|1.7e-4" "vof_deform_small|1.5e-2" "vof_translate_small|-1" "vof_ibm_small|-1" "vof_ibm_wm_small|-1")

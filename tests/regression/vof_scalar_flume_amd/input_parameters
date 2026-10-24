@@ -1,0 +1,43 @@
+! Two-fluid wave flume with sediment and Boussinesq temperature on the scalar boundary conditions the other scalar cases do not reach:
+! x inflow plane and convective outflow (x_bc_type=1), isothermal bottom and top (T_bc_bot/top=1), sediment bottom ghost against C_ref
+! (sed_bc_bot=1). CPU vs GPU parity of the final snapshot (all field blocks); nsave = 12 is not a monitor step.
+&DOMAIN
+  nx = 98, ny = 33, nz = 6,
+  Lx = 3.03125, Ly = 1.0, Lz = 0.15625,
+  grid_type = 1, alpha_grid = 1.0, alpha_grid_z = 0.0, p_row = 0, p_col = 0,
+/
+&PHYSICS
+  nu = 1.0e-6, sgs_model = 2,
+/
+&NUMERICS
+  dt = 1.0e-3, nsteps = 12, nsave = 12, nmonitor = 10, cfl_adaptive = 1, cfl_target = 0.4, cfl_safety = 0.9,
+  dt_max = 5.0e-3,
+/
+&BOUNDARY_CONDITIONS
+  bc_face_ylo = 1, bc_face_yhi = 2, x_bc_type = 1, y_bc_type = 1, z_bc_type = 0,
+/
+&INFLOW
+  inflow_type = 3,
+/
+&INITIAL_CONDITIONS
+  Utarget = 0.0, ic_type = 3, noise_percent = 0.0, restart = 0,
+/
+&IO
+  filein = 'restart/x', fileout = 'flume',
+/
+&WAVES
+  wave_type = 1, wave_height = 0.04, wave_period = 1.0, wave_gen_len = 1.0, wave_ramp_time = 2.0, wave_abs_len = 1.0, wave_relax_rate = 20.0,
+  wave_gauge_x = 1.0, 1.4, 1.8,
+/
+&VOF
+  vof_active = 1, vof_flow = 1, vof_ic_type = 1, vof_level = 0.5,
+  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 9.81, vof_pcg_tol = 1e-12, vof_pcg_iters = 400, vof_adv_iters = 60, vof_adv_tol = 1d-12,
+/
+
+&SEDIMENT
+  sediment_flag = 1, d_s = 1.0e-4, rho_s = 2650.0, rho_f = 1000.0, Sc = 1.0, Sc_t = 1.0, C_ref = 1.0, sed_bc_bot = 1, C_ic_type = 3, C_ic_height = 0.5,
+/
+&BOUSSINESQ
+  boussinesq_flag = 1, beta_T = 2.0e-4, T_ref = 20.0, grav = 9.81, Pr = 7.0, Pr_t = 0.85, T_ic_type = 1, T_ic_grad = 5.0,
+  T_bc_bot = 1, T_wall_bot = 22.0, T_bc_top = 1, T_wall_top = 18.0,
+/
