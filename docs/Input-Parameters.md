@@ -36,7 +36,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `Ub_x, Ub_z` | `0.0` | Amplitude of oscillatory (wave) forcing: `dP/dx(t) = dPdx + Ub_x·ω_x·cos(ω_x t + φ_x)` (same in z). |
 | `T_wave_x, T_wave_z` | `0.0` | Oscillation period [s]; `0` = steady. ω = 2π/T. |
 | `phi_wave_x, phi_wave_z` | `0.0` | Phase offset [rad] (π/2 gives sine forcing; φ_z−φ_x sets the cross-wave lag). |
-| `sgs_model` | `2` | `0` DNS, `1` Vreman LES, `2` AMD (anisotropic minimum dissipation) LES (default). Set `0` explicitly for DNS. |
+| `sgs_model` | `2` | `0` DNS, `1` Vreman LES, `2` AMD (anisotropic minimum dissipation) LES (default). Set `0` explicitly for DNS. The default is explicit, not automatic: the validated range of each closure is tabulated in [Numerics §5.2](Numerics.md#52-choosing-the-sgs-model) and the start-up summary prints an `ADVISORY:` line when a case falls outside it (wall-modelled channel resolution in wall units, stratified AMD, wall-resolved/IBM/two-phase AMD). |
 | `C_amd` | `1/3` | AMD constant (Poincaré constant of second-order central differences), used when `sgs_model=2`. |
 | `amd_buoyancy` | `1` | With `sgs_model=2` and `boussinesq_flag >= 1` (single phase): `1` adds the buoyancy production $+\beta g\,\Delta_k^2\,\partial_k v\,\partial_k\theta'$ (θ′ = T minus its horizontal mean) to the AMD eddy-viscosity numerator (Abkar & Moin 2017), `0` omits it (plain AMD). |
 | `Cs_vreman` | `0.17` | Vreman constant (c_V = 2.5·Cs²). With a flat-wall model the first cell next to a no-slip wall uses the log-law wall-normal gradient u_τ/(κy) instead of the mirror-ghost one (Numerics §5). |
@@ -61,7 +61,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `dt` | required | Time step [s] (initial step if `cfl_adaptive=1`). |
 | `nsteps` | required | `>0` run exactly this many steps; `<0` ignore the count and run until `t ≥ sim_end_time`. |
 | `nsave` | required | `>0` write a snapshot every `nsave` steps; `<0` every `tsave` time units (the last steps are shortened to land on multiples of `tsave`; the landing step is never shorter than `dt/2`, see [Numerics §3](Numerics.md)). |
-| `nmonitor` | required | Print a monitor line every `nmonitor` steps (must be `>0`). |
+| `nmonitor` | required | Print a monitor line every `nmonitor` steps (must be `>0`). With a flat-wall model (`flat_wall_model_flag > 0`, y walls, single phase) the same cadence appends the plane-averaged wall-model state to `wall_diag.dat`: `step t u_tau_lo u_tau_hi` and, with the MOST thermal wall model (`T_bc_*=2`), `qT_lo qT_hi invL_lo invL_hi` (wall heat flux and 1/L per wall). A fresh run truncates the file, a restart appends. z walls and IBM walls are not covered. |
 | `sim_end_time` | `1e30` | End time; used only when `nsteps<0`. |
 | `tsave` | `1e30` | Save interval; used only when `nsave<0`. |
 | `cfl_adaptive` | `0` | `1` adapts `dt` to `cfl_target`. |
@@ -185,10 +185,10 @@ Temperature transport with buoyancy in the y-momentum equation (gravity along �
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
 | `boussinesq_flag` | `0` | `1` enable. |
-| `beta_T` | `0.0` | Thermal expansion coefficient [1/K]. |
-| `T_ref` | `0.0` | Reference temperature [K] for buoyancy and the uniform IC. |
+| `beta_T` | `0.0` | Thermal expansion coefficient [1/K]; the buoyancy force is $\beta_T\,g\,(T-T_\mathrm{ref})$ and the Obukhov length of the MOST wall model uses $\beta_T\,g$ (neutral when `beta_T*grav = 0`). |
+| `T_ref` | `0.0` | Reference temperature [K] for buoyancy and the uniform IC: only an offset (shifting `T_ref` and all temperatures together changes nothing), not an absolute temperature. |
 | `grav` | `0.0` | Gravity [m/s²] (see `&SEDIMENT`). |
-| `Pr, Pr_t` | `0.7`, `0.85` | Molecular / turbulent Prandtl numbers. `Pr_t` is used with `sgs_model = 1` (Vreman) and `0`; with `sgs_model = 2` (AMD) the AMD scalar closure supplies the turbulent diffusivity and `Pr_t` is ignored; the buoyancy production term of the AMD eddy viscosity needs `boussinesq_flag >= 1` and is not available in the GPU build (Numerics §5). |
+| `Pr, Pr_t` | `0.7`, `0.85` | Molecular / turbulent Prandtl numbers. `Pr_t` is used with `sgs_model = 1` (Vreman) and `0`; with `sgs_model = 2` (AMD) the AMD scalar closure supplies the turbulent diffusivity and `Pr_t` is ignored; the buoyancy production term of the AMD eddy viscosity needs `boussinesq_flag >= 1` (it runs on CPU and GPU builds; Numerics §5). |
 | `T_bc_bot, T_bc_top` | `0, 0` | Wall BC: `0` adiabatic, `1` isothermal at `T_wall_*`, `2` rough-EQWM flux with Monin–Obukhov stability coupling (needs `flat_wall_model_flag=2` and `z0h_*>0`; the momentum stress uses the previous step's Obukhov length). |
 | `T_wall_bot, T_wall_top` | `0.0` | Wall temperature [K] for BC types 1 and 2. |
 | `T_ic_type` | `0` | `0` uniform `T_ref`; `1` linear gradient. |

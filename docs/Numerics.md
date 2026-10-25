@@ -289,6 +289,27 @@ The Vreman LES is validated against a standard turbulent channel flow case used 
 > turbulent shear flow: Algebraic theory and applications*. Phys. Fluids 16(10),
 > 3670–3681. DOI: [10.1063/1.1785131](https://doi.org/10.1063/1.1785131)
 
+### 5.2 Choosing the SGS model
+
+`sgs_model` is an explicit input (default AMD); neither closure is better everywhere. The wall-modelled channel validations below (neutral, filter on, bulk-velocity
+error against the DNS, 60 time-unit windows after a 40 time-unit transient, 2σ of the block means ≲ 0.2 points) give:
+
+| case | $\Delta x^+$ | first cell $y^+$ | Vreman | AMD |
+|---|---|---|---|---|
+| $Re_\tau = 395$, $48\times21\times32$ | 232 | 20 | +3.8 % | −0.7 % |
+| $Re_\tau = 395$, $96\times21\times64$ | 116 | 20 | −0.4 % | +3.9 % |
+| $Re_\tau = 395$, $192\times21\times128$ | 58 | 20 | +2.3 % | +7.1 % |
+| $Re_\tau = 2000$, $64^3$ half channel | 196 | 16 | +6.6 % | +0.2 % |
+| $Re_\tau = 5200$, $64^3$ half channel | 510 | 41 | +3.9 % | −2.2 % |
+
+AMD is the better closure at coarse streamwise resolution ($\Delta x^+ \gtrsim 200$, where Vreman keeps the log-layer overshoot), Vreman at fine resolution
+($\Delta x^+ \lesssim 130$); the thresholds are provisional (one channel geometry, three Reynolds numbers). Refining only $x$ moves the error as much as refining $x$ and $z$,
+refining only $z$ changes it by about 0.5 points; the wall law (Reichardt instead of the calibrated log law, a uniform −2.2 points) and the wall-model filter (+2.5 to +3.5 points
+when switched off) do not change this trend. In the stably stratified channel at $Re_\tau = 395$ ($Ri_\tau = 24$, 120; 96×21×64) the AMD buoyancy term is inactive (bulk velocity
+changes by ≤ 0.1 points with and without it) and the AMD–Vreman difference of the neutral case (4.3 points) is carried over unchanged, so stratified flows follow the same
+resolution rule; both closures suppress the turbulent transport 15–30 % more than the DNS. AMD is not validated for wall-resolved LES, IBM/urban flows or two-phase flows (decomposition
+parity tests only; the earlier validations of those paths used Vreman). The start-up summary prints an `ADVISORY:` line for these cases; it never changes the run.
+
 ## 6. Immersed boundary method (IBM)
 
 Complex solid geometries (e.g. rough surfaces, buildings) are represented either by a **ghost-cell
@@ -476,7 +497,7 @@ $\theta_\tau$, and the Obukhov length $L$ through Monin-Obukhov similarity theor
 
 $$u_\tau = \frac{\kappa\,u_\text{ref}}{\ln(y/z_0) - \psi_m(y/L)}, \qquad
 \theta_\tau = \frac{\kappa\,(\theta_\text{ref}-\theta_\text{wall})}{\ln(y/z_0^h) - \psi_h(y/L)}, \qquad
-L = \frac{u_\tau^2\,T_\text{ref}}{\kappa\,g\,\theta_\tau}$$
+L = \frac{u_\tau^2}{\kappa\,\beta_T\,g\,\theta_\tau}$$
 
 using the standard Businger-Dyer stability functions (Paulson 1970 / Dyer 1974
 integrated unstable branch; linear stable branch), with $\zeta = y/L$ clipped to
@@ -490,7 +511,7 @@ this coupling.
 
 The wall heat flux $u_\tau\theta_\tau$ at the matching height replaces the diffusive flux
 $\kappa\,\partial T/\partial y$ through the wall face of the first-cell temperature balance
-(as the stress does for momentum, §7.1), and the ghost row is zero-gradient.
+(as the stress does for momentum, §7.1), and the ghost row is zero-gradient. The Obukhov length uses the buoyancy parameter $\beta_T g$ of the momentum equation (it is neutral for `beta_T*grav = 0`); `T_ref` only offsets the temperature. The plane-averaged $u_\tau$, wall heat flux and $1/L$ of both walls are written to `wall_diag.dat` every `nmonitor` steps.
 
 The stability correction also sets the momentum stress on the same walls: under `T_bc_* = 2` the
 wall stress uses $u_\tau = \kappa u/(\ln(y/z_0)-\psi_m(y/L))$ with the Obukhov length $L$ of the previous step
