@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run one case and require the monitor's max |div| (all cells that the solver reports) to stay below --max-div at every step.
 Used for ibm_pressure = 2, whose fluid cells must stay divergence-free to round-off even next to the body."""
-import argparse, os, sys
+import argparse, atexit, os, sys, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from compare_monitor import parse_monitor, run_case, clear_snapshots
 
@@ -12,6 +12,11 @@ p.add_argument('--exe', required=True)
 p.add_argument('--np', type=int, default=1)
 p.add_argument('--max-div', type=float, default=1e-9)
 a = p.parse_args()
+
+scratch = tempfile.mkdtemp(prefix='case_')   # own work directory, so ctest -j cannot overlap runs of one case
+shutil.copytree(a.case_dir, os.path.join(scratch, 'case'))
+a.case_dir = os.path.join(scratch, 'case')
+atexit.register(shutil.rmtree, scratch, ignore_errors=True)
 
 clear_snapshots(a.case_dir)
 rows = parse_monitor(run_case(a.mpirun, a.exe, a.np, a.case_dir, {}))

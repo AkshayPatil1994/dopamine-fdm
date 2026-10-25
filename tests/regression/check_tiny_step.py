@@ -3,7 +3,7 @@
 and require that every step runs and that the landing snapshot, the newest one, has a pressure of the order of the dynamic pressure. A landing
 step of 1e-9 s would multiply the incremental pressure by dt_prev/dt (about 1e6 here, 1e7 in an urban case): the velocity stays sane in
 that step and the next one blows up. The landing step is never shorter than dt/2 (monitor.f90 landing_dt)."""
-import argparse, glob, os, re, sys
+import argparse, atexit, glob, os, re, sys, shutil, tempfile
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from compare_monitor import parse_monitor, run_case, clear_snapshots, read_snapshot
@@ -16,6 +16,11 @@ p.add_argument('--np', type=int, default=1)
 p.add_argument('--nsteps', type=int, default=8)
 p.add_argument('--max-p', type=float, default=1e3)
 a = p.parse_args()
+
+scratch = tempfile.mkdtemp(prefix='case_')   # own work directory, so ctest -j cannot overlap runs of one case
+shutil.copytree(a.case_dir, os.path.join(scratch, 'case'))
+a.case_dir = os.path.join(scratch, 'case')
+atexit.register(shutil.rmtree, scratch, ignore_errors=True)
 
 clear_snapshots(a.case_dir)
 rows = parse_monitor(run_case(a.mpirun, a.exe, a.np, a.case_dir, {}))

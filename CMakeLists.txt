@@ -523,8 +523,14 @@ find_package(Python3 COMPONENTS Interpreter)
 set(TEST_MPIRUN "" CACHE FILEPATH "MPI launcher used by the regression scripts (default: generated wrapper around mpiexec)")
 if(NOT TEST_MPIRUN)
     set(TEST_MPIRUN "${CMAKE_BINARY_DIR}/mpirun_wrapper.sh")
+    # Several GPU ranks sharing one device are time-sliced without CUDA MPS, which makes every host-device synchronisation
+    # 10-20x slower (a 4-rank case takes 10x longer than with MPS): start the user-level MPS daemon where it exists.
+    set(_mps_start "")
+    if(ENABLE_GPU)
+        set(_mps_start "if command -v nvidia-cuda-mps-control >/dev/null 2>&1 && ! pgrep -u \"$(id -u)\" -x nvidia-cuda-mps >/dev/null 2>&1; then nvidia-cuda-mps-control -d >/dev/null 2>&1; fi\n")
+    endif()
     file(WRITE "${TEST_MPIRUN}" "#!/bin/sh
-real='${MPIEXEC_EXECUTABLE}'
+${_mps_start}real='${MPIEXEC_EXECUTABLE}'
 os=
 if \"$real\" --help 2>&1 | grep -q oversubscribe; then os=--oversubscribe; fi
 n=$#
@@ -1003,6 +1009,15 @@ if(Python3_Interpreter_FOUND)
     endif()
 else()
     message(STATUS "Python3 not found: the regression tests (ctest) that need it are not defined")
+endif()
+
+# One GPU: the GPU tests must never overlap under ctest -j (label gpu: ctest -L gpu)
+if(ENABLE_GPU)
+    get_property(_all_tests DIRECTORY PROPERTY TESTS)
+    foreach(_t ${_all_tests})
+        set_property(TEST ${_t} APPEND PROPERTY LABELS gpu)
+        set_property(TEST ${_t} APPEND PROPERTY RESOURCE_LOCK gpu)
+    endforeach()
 endif()
 
 #------------------------------------------------------------------------------

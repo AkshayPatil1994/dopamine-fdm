@@ -163,24 +163,28 @@ def main():
             out[k] = v
         return out
 
-    case_a = case_b = args.case_dir
     tmp_dirs = []
-    if args.p_grid:
-        row, col = args.p_grid.split(',')
 
-        def with_grid(src):
-            d = tempfile.mkdtemp(prefix='pgrid_')
-            tmp_dirs.append(d)
-            shutil.copytree(src, os.path.join(d, 'case'))
-            f = os.path.join(d, 'case', 'input_parameters')
+    def scratch_case(src, grid=None):
+        d = tempfile.mkdtemp(prefix='case_')
+        tmp_dirs.append(d)
+        # the sibling case directories stay reachable for inputs given as ../<case>/...
+        parent, base = os.path.split(os.path.abspath(src))
+        for name in os.listdir(parent):
+            if name != base:
+                os.symlink(os.path.join(parent, name), os.path.join(d, name))
+        shutil.copytree(src, os.path.join(d, base))
+        if grid:
+            f = os.path.join(d, base, 'input_parameters')
             txt = open(f).read()
-            txt = re.sub(r'p_row\s*=\s*\d+', f'p_row = {row}', txt)
-            txt = re.sub(r'p_col\s*=\s*\d+', f'p_col = {col}', txt)
+            txt = re.sub(r'p_row\s*=\s*\d+', f'p_row = {grid[0]}', txt)
+            txt = re.sub(r'p_col\s*=\s*\d+', f'p_col = {grid[1]}', txt)
             open(f, 'w').write(txt)
-            return os.path.join(d, 'case')
+        return os.path.join(d, base)
 
-        case_b = with_grid(args.case_dir)
-        case_a = args.case_dir if args.p_grid_b_only else with_grid(args.case_dir)
+    grid = args.p_grid.split(',') if args.p_grid else None
+    case_b = scratch_case(args.case_dir, grid)
+    case_a = scratch_case(args.case_dir, None if args.p_grid_b_only else grid)
     if args.fields:
         clear_snapshots(case_a)
     clear_files(case_a, args.files)

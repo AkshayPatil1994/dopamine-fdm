@@ -106,7 +106,7 @@ fluctuation on a large offset (Boussinesq `T` around `T_ref`).
   multi-GPU transfers (not verified here), and 4-rank two-fluid cases take tens of minutes.
 - The AMD closure (`sgs_model = 2`) has parity cases `chan_les_amd_small`, `bouss_amd_small`, `ibm_amd_small`, `vof_les_flume_amd_small` and `vof_scalar_flume_amd`; the wall-model filter state is restored from the `<snapshot>.wmf` sidecar, so the
   restart tests run with the filter on. The AMD buoyancy production term (`amd_buoyancy`) runs on the GPU with a device reduction for the horizontal mean temperature.
-- Running several 4-rank GPU tests at once (`ctest -j`) can fail spuriously on 2 GPUs; run them sequentially.
+- In a GPU build every test carries the label `gpu` and the resource lock `gpu`, so `ctest -j` never overlaps two GPU tests; the CPU tests of a CPU build may run in parallel (mind the rank count of each).
 
 ## Contributing
 
