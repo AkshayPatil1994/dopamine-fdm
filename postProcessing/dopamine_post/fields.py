@@ -159,7 +159,7 @@ def write_box_xmf(case_dir=".", prefix=None, out=None):
     out_path = Path(out) if out else out_dir / "box.xmf"
     pat = re.compile(r"^(.+)\.(\d+)$")
     snaps = sorted((int(m.group(2)), p) for p in (case / "fields").iterdir() if (m := pat.match(p.name))
-                   and (prefix is None and m.group(1).endswith("Block") or prefix == m.group(1)))
+                   and (prefix is None and m.group(1).endswith("Block") and not m.group(1).endswith("_tavgBlock") or prefix == m.group(1)))
     if not snaps:
         raise FileNotFoundError(f"no box snapshots (<prefix>Block.<step>) found in {case / 'fields'}")
 
@@ -1168,7 +1168,7 @@ def animate_velocity_slice(series, steps, z_target=None, out="velocity.gif", fps
 # ════════════════════════════════════════════════════════════════════════════
 # XDMF export (zero-copy byte-seek into the raw snapshot files)
 # ════════════════════════════════════════════════════════════════════════════
-def _probe_field_header(fpath, has_sediment, has_sgs, has_boussinesq):
+def _probe_field_header(fpath, has_sediment, has_sgs, has_boussinesq, has_vof=False):
     """Header-only probe: grid + field shapes/byte offsets for the XDMF writer, without
     materializing the (possibly large) field blocks into arrays.
 
@@ -1214,12 +1214,15 @@ def _probe_field_header(fpath, has_sediment, has_sgs, has_boussinesq):
         cn = ri3(); off_C = pos[0]; skip8(cn[0] * cn[1] * cn[2])
     if has_sgs:
         nutn = ri3(); off_nut = pos[0]; skip8(nutn[0] * nutn[1] * nutn[2])
+    vofn = off_vof = None
     if has_boussinesq:
-        Tn = ri3(); off_T = pos[0]
+        Tn = ri3(); off_T = pos[0]; skip8(Tn[0] * Tn[1] * Tn[2])
+    if has_vof:
+        vofn = ri3(); off_vof = pos[0]
 
     return dict(nxm=nxm, nym=nym, nzm=nzm, xm=xm, ym=ym, zm=zm, un=un, vn=vn, wn=wn, pn=pn,
                off_U=off_U, off_V=off_V, off_W=off_W, off_P=off_P,
-               cn=cn, off_C=off_C, nutn=nutn, off_nut=off_nut, Tn=Tn, off_T=off_T)
+               cn=cn, off_C=off_C, nutn=nutn, off_nut=off_nut, Tn=Tn, off_T=off_T, vofn=vofn, off_vof=off_vof)
 
 
 def _xdmf_hyperslab(attr_name, full_dims_str, start_str, seek, fpath_rel, nxm, nym, nzm):
@@ -1284,9 +1287,9 @@ def write_field_xmf(case_dir=".", prefix=None, out=None):
 
     Fields are on a staggered grid; ghost-layer stripping and the selection of the
     lower face value per cell (no averaging) are handled entirely within the XDMF
-    HyperSlab, exactly as in generateXMF.py.  Which optional blocks (C, nu_t, T) are
+    HyperSlab, exactly as in generateXMF.py.  Which optional blocks (C, nu_t, T, vof) are
     present is auto-detected from `<case_dir>/input_parameters` (sediment_flag,
-    sgs_model, boussinesq_flag) when available.
+    sgs_model, boussinesq_flag, vof_active) when available.
     """
     case = Path(case_dir)
     fields_dir = case / "fields"
@@ -1294,21 +1297,22 @@ def write_field_xmf(case_dir=".", prefix=None, out=None):
     out_dir.mkdir(exist_ok=True)
     out_path = Path(out) if out else out_dir / "channel_test.xmf"
 
-    snaps = list_indexed(fields_dir, _PAT, prefix)
+    snaps = list_indexed(fields_dir, _PAT, prefix or _detect_prefix(fields_dir))
 
     ip_path = case / "input_parameters"
-    has_sediment = has_sgs = has_boussinesq = False
+    has_sediment = has_sgs = has_boussinesq = has_vof = False
     if ip_path.exists():
         prm = _core.parse_input_parameters(ip_path)
         has_sediment = int(prm.get("sediment_flag", 0)) >= 1
         has_sgs = int(prm.get("sgs_model", SGS_MODEL_DEFAULT)) != 0
         has_boussinesq = int(prm.get("boussinesq_flag", 0)) >= 1
+        has_vof = int(prm.get("vof_active", 0)) >= 1
 
     info = None
     body_lines = []
     nxm = nym = nzm = None
     for step, fpath in snaps:
-        h = _probe_field_header(fpath, has_sediment, has_sgs, has_boussinesq)
+        h = _probe_field_header(fpath, has_sediment, has_sgs, has_boussinesq, has_vof)
         if info is None:
             info = h
             nxm, nym, nzm = info["nxm"], info["nym"], info["nzm"]
@@ -1337,6 +1341,9 @@ def write_field_xmf(case_dir=".", prefix=None, out=None):
         if has_boussinesq and h["off_T"] is not None:
             Tx, Ty, Tz = h["Tn"]
             body_lines += _xdmf_hyperslab("T", f"{Tz} {Ty} {Tx}", "1 1 1", h["off_T"], frel, nxm, nym, nzm)
+        if has_vof and h["off_vof"] is not None:
+            vx, vy, vz = h["vofn"]
+            body_lines += _xdmf_hyperslab("vof", f"{vz} {vy} {vx}", "1 1 1", h["off_vof"], frel, nxm, nym, nzm)
         body_lines.append('      </Grid>')
 
     if info is None:

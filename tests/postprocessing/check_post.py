@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """dopamine_post reads what the solver writes: a tiny AMD (default sgs_model) Boussinesq case with box snapshots and time averages is run, then
-every reader is checked (flag autodetect, wrong flags raise, box snapshot == full snapshot, tavg, prefix detection) and importing the package must
+every reader is checked (flag autodetect, wrong flags raise, box snapshot == full snapshot, tavg, prefix detection, XDMF for single-phase/Boussinesq/box/VOF/particle cases) and importing the package must
 leave the matplotlib backend alone."""
 import argparse, os, re, shutil, subprocess, sys, tempfile
 import numpy as np
@@ -69,6 +69,59 @@ try:
     from dopamine_post.fields import plot_profile
     fig = plot_profile(snap)
     assert fig is not None and matplotlib.get_backend().lower() == 'pdf', 'plot_profile must return a live figure and keep the backend'
+
+    # XDMF writers: every Seek offset must lie inside the binary file and the attributes must hold what the solver wrote
+    import xml.etree.ElementTree as ET
+    from dopamine_post.fields import write_field_xmf, write_box_xmf
+    from dopamine_post.particles import write_particles_xmf
+
+    def xmf_attrs(xmf):
+        out = {}
+        for at in ET.parse(xmf).iter('Attribute'):
+            for di in at.iter('DataItem'):
+                if di.get('Format') == 'Binary' and di.get('Seek'):
+                    n = int(np.prod([int(v) for v in di.get('Dimensions').split()]))
+                    fn = os.path.join(os.path.dirname(str(xmf)), di.text.strip())
+                    assert int(di.get('Seek')) + 8 * n <= os.path.getsize(fn), f'{xmf}: {at.get("Name")} runs past the end of {fn}'
+                    out[at.get('Name')] = np.fromfile(fn, '>f8', n, offset=int(di.get('Seek')))
+        return out
+
+    attrs = xmf_attrs(write_field_xmf(tmp))
+    assert {'Velocity', 'P', 'nu_t', 'T'} <= set(attrs), f'single-phase Boussinesq XMF attributes {sorted(attrs)}'
+    assert {'Velocity', 'P'} <= set(xmf_attrs(write_box_xmf(tmp)))
+
+    def tiny_case(name, edits):
+        src = os.path.join(os.path.dirname(a.case_dir), name)
+        if not os.path.exists(os.path.join(src, 'input_parameters')):
+            return None
+        wd = os.path.join(tmp, name)
+        for sub in ('fields', 'restart', 'stats'):
+            os.makedirs(os.path.join(wd, sub))
+        text = open(os.path.join(src, 'input_parameters')).read()
+        for pat, rep in edits:
+            text = re.sub(pat, rep, text, count=1)
+        open(os.path.join(wd, 'input_parameters'), 'w').write(text)
+        r = subprocess.run([a.mpirun, '-np', '1', a.exe], cwd=wd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if r.returncode != 0:
+            print(r.stdout); sys.exit(f'FAIL: {name} run failed')
+        return wd
+
+    wd = tiny_case('vof_drop_small', [(r'nsteps\s*=\s*-1', 'nsteps = 4'), (r'nsave\s*=\s*\d+', 'nsave = 4')])
+    if wd:
+        vattrs = xmf_attrs(write_field_xmf(wd))
+        assert 'vof' in vattrs, f'VOF case: the XMF has no liquid-fraction attribute ({sorted(vattrs)})'
+        vs = FieldSeries(wd).latest()['vof']
+        assert 0 <= vattrs['vof'].min() and vattrs['vof'].max() <= 1 and abs(vattrs['vof'].max() - vs.max()) < 1e-12, 'vof attribute does not match the snapshot'
+    wd = tiny_case('part_tracer_small', [])
+    if wd:
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')                      # fields next to <prefix>_particles.<step> must not trigger the multiple-prefix warning
+            write_field_xmf(wd)
+        write_particles_xmf(wd)
+        topo = ET.parse(os.path.join(wd, 'paraview', 'particles.xmf')).getroot().findall('.//Topology')
+        assert len(topo) == 1 and int(topo[0].get('NumberOfElements')) == 300, 'particle XMF: one saved step with n_particles_init points expected'
+        assert 'Velocity' in xmf_attrs(os.path.join(wd, 'paraview', 'particles.xmf'))
     print('PASS: dopamine_post readers (flags autodetect incl. AMD default, wrong flags raise, box == full, tavg, backend untouched)')
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
