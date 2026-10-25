@@ -11,7 +11,7 @@ Module vof_state
   Use global
   Use mpi
   Use decomp, Only : x_periodic_partner, z_periodic_partner
-  Use halo_pad, Only : pad_field, pad_field_dev
+  Use halo_pad, Only : pad_field_dev
   Use boundary_conditions, Only : update_ghost_interior_planes_x, update_ghost_interior_planes, apply_periodic_bc_x, &
                                   apply_periodic_bc_z
   Use scalar_transport, Only : finish_scalar_halos
@@ -19,7 +19,7 @@ Module vof_state
   Use vof_normals
   Use vof_advect
   Use vof_pressure, Only : dev_copy, vp_init, vp_set_density, vp_selftest, vp_rho, vp_w, vp_iters_last, vp_res_last, vp_its_total, &
-                           vp_masked, vp_act
+                           vp_masked, vp_act, vp_dev
   Use input_output, Only : read_vof_restart
   Use restart_output, Only : file_exists_nonempty
   Use waves, Only : wave_init, wave_eta
@@ -378,13 +378,17 @@ Contains
        Call fill_solid_fraction(Cp, n1, n2, n3)
        ! wall ghost rows from the filled rows, and the x/z pad layers (second ghost layer) from the
        ! neighbours' filled cells
+       !$acc kernels present(Cp,Cw)
        Cw = Cp(1:n1,1:n2,1:n3)
        Cw(:,1,:)  = Cw(:,2,:)
        Cw(:,n2,:) = Cw(:,n2-1,:)
-       Call pad_field(Cw, n1, n2, n3, .False., .False., 1, Pw)
+       !$acc end kernels
+       Call pad_field_dev(Cw, Pw, n1, n2, n3, .False., .False., 1)
+       !$acc kernels present(Cp,Pw)
        Cp(0:n1+1,1:n2,0:n3+1) = Pw
        Cp(:,0,:)    = Cp(:,3,:)
        Cp(:,n2+1,:) = Cp(:,n2-2,:)
+       !$acc end kernels
     End If
 
   End Subroutine vof_fill_pad
@@ -611,32 +615,70 @@ Contains
   !  C range, interface cells, cumulative clip loss, largest sub-step Courant number seen since the last row
   Subroutine vof_output_monitor
 
-    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr, pjump, pcs(2)
+    Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr, pjump, pcs(2), um, vm, wm
+    Integer(Int32) :: i, j, k
     Integer(Int64) :: nfail
     Integer(Int64) :: nint
     Logical :: has_rows
 
-    !$acc update host(U,V,W,P,Cv)
+    ! the host velocity is read by the generic monitor and the snapshot output; the diagnostics below run on the
+    ! device only with the two-fluid flow (vp_act and the face masks live there)
+    !$acc update host(U,V,W)
+    If ( vof_debug == 1 .Or. .Not. vp_dev ) Then
+       !$acc update host(P,Cv)
+    End If
     Call vof_diagnostics(vliq, cmin, cmax, nint, mom)
     serr = shape_error()
     pjump = pressure_jump()
     pcs = pressure_checksums()
     Call MPI_Allreduce(vof_hf_fail, nfail, 1, MPI_integer8, MPI_SUM, MPI_COMM_WORLD, ierr)
     vv = Max(vliq, 1d-300)
-    vel_loc = (/ MaxVal(Abs(U(2:nx-1,2:nyg-1,2:nzg-1))), MaxVal(Abs(V(2:nxg-1,2:ny-1,2:nzg-1))), &
-                 MaxVal(Abs(W(2:nxg-1,2:nyg-1,2:nz-1))) /)
+    um = 0d0;  vm = 0d0;  wm = 0d0
+    !$acc parallel loop collapse(3) reduction(max:um) present(U) if(vp_dev)
+    Do k = 2, nzg-1
+       Do j = 2, nyg-1
+          Do i = 2, nx-1
+             um = Max(um, Abs(U(i,j,k)))
+          End Do
+       End Do
+    End Do
+    !$acc parallel loop collapse(3) reduction(max:vm) present(V) if(vp_dev)
+    Do k = 2, nzg-1
+       Do j = 2, ny-1
+          Do i = 2, nxg-1
+             vm = Max(vm, Abs(V(i,j,k)))
+          End Do
+       End Do
+    End Do
+    !$acc parallel loop collapse(3) reduction(max:wm) present(W) if(vp_dev)
+    Do k = 2, nz-1
+       Do j = 2, nyg-1
+          Do i = 2, nxg-1
+             wm = Max(wm, Abs(W(i,j,k)))
+          End Do
+       End Do
+    End Do
+    vel_loc = (/ um, vm, wm /)
     Call MPI_Allreduce(vel_loc, vel_glb, 3, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
-    ! where the fastest |U| is (x, y of the face), reduced with MAXLOC
+    ! where the fastest |U| is (x, y of the face; the first cell of that value, as MaxLoc), reduced with MAXLOC
     Block
-      Integer(Int32) :: ia(3)
+      Integer(Int32) :: key, n1, n2
       Real(Int64) :: pin(2), pout(2)
-      ia = MaxLoc(Abs(U(2:nx-1,2:nyg-1,2:nzg-1)))
-      pin(1) = MaxVal(Abs(U(2:nx-1,2:nyg-1,2:nzg-1)))
+      n1 = nx-2;  n2 = nyg-2;  key = Huge(key)
+      !$acc parallel loop collapse(3) reduction(min:key) present(U) if(vp_dev)
+      Do k = 2, nzg-1
+         Do j = 2, nyg-1
+            Do i = 2, nx-1
+               If ( Abs(U(i,j,k)) == um ) key = Min(key, (i-2) + n1*((j-2) + n2*(k-2)))
+            End Do
+         End Do
+      End Do
+      pin(1) = um
       pin(2) = Real(myid,Int64)
       Call MPI_Allreduce(pin, pout, 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, MPI_COMM_WORLD, ierr)
       xloc = 0d0;  yloc = 0d0
       If ( Real(myid,Int64) == pout(2) ) Then
-         xloc = x(ia(1)+1);  yloc = yg(ia(2)+1)
+         xloc = x(Mod(key,n1)+2);  yloc = yg(Mod(key/n1,n2)+2)
       End If
       pin = (/ xloc, yloc /)
       Call MPI_Allreduce(pin, pout, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
@@ -806,6 +848,8 @@ Contains
        If ( is_last ) khi = nzg-2
     End If
     el = 0d0
+    ! Cinit lives on the host only
+    !$acc update host(Cv)
     Do k = 2, khi
        Do j = 2, nyg-1
           Do i = 2, ihi
@@ -822,7 +866,7 @@ Contains
   !  jump of a static drop
   Function pressure_jump() Result(pj)
 
-    Real(Int64) :: pj, loc(4), glb(4), vc
+    Real(Int64) :: pj, loc(4), glb(4), vc, fw, l1, l2, l3, l4
     Integer(Int32) :: i, j, k, ihi, khi
     Logical :: is_first, is_last
     Integer(Int32) :: partner
@@ -836,19 +880,23 @@ Contains
        Call z_periodic_partner(is_first, is_last, partner)
        If ( is_last ) khi = nzg-2
     End If
-    loc = 0d0
+    l1 = 0d0;  l2 = 0d0;  l3 = 0d0;  l4 = 0d0
+    !$acc parallel loop collapse(3) private(vc,fw) reduction(+:l1,l2,l3,l4) present(Cv,P,hx,hy,hz,vp_act) if(vp_dev)
     Do k = 2, khi
        Do j = 2, nyg-1
           Do i = 2, ihi
-             vc = hx(i)*hy(j)*hz(k)*fluid_weight(i,j,k)
+             fw = 1d0
+             If ( vp_masked ) fw = vp_act(i,j,k)
+             vc = hx(i)*hy(j)*hz(k)*fw
              If ( Cv(i,j,k) > 0.99d0 ) Then
-                loc(1) = loc(1) + vc*P(i,j,k);  loc(2) = loc(2) + vc
+                l1 = l1 + vc*P(i,j,k);  l2 = l2 + vc
              Else If ( Cv(i,j,k) < 0.01d0 ) Then
-                loc(3) = loc(3) + vc*P(i,j,k);  loc(4) = loc(4) + vc
+                l3 = l3 + vc*P(i,j,k);  l4 = l4 + vc
              End If
           End Do
        End Do
     End Do
+    loc = (/ l1, l2, l3, l4 /)
     Call MPI_Allreduce(loc, glb, 4, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     pj = 0d0
     If ( glb(2) > 0d0 .And. glb(4) > 0d0 ) pj = glb(1)/glb(2) - glb(3)/glb(4)
@@ -860,7 +908,7 @@ Contains
   !  halos/seams are right
   Function pressure_checksums() Result(pc)
 
-    Real(Int64) :: pc(2), loc(2), vc
+    Real(Int64) :: pc(2), loc(2), vc, fw, l1, l2
     Integer(Int32) :: i, j, k, ihi, khi
     Logical :: is_first, is_last
     Integer(Int32) :: partner
@@ -874,15 +922,19 @@ Contains
        Call z_periodic_partner(is_first, is_last, partner)
        If ( is_last ) khi = nzg-2
     End If
-    loc = 0d0
+    l1 = 0d0;  l2 = 0d0
+    !$acc parallel loop collapse(3) private(vc,fw) reduction(+:l1,l2) present(P,hx,hy,hz,vp_act) if(vp_dev)
     Do k = 2, khi
        Do j = 2, nyg-1
           Do i = 2, ihi
-             vc = hx(i)*hy(j)*hz(k)*fluid_weight(i,j,k)
-             loc(1) = loc(1) + vc*P(i,j,k);  loc(2) = loc(2) + vc*P(i,j,k)**2
+             fw = 1d0
+             If ( vp_masked ) fw = vp_act(i,j,k)
+             vc = hx(i)*hy(j)*hz(k)*fw
+             l1 = l1 + vc*P(i,j,k);  l2 = l2 + vc*P(i,j,k)**2
           End Do
        End Do
     End Do
+    loc = (/ l1, l2 /)
     Call MPI_Allreduce(loc, pc, 2, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
   End Function pressure_checksums
@@ -951,7 +1003,7 @@ Contains
     Integer(Int32) :: i, j, k, ihi, jhi, khi
     Logical :: is_first, is_last
     Integer(Int32) :: partner
-    Real(Int64) :: c, vc, buf(8), gbuf(8), mn, mx, kd, ke
+    Real(Int64) :: c, vc, buf(8), gbuf(8), mn, mx, kd, ke, fw, b1, b2, b3, b4, b5, b6, b7, b8
     Integer(Int64) :: ni, gni
 
     ihi = nxg-1;  jhi = nyg-1;  khi = nzg-1
@@ -965,28 +1017,34 @@ Contains
     End If
     If ( y_bc_type == 0 ) jhi = nyg-2
 
-    buf = 0d0;  mn = 1d300;  mx = -1d300;  ni = 0
+    mn = 1d300;  mx = -1d300;  ni = 0
+    b1 = 0d0;  b2 = 0d0;  b3 = 0d0;  b4 = 0d0;  b5 = 0d0;  b6 = 0d0;  b7 = 0d0;  b8 = 0d0
     kd = 0d0
     If ( vof_wave_lambda > 0d0 ) kd = 8d0*Atan(1d0)/vof_wave_lambda
+    !$acc parallel loop collapse(3) private(c,vc,ke,fw) reduction(+:b1,b2,b3,b4,b5,b6,b7,b8,ni) reduction(min:mn) &
+    !$acc& reduction(max:mx) present(Cv,U,V,W,hx,hy,hz,xg,yg,zg,vp_act) if(vp_dev)
     Do k = 2, khi
        Do j = 2, jhi
           Do i = 2, ihi
              c = Cv(i,j,k)
-             vc = hx(i)*hy(j)*hz(k)*fluid_weight(i,j,k)
-             buf(1) = buf(1) + c*vc
-             buf(2) = buf(2) + c*vc*xg(i)
-             buf(3) = buf(3) + c*vc*yg(j)
-             buf(4) = buf(4) + c*vc*zg(k)
-             buf(5) = buf(5) + c*(1d0 - c)*vc
-             buf(6) = buf(6) + c*vc*Cos(kd*xg(i))
+             fw = 1d0
+             If ( vp_masked ) fw = vp_act(i,j,k)
+             vc = hx(i)*hy(j)*hz(k)*fw
+             b1 = b1 + c*vc
+             b2 = b2 + c*vc*xg(i)
+             b3 = b3 + c*vc*yg(j)
+             b4 = b4 + c*vc*zg(k)
+             b5 = b5 + c*(1d0 - c)*vc
+             b6 = b6 + c*vc*Cos(kd*xg(i))
              ke = 0.125d0*( (U(i,j,k) + U(i-1,j,k))**2 + (V(i,j,k) + V(i,j-1,k))**2 + (W(i,j,k) + W(i,j,k-1))**2 )*vc
-             buf(7) = buf(7) + c*vof_rho_l*ke
-             buf(8) = buf(8) + (1d0 - c)*vof_rho_g*ke
+             b7 = b7 + c*vof_rho_l*ke
+             b8 = b8 + (1d0 - c)*vof_rho_g*ke
              mn = Min(mn, c);  mx = Max(mx, c)
-             If ( c > vof_eps .And. c < 1d0 - vof_eps .And. fluid_weight(i,j,k) > 0.5d0 ) ni = ni + 1
+             If ( c > vof_eps .And. c < 1d0 - vof_eps .And. fw > 0.5d0 ) ni = ni + 1
           End Do
        End Do
     End Do
+    buf = (/ b1, b2, b3, b4, b5, b6, b7, b8 /)
 
     Call MPI_Allreduce(buf, gbuf, 8, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(mn, cmin, 1, MPI_real8, MPI_MIN, MPI_COMM_WORLD, ierr)
