@@ -40,6 +40,9 @@ Module vof_pressure
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_mu, vp_mv, vp_mw, vp_act
   ! vp_bu/bv/bw changed since the multigrid conductances were built (rebuilt by the next preconditioner call)
   Logical :: vp_mg_stale = .False.
+  ! reciprocal grid spacings of vp_apply_A (the FP64 divisions dominate its cost): 1/(yg(j+1)-yg(j)), 1/(yg(j)-yg(j-1)),
+  ! 1/(y(j)-y(j-1)), and the same in z
+  Real(Int64), Allocatable, Dimension(:) :: vp_ryh, vp_ryl, vp_rhy, vp_rzh, vp_rzl, vp_rhz
 
 Contains
 
@@ -506,28 +509,35 @@ Contains
     Real(Int64), Intent(Out) :: out(nxg,nyg,nzg)
 
     Integer(Int32) :: i, j, k
-    Real(Int64) :: inv_dx2, hy, hz, ihy_hi, ihy_lo, ihz_hi, ihz_lo, fxh, fxl, fyh, fyl, fzh, fzl
+    Real(Int64) :: inv_dx2, fxh, fxl, fyh, fyl, fzh, fzl
 
     inv_dx2 = 1d0/(dx*dx)
+    If ( .Not. Allocated(vp_ryh) ) Then
+       Allocate( vp_ryh(nyg), vp_ryl(nyg), vp_rhy(nyg), vp_rzh(nzg), vp_rzl(nzg), vp_rhz(nzg) )
+       vp_ryh = 0d0;  vp_ryl = 0d0;  vp_rhy = 0d0;  vp_rzh = 0d0;  vp_rzl = 0d0;  vp_rhz = 0d0
+       Do j = 2, nyg-1
+          vp_ryh(j) = 1d0/(yg(j+1) - yg(j));  vp_ryl(j) = 1d0/(yg(j) - yg(j-1));  vp_rhy(j) = 1d0/(y(j) - y(j-1))
+       End Do
+       Do k = 2, nzg-1
+          vp_rzh(k) = 1d0/(zg(k+1) - zg(k));  vp_rzl(k) = 1d0/(zg(k) - zg(k-1));  vp_rhz(k) = 1d0/(z(k) - z(k-1))
+       End Do
+       !$acc enter data copyin(vp_ryh,vp_ryl,vp_rhy,vp_rzh,vp_rzl,vp_rhz) if(vp_dev)
+    End If
     ! the interior cells are overwritten below, only the outer shell needs to be zero
     !$acc kernels present(out) if(vp_dev)
     out(1,:,:) = 0d0;  out(nxg,:,:) = 0d0;  out(:,1,:) = 0d0;  out(:,nyg,:) = 0d0;  out(:,:,1) = 0d0;  out(:,:,nzg) = 0d0
     !$acc end kernels
-    !$acc parallel loop collapse(3) present(phi,out,vp_bu,vp_bv,vp_bw,y,yg,z,zg) if(vp_dev)
+    !$acc parallel loop collapse(3) present(phi,out,vp_bu,vp_bv,vp_bw,vp_ryh,vp_ryl,vp_rhy,vp_rzh,vp_rzl,vp_rhz) if(vp_dev)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
           Do i = 2, nxg-1
-             hz = z(k) - z(k-1)
-             ihz_hi = 1d0/(zg(k+1) - zg(k));  ihz_lo = 1d0/(zg(k) - zg(k-1))
-             hy = y(j) - y(j-1)
-             ihy_hi = 1d0/(yg(j+1) - yg(j));  ihy_lo = 1d0/(yg(j) - yg(j-1))
              fxh = vp_bu(i,j,k)*( phi(i+1,j,k) - phi(i,j,k) )
              fxl = vp_bu(i-1,j,k)*( phi(i,j,k) - phi(i-1,j,k) )
-             fyh = vp_bv(i,j,k)*( phi(i,j+1,k) - phi(i,j,k) )*ihy_hi
-             fyl = vp_bv(i,j-1,k)*( phi(i,j,k) - phi(i,j-1,k) )*ihy_lo
-             fzh = vp_bw(i,j,k)*( phi(i,j,k+1) - phi(i,j,k) )*ihz_hi
-             fzl = vp_bw(i,j,k-1)*( phi(i,j,k) - phi(i,j,k-1) )*ihz_lo
-             out(i,j,k) = (fxh - fxl)*inv_dx2 + (fyh - fyl)/hy + (fzh - fzl)/hz
+             fyh = vp_bv(i,j,k)*( phi(i,j+1,k) - phi(i,j,k) )*vp_ryh(j)
+             fyl = vp_bv(i,j-1,k)*( phi(i,j,k) - phi(i,j-1,k) )*vp_ryl(j)
+             fzh = vp_bw(i,j,k)*( phi(i,j,k+1) - phi(i,j,k) )*vp_rzh(k)
+             fzl = vp_bw(i,j,k-1)*( phi(i,j,k) - phi(i,j,k-1) )*vp_rzl(k)
+             out(i,j,k) = (fxh - fxl)*inv_dx2 + (fyh - fyl)*vp_rhy(j) + (fzh - fzl)*vp_rhz(k)
           End Do
        End Do
     End Do
