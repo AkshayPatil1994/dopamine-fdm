@@ -39,6 +39,12 @@ Module vof_mg
   Logical :: mg_xself, mg_zself
   Real(Int64) :: mg_xlo_gs, mg_xhi_gs   ! ghost = gs * boundary cell where there is no neighbour
   Logical :: mg_ready = .False.
+  ! direct coarsest level: the coarsest level (all ranks together, nl own cells of ng) is solved exactly by the
+  ! explicit inverse rows of its banded matrix, so the cycle does not depend on how many sweeps it can afford
+  Logical :: mg_direct = .False.
+  Integer(Int32) :: mg_dnl = 0, mg_dng = 0, mg_db = 1, mg_dnx = 1, mg_dnz = 1
+  Integer(Int32), Allocatable :: mg_dcnt(:), mg_ddsp(:), mg_dpos(:), mg_dgi(:,:,:)
+  Real(mgk), Allocatable :: mg_dinv(:,:), mg_drecv(:), mg_dout(:), mg_dpk(:,:), mg_dcg(:,:)
 
 Contains
 
@@ -48,7 +54,7 @@ Contains
 
     Integer(Int32), Intent(In) :: ihi, jhi, khi
 
-    Integer(Int32) :: l, j, k, nmin(2), nmin_g(2), ntot, nmax, partner
+    Integer(Int32) :: l, j, k, nmin(2), nmin_g(2), nsum(3), nsum_g(3), ntot, nmax, partner
     Integer(Int32) :: ni, nj, nk, nic, njc, nkc, sx, sy, sz
     Logical :: is_first, is_last, cx_, cy_, cz_
     Real(Int64), Allocatable :: hx(:), hy(:), hz(:), dcx(:), dcy(:), dcz(:)
@@ -109,6 +115,16 @@ Contains
        ! a direction is coarsened if every rank holds at least two of its cells
        nmin = (/ mg_ni(l), mg_nk(l) /)
        Call MPI_Allreduce(nmin, nmin_g, 2, MPI_integer, MPI_MIN, MPI_COMM_WORLD, ierr)
+       nsum = (/ mg_ni(l), mg_nk(l), mg_ni(l)*mg_nj(l)*mg_nk(l) /)
+       Call MPI_Allreduce(nsum, nsum_g, 3, MPI_integer, MPI_SUM, MPI_COMM_WORLD, ierr)
+       mg_dnx = nsum_g(1)/p_col;  mg_dnz = nsum_g(2)/p_row;  mg_dng = nsum_g(3)
+       mg_db = mg_direct_band(mg_nj(l), mg_dnx, mg_dnz)
+       ! band Cholesky of the n x n matrix plus nl solves for the own rows of its inverse
+       If ( mg_dng <= 1024 .And. Real(mg_dng,Int64)*Real(mg_db,Int64)*( Real(mg_db,Int64) &
+            + 2d0*Real((mg_dng+p_row*p_col-1)/(p_row*p_col),Int64) ) <= 6d6 ) Then
+          mg_direct = .True.
+          Exit
+       End If
        cx_ = ( nmin_g(1) >= 2 );  cz_ = ( nmin_g(2) >= 2 );  cy_ = ( mg_coarsen_y .And. mg_nj(l) >= 2 )
        If ( .Not. ( cx_ .Or. cy_ .Or. cz_ ) .Or. l == mg_maxlev ) Exit
        sx = Merge(2, 1, cx_);  sy = Merge(2, 1, cy_);  sz = Merge(2, 1, cz_)
@@ -130,6 +146,7 @@ Contains
     ntot = mg_off(mg_nlev+1)
     Deallocate( hx, hy, hz, dcx, dcy, dcz )
 
+    If ( mg_direct ) Call mg_direct_setup
     Allocate( mg_cx(ntot), mg_cy(ntot), mg_cz(ntot), mg_dd(ntot), mg_x(ntot), mg_b(ntot), mg_t(ntot), mg_d(ntot), &
               mg_m(ntot), mg_iw(ntot), mg_s(ntot) )
     mg_cx = 0d0;  mg_cy = 0d0;  mg_cz = 0d0;  mg_dd = 0d0;  mg_x = 0d0;  mg_b = 0d0;  mg_t = 0d0;  mg_d = 0d0
@@ -147,11 +164,268 @@ Contains
        Do l = 1, mg_nlev
           Write(*,'(A,I3,3I6)') '     level', l, mg_ni(l), mg_nj(l), mg_nk(l)
        End Do
-       If ( mg_nk(1) < 8 .And. nz_global > mg_nk(1) ) &
-            Write(*,'(A)') '   NOTE: fewer than 8 z-cells per rank limit the multigrid coarsening in z; p_col = 1 converges faster'
+       If ( mg_direct ) Write(*,'(A,I0,A,I0)') '   coarsest level solved directly: ', mg_dng, ' cells, half-bandwidth ', mg_db
     End If
 
   End Subroutine mg_init
+
+
+
+  !> Half-bandwidth of the coarsest-level matrix, ordered j + nj*(fold(i) - 1 + nx*(fold(k) - 1))
+  Function mg_direct_band(nj, nx, nz) Result(b)
+
+    Integer(Int32), Intent(In) :: nj, nx, nz
+    Integer(Int32) :: b
+
+    b = 1
+    If ( nx > 1 ) b = Max(b, nj*Merge(2, 1, x_bc_type == 0 .And. nx > 2))
+    If ( nz > 1 ) b = Max(b, nj*nx*Merge(2, 1, z_bc_type == 0 .And. nz > 2))
+
+  End Function mg_direct_band
+
+
+  !> Position of cell i of n: periodic directions are folded (1, n, 2, n-1, ...) so that the wrap-around
+  !  neighbours stay within two positions
+  Function mg_fold(i, n, per) Result(p)
+
+    Integer(Int32), Intent(In) :: i, n
+    Logical, Intent(In) :: per
+    Integer(Int32) :: p
+
+    p = i
+    If ( per .And. n > 2 ) p = Merge(2*i - 1, 2*(n - i + 1), i <= (n + 1)/2)
+
+  End Function mg_fold
+
+
+  !> Gather layout of the coarsest level over all ranks (row-major rank = x index * p_col + z index) and the
+  !  band position of every gathered cell
+  Subroutine mg_direct_setup
+
+    Integer(Int32) :: l, np, r, row, col, rr, i, j, k, ni, nj, nk, xoff, zoff, idx
+    Integer(Int32), Allocatable :: nia(:), nka(:)
+
+    np = p_row*p_col
+    l = mg_nlev
+    ni = mg_ni(l);  nj = mg_nj(l);  nk = mg_nk(l)
+    Allocate( nia(0:np-1), nka(0:np-1), mg_dcnt(0:np-1), mg_ddsp(0:np-1) )
+    Call MPI_Allgather(ni, 1, MPI_integer, nia, 1, MPI_integer, MPI_COMM_WORLD, ierr)
+    Call MPI_Allgather(nk, 1, MPI_integer, nka, 1, MPI_integer, MPI_COMM_WORLD, ierr)
+    mg_dcnt = nia*nj*nka
+    mg_ddsp(0) = 0
+    Do r = 1, np-1
+       mg_ddsp(r) = mg_ddsp(r-1) + mg_dcnt(r-1)
+    End Do
+    Allocate( mg_dpos(mg_dng), mg_dgi(mg_dnx,nj,mg_dnz) )
+    Do r = 0, np-1
+       row = r/p_col;  col = Mod(r, p_col)
+       xoff = 0
+       Do rr = 0, row-1
+          xoff = xoff + nia(rr*p_col)
+       End Do
+       zoff = Sum(nka(row*p_col:row*p_col+col-1))
+       Do k = 1, nka(r)
+          Do j = 1, nj
+             Do i = 1, nia(r)
+                idx = mg_ddsp(r) + i + nia(r)*((j-1) + nj*(k-1))
+                mg_dgi(xoff+i,j,zoff+k) = idx
+                mg_dpos(idx) = j + nj*( mg_fold(xoff+i, mg_dnx, x_bc_type == 0) - 1 &
+                                      + mg_dnx*(mg_fold(zoff+k, mg_dnz, z_bc_type == 0) - 1) )
+             End Do
+          End Do
+       End Do
+    End Do
+    mg_dnl = ni*nj*nk
+    Allocate( mg_dinv(mg_dng,mg_dnl), mg_drecv(mg_dng), mg_dout(mg_dnl), mg_dpk(3,mg_dnl), mg_dcg(3,mg_dng) )
+    mg_dinv = 0d0;  mg_drecv = 0d0;  mg_dout = 0d0
+    !$acc enter data create(mg_dinv,mg_drecv,mg_dout,mg_dpk)
+    Deallocate( nia, nka )
+
+  End Subroutine mg_direct_setup
+
+
+  !> Adds the face (p, q) of conductance c to the banded lower storage ab (off-diagonal and, when p == q, the
+  !  diagonal part) and to the face sum ds
+  Subroutine mg_dpair(ab, ds, b, n, p, q, c)
+
+    Integer(Int32), Intent(In) :: b, n, p, q
+    Real(Int64), Intent(InOut) :: ab(0:b,n), ds(n)
+    Real(Int64), Intent(In) :: c
+
+    ds(p) = ds(p) + c;  ds(q) = ds(q) + c
+    If ( p == q ) Then
+       ab(0,p) = ab(0,p) - 2d0*c
+    Else
+       ab(Abs(p-q),Min(p,q)) = ab(Abs(p-q),Min(p,q)) - c
+    End If
+
+  End Subroutine mg_dpair
+
+
+  !> Gathers the coarsest-level conductances, assembles K = S + eps*diag(S) (the Dirichlet x outlet folded
+  !  into the diagonal) in a band, factors it and stores the rows of K^-1 of the own cells (K is symmetric).
+  !  Cells without an open face stay zero.
+  Subroutine mg_direct_build
+
+    Integer(Int32) :: l, o, np, n, b, nl, ni, nj, nk, ix, j, kz, ix2, kz2, idx, p, q, pc, c, g, r
+    Real(Int64), Allocatable :: ab(:,:), ds(:), dr(:), y(:), xs(:)
+    Real(Int64) :: s, cf
+
+    np = p_row*p_col
+    l = mg_nlev;  o = mg_off(l) + 1
+    ni = mg_ni(l);  nj = mg_nj(l);  nk = mg_nk(l)
+    n = mg_dng;  b = mg_db;  nl = mg_dnl
+    Call mg_dpack(ni, nj, nk, mg_cx(o), mg_cy(o), mg_cz(o), mg_dpk)
+    !$acc wait(1)
+    !$acc update host(mg_dpk)
+    If ( np == 1 ) Then
+       mg_dcg = mg_dpk
+    Else
+       Call MPI_Allgatherv(mg_dpk, 3*nl, mg_mpi_t, mg_dcg, 3*mg_dcnt, 3*mg_ddsp, mg_mpi_t, MPI_COMM_WORLD, ierr)
+    End If
+
+    Allocate( ab(0:b,n), ds(n), dr(n), y(n), xs(n) )
+    ab = 0d0;  ds = 0d0;  dr = 0d0
+    Do kz = 1, mg_dnz
+       Do j = 1, nj
+          Do ix = 1, mg_dnx
+             idx = mg_dgi(ix,j,kz);  p = mg_dpos(idx)
+             cf = mg_dcg(1,idx)
+             If ( cf > 0d0 ) Then
+                ix2 = ix + 1
+                If ( ix2 > mg_dnx .And. x_bc_type == 0 ) ix2 = 1
+                If ( ix2 > mg_dnx ) Then
+                   ds(p) = ds(p) + cf;  dr(p) = cf
+                Else
+                   Call mg_dpair(ab, ds, b, n, p, mg_dpos(mg_dgi(ix2,j,kz)), cf)
+                End If
+             End If
+             cf = mg_dcg(2,idx)
+             If ( cf > 0d0 .And. j < nj ) Call mg_dpair(ab, ds, b, n, p, mg_dpos(mg_dgi(ix,j+1,kz)), cf)
+             cf = mg_dcg(3,idx)
+             If ( cf > 0d0 ) Then
+                kz2 = kz + 1
+                If ( kz2 > mg_dnz .And. z_bc_type == 0 ) kz2 = 1
+                If ( kz2 <= mg_dnz ) Call mg_dpair(ab, ds, b, n, p, mg_dpos(mg_dgi(ix,j,kz2)), cf)
+             End If
+          End Do
+       End Do
+    End Do
+    Do p = 1, n
+       If ( ds(p) > 0d0 ) Then
+          ab(0,p) = ab(0,p) + (1d0 + mg_eps)*ds(p) + dr(p)
+       Else
+          ab(0,p) = 1d0
+       End If
+    End Do
+    Do p = 1, n
+       ab(0,p) = Sqrt(ab(0,p))
+       Do r = p+1, Min(n, p+b)
+          ab(r-p,p) = ab(r-p,p)/ab(0,p)
+       End Do
+       Do q = p+1, Min(n, p+b)
+          Do r = q, Min(n, p+b)
+             ab(r-q,q) = ab(r-q,q) - ab(r-p,p)*ab(q-p,p)
+          End Do
+       End Do
+    End Do
+    mg_dinv = 0d0
+    Do c = 1, nl
+       pc = mg_dpos(mg_ddsp(myid) + c)
+       If ( ds(pc) <= 0d0 ) Cycle
+       y = 0d0
+       y(pc) = 1d0/ab(0,pc)
+       Do r = pc+1, n
+          s = 0d0
+          Do q = Max(pc, r-b), r-1
+             s = s + ab(r-q,q)*y(q)
+          End Do
+          y(r) = -s/ab(0,r)
+       End Do
+       Do p = n, 1, -1
+          s = y(p)
+          Do q = p+1, Min(n, p+b)
+             s = s - ab(q-p,p)*xs(q)
+          End Do
+          xs(p) = s/ab(0,p)
+       End Do
+       Do g = 1, n
+          mg_dinv(g,c) = Real(xs(mg_dpos(g)), mgk)
+       End Do
+    End Do
+    !$acc update device(mg_dinv)
+    Deallocate( ab, ds, dr, y, xs )
+
+  End Subroutine mg_direct_build
+
+
+  Subroutine mg_dpack(ni, nj, nk, cx, cy, cz, pk)
+
+    Integer(Int32), Intent(In) :: ni, nj, nk
+    Real(mgk), Intent(In) :: cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), cz(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: pk(3,ni*nj*nk)
+    Integer(Int32) :: i, j, k, c
+
+    !$acc parallel loop collapse(3) private(c) present(cx,cy,cz,pk) async(1)
+    Do k = 1, nk
+       Do j = 1, nj
+          Do i = 1, ni
+             c = i + ni*((j-1) + nj*(k-1))
+             pk(1,c) = cx(i,j,k);  pk(2,c) = cy(i,j,k);  pk(3,c) = cz(i,j,k)
+          End Do
+       End Do
+    End Do
+
+  End Subroutine mg_dpack
+
+
+  !> x = K^-1 b on the coarsest level: gather b over the ranks, one dot product with the stored inverse row per
+  !  own cell
+  Subroutine mg_direct_solve(ni, nj, nk, b, x)
+
+    Integer(Int32), Intent(In) :: ni, nj, nk
+    Real(mgk), Intent(In) :: b(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: x(0:ni+1,0:nj+1,0:nk+1)
+    Integer(Int32) :: i, j, k, c, g, d0, nl
+    Real(mgk) :: s
+
+    nl = mg_dnl
+    d0 = mg_ddsp(myid)
+    !$acc parallel loop collapse(3) private(c) present(b,mg_drecv) async(1)
+    Do k = 1, nk
+       Do j = 1, nj
+          Do i = 1, ni
+             c = i + ni*((j-1) + nj*(k-1))
+             mg_drecv(d0+c) = b(i,j,k)
+          End Do
+       End Do
+    End Do
+    If ( p_row*p_col > 1 ) Then
+       !$acc wait(1)
+       !$acc update host(mg_drecv(d0+1:d0+nl))
+       Call MPI_Allgatherv(MPI_IN_PLACE, 0, mg_mpi_t, mg_drecv, mg_dcnt, mg_ddsp, mg_mpi_t, MPI_COMM_WORLD, ierr)
+       !$acc update device(mg_drecv) async(1)
+    End If
+    !$acc parallel loop gang private(s) present(mg_dinv,mg_drecv,mg_dout) async(1)
+    Do c = 1, nl
+       s = 0.0
+       !$acc loop vector reduction(+:s)
+       Do g = 1, mg_dng
+          s = s + mg_dinv(g,c)*mg_drecv(g)
+       End Do
+       mg_dout(c) = s
+    End Do
+    !$acc parallel loop collapse(3) private(c) present(x,mg_dout) async(1)
+    Do k = 1, nk
+       Do j = 1, nj
+          Do i = 1, ni
+             c = i + ni*((j-1) + nj*(k-1))
+             x(i,j,k) = mg_dout(c)
+          End Do
+       End Do
+    End Do
+
+  End Subroutine mg_direct_solve
 
 
 
@@ -222,6 +496,7 @@ Contains
        o = mg_off(l) + 1
        Call mg_factor(mg_ni(l), mg_nj(l), mg_nk(l), mg_cx(o), mg_cy(o), mg_cz(o), mg_dd(o), mg_m(o), mg_iw(o))
     End Do
+    If ( mg_direct ) Call mg_direct_build
 
   End Subroutine mg_set_coef
 
@@ -399,27 +674,46 @@ Contains
 
     Integer(Int32), Intent(In) :: ni, nj, nk
     Real(mgk), Intent(InOut) :: a(0:ni+1,0:nj+1,0:nk+1)
-    Integer(Int32) :: i, j, k, n
+    Integer(Int32) :: i, j, k, nx_, nz_, nreq, req(8)
+    Logical :: xmpi, zmpi
     Real(Int64) :: glo, ghi
 
     !$acc kernels present(a) async(1)
     a(:,0,:) = a(:,1,:)
     a(:,nj+1,:) = a(:,nj,:)
     !$acc end kernels
+    xmpi = .Not. ( mg_xself .Or. ( mg_xdn == MPI_PROC_NULL .And. mg_xup == MPI_PROC_NULL ) )
+    zmpi = .Not. ( mg_zself .Or. ( mg_zdn == MPI_PROC_NULL .And. mg_zup == MPI_PROC_NULL ) )
+    glo = mg_xlo_gs;  ghi = mg_xhi_gs
     If ( mg_xself ) Then
        !$acc kernels present(a) async(1)
        a(0,:,:) = a(ni,:,:)
        a(ni+1,:,:) = a(1,:,:)
        !$acc end kernels
-    Else If ( mg_xdn == MPI_PROC_NULL .And. mg_xup == MPI_PROC_NULL ) Then
+    Else If ( .Not. xmpi ) Then
        ! no x neighbour: fill on the device, no host staging of the send/receive planes
-       glo = mg_xlo_gs;  ghi = mg_xhi_gs
        !$acc kernels present(a) async(1)
        a(0,:,:) = glo*a(1,:,:)
        a(ni+1,:,:) = ghi*a(ni,:,:)
        !$acc end kernels
-    Else
-       n = (nj+2)*(nk+2)
+    End If
+    If ( mg_zself ) Then
+       !$acc kernels present(a) async(1)
+       a(:,:,0) = a(:,:,nk)
+       a(:,:,nk+1) = a(:,:,1)
+       !$acc end kernels
+    Else If ( .Not. zmpi ) Then
+       !$acc kernels present(a) async(1)
+       a(:,:,0) = a(:,:,1)
+       a(:,:,nk+1) = a(:,:,nk)
+       !$acc end kernels
+    End If
+    If ( .Not. ( xmpi .Or. zmpi ) ) Return
+
+    ! both directions in one exchange (the stencil does not read the corners) with a single host synchronisation:
+    ! every wait on a GPU shared by several ranks costs far more than the copy
+    nx_ = (nj+2)*(nk+2);  nz_ = (ni+2)*(nj+2)
+    If ( xmpi ) Then
        !$acc parallel loop collapse(2) present(a,mg_sbx) async(1)
        Do k = 0, nk+1
           Do j = 0, nj+1
@@ -427,14 +721,37 @@ Contains
              mg_sbx(1+j+(nj+2)*k,2) = a(1,j,k)
           End Do
        End Do
-       !$acc wait(1)
-       !$acc update host(mg_sbx(1:n,1:2))
-       Call MPI_Sendrecv(mg_sbx(1,1), n, mg_mpi_t, mg_xup, 301, mg_rbx(1,1), n, mg_mpi_t, mg_xdn, 301, &
-                         MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
-       Call MPI_Sendrecv(mg_sbx(1,2), n, mg_mpi_t, mg_xdn, 302, mg_rbx(1,2), n, mg_mpi_t, mg_xup, 302, &
-                         MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
-       !$acc update device(mg_rbx(1:n,1:2))
-       glo = mg_xlo_gs;  ghi = mg_xhi_gs
+       !$acc update host(mg_sbx(1:nx_,1:2)) async(1)
+    End If
+    If ( zmpi ) Then
+       !$acc parallel loop collapse(2) present(a,mg_sbz) async(1)
+       Do j = 0, nj+1
+          Do i = 0, ni+1
+             mg_sbz(1+i+(ni+2)*j,1) = a(i,j,nk)
+             mg_sbz(1+i+(ni+2)*j,2) = a(i,j,1)
+          End Do
+       End Do
+       !$acc update host(mg_sbz(1:nz_,1:2)) async(1)
+    End If
+    !$acc wait(1)
+    nreq = 0
+    If ( xmpi ) Then
+       Call MPI_Irecv(mg_rbx(1,1), nx_, mg_mpi_t, mg_xdn, 301, MPI_COMM_WORLD, req(nreq+1), ierr)
+       Call MPI_Irecv(mg_rbx(1,2), nx_, mg_mpi_t, mg_xup, 302, MPI_COMM_WORLD, req(nreq+2), ierr)
+       Call MPI_Isend(mg_sbx(1,1), nx_, mg_mpi_t, mg_xup, 301, MPI_COMM_WORLD, req(nreq+3), ierr)
+       Call MPI_Isend(mg_sbx(1,2), nx_, mg_mpi_t, mg_xdn, 302, MPI_COMM_WORLD, req(nreq+4), ierr)
+       nreq = nreq + 4
+    End If
+    If ( zmpi ) Then
+       Call MPI_Irecv(mg_rbz(1,1), nz_, mg_mpi_t, mg_zdn, 303, MPI_COMM_WORLD, req(nreq+1), ierr)
+       Call MPI_Irecv(mg_rbz(1,2), nz_, mg_mpi_t, mg_zup, 304, MPI_COMM_WORLD, req(nreq+2), ierr)
+       Call MPI_Isend(mg_sbz(1,1), nz_, mg_mpi_t, mg_zup, 303, MPI_COMM_WORLD, req(nreq+3), ierr)
+       Call MPI_Isend(mg_sbz(1,2), nz_, mg_mpi_t, mg_zdn, 304, MPI_COMM_WORLD, req(nreq+4), ierr)
+       nreq = nreq + 4
+    End If
+    Call MPI_Waitall(nreq, req, MPI_STATUSES_IGNORE, ierr)
+    If ( xmpi ) Then
+       !$acc update device(mg_rbx(1:nx_,1:2)) async(1)
        !$acc parallel loop collapse(2) present(a,mg_rbx) firstprivate(glo,ghi) async(1)
        Do k = 0, nk+1
           Do j = 0, nj+1
@@ -451,32 +768,8 @@ Contains
           End Do
        End Do
     End If
-    If ( mg_zself ) Then
-       !$acc kernels present(a) async(1)
-       a(:,:,0) = a(:,:,nk)
-       a(:,:,nk+1) = a(:,:,1)
-       !$acc end kernels
-    Else If ( mg_zdn == MPI_PROC_NULL .And. mg_zup == MPI_PROC_NULL ) Then
-       !$acc kernels present(a) async(1)
-       a(:,:,0) = a(:,:,1)
-       a(:,:,nk+1) = a(:,:,nk)
-       !$acc end kernels
-    Else
-       n = (ni+2)*(nj+2)
-       !$acc parallel loop collapse(2) present(a,mg_sbz) async(1)
-       Do j = 0, nj+1
-          Do i = 0, ni+1
-             mg_sbz(1+i+(ni+2)*j,1) = a(i,j,nk)
-             mg_sbz(1+i+(ni+2)*j,2) = a(i,j,1)
-          End Do
-       End Do
-       !$acc wait(1)
-       !$acc update host(mg_sbz(1:n,1:2))
-       Call MPI_Sendrecv(mg_sbz(1,1), n, mg_mpi_t, mg_zup, 303, mg_rbz(1,1), n, mg_mpi_t, mg_zdn, 303, &
-                         MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
-       Call MPI_Sendrecv(mg_sbz(1,2), n, mg_mpi_t, mg_zdn, 304, mg_rbz(1,2), n, mg_mpi_t, mg_zup, 304, &
-                         MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
-       !$acc update device(mg_rbz(1:n,1:2))
+    If ( zmpi ) Then
+       !$acc update device(mg_rbz(1:nz_,1:2)) async(1)
        !$acc parallel loop collapse(2) present(a,mg_rbz) async(1)
        Do j = 0, nj+1
           Do i = 0, ni+1
@@ -520,6 +813,7 @@ Contains
   End Subroutine mg_resid
 
 
+#ifndef GPU_POISSON
   !> t <- T^-1 t: one tridiagonal solve along y per column
   Subroutine mg_line(ni, nj, nk, t, cy, m, iw)
 
@@ -528,22 +822,6 @@ Contains
     Real(mgk), Intent(In) :: cy(0:ni+1,0:nj+1,0:nk+1), m(0:ni+1,0:nj+1,0:nk+1), iw(0:ni+1,0:nj+1,0:nk+1)
     Integer(Int32) :: i, j, k
 
-#ifdef GPU_POISSON
-    !$acc parallel loop collapse(2) gang vector present(t,cy,m,iw) async(1)
-    Do k = 1, nk
-       Do i = 1, ni
-          !$acc loop seq
-          Do j = 2, nj
-             t(i,j,k) = t(i,j,k) + m(i,j,k)*t(i,j-1,k)
-          End Do
-          t(i,nj,k) = t(i,nj,k)*iw(i,nj,k)
-          !$acc loop seq
-          Do j = nj-1, 1, -1
-             t(i,j,k) = ( t(i,j,k) + cy(i,j,k)*t(i,j+1,k) )*iw(i,j,k)
-          End Do
-       End Do
-    End Do
-#else
     Do k = 1, nk
        Do j = 2, nj
           Do i = 1, ni
@@ -559,7 +837,6 @@ Contains
           End Do
        End Do
     End Do
-#endif
 
   End Subroutine mg_line
 
@@ -576,7 +853,6 @@ Contains
     Real(mgk) :: c1s, c2s
 
     c1s = Real(c1, mgk);  c2s = Real(c2, mgk)
-    !$acc parallel loop collapse(3) present(x,d,t) async(1)
     Do k = 1, nk
        Do j = 1, nj
           Do i = 1, ni
@@ -591,6 +867,83 @@ Contains
     End Do
 
   End Subroutine mg_upd
+#endif
+
+#ifdef GPU_POISSON
+  !> Forward elimination of the y-line solve applied to the residual b - S x (to b when zero) in one pass
+  Subroutine mg_rfwd(ni, nj, nk, x, b, cx, cy, cz, dd, m, t, zero)
+
+    Integer(Int32), Intent(In) :: ni, nj, nk
+    Real(mgk), Intent(In) :: x(0:ni+1,0:nj+1,0:nk+1), b(0:ni+1,0:nj+1,0:nk+1), dd(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: cx(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), cz(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: m(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(InOut) :: t(0:ni+1,0:nj+1,0:nk+1)
+    Logical, Intent(In) :: zero
+    Integer(Int32) :: i, j, k
+    Real(mgk) :: r, tp
+
+    !$acc parallel loop collapse(2) gang vector private(r,tp) present(x,b,cx,cy,cz,dd,m,t) async(1)
+    Do k = 1, nk
+       Do i = 1, ni
+          tp = 0.0
+          !$acc loop seq
+          !dir$ unroll 4
+          Do j = 1, nj
+             If ( zero ) Then
+                r = b(i,j,k)
+             Else
+                r = b(i,j,k) - ( dd(i,j,k)*x(i,j,k) - cx(i,j,k)*x(i+1,j,k) - cx(i-1,j,k)*x(i-1,j,k) &
+                               - cy(i,j,k)*x(i,j+1,k) - cy(i,j-1,k)*x(i,j-1,k) &
+                               - cz(i,j,k)*x(i,j,k+1) - cz(i,j,k-1)*x(i,j,k-1) )
+             End If
+             r = r + m(i,j,k)*tp
+             t(i,j,k) = r
+             tp = r
+          End Do
+       End Do
+    End Do
+
+  End Subroutine mg_rfwd
+
+
+  !> Back substitution of the y-line solve and the Chebyshev update d = c1 d + c2 t, x = x + d (x = d when
+  !  zero) in one pass
+  Subroutine mg_bwdupd(ni, nj, nk, x, d, t, cy, iw, c1, c2, zero)
+
+    Integer(Int32), Intent(In) :: ni, nj, nk
+    Real(mgk), Intent(InOut) :: x(0:ni+1,0:nj+1,0:nk+1), d(0:ni+1,0:nj+1,0:nk+1)
+    Real(mgk), Intent(In) :: t(0:ni+1,0:nj+1,0:nk+1), cy(0:ni+1,0:nj+1,0:nk+1), iw(0:ni+1,0:nj+1,0:nk+1)
+    Real(Int64), Intent(In) :: c1, c2
+    Logical, Intent(In) :: zero
+    Integer(Int32) :: i, j, k
+    Real(mgk) :: c1s, c2s, tn, dn
+
+    c1s = Real(c1, mgk);  c2s = Real(c2, mgk)
+    !$acc parallel loop collapse(2) gang vector private(tn,dn) present(x,d,t,cy,iw) async(1)
+    Do k = 1, nk
+       Do i = 1, ni
+          tn = 0.0
+          !$acc loop seq
+          !dir$ unroll 4
+          Do j = nj, 1, -1
+             If ( j == nj ) Then
+                tn = t(i,j,k)*iw(i,j,k)
+             Else
+                tn = ( t(i,j,k) + cy(i,j,k)*tn )*iw(i,j,k)
+             End If
+             dn = c1s*d(i,j,k) + c2s*tn
+             d(i,j,k) = dn
+             If ( zero ) Then
+                x(i,j,k) = dn
+             Else
+                x(i,j,k) = x(i,j,k) + dn
+             End If
+          End Do
+       End Do
+    End Do
+
+  End Subroutine mg_bwdupd
+#endif
 
 
   !> Chebyshev polynomial of degree deg in T^-1 S on [lo, hi] (hi = 2 bounds the line-Jacobi spectrum), from x
@@ -605,24 +958,32 @@ Contains
     Real(Int64), Intent(In) :: lo, hi
     Logical, Intent(In) :: zero
     Integer(Int32) :: it
-    Real(Int64) :: theta, delta, sigma, rho0, rho1
+    Logical :: first
+    Real(Int64) :: theta, delta, sigma, rho0, rho1, c1, c2
 
     theta = 0.5d0*(hi + lo);  delta = 0.5d0*(hi - lo);  sigma = theta/delta;  rho0 = 1d0/sigma
     Do it = 1, deg
-       If ( it == 1 .And. zero ) Then
+       first = ( it == 1 .And. zero )
+       If ( .Not. first ) Call mg_halo(x, ni, nj, nk)
+       If ( it == 1 ) Then
+          c1 = 0d0;  c2 = 1d0/theta
+       Else
+          rho1 = 1d0/(2d0*sigma - rho0)
+          c1 = rho1*rho0;  c2 = 2d0*rho1/delta
+          rho0 = rho1
+       End If
+#ifdef GPU_POISSON
+       Call mg_rfwd(ni, nj, nk, x, b, cx, cy, cz, dd, m, t, first)
+       Call mg_bwdupd(ni, nj, nk, x, d, t, cy, iw, c1, c2, first)
+#else
+       If ( first ) Then
           Call mg_copy(ni, nj, nk, b, t)
        Else
-          Call mg_halo(x, ni, nj, nk)
           Call mg_resid(ni, nj, nk, x, b, cx, cy, cz, dd, t)
        End If
        Call mg_line(ni, nj, nk, t, cy, m, iw)
-       If ( it == 1 ) Then
-          Call mg_upd(ni, nj, nk, x, d, t, 0d0, 1d0/theta, zero)
-       Else
-          rho1 = 1d0/(2d0*sigma - rho0)
-          Call mg_upd(ni, nj, nk, x, d, t, rho1*rho0, 2d0*rho1/delta, .False.)
-          rho0 = rho1
-       End If
+       Call mg_upd(ni, nj, nk, x, d, t, c1, c2, first)
+#endif
     End Do
 
   End Subroutine mg_cheb
@@ -715,8 +1076,12 @@ Contains
 
     o = mg_off(l) + 1
     If ( l == mg_nlev ) Then
-       Call mg_cheb(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_t(o), mg_d(o), mg_cx(o), mg_cy(o), mg_cz(o), &
-                    mg_dd(o), mg_m(o), mg_iw(o), mg_deg_coarse, hi/mg_ratio_coarse, hi, .True.)
+       If ( mg_direct ) Then
+          Call mg_direct_solve(mg_ni(l), mg_nj(l), mg_nk(l), mg_b(o), mg_x(o))
+       Else
+          Call mg_cheb(mg_ni(l), mg_nj(l), mg_nk(l), mg_x(o), mg_b(o), mg_t(o), mg_d(o), mg_cx(o), mg_cy(o), mg_cz(o), &
+                       mg_dd(o), mg_m(o), mg_iw(o), mg_deg_coarse, hi/mg_ratio_coarse, hi, .True.)
+       End If
        Return
     End If
     oc = mg_off(l+1) + 1

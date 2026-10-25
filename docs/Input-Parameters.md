@@ -23,7 +23,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `grid_type` | `1` | Wall-normal (y) grid: 1 uniform; 2 tanh, fine at both walls; 3 tanh, fine at bottom; 4 tanh, fine at top; 5 uniform sublayer `[0,ks]` (`nks` cells, set in `&IBM`) then tanh fine at the interface and the top wall; 6 same, coarse at the top; 7 same, coarse at the interface and fine at the top. |
 | `alpha_grid` | `1.0` | Stretching strength for `grid_type` 2–7 (larger = stronger clustering). Ignored for type 1. |
 | `alpha_grid_z` | `0.0` | Spanwise stretching: `0` uniform, `>0` symmetric tanh clustering at both z walls. Needs `z_bc_type=1` (aborts with periodic z). |
-| `p_row, p_col` | `0, 0` | MPI pencil grid (`p_row` splits x, `p_col` splits z, y always local; product = rank count). `0,0` = automatic: pure z-slab if every rank keeps ≥2 z-cells, otherwise the factor pair closest to the x:z aspect ratio. With `y_bc_type=1` and `z_bc_type=1` (duct) auto forces `p_row=nprocs, p_col=1`; an explicit `p_col>1` there aborts.  With the multigrid preconditioner (`pcg_precond=1`), keep at least ~12 cells per rank in z: a thin z extent per rank stops the coarsening in z early and roughly doubles the PCG iterations (tk94 flume 976×81×14 on 8 ranks: `p_row=8, p_col=1` is 1.5× faster than the automatic 4×2). |
+| `p_row, p_col` | `0, 0` | MPI pencil grid (`p_row` splits x, `p_col` splits z, y always local; product = rank count). `0,0` = automatic: pure z-slab if every rank keeps ≥2 z-cells, otherwise the factor pair closest to the x:z aspect ratio. With `y_bc_type=1` and `z_bc_type=1` (duct) auto forces `p_row=nprocs, p_col=1`; an explicit `p_col>1` there aborts. |
 
 ## PHYSICS
 
@@ -69,7 +69,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `cfl_safety` | `0.9` | Safety factor on the `dt` update (adaptive). |
 | `dt_min, dt_max` | `1e-10`, `1e10` | Bounds on `dt` (adaptive). |
 | `pcg_precond` | `-1` | Preconditioner of the variable-density PCG of the two-fluid solver (`vof_flow≥1`): `0` fast Poisson solver, `1` mask-aware multigrid (needs y walls), `-1` automatic (1 with y walls, else 0). GPU: `vof_flow≥1` needs 1. |
-| `mg_cycle` | `-1` | Multigrid cycle of the `pcg_precond=1` preconditioner: `1` V-cycle, `2` W-cycle (the coarse level is visited twice; 3–6× fewer PCG iterations for ~15 % more work per cycle), `3` three visits, `-1` automatic (W on CPU builds, V on GPU builds, where the W cycle's many tiny coarse-level kernels are launch-bound: 6× slower on a 0.9 M-cell wave flume). |
+| `mg_cycle` | `-1` | Multigrid cycle of the `pcg_precond=1` preconditioner: `1` V-cycle, `2` W-cycle (the coarse level is visited twice; about 1.5× fewer PCG iterations for ~15 % more work per cycle), `3` three visits, `-1` automatic (W on CPU builds, V on GPU builds, where the two cost the same). |
 | `mg_smooth_deg` | `4` | Degree of the Chebyshev smoother of the multigrid on every level but the coarsest. |
 
 ## BOUNDARY_CONDITIONS

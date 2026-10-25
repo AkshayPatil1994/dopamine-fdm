@@ -180,20 +180,21 @@ steep variable-density wave, and each of these across rank layouts.
 ### 2.1 Cost and speed settings
 
 Cost: 0.06–0.09 s per step at N = 64 × 65 × 6 on one core (≈ 1.1–1.6× the fixed-iteration Euler reference), dominated by the WENO5-Z
-tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1 with a V-cycle multigrid; the W-cycle, the CPU default, needs about a third as many). Two inputs trade a little accuracy for speed (measured on a
+tendency evaluations and the PCG (2–4 iterations per solve at 1000:1 with the W-cycle, the CPU default; the V-cycle needs about 1.5× as many). Two inputs trade a little accuracy for speed (measured on a
 386 × 65 × 10 wave flume with a sill, one rank, 0.317 s/step with the defaults; 0.280 s/step with both):
 
 * `vof_rk_mom = 2`: two instead of three tendency evaluations per sweep; a 4000-step standing-wave run (about 20 periods) matches the default to four digits.
 * `vof_tr_floor = 1e-12`: stopping floor of the transporting-velocity projection with an immersed body; the liquid volume then drifts at ~1e-14 instead of ~1e-16.
 
 Measured on the Ting & Kirby breaker (976 × 81 × 14, immersed bed, wave generation and absorption zones, 8 ranks, restart from a breaking
-state): the defaults below take 0.46 s/step, against 1.36 s/step with the V-cycle multigrid and the automatic 4 × 2 rank layout. Three settings account for it:
+state): the defaults below take 0.38 s/step, against 1.36 s/step with the V-cycle multigrid and the automatic 4 × 2 rank layout. Three settings account for it:
 
-* The multigrid preconditioner uses a W-cycle with a degree-4 smoother on CPU builds (`mg_cycle = 2`, `mg_smooth_deg = 4`; `mg_cycle = -1`, the default, selects it): 3–6× fewer PCG
-  iterations than the V-cycle, whose aggregation transfers converge slowly. A three-visit cycle (`mg_cycle = 3`) is slower again. GPU builds
-  select the V-cycle instead (see 4.2): there the W-cycle's 2^L launches of tiny coarse-level kernels dominate the step.
-* A rank layout with at least ~12 cells per rank in z (`p_col = 1`, `p_row` = number of ranks for flume grids): with 6 z-cells per rank
-  the multigrid stops coarsening in z early and needs about twice the iterations; the code prints a note at start-up in that case.
+* The multigrid preconditioner uses a W-cycle with a degree-4 smoother on CPU builds (`mg_cycle = 2`, `mg_smooth_deg = 4`; `mg_cycle = -1`, the default, selects it): about 1.5×
+  fewer PCG iterations than the V-cycle. A three-visit cycle (`mg_cycle = 3`) is slower again. GPU builds select the V-cycle instead (see 4.2).
+* The coarsest multigrid level (at most 1024 cells over all ranks and a bounded band-factorisation cost) is solved exactly: its band matrix is gathered on every rank and the
+  rows of its inverse are applied as a dot product. Coarsening that stops at a few cells per rank and an inexact coarsest smoother
+  made the V-cycle need 2.4× the iterations (67.7 against 27.7 per step on the breaker) and made the cost depend on the rank layout
+  (PCG took twice as long at 4 × 2 as at 8 × 1); with the direct level the count is 18.8 (8 × 1) and 18.7 (4 × 2) iterations per step.
 * `vof_tr_floor = 1e-12` (optional, ~6 %) and `vof_rk_mom = 2` (optional, ~9 %). Against the default, `vof_rk_mom = 2` over 3000 steps (1.1
   wave periods through breaking) gave wave-gauge differences of 0.12 mm rms and 1.9 mm at most for H = 125 mm, kinetic energy within 2e-4
   and an identical liquid-volume drift; the single-cell peak velocity differs by up to 9 %.
@@ -202,7 +203,8 @@ With these settings the step is not dominated by the pressure solve (PCG ≈ 30 
 stages (wall model, viscous terms) the rest. The profiler summary printed at the end of every run lists the VOF stages (transport projection,
 advection, projection, forces) with the PCG time and the sub-stages of the advection and momentum update, so the split can be checked for
 any case. The multigrid W-cycle does more work on the small coarse levels, which are latency-bound: check the step time against
-`mg_cycle = 1` when running on many (16 or more) CPU ranks.
+`mg_cycle = 1` when running on many (16 or more) CPU ranks. The 4 × 2 layout is still about 30 % slower per step than 8 × 1 (0.50 against
+0.38 s/step) although the iteration counts agree.
 
 The sub-step Courant limit `vof_co_sub` only matters once the flow needs more than one sub-step per half step. The multigrid
 preconditioner runs in single precision (the outer PCG is double), which changes the iteration count by a few percent.
@@ -343,7 +345,7 @@ Measured on an RTX 3060 (FP64 at 1/64 of the FP32 rate; the multigrid runs in si
 | two-fluid flow | 35.6 s | 10.3 s |
 | + sediment and Boussinesq temperature | 39.6 s | 11.3 s |
 
-The scalars cost 9 % extra on the GPU against 11 % on the CPU. Their boundary conditions (x inflow plane and convective outflow, periodic wraps, y wall ghosts, the IBM ghost fills) run on the device for one rank; with several ranks they stage the whole field through the host every RK stage. Host consumers (snapshots, probes, Boussinesq particles) copy the scalars from the device when they read them. Launch-bound patterns to avoid on the GPU are staging the multigrid ghost fill through the host without neighbour ranks and multi-array `a = b` copies, which the compiler runs on one GPU thread. The multigrid W-cycle is also launch-bound on a GPU (2^L visits of tiny coarse levels), hence `mg_cycle = -1` selects the V-cycle there.
+The scalars cost 9 % extra on the GPU against 11 % on the CPU. Their boundary conditions (x inflow plane and convective outflow, periodic wraps, y wall ghosts, the IBM ghost fills) run on the device for one rank; with several ranks they stage the whole field through the host every RK stage. Host consumers (snapshots, probes, Boussinesq particles) copy the scalars from the device when they read them. Launch-bound patterns to avoid on the GPU are staging the multigrid ghost fill through the host without neighbour ranks and multi-array `a = b` copies, which the compiler runs on one GPU thread. With the direct coarsest level the W-cycle costs about the same as the V-cycle on the GPU (1.48 against 1.40 s of PCG for 10 steps of the 1.1 M-cell breaker); `mg_cycle = -1` keeps the V-cycle there.
 
 ## 5. References
 
