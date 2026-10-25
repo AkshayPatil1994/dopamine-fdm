@@ -48,7 +48,7 @@ The executable `dopamine` is placed in `build/`.
 > `-DALLOW_UNSUPPORTED_COMPILER=ON` with preprocessing and big-endian I/O flags in `CMAKE_Fortran_FLAGS`.
 > `-DCMAKE_CUDA_ARCHITECTURES` takes one or several compute capabilities (`80` or `80;90`).
 
-> **Note**: The solver uses `-fconvert=big-endian` globally so that field snapshots are
+> The solver uses `-fconvert=big-endian` globally so that field snapshots are
 > big-endian. Reynolds stress budget output uses `CONVERT='little_endian'` on the file
 > `OPEN` to produce little-endian float64 (consistent with the coordinate `.bin` files
 > used by `dopamine_post.fields.write_field_xmf`).
@@ -57,8 +57,7 @@ The executable `dopamine` is placed in `build/`.
 
 An optional `ENABLE_GPU` CMake target offloads the RHS/SGS/boundary-condition/projection
 kernels and the pressure Poisson solve (cuFFT transforms + cuSPARSE batched tridiagonal
-solve) to NVIDIA GPUs via OpenACC, one MPI rank per GPU. The CPU build above is untouched
-and remains the default; this is a separate, opt-in build.
+solve) to NVIDIA GPUs via OpenACC, one MPI rank per GPU. The CPU build above remains the default; this is a separate, opt-in build.
 
 **Requirements**:
 - [NVIDIA HPC SDK](https://developer.nvidia.com/hpc-sdk) 23.3 or later (provides
@@ -77,7 +76,7 @@ Poisson solve, and the velocity/scalar halo exchanges, pass *device* buffers str
 MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
 (`src/gpu_device.f90`). Launch with one rank per GPU.
 
-**Scope — read before using**:
+**Scope**:
 - **Multi-GPU (`nprocs>1`)**: supported for every GPU-supported BC combination, pencil-decomposed
   like the CPU build (`p_row`/`p_col`): periodic/wall `y`, periodic (FFT) or inflow/outflow
   (`x_bc_type=1`, DCT-IV) `x`, periodic `z`, a spanwise wall alone (`z_bc_type=1`, `y_bc_type=0`, `x_bc_type=0`), and the 4-wall duct (`y_bc_type=1`, `z_bc_type=1`,
@@ -89,8 +88,7 @@ MPI (GPU-aware MPI); each rank is bound to its own GPU by node-local rank
   Verified at one rank against the CPU build; multi-rank GPU runs are covered only partly (see [Two-Phase-VOF](Two-Phase-VOF.md#42-not-supported)).
   The scalar boundary conditions (sediment, temperature) are device-resident for one rank only; with several ranks they stage the whole field through the host every RK stage.
 - **Verification status**: the GPU regression suite (single-phase cases, AMD closure and scalar diffusivity, wall-model filter with restart, IBM, Boussinesq, particles, and the two-fluid cases at one rank) passes against the CPU build on one RTX 3060
-  when the build is configured with `-DCPU_REFERENCE_EXE=<CPU build>/dopamine` (the CPU-vs-GPU comparisons). The two-fluid solver with an immersed body at 4 ranks on one GPU shows a volume drift of 4.6e-9 (also in the code
-  before the AMD work); multi-GPU transfers with several physical GPUs have not been exercised.
+  when the build is configured with `-DCPU_REFERENCE_EXE=<CPU build>/dopamine` (the CPU-vs-GPU comparisons). The two-fluid solver with an immersed body at 4 ranks on one GPU shows a volume drift of 4.6e-9; multi-GPU transfers with several physical GPUs have not been exercised.
 - **CPU-only**: a duct with
   `x_bc_type=1`. Unsupported combinations abort at input with an explanatory message.
 

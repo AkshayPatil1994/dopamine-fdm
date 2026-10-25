@@ -1,12 +1,10 @@
 ! ================================================================
-! UAV actuator-disk Phase 1 smoke test: static hovering disk in a
-! quiescent, free-slip box (no ground, no ambient wind/turbulence yet --
-! see docs/UAV_ActuatorDisk_Design.md for the later phases: moving disk,
-! mean wind, ABL turbulence, ground effect).
+! UAV actuator-disk smoke test: static hovering disk in a
+! quiescent, free-slip box (no ground, no ambient wind or turbulence).
 !
 ! Purpose: check the disk force is stable and produces a plausible
-! downwash jet under the disk before adding any of the harder pieces
-! (ground IBM, inflow turbulence, path).
+! downwash jet under the disk on its own,
+! without ground, inflow turbulence or a path.
 ! ================================================================
 
 &DOMAIN
@@ -61,7 +59,7 @@
 /
 
 ! UAV actuator disk: centred mid-box, well clear (>2 radii) of every wall
-! so the Phase-1 kernel (no periodic-boundary wrapping) stays valid.
+! so the kernel (no periodic-boundary wrapping) stays valid.
 &UAV
   uav_active       = 1,
   uav_xc           = 0.5,

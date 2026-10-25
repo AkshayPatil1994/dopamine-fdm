@@ -42,7 +42,7 @@ Notes:
   bound to GPUs by node-local rank modulo the GPU count, and the run stops with an error if no GPU is visible.
 - Use `make allclean` whenever you switch between CPU and GPU builds.
 - A hash cell holding so many triangles that 27 cells exceed `max_cands_gpu` (32768, `spatial_hash.f90`) stops
-  the GPU build with a clear message; raise the constant or coarsen the mesh locally.
+  the GPU build with an error message; raise the constant or coarsen the mesh locally.
 - The GPU and CPU builds give the same fields to round-off (~1e-14 in distance, identical signs and object IDs).
 - Debug build (CPU): `make FFLAGS="-O0 -g -fcheck=all -fbacktrace -ffree-line-length-none -cpp"`.
 
@@ -92,10 +92,10 @@ Plain text, **positional**: each non-comment line is one entry, lines starting w
 | 7 | `5` | narrow-band width in cells (kept for compatibility; the search reach is 6 cells) |
 | 8 | `3` | solver wall-normal axis: `2` = y vertical, `3` = z vertical |
 | 9 | `.false.` | also write the face-staggered SDFs `sdfu`, `sdfv`, `sdfw` |
-| 10 | `1` | *optional* `sign_method`: `0` legacy parity, `1` robust (default), `2` winding number everywhere (slow audit) |
+| 10 | `1` | *optional* `sign_method`: `0` three-axis parity, `1` signed rays with winding-number fallback (default), `2` winding number everywhere (slow check) |
 | 11 | `1` | *optional* `cap_holes`: close simple planar holes with a lid (`1`, default) or leave the mesh as given (`0`) |
 
-Lines 10–11 may be omitted (older files keep working).
+Lines 10–11 may be omitted; the defaults apply.
 
 ## 4. Run
 

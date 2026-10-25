@@ -308,7 +308,7 @@ refining only $z$ changes it by about 0.5 points; the wall law (Reichardt instea
 when switched off) do not change this trend. In the stably stratified channel at $Re_\tau = 395$ ($Ri_\tau = 24$, 120; 96×21×64) the AMD buoyancy term is inactive (bulk velocity
 changes by ≤ 0.1 points with and without it) and the AMD–Vreman difference of the neutral case (4.3 points) is carried over unchanged, so stratified flows follow the same
 resolution rule; both closures suppress the turbulent transport 15–30 % more than the DNS. AMD is not validated for wall-resolved LES, IBM/urban flows or two-phase flows (decomposition
-parity tests only; the earlier validations of those paths used Vreman). The start-up summary prints an `ADVISORY:` line for these cases; it never changes the run.
+parity tests only; those paths were validated with Vreman). The start-up summary prints an `ADVISORY:` line for these cases; it never changes the run.
 
 ## 6. Immersed boundary method (IBM)
 
@@ -399,7 +399,7 @@ The second IBM method does not interpolate. It treats the body as the set of gri
 
 1. *Incremental form* (`ibm_pressure ≥ 1`): the predictor carries $-\Delta t\,a_{ss}\nabla P_{st}$, with $P_{st}$ the pressure of the previous stage (`Pst`, started at zero, so the first stage of a run is unchanged), and the solve returns the increment $\varphi$, after which $P_{st} \leftarrow P_{st} + \varphi/(\Delta t\,a_{ss})$. With an exact solve this is the same method; with the body faces zeroed it is not, because the flux through them is now only that of the increment. The body faces are zeroed in the predictor, so the right-hand side is the divergence of a field with no flux through the body.
 2. *No second zeroing* (`ibm_pressure = 2`, staircase): the body faces keep the flux of the solve, so every fluid cell is divergence-free to round-off at the end of each stage; the faces are zeroed again at the start of the next stage, before the predictor is built.
-3. *Step-size dependence* (`ibm_pressure = 2`): the flux the last solve leaves through the body faces is proportional to that step's $\Delta t$, but the divergence its zeroing leaves in the fluid cells enters every solve of the next step divided by the new $\Delta t\,a_{ss}$, so the $P_{st}$ update picks up a term $\propto \Delta t_{prev}/\Delta t$. Consecutive steps of similar size (the CFL-adaptive $\Delta t$ changes by a few per cent) are harmless, but a step that is orders of magnitude shorter multiplies $P_{st}$ by the ratio while the velocity stays divergence-free and sane, and the next step fails: a restart from a healthy urban snapshot with a $10^{-8}$ s landing step reached $\max|P| = 5\times10^{6}$ in that snapshot (normally 25) and aborted five steps later, and the production case that crashed at $t = 2300$ s (snapshot $\max|P| = 3\times10^8$) did the same. The time-stepping therefore never creates such a step: the landing step on a save time is at least $\Delta t/2$ (§3). An attempt to compensate the ratio inside the solve was rejected because the flux left by a very short step is not proportional to its $\Delta t$, so a $\Delta t$-ratio weight cannot be defined; keep $\Delta t$ changes between consecutive steps moderate (`cfl_adaptive` does). Regression: `ibm_stair_tiny_step`.
+3. *Step-size dependence* (`ibm_pressure = 2`): the flux the last solve leaves through the body faces is proportional to that step's $\Delta t$, but the divergence its zeroing leaves in the fluid cells enters every solve of the next step divided by the new $\Delta t\,a_{ss}$, so the $P_{st}$ update picks up a term $\propto \Delta t_{prev}/\Delta t$. Consecutive steps of similar size (the CFL-adaptive $\Delta t$ changes by a few per cent) are harmless, but a step that is orders of magnitude shorter multiplies $P_{st}$ by the ratio while the velocity stays divergence-free and sane, and the next step fails: a restart from a healthy urban snapshot with a $10^{-8}$ s landing step reached $\max|P| = 5\times10^{6}$ in that snapshot (normally 25) and aborted five steps later. The time-stepping therefore never creates such a step: the landing step on a save time is at least $\Delta t/2$ (§3). The ratio is not compensated inside the solve because the flux left by a very short step is not proportional to its $\Delta t$, so a $\Delta t$-ratio weight cannot be defined; keep $\Delta t$ changes between consecutive steps moderate (`cfl_adaptive` does). Regression: `ibm_stair_tiny_step`.
 
 Measured on the Chicago case (514×93×514, 3 m cells, buildings and terrain from GenSDF, `ibm_method=1, ibm_pressure=2, ibm_wall_model_flag=1`, 8 ranks, cold start, 80 steps at $\Delta t = 5\times10^{-3}$): the maximum velocity stays at 34.7 m/s at step 30 and 33.3 m/s at step 80, within 0.1 m/s of the masked-PCG solution at the same steps (34.68, 33.34) and at the cost of the fast solve (2.5 s/step); without `ibm_pressure` it climbs past 49 m/s. The first 10 steps of a zero-velocity, zero-pressure start still show an overshoot (peak 46 m/s at step 3 with a capped $\Delta t$, 35 m/s with the adaptive $\Delta t$ of the case) because $P_{st}$ is zero and the impulsive-start pressure scales as $1/\Delta t$; starting from a developed field avoids it. With `ibm_method=0` the ghost-cell values are rewritten after the solve, which has the same effect as the second zeroing, and the maximum velocity still grew (64 m/s in 60 steps): use the staircase method for rough terrain and buildings.
 
@@ -412,8 +412,8 @@ based on the classical log-law, applied when `flat_wall_model_flag = 1` or `2` (
 walls) or `ibm_wall_model_flag = 1` (IBM surfaces).
 
 `flat_wall_model_flag` governs the $y$ walls always, and the $z$ walls too when
-`z_bc_type = 1` — mode 1 (smooth Reichardt EQWM) only; mode 2 (rough `z0`) is not yet
-extended to $z$ walls. At a $z$ wall the roles swap: $U$ and $V$ are the tangential
+`z_bc_type = 1` — mode 1 (smooth Reichardt EQWM) only; mode 2 (rough `z0`) is not
+available for $z$ walls (the run aborts). At a $z$ wall the roles swap: $U$ and $V$ are the tangential
 components (the log-law stress enters their $z$-edge viscous flux, see §7.1) and $W$ is wall-normal, staying exactly
 no-penetration — the direct $y$-wall analogue of §7.1 below, with $y \leftrightarrow z$ and $V \leftrightarrow W$.
 
@@ -430,7 +430,7 @@ $y$-gradient of $v$, which is small for resolved fields and large in the first c
 measured). Switching only the wall cell is not enough. `adv_wall_layers` (default automatic: 8 with a flat-wall model and scheme 0 or 2) makes
 that many cells next to the wall use the pure divergence form in every direction, which removes the imbalance (below); the skew-symmetric form is kept above.
 Measured (rough EQWM, $z_0 = 6.77\cdot 10^{-5}\delta$, $Re_\tau \approx 2000$, 64×128×64, 5.4 time units from a stationary scheme-1 state): scheme 0 with no
-layers had a wall stress of 0.70 of the forcing (earlier 20-time-unit runs) and scheme 2 (order 5, $\beta_0 = 0.05$) 0.88 to 0.92, the bulk velocity falling by 1.9;
+layers had a wall stress of 0.70 of the forcing and scheme 2 (order 5, $\beta_0 = 0.05$) 0.88 to 0.92, the bulk velocity falling by 1.9;
 scheme 0 with 1, 2 and 4 layers fell by 1.9, 1.3 and 0.35, and 6 or more layers kept the bulk velocity and the profile within 0.3 of the scheme-1 run
 (scheme 2 with 8 layers behaves the same). Immersed bodies
 are not covered: the staircase and ghost-cell IBM faces use the same blend and have not been measured.
@@ -650,7 +650,7 @@ budget module (§9) additionally reports the buoyancy production term $\beta_T g
 `&BOUSSINESQ` — see
 [Input Parameters § BOUSSINESQ](Input-Parameters.md#boussinesq).
 
-> **Note:** this is independent of the suspended-sediment scalar (§8.1–8.2) — the two can
+> The temperature is independent of the suspended-sediment scalar (§8.1–8.2): the two can
 > be enabled together, each with its own transport equation, but only $T$ couples back
 > into the momentum equation.
 

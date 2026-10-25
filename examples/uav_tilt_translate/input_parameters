@@ -12,7 +12,7 @@
 ! thrust vector should inject real horizontal momentum into the flow
 ! during the horizontal-acceleration/deceleration parts of the path,
 ! visible as a clearly nonzero bulk <U> in the step monitor -- something
-! the original flat/vertical-only model cannot produce at all (rerun with
+! the flat/vertical-only model (uav_tilt_active=0) cannot produce (rerun with
 ! uav_tilt_active=0, uav_swirl_frac=0.0 as a control: <U> then stays at
 ! the noise floor, ~1e-3, for the whole run instead of peaking near -0.26
 ! during the translate/deceleration-into-landing phase).

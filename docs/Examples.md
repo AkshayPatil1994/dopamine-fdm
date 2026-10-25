@@ -15,6 +15,7 @@ Several runnable cases live under `examples/`, each a self-contained `input_para
 | [`uav_*`](#uav-actuator-disk-examplesuav_) | UAV actuator disk: hover, ground effect, takeoff paths, crosswind |
 | [`particle_channel_turbophoresis`](../examples/particle_channel_turbophoresis/input_parameters) | inertial particles migrating to the wall (qualitative turbophoresis check, St⁺ ≈ 25; header of its input explains the setup) |
 | [`vof_zalesak_disk`](#two-phase-vof-cases) | PLIC-VOF slotted-disk rotation |
+| [`tingkirby94_spillingwaves`](#tingkirby94_spillingwaves) | spilling breaker on a 1:35 beach (Ting & Kirby 1994) with the two-fluid solver |
 
 ## `les_chan395`
 
@@ -77,11 +78,8 @@ Both cases share the same domain size (`nx,ny,nz = 130,65,66`, `Lx,Ly,Lz = 12.0,
   precursor's recorded planes as a time-resolved inlet condition. `ic_type = 1` is set
   but not used for initialisation in this mode.
 
-> This recycling inflow mode (`inflow_type`, `inflow_recycle_file`,
-> `inflow_recycle_loop`) is broader than the constant/SEM options documented in
-> [Input Parameters § INFLOW](Input-Parameters.md#inflow);
-> consult `src/` (`sem.f90` / `boundary_conditions.f90`) or open an issue if the recycle
-> workflow needs deeper docs.
+The recycling inflow parameters (`inflow_type = 2`, `inflow_recycle_file`, `inflow_recycle_loop`) are described in
+[Input Parameters § INFLOW](Input-Parameters.md#inflow).
 
 **Running order**: run `precursor/` to completion first (so `slices/precursor*` exists
 and has enough recorded planes), then run `successor/` from its own directory, pointing
@@ -129,6 +127,10 @@ renders any of these cases' path file as a moving-disk ParaView animation (see
 [Pre- and Post-Processing Tools § dopamine_post.uav](Tools.md#dopamine_postuav)).
 
 
+## `tingkirby94_spillingwaves`
+
+Spilling breaker of Ting & Kirby (1994) on a 1:35 beach, run with the two-fluid solver, a wave inlet and absorption zone, and the beach as a ghost-cell IBM body. `setup.sh CASE [NP]` (`CASE` = `coarse`, `coarse_exact_slope`, `medium`, `fine` or `test`) calls `make_case.py` to write `input_parameters`, `bed.stl` and the GenSDF configuration, does a short solver start to obtain `fields/geometry.out` and `fields/grid.out`, and builds `SDF_in` with GenSDF (set `DOPAMINE_REPO`, `DOPAMINE_EXE`, `GENSDF_EXE` as needed). `postprocess.py` computes wave statistics from `vof_gauges.dat`; `compare_simulation.py` draws Figs. 4–8 of the paper against the digitised data in `exp/`. The header of `make_case.py` lists the geometry, the wave (stream function, H = 0.125 m, T = 2 s) and the differences from the experiment (periodic span of 0.2 m, generation zone instead of a piston, no swash zone).
+
 ## Two-phase VOF cases
 
 The two-fluid solver ([Two-Phase VOF](Two-Phase-VOF.md)) has one example, `examples/vof_zalesak_disk` (Zalesak slotted disk with PLIC, 100 × 100, `vof_ic_type = 7`, `vof_prescribed = 3`; `plot_zalesak.py RUN_DIR` draws the validation figure against the exact solution). Its small, quick regression cases under
@@ -145,6 +147,6 @@ has a physical reference; run them with `tests/regression/vof_check.py` or copy 
 | `vof_ibm_small` | Drop in a flow around an immersed sphere (ghost-cell IBM + two-fluid solver) |
 | `vof_break_small` | Steep (ka = 0.5) Stokes wave at 1000:1: layout independence with the interface crossing the rank seams |
 
-`tests/regression/vof_check.py` and the figure script `scripts/vof_figures.py` (breaking-wave panels) are
+`tests/regression/vof_check.py` and the figure script `postProcessing/animations/vof_figures.py` (breaking-wave panels) are
 described in [Tools](Tools.md#two-phase-vof-tools). The plunging-breaker setup of the documentation figure is the `vof_break_small`
 input with `vof_sigma = 0.072`, `ak = 0.55` (`vof_wave_amp = 0.0875`), N = 128, `vof_debug = 1`, `vof_snap_dt = 0.1`.

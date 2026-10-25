@@ -1,5 +1,5 @@
 ! ================================================================
-! UAV actuator-disk Phase 2 smoke test: a vertical takeoff, climbing
+! UAV actuator-disk smoke test: a vertical takeoff, climbing
 ! from h/R=2 (in ground effect) to h/R=10 above the domain's own
 ! no-slip ground (y=0) along a prescribed path, x/z fixed (pure
 ! vertical climb -- horizontal-path motion is not exercised here but

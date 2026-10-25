@@ -9,7 +9,7 @@ Nothing is clipped, damped or capped: `C` stays in [0,1] and the liquid volume i
 
 The solver is selected by `vof_active = 1`, `vof_flow = 1` in [`&VOF`](Input-Parameters.md#vof). With
 `vof_active = 0` (the default) none of it runs: the output is bit-for-bit that of the single-phase solver and the run time is
-unchanged (checked on the regression suite against the commit the branch started from).
+unchanged (the regression suite checks this).
 
 Contents: [1 Method](#1-method) · [2 Running](#2-running-and-output) · [3 Validation](#3-validation) ·
 [4 Limits and known issues](#4-limits-and-known-issues) · [5 References](#5-references)
@@ -171,7 +171,7 @@ capillary) and advection Courant numbers. Example input files: `tests/regression
 
 The console line is the standard monitor of the single-phase solver. With `vof_debug = 1` the run also writes development
 diagnostics; `vof_snap_dt > 0` adds mid-plane slices `vof_snap_NNNNN.dat` (with `x y C u v`; one file per rank
-`vof_snap_NNNNN_rRRR.dat` on several ranks), which `scripts/vof_figures.py` turns into the figures of this page.
+`vof_snap_NNNNN_rRRR.dat` on several ranks), which `postProcessing/animations/vof_figures.py` turns into the figures of this page.
 
 Regression tests (`ctest -R vof_`, serial driver `tests/regression/vof_check.py`): reversed vortex and 3-D deformation, static drop
 (Laplace jump, parasitic currents), capillary-wave and sloshing frequencies, translating drop, drop in an IBM-resolved flow, a
@@ -187,7 +187,7 @@ tendency evaluations and the PCG (≈ 30–40 iterations per solve at 1000:1 wit
 * `vof_tr_floor = 1e-12`: stopping floor of the transporting-velocity projection with an immersed body; the liquid volume then drifts at ~1e-14 instead of ~1e-16.
 
 Measured on the Ting & Kirby breaker (976 × 81 × 14, immersed bed, wave generation and absorption zones, 8 ranks, restart from a breaking
-state): 1.36 s/step at the old defaults (V-cycle multigrid, automatic 4 × 2 rank layout) and 0.46 s/step now, from three changes:
+state): the defaults below take 0.46 s/step, against 1.36 s/step with the V-cycle multigrid and the automatic 4 × 2 rank layout. Three settings account for it:
 
 * The multigrid preconditioner uses a W-cycle with a degree-4 smoother on CPU builds (`mg_cycle = 2`, `mg_smooth_deg = 4`; `mg_cycle = -1`, the default, selects it): 3–6× fewer PCG
   iterations than the V-cycle, whose aggregation transfers converge slowly. A three-visit cycle (`mg_cycle = 3`) is slower again. GPU builds
@@ -198,7 +198,7 @@ state): 1.36 s/step at the old defaults (V-cycle multigrid, automatic 4 × 2 ran
   wave periods through breaking) gave wave-gauge differences of 0.12 mm rms and 1.9 mm at most for H = 125 mm, kinetic energy within 2e-4
   and an identical liquid-volume drift; the single-cell peak velocity differs by up to 9 %.
 
-With these settings the step is no longer dominated by the pressure solve (PCG ≈ 30 %): the momentum update is about a third, the force
+With these settings the step is not dominated by the pressure solve (PCG ≈ 30 %): the momentum update is about a third, the force
 stages (wall model, viscous terms) the rest. The profiler summary printed at the end of every run lists the VOF stages (transport projection,
 advection, projection, forces) with the PCG time and the sub-stages of the advection and momentum update, so the split can be checked for
 any case. The multigrid W-cycle does more work on the small coarse levels, which are latency-bound: check the step time against
@@ -334,7 +334,7 @@ convergence of the plunge geometry with N have not been done.
 ### 4.2 Not supported
 
 Not supported with `vof_flow = 1` (the run aborts at input with a message): `ibm_surface_nsampling`, UAV (also with `vof_flow = 0`), rotation, `dPdx`/`dPdz`/mass-flux forcing,
-non-periodic z, periodic y, `inflow_type` 1 and 2 (SEM, recycled precursor; the turbulent wave inlet `wave_turb = 1` is supported) and the Reynolds-stress budget. In a **GPU build** the two-fluid flow (VOF, densities, multigrid pressure, WENO5 momentum, curvature, wall stress, wave inlet and relaxation zones) runs on the device (it needs `pcg_precond = 1`, the default for wall-bounded y); the scalars of 1.8 are advanced on the device, boundary conditions included (one rank; with several ranks the scalar boundary conditions still stage the host copy of the field), and the particles are host code fed by a once-per-step copy of the velocity and liquid fraction; multi-rank GPU runs of these are not yet verified (the np4 variants of their tests are CPU-only, because the test machine has one GPU). A GPU snapshot, probe, gauge or diagnostic row copies the fields it needs to the host at that step only, so the liquid fraction is not copied every step.
+non-periodic z, periodic y, `inflow_type` 1 and 2 (SEM, recycled precursor; the turbulent wave inlet `wave_turb = 1` is supported) and the Reynolds-stress budget. In a **GPU build** the two-fluid flow (VOF, densities, multigrid pressure, WENO5 momentum, curvature, wall stress, wave inlet and relaxation zones) runs on the device (it needs `pcg_precond = 1`, the default for wall-bounded y); the scalars of 1.8 are advanced on the device, boundary conditions included (one rank; with several ranks the scalar boundary conditions still stage the host copy of the field), and the particles are host code fed by a once-per-step copy of the velocity and liquid fraction; multi-rank GPU runs of these are not verified (the np4 variants of their tests are CPU-only, because the test machine has one GPU). A GPU snapshot, probe, gauge or diagnostic row copies the fields it needs to the host at that step only, so the liquid fraction is not copied every step.
 
 Measured on an RTX 3060 (FP64 at 1/64 of the FP32 rate; the multigrid runs in single precision) against one CPU core, wave flume of 0.9 M cells (770×97×12), 30 steps, default tolerances, `pcg_precond = 1`:
 
@@ -343,7 +343,7 @@ Measured on an RTX 3060 (FP64 at 1/64 of the FP32 rate; the multigrid runs in si
 | two-fluid flow | 35.6 s | 10.3 s |
 | + sediment and Boussinesq temperature | 39.6 s | 11.3 s |
 
-The scalars cost 9 % extra on the GPU against 11 % on the CPU. Their boundary conditions (x inflow plane and convective outflow, periodic wraps, y wall ghosts, the IBM ghost fills) run on the device for one rank; before that change they copied the whole field to the host and back six times per RK stage and scalar, and the scalars cost 63 % extra (16.8 s). With several ranks the old host-staged path is still used (its multi-GPU version needs a multi-GPU node to test). Host consumers (snapshots, probes, Boussinesq particles) copy the scalars from the device when they read them. Two launch-bound patterns had made the first GPU version 8× slower than the CPU: the multigrid ghost fill staged through the host even without neighbour ranks, and multi-array `a = b` copies that the compiler ran on one GPU thread. The multigrid W-cycle is also launch-bound on a GPU (2^L visits of tiny coarse levels), hence `mg_cycle = -1` selects the V-cycle there.
+The scalars cost 9 % extra on the GPU against 11 % on the CPU. Their boundary conditions (x inflow plane and convective outflow, periodic wraps, y wall ghosts, the IBM ghost fills) run on the device for one rank; with several ranks they stage the whole field through the host every RK stage. Host consumers (snapshots, probes, Boussinesq particles) copy the scalars from the device when they read them. Launch-bound patterns to avoid on the GPU are staging the multigrid ghost fill through the host without neighbour ranks and multi-array `a = b` copies, which the compiler runs on one GPU thread. The multigrid W-cycle is also launch-bound on a GPU (2^L visits of tiny coarse levels), hence `mg_cycle = -1` selects the V-cycle there.
 
 ## 5. References
 

@@ -78,7 +78,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 |---|---|---|
 | `bc_face_ylo, bc_face_yhi` | `1, 1` | Bottom / top wall: `1` no-slip, `2` free-slip. Ignored if `y_bc_type=0`. |
 | `x_bc_type` | `0` | Streamwise: `0` periodic (FFT pressure solve); `1` inflow/outflow (Dirichlet inflow from `&INFLOW`, convective outflow `dF/dt+Uc dF/dx=0` with `Uc` the outlet mean clipped to `[0,dx/dt]`, DCT-IV pressure solve; the outflow face is divergence-corrected so mass is conserved). |
-| `outflow_backflow_beta` | `0.0` | Outlet backflow stabilisation for `x_bc_type = 1` with `ibm_pressure >= 1` (the outlet pressure carries a term that bounds reversed flow through the outlet; `1.0` is the value that was used for the check, `0` is the plain Dirichlet `p = 0` outlet). Aborts for `x_bc_type /= 1` or `ibm_pressure < 1`. No regression test since the SGS wall-cell change. |
+| `outflow_backflow_beta` | `0.0` | Outlet backflow stabilisation for `x_bc_type = 1` with `ibm_pressure >= 1` (the outlet static pressure is `-beta·|u|²/2` where the flow re-enters, so `1.0` gives zero total pressure for reversed flow; `0` is the plain Dirichlet `p = 0` outlet). Aborts for `x_bc_type /= 1` or `ibm_pressure < 1`. No regression test covers it. |
 | `y_bc_type` | `1` | Wall-normal: `0` periodic (needs `grid_type=1`; required for Taylor–Green `ic_type=6`), `1` walls. |
 | `z_bc_type` | `0` | Spanwise: `0` periodic; `1` wall (no-slip or smooth EQWM only; no free-slip, no rough EQWM). With `y_bc_type=1` this is a 4-wall duct (coupled 2-D y–z pressure solve, needs `p_col=1`). |
 
@@ -211,14 +211,14 @@ Time-averaged statistics, Reynolds-stress budget and probes. Omit to disable.
 | `rsb_nstart` | `0` | Step at which accumulation starts (skip spin-up). |
 | `rsb_hom_dir` | `'x,z'` | Homogeneous averaging directions: `''` none, `'x'`, `'z'`, `'x,z'` (channel). |
 | `rsb_fileout` | `'rsb'` | Output base path, e.g. `'stats/rsb'`. |
-| `n_slices` | `0` | Number of 2-D slice probes (max 8). |
+| `n_slices` | `0` | Number of 2-D slice probes (max 30). |
 | `slice_freq` | `100` | Output every this many steps (shared). Negative: write every `slice_interval` time units instead (the last steps are shortened to land on those times, as for `nsave<0`). |
 | `slice_interval` | `0.0` | Time between slice outputs when `slice_freq<0`; the first is due one interval after the start time. |
 | `slice_dir(n)` | `'z'` | Normal direction `'x'`, `'y'` or `'z'`. |
 | `slice_pos(n)` | `0.0` | Position along the normal [m]. |
 | `slice_comps(n)` | `'UVW'` | Any of `U V W P T C` concatenated (`T` needs Boussinesq, `C` needs sediment; dropped with a warning otherwise). |
 | `slice_fileout(n)` | `'slice'` | Base path. Writes `.bin` (appended `(ncomp,n1,n2)` big-endian float64 per output), `_meta.txt` and `_times.bin` (exact time of each snapshot, used by `inflow_type=2`). Cell-centre values; (n1,n2) = (ny,nz) for x-normal, (nx,nz) for y-normal, (nx,ny) for z-normal. |
-| `n_lines` | `0` | Number of 1-D line probes (max 8). |
+| `n_lines` | `0` | Number of 1-D line probes (max 30). |
 | `line_freq` | `100` | Output interval in steps (shared). Negative: write every `line_interval` time units instead. |
 | `line_interval` | `0.0` | Time between line outputs when `line_freq<0`. |
 | `line_dir(n)` | `'y'` | Direction along the line. |
@@ -241,6 +241,7 @@ Actuator disk whose thrust is spread as a reaction force over `rhs_u/v/w`. Omit 
 | `uav_n_r, uav_n_theta` | `15`, `24` | Radial bands / azimuthal sectors of force markers. |
 | `uav_hover_thrust` | `0.0` | Thrust / fluid density [m⁴/s²] (same kinematic convention as `dPdx`). |
 | `uav_kernel_ncell` | `2` | Support radius [cells] of the Gaussian delta kernel. Keep the disk ≥ this·max(dx,dz) from a periodic x/z edge (the kernel does not wrap). |
+| `uav_path_file`, `uav_thrust_file` | `''` | Waypoint file / thrust-schedule file; see `uav_path_active` and `uav_thrust_active`. |
 | `uav_path_active` | `0` | `1` follow `uav_path_file`: rows `t x y z` sorted by strictly increasing t; Catmull-Rom cubic-Hermite interpolation, clamped outside the range (can under/overshoot a few % at a flat-hold→steep-change transition). |
 | `uav_thrust_active` | `0` | `1` follow `uav_thrust_file` (rows `t T`, same interpolation) instead of the constant thrust, e.g. takeoff surge or landing flare. |
 | `uav_load_profile` | `0` | `0` uniform loading; `1` parabolic tip taper (weight 1−(r/R)², renormalised). |
@@ -274,7 +275,7 @@ Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disa
 | `particle_temp_abs` | `293` | Temperature [K] for Brownian motion. |
 | `particle_ibm_bc(0:15)` | `2` | Per-solid-ID IBM collision: `1` absorb, `2` reflect (restitution `min(1, τ_p/particle_ibm_tau_crit)`), `3` reflect if the relative speed exceeds `particle_resuspend_ucrit`, else absorb. |
 | `particle_ibm_tau_crit` | `1e-3` | Response-time scale of the restitution. |
-| `particle_resuspend_ucrit` | `1e30` | Resuspension speed threshold [m/s] (effectively always deposits until set). |
+| `particle_resuspend_ucrit` | `1e30` | Resuspension speed threshold [m/s] (the default always deposits). |
 | `particle_boussinesq_coupling` | `0` | `1` buoyancy with the local Boussinesq density (one-way). |
 | `particle_deposit_file`, `particle_deposit_freq` | `'particle_deposit_x.csv'`, `10` | Deposition-rate CSV and its write interval in monitor reports. |
 | `sgs_particle_model` | `0` | `1` simplified isotropic Langevin SGS dispersion for LES. |

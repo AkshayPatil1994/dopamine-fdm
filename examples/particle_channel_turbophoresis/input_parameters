@@ -1,5 +1,5 @@
 ! ================================================================
-! Turbophoresis smoke test for src/particles.f90 (Phase 6 validation).
+! Turbophoresis smoke test for src/particles.f90.
 !
 ! Seeds inertial point-particles (St+ ~ 25 in this preset, computed as
 ! tau_p*u_tau^2/nu with u_tau=1, nu=1/Re_tau below) uniformly across the
@@ -19,7 +19,7 @@
 ! published concentration profiles -- a dedicated long-running campaign,
 ! not something to launch from a quick example.
 !
-! Observed with this exact config (2000 steps, single rank): near-wall
+! Result with this exact config (2000 steps, single rank): near-wall
 ! fraction (particles within 0.1 of either wall, channel half-height 1.0)
 ! climbs from the ~5% well-mixed baseline to full saturation (~100%) by
 ! step ~1800, while a tracer (particle_mode=0) control run holds flat at

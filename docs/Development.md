@@ -91,7 +91,7 @@ each case is compared at np=1 vs 2, 2x2 and 4x1 (particles also 3), restart vs u
 | `tests/regression/ibm_ghost_counts.py`, `ibm_ghost_diff.py` | IBM ghost-cell bookkeeping between layouts (counts / cell by cell). |
 
 `trace_compare.py` gates on the *interior* of the global array and scales by the field spread (with a floor of 1e-8 of the
-field magnitude). The older `compare_monitor.py --field-tol` scales by the field maximum, which hides differences in a
+field magnitude). `compare_monitor.py --field-tol` scales by the field maximum, which hides differences in a
 fluctuation on a large offset (Boussinesq `T` around `T_ref`).
 
 ### Notes
@@ -100,8 +100,8 @@ fluctuation on a large offset (Boussinesq `T` around `T_ref`).
 - CPU-vs-GPU comparisons use a gfortran CPU build and an nvfortran GPU build; results agree to roundoff. The two-fluid VOF cases are the exception: the GPU preconditions the pressure PCG with the multigrid V-cycle and the CPU with the W-cycle (`mg_cycle=-1`), so both reach the same PCG tolerance by different iterates and agree to about 1e-8 (the parity tests use 1e-7).
 - NVHPC compiler messages (`-Minfo=accel`) containing `Conditional loop will be executed in scalar mode` or `Accelerator serial kernel generated` mark kernels that run on one GPU thread (a multi-array `a = b` in one `kernels` region did this); use `dev_copy` (`vof_pressure.f90`) or an explicit `parallel loop`. `NV_ACC_TIME=1` prints the per-kernel device time and launch counts, `NVCOMPILER_ACC_NOTIFY=2` every host-device transfer.
 - `Cscal` and `Tscal` live on the device (their boundary conditions do not copy them to the host at one rank): a host reader must `!$acc update host(...)` first, as `output_data`, `write_probes`, `advance_particles` (Boussinesq coupling) and `accumulate_rsb` do. A stale host copy shows up only in what those readers write, and the monitor never copies the scalars; give a parity case an `nsave` that is not a multiple of `nmonitor` (`vof_scalar_flume`, `vof_scalar_ibm`).
-- Verification status (RTX 3060 and a CPU build, 2026-10): the CPU suite passes completely (217 tests). The GPU suite passes except `vof_ibm_slosh_np1_vs_np4_2x2` (the two-fluid solver with an immersed body at 4 ranks on one GPU:
-  the volume drift is 4.6e-9 against a limit of 1e-12; the unmodified code reproduces it, so it is a known multi-rank GPU VOF limit). Configure the GPU build with `-DCPU_REFERENCE_EXE=<CPU build>/dopamine`
+- Verification status (RTX 3060 and a CPU build): the CPU suite passes completely (218 tests). The GPU suite passes except `vof_ibm_slosh_np1_vs_np4_2x2` (the two-fluid solver with an immersed body at 4 ranks on one GPU:
+  the volume drift is 4.6e-9 against a limit of 1e-12; a known multi-rank GPU VOF limit). Configure the GPU build with `-DCPU_REFERENCE_EXE=<CPU build>/dopamine`
   (and `-DCPU_REFERENCE_MPIRUN=<its mpirun>`) to add the CPU-vs-GPU comparisons; without it the GPU suite only compares GPU layouts and restarts. Rank counts above one on a single GPU oversubscribe the device: they test the MPI logic but not real
   multi-GPU transfers (not verified here), and 4-rank two-fluid cases take tens of minutes.
 - The AMD closure (`sgs_model = 2`) has parity cases `chan_les_amd_small`, `bouss_amd_small`, `ibm_amd_small`, `vof_les_flume_amd_small` and `vof_scalar_flume_amd`; the wall-model filter state is restored from the `<snapshot>.wmf` sidecar, so the
@@ -112,7 +112,4 @@ fluctuation on a large offset (Boussinesq `T` around `T_ref`).
 
 License: AGPL-3.0-or-later, see [LICENSE](../LICENSE). Citation information is in the [README](../README.md#citing-this-solver) and [`CITATION.cff`](../CITATION.cff); the methods implemented are listed in [References](References.md).
 
-- If you spot a mistake anywhere in the docs (including this wiki), please open an issue
-  on GitHub.
-- Bug reports and pull requests are welcome; there is no separate CONTRIBUTING template
-  at present, so a descriptive issue or PR is the way to start.
+- Report mistakes in the docs, bugs and pull requests as GitHub issues or PRs; there is no separate CONTRIBUTING template.

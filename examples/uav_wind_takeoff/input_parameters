@@ -1,9 +1,8 @@
 ! ================================================================
-! UAV actuator-disk Phase 3 smoke test: the same vertical takeoff as
-! ../uav_path_takeoff, now into a steady mean crosswind (constant mass
+! UAV actuator-disk smoke test: the same vertical takeoff as
+! ../uav_path_takeoff, into a steady mean crosswind (constant mass
 ! flux forcing, Ub_target) over the domain's rough-free log-law ground
-! (flat_wall_model_flag=1). No new UAV code -- this is a configuration
-! exercise on top of the existing moving-disk case.
+! (flat_wall_model_flag=1). A configuration of the moving-disk case.
 !
 ! Purpose: check the disk's wake is visibly advected/deflected
 ! downstream by the crosswind instead of rising straight up, and that

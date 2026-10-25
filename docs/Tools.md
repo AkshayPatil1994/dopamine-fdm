@@ -35,7 +35,7 @@ matching that example ([Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywa
 five-column format as `grid.out`); copy that into `data/` as well and GenSDF picks it up
 automatically (with `vertical_axis = 2`), using the per-cell spanwise spacing in the
 narrow-band search and in the fast-sweep update. Without a `grid_z.out` the spanwise axis is
-assumed uniform, as before. The solver removes a stale `grid_z.out` when z is uniform.
+assumed uniform. The solver removes a stale `grid_z.out` when z is uniform.
 
 Run:
 
@@ -99,7 +99,7 @@ directly — read those instead of `--help` output to see idiomatic library usag
 | Module | Covers | Key classes/functions |
 |---|---|---|
 | `dopamine_post.fields` | Binary field snapshots, time-averaged statistics, DNS comparison, XDMF export | `FieldSnapshot`, `FieldSeries`, `FieldStats`, `plot_profile`, `plot_stats`, `write_field_xmf`, `read_box_snapshot`, `write_box_xmf` |
-| `dopamine_post.particles` | Lagrangian point particles (`src/particles.f90`), including the solver-computed per-step acceleration (`ax`/`ay`/`az`, added alongside position/velocity/age) | `ParticleData`, `Geometry`, `plot_tracks`, `animate_tracks`, `animate_cloud`, `write_particles_xmf` |
+| `dopamine_post.particles` | Lagrangian point particles (`src/particles.f90`), including the solver-computed per-step acceleration (`ax`/`ay`/`az`) | `ParticleData`, `Geometry`, `plot_tracks`, `animate_tracks`, `animate_cloud`, `write_particles_xmf` |
 | `dopamine_post.probes` | Line and slice probe output, XDMF export for slices | `LineProbe`, `SliceProbe` |
 | `dopamine_post.ibm_surface` | Per-point IBM surface samples (pressure/viscous force) | `IBMSurface` |
 | `dopamine_post.sdf` | Signed-distance-field reading and slice plotting | `SDF` |
@@ -114,8 +114,7 @@ A shared internal module, `dopamine_post._core`, holds the low-level helpers eve
 module builds on (Fortran-namelist parsing, `<prefix>.<step>` snapshot globbing, the
 big-endian binary reader, ffmpeg movie encoding, percentile colour clipping, the cubic-
 Hermite interpolation that matches `uav_actuator.f90`'s `uav_current_center`, and the
-ParaView `.pvd` writer) — not part of the public API, but worth knowing about if you're
-extending the library rather than just using it.
+ParaView `.pvd` writer) — not part of the public API.
 
 ### `dopamine_post.particles`
 
@@ -123,11 +122,9 @@ Reads `fields/<fileout>_particles.<step>` (written by `src/particles.f90`, activ
 whenever `particles_active=1` in `&PARTICLES`). `ParticleData.from_case(case_dir)` loads
 every snapshot into id-indexed `(Nt, Np, 3)` arrays (`pos`, `vel`, and `acc` — NaN where a
 particle is absent that step). `acc` is the solver's own per-step acceleration when the
-snapshot was written by a build with that feature (10-column binary layout: x,y,z,u,v,w,
-ax,ay,az,age); for older 7-column snapshots (x,y,z,u,v,w,age, from before this feature
-existed) it falls back to a finite difference of the stored velocity between snapshots —
-only as good as the snapshot write cadence, so prefer a fresh run when trajectory
-acceleration statistics matter.
+snapshot has the 10-column binary layout (x,y,z,u,v,w,ax,ay,az,age); for 7-column
+snapshots (x,y,z,u,v,w,age) it falls back to a finite difference of the stored velocity
+between snapshots, which is only as good as the snapshot write cadence.
 
 `ParticleData.write_xmf()` (or the module function `write_particles_xmf`) writes
 `paraview/particles.xmf`, pointing directly at the raw binary snapshots via byte-seek
@@ -155,27 +152,25 @@ field/slice/particle series opened alongside it. `drone_animation(tilt=True)` ad
 replays `uav_disk_state`'s auto-tilt low-pass filter (only meaningful with
 `uav_tilt_active=1`).
 
-> **Reference (fast-sweep / cubic Hermite):** see [Numerics](Numerics.md) for the UAV
-> actuator-disk model.
+> The UAV actuator-disk model is described in [Numerics](Numerics.md).
 
 ### `dopamine_post.fields`
 
 `FieldSeries(case_dir).latest()` / `.read(step)` returns a `FieldSnapshot` (cell-centred
 U,V,W,P and, when active, C/nu_t/T and the two-fluid liquid fraction `vof`, ghost layers stripped) for wall-normal profile plots
 (`plot_profile`) or arbitrary planes (`FieldSnapshot.plane`). `FieldSeries.time_average(
-step_range, interval)` reproduces the former `compute_stats.py` (mean profiles, resolved
-Reynolds stresses, resolved+SGS dissipation, centreline symmetry fold) as a `FieldStats`
+step_range, interval)` computes mean profiles, resolved Reynolds stresses, resolved+SGS
+dissipation and the centreline symmetry fold as a `FieldStats`
 you can `.save(stats_dir)` or hand to `plot_stats` (with an optional DNS/MKM overlay).
-`FieldSeries.profile_vs_dns(dns_dir, x_stations)` reproduces the former
-`analyse_channel.py` (multi-station spanwise+temporal-averaged profiles against
+`FieldSeries.profile_vs_dns(dns_dir, x_stations)` gives multi-station spanwise+temporal-averaged profiles against
 Moser–Kim–Mansour DNS and/or a measured wind-tunnel inflow — resolved stresses only; a
 wall-modelled/coarse LES carries part of the stress in the SGS model, so a near-wall
-deficit vs. DNS is expected). `FieldSeries.write_xmf()` writes `paraview/channel_test.xmf`
+deficit vs. DNS is expected. `FieldSeries.write_xmf()` writes `paraview/channel_test.xmf`
 via the same zero-copy byte-seek approach as `dopamine_post.particles`.
 
 **Which optional blocks a full snapshot holds** (C, nu_t, T, vof, in that order after U, V, W, P) is taken from `<case>/input_parameters` (`sediment_flag`, `sgs_model`, `boussinesq_flag`, `vof_active`); a missing
 `sgs_model` means the solver default, AMD (`sgs_model = 2`, so a `nu_t` block exists). When all flags come from the input file and the file holds a different number of blocks, `FieldSnapshot.read` raises a `ValueError`
-instead of shifting the blocks (a wrong `sgs_model` used to read `nu_t` as `T`); pass `sgs_model=`, `sediment_flag=`, `boussinesq_flag=`, `vof_active=` explicitly to override, or to skip trailing blocks. The wall-model
+instead of shifting the blocks; pass `sgs_model=`, `sediment_flag=`, `boussinesq_flag=`, `vof_active=` explicitly to override, or to skip trailing blocks. The wall-model
 filter sidecars `<snapshot>.wmf`, time-average files (`*_tavg.*`), particle files and box files (`*Block.*`) are never taken for a field snapshot when the prefix is detected.
 
 Chunked snapshots (`chunked_snapshot=.true.`, `&IO`) are read with `FieldSnapshot.from_box(path)` (a `FieldSnapshot` on the box's cell centres, staggered velocities averaged to the centres) or `read_box_snapshot(path)`, which returns the box
@@ -208,13 +203,13 @@ sets Agg because it only writes files.
 `LineProbe`/`SliceProbe` load 1-D line-probe and 2-D slice-probe output (`<base>.bin` +
 `<base>_meta.txt`, written by the solver's probe module — see
 [Input Parameters § STATISTICS](Input-Parameters.md#statistics));
-`SliceProbe.write_xmf(...)` is the former `generate_slice_xmf.py`, reading exact write
+`SliceProbe.write_xmf(...)` writes the slice XDMF, reading exact write
 times from `<base>_times.bin` when present (`--dt`/`--t0` remain a fallback for when it's
 missing — line probes don't write one).
 
 ### `dopamine_post.rsb`
 
-`RSBStats.read(case_dir).plot(last=None)` is the former `read_RSBstats.py`: production,
+`RSBStats.read(case_dir).plot(last=None)` plots production,
 pressure-strain, viscous/turbulent/pressure diffusion, resolved/SGS dissipation, residual,
 optionally averaging only the last `N` accumulated samples.
 
@@ -260,7 +255,7 @@ glob_pattern, out)` convert one file or a whole time series for ParaView.
   volume drift, `C` in [0,1], the shape error of the reversal tests, agreement of selected columns between layouts
   (`--np-b`, `--p-grid`, `--same-cols`, `--same-tol`), final-row limits (`--limit COL:MIN:MAX`), the largest value over the run
   (`--rowmax`), and oscillation frequencies from zero crossings (`--freq COL:THEORY:TOL`). The ctest entries `vof_*` call it.
-* **`scripts/vof_figures.py`** — `breaker RUN OUT.png t1 t2 ...` draws liquid fraction and interface from the `vof_snap_*.dat`
+* **`postProcessing/animations/vof_figures.py`** — `breaker RUN OUT.png t1 t2 ...` draws liquid fraction and interface from the `vof_snap_*.dat`
   slices (`vof_debug = 1`, `vof_snap_dt > 0`; per-rank files are merged).
 * **`vof_diag.dat`** — the named 30-column diagnostic file of the two-fluid solver (columns in
   [Two-Phase VOF § Running](Two-Phase-VOF.md#2-running-and-output)); it is plain text and loads with `numpy.loadtxt(..., comments='#')`.
