@@ -99,6 +99,11 @@ try:
         qm, ut = most(u, tm - twall, ym)
         qm = -qm                                      # heat gained by the fluid per unit area: -u_tau*theta_tau
         err = abs(heat - qm)/max(abs(qm), 1e-12)
+        wd = np.loadtxt(os.path.join(tmp, tag, 'wall_diag.dat'), ndmin=2)[-1]   # step t u_lo u_hi qT_lo qT_hi invL_lo invL_hi
+        errd = abs(abs(wd[5 if top else 4]) - abs(qm))/max(abs(qm), 1e-12)         # monitor-file wall flux of the thermal wall
+        print('         wall_diag.dat: |qT| %.5e vs MOST %.5e rel.err %.3f' % (abs(wd[5 if top else 4]), abs(qm), errd))
+        if errd > 0.02:
+            err = max(err, errd)
         un = KAPPA*u_other/math.log(ym/Z0)            # the other wall keeps the neutral rough law
         expected = ut**2 + un**2                      # momentum lost by the column = sum of both applied wall stresses
         errm = abs(drag - expected)/expected
@@ -109,15 +114,15 @@ try:
     d14 = np.abs(T1 - T4).max()
     print('np1 vs np4 max|dT| %.2e' % d14)
     bad |= not (d14 < 1e-9)
-    if bad:
-        print('FAILED'); sys.exit(1)
-    print('PASSED')
-finally:
-    import shutil
     # T_ref is only an offset: the same physical case with every temperature shifted by -T_ref must give the same flow and T - 300
     Uo, To = run('offset', 1, [(r'T_ref = 300.0', 'T_ref = 0.0'), (r'T_wall_bot = 301.0', 'T_wall_bot = 1.0'),
                                (r'T_wall_top = 300.0', 'T_wall_top = 0.0')])
     dU, dTo = np.abs(U1 - Uo).max(), np.abs(T1 - TREF - To).max()
     print('T_ref offset invariance: max|dU| %.2e  max|dT| %.2e' % (dU, dTo))
     bad |= not (dU < 1e-9 and dTo < 1e-9)
+    if bad:
+        print('FAILED'); sys.exit(1)
+    print('PASSED')
+finally:
+    import shutil
     shutil.rmtree(tmp, ignore_errors=True)

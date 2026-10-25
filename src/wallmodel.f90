@@ -690,6 +690,32 @@ Contains
 
   End Subroutine compute_flat_wall_thermal_eqwm
 
+  !> Sums over this rank's interior wall-parallel columns of the y-wall model state, for the wall_diag.dat monitor file:
+  !  s = (u_tau lower, u_tau upper, qT lower, qT upper, 1/L lower, 1/L upper, number of columns); the thermal sums stay zero unless thermal=.True.
+  Subroutine wall_diag_sums(thermal, s)
+
+    Logical,                    Intent(In)  :: thermal
+    Real(Int64), Dimension(7),  Intent(Out) :: s
+
+    Integer(Int32) :: i, k
+    Real   (Int64) :: s1, s2, s3, s4, s5, s6
+
+    s1 = 0d0;  s2 = 0d0;  s3 = 0d0;  s4 = 0d0;  s5 = 0d0;  s6 = 0d0
+    !$acc parallel loop collapse(2) reduction(+:s1,s2,s3,s4,s5,s6) present(wmf_tx,qT_wall,L_obukhov_ylo,L_obukhov_yhi)
+    Do k = 2, nzg-1
+       Do i = 2, nx-1
+          s1 = s1 + wmf_tx(i,1,k);  s2 = s2 + wmf_tx(i,2,k)
+          If ( thermal ) Then
+             s3 = s3 + qT_wall(i,1,k);  s4 = s4 + qT_wall(i,2,k)
+             s5 = s5 + 1d0/L_obukhov_ylo(i,k);  s6 = s6 + 1d0/L_obukhov_yhi(i,k)
+          End If
+       End Do
+    End Do
+    !$acc end parallel loop
+    s = (/ s1, s2, s3, s4, s5, s6, Real((nx-2)*(nzg-2), Int64) /)
+
+  End Subroutine wall_diag_sums
+
   !> Set constant Robin BC alpha for y-walls (bc_face=1 -> Dirichlet no-slip alpha=0; bc_face=2 -> Neumann free-slip alpha=1e10)
   Subroutine compute_constant_alpha
 

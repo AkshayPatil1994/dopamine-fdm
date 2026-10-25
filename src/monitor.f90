@@ -10,9 +10,12 @@ Module monitor
   Use decomp, Only : x_periodic_partner, z_periodic_partner
   Use uav_actuator, Only : uav_current_thrust
   Use restart_output, Only : trim_restart_file
+  Use wallmodel, Only : wall_diag_sums
 
   ! prevent implicit typing
   Implicit None
+
+  Logical, Save :: wall_diag_started = .False.
 
 Contains
 
@@ -23,6 +26,8 @@ Contains
     Real(Int64)    :: meanU, maxU
     Real(Int64)    :: max_divergence
     Integer(Int32) :: local_nan, global_nan
+    Logical        :: wd_active, wd_thermal
+    Real(Int64)    :: wd_loc(7), wd_glob(7)
 
     If ( Mod(istep, nmonitor) == 0 ) Then
 
@@ -65,6 +70,28 @@ Contains
                meanU,                                                        &
                maxU, max_divergence,                                         &
                cfl_conv_last, cfl_visc_last, cfl_accel_last, dt, time2 - time1
+       End If
+
+       ! wall_diag.dat: mean u_tau (and, with the MOST thermal wall model, wall heat flux and 1/L) of the y-wall model, per wall
+       wd_active  = vof_flow < 1 .And. y_bc_type == 1 .And. flat_wall_model_flag > 0
+       wd_thermal = wd_active .And. boussinesq_flag >= 1 .And. ( T_bc_bot == 2 .Or. T_bc_top == 2 )
+       If ( wd_active ) Then
+          Call wall_diag_sums(wd_thermal, wd_loc)
+          Call MPI_Reduce(wd_loc, wd_glob, 7, MPI_real8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+          If ( myid == 0 ) Then
+             If ( .Not. wall_diag_started ) Then
+                wall_diag_started = .True.
+                If ( restart == 0 ) Then
+                   Open(unit=87, file='wall_diag.dat', status='replace')
+                   Write(87,'(A)') '# step t u_tau_lo u_tau_hi qT_lo qT_hi invL_lo invL_hi (qT, 1/L: MOST thermal model only)'
+                   Close(87)
+                End If
+             End If
+             Open(unit=87, file='wall_diag.dat', status='unknown', position='append')
+             Write(87,'(I10,7ES15.7)') istep, t, wd_glob(1)/wd_glob(7), wd_glob(2)/wd_glob(7), wd_glob(3)/wd_glob(7), &
+                                       wd_glob(4)/wd_glob(7), wd_glob(5)/wd_glob(7), wd_glob(6)/wd_glob(7)
+             Close(87)
+          End If
        End If
 
        time1 = MPI_WTIME()
