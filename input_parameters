@@ -36,6 +36,7 @@
   flow_forcing_mode    = 0,
   Ub_target            = 0.068,
   advection_scheme     = 0,
+  adv_wall_layers      = -1,
   rotation_active      = 0,
   Omega_x              = 0.0,
 /
@@ -50,7 +51,7 @@
   cfl_adaptive = 0,
   cfl_target   = 0.5,
   cfl_safety   = 0.9,
-  dt_min       = 1.0e-8,
+  dt_min       = 1.0e-10,
   dt_max       = 1.0e10,
 /
 
@@ -60,6 +61,7 @@
   x_bc_type   = 0,
   y_bc_type   = 1,
   z_bc_type   = 0,
+  outflow_backflow_beta = 0.0,
 /
 
 &INFLOW
