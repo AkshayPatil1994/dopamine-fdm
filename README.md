@@ -48,7 +48,7 @@ ctest --test-dir build               # optional: regression suite
 
 ## Funding Notice
 
-1. The UAV, Urban Flows, and AMD sub-grid model implementation was supported by the IAM-CC project <href>(https://www.iamcc.eu/)</href>$^\dagger$. 
+1. The UAV, Urban Flows, and AMD sub-grid model implementation was supported by the [IAM-CC project](https://www.iamcc.eu/) $^\dagger$. 
 
 2. The multi-phase VOF components in the code were supported by the Climate Action Seed Fund, Delft University of Technology (Feb. 2026).  
 

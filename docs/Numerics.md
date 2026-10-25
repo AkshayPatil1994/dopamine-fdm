@@ -41,7 +41,7 @@ better conserves kinetic energy) or pure central-difference (divergence) form
 
 **Upwind-biased dissipation (`advection_scheme = 2`).** Central schemes have no dissipation, so the sharp jump from the stream to the zeroed solid cells at a roof or wall excites grid-scale oscillations (Gibbs-like ringing) that only the SGS model damps. `advection_scheme = 2` keeps the skew-symmetric second-order central scheme and adds to every momentum flux the dissipative part of a high-order upwind-biased face value. The upwind-biased value is the central one plus a high-order difference, $\phi_f = \phi_c + s\,D$ with $s = \mathrm{sgn}(u_f)$, $D = \delta^3\phi/12$ for 3rd order and $D = -\delta^5\phi/60$ for 5th order ($\delta^3\phi=\phi_{i+2}-3\phi_{i+1}+3\phi_i-\phi_{i-1}$, with the 4th-order central $\phi_c$ resp. 6th-order central for 5th order); here only the term $\beta\,s\,D$ is added, as the conservative flux $F_d = \beta\,|u_f|\,D$ ($u_f$ the face-averaged convecting velocity), in each direction and for each of the three momentum equations (Rai and Moin, 1991, use this construction with a small coefficient). The central part is **not** raised to 4th/6th order, so $\beta = 1$ is the dissipation of UP3/UP5 on top of the second-order central scheme, not the UP3/UP5 scheme itself.
 
-*Numerical diffusion and truncation error.* With $\delta^3\phi = \Delta x^3\phi''' + O(\Delta x^5)$ and constant $u$, the added term is $\partial_t\phi = -(\beta|u|\Delta x^3/12)\,\partial_x^4\phi$ (order 3) or $-(\beta|u|\Delta x^5/60)\,\partial_x^6\phi$ (order 5): a bi- resp. tri-harmonic hyperdiffusion with a real, strictly damping symbol and no phase error. A mode of phase angle $\theta=k\Delta x$ decays at the rate $(4/3)\,\beta\,(|u|/\Delta x)\sin^4(\theta/2)$ (order 3) or $(16/15)\,\beta\,(|u|/\Delta x)\sin^6(\theta/2)$ (order 5), bounded by $1.33$ resp. $1.07\,\beta|u|/\Delta x$ at the grid scale; resolved scales ($k\Delta x\lesssim 0.5$) see only $\beta(|u|/\Delta x)(k\Delta x)^4/12$ resp. $(k\Delta x)^6/60$. The leading truncation error of the scheme is that of the central part, the dispersive $(u\Delta x^2/6)\,\partial_x^3\phi$ (phase speed $u(1-(k\Delta x)^2/6)$), so the formal order stays two; the added error is $O(\Delta x^3)$ resp. $O(\Delta x^5)$, a fraction $\beta k\Delta x/2$ of the dispersive one. The term is a flux difference, so momentum is conserved, and for constant $|u|$ it removes kinetic energy ($\int\phi\,\partial_x^4\phi = \int(\partial_x^2\phi)^2\ge 0$); with variable $|u_f|$ global dissipativity is not proved (it was measured: 0.3 % kinetic-energy change in the block test). The difference is taken in index space (a damping operator, not an interpolation, so the stretched wall-normal grid needs no special weights), and next to the y walls the stencil is reduced from order 5 to 3 and then dropped. The coefficient is $\beta = \max(\texttt{adv\_beta0},\ \texttt{adv\_beta\_ibm}\cdot s_{ibm})$, with $s_{ibm} = 1$ within `adv_band` cells of a solid cell and 0 elsewhere, so the damping is strongest where the ringing is produced. With $\beta = 0$ the scheme is `advection_scheme = 0` bit for bit.
+*Numerical diffusion and truncation error.* With $\delta^3\phi = \Delta x^3\phi''' + O(\Delta x^5)$ and constant $u$, the added term is $\partial_t\phi = -(\beta|u|\Delta x^3/12)\,\partial_x^4\phi$ (order 3) or $-(\beta|u|\Delta x^5/60)\,\partial_x^6\phi$ (order 5): a bi- resp. tri-harmonic hyperdiffusion with a real, strictly damping symbol and no phase error. A mode of phase angle $\theta=k\Delta x$ decays at the rate $(4/3)\,\beta\,(|u|/\Delta x)\sin^4(\theta/2)$ (order 3) or $(16/15)\,\beta\,(|u|/\Delta x)\sin^6(\theta/2)$ (order 5), bounded by $1.33$ resp. $1.07\,\beta|u|/\Delta x$ at the grid scale; resolved scales ($k\Delta x\lesssim 0.5$) see only $\beta(|u|/\Delta x)(k\Delta x)^4/12$ resp. $(k\Delta x)^6/60$. The leading truncation error of the scheme is that of the central part, the dispersive $(u\Delta x^2/6)\,\partial_x^3\phi$ (phase speed $u(1-(k\Delta x)^2/6)$), so the formal order stays two; the added error is $O(\Delta x^3)$ resp. $O(\Delta x^5)$, a fraction $\beta k\Delta x/2$ of the dispersive one. The term is a flux difference, so momentum is conserved, and for constant $|u|$ it removes kinetic energy ($\int\phi\,\partial_x^4\phi = \int(\partial_x^2\phi)^2\ge 0$); with variable $|u_f|$ global dissipativity is not proved (it was measured: 0.3 % kinetic-energy change in the block test). The difference is taken in index space (a damping operator, not an interpolation, so the stretched wall-normal grid needs no special weights), and next to the y walls the stencil is reduced from order 5 to 3 and then dropped. The coefficient is $\beta = \max(\beta_0,\ \beta_\mathrm{ibm}\,s_\mathrm{ibm})$, with $\beta_0$ = `adv_beta0`, $\beta_\mathrm{ibm}$ = `adv_beta_ibm` and $s_\mathrm{ibm} = 1$ within `adv_band` cells of a solid cell and 0 elsewhere, so the damping is strongest where the ringing is produced. With $\beta = 0$ the scheme is `advection_scheme = 0` bit for bit.
 
 *Measured effect* (CPU):
 
@@ -202,8 +202,7 @@ reduces the problem to an independent 1-D $y$-tridiagonal `Zgtsv` solve (the sam
 machinery as the periodic-$y$/wall-$z$ case above, with the $z$-eigenvalue $\lambda_z$
 standing in for the closed-form wavenumber $k_z^2$). $D_{zz}$ itself is symmetric only
 for a *uniform* $z$ grid; a stretched $z$ (`alpha_grid_z > 0`) breaks that, so the solver
-diagonalises the similarity-transformed $S = W^{1/2} D_{zz} W^{-1/2}$ instead, where $W =
-\mathrm{diag}(\Delta z_k)$ is the diagonal matrix of local cell widths — a standard
+diagonalises the similarity-transformed $S = W^{1/2} D_{zz} W^{-1/2}$ instead, where $W = \mathrm{diag}(\Delta z_k)$ is the diagonal matrix of local cell widths — a standard
 finite-volume trick, since $W D_{zz}$ is exactly symmetric by construction. $S$ shares
 $D_{zz}$'s eigenvalues; a $\sqrt{\Delta z_k}$ weighting on the forward/inverse transforms
 recovers $D_{zz}$'s own (generally non-orthogonal) eigenvectors from $S$'s orthonormal
@@ -346,8 +345,7 @@ No-slip ($U_\text{wall} = 0$) is the default; moving-wall BCs can be set by chan
 ### 6.3 Validation — turbulent flow over a wavy wall
 
 The IBM is validated on the `dns_ibm_wavyWall` example (ERCOFTAC Classic Collection
-Case 076, [Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywall); $Re_H = U_b
-H/\nu = 6760$), a sinusoidal wavy bottom wall of wavelength $\lambda = 1$,
+Case 076, [Examples § dns_ibm_wavyWall](Examples.md#dns_ibm_wavywall); $Re_H = U_b H/\nu = 6760$), a sinusoidal wavy bottom wall of wavelength $\lambda = 1$,
 amplitude-to-wavelength ratio $a/\lambda = 0.05$, tiled four times over the streamwise
 domain $L_x = 4$. The wall is represented as a precomputed cell-centre SDF
 (`ibm_input_mode = 1`) generated by `GenSDF` from the analytic wave profile:
@@ -462,8 +460,7 @@ The wall stress is applied exactly as in §7.1 -- only the source of $u_\tau$ ch
 
 The rough log law is only reliable once the sample point clears the roughness
 sublayer ($y/z_0 \gtrsim 20$). On a grid resolved fine enough for a smooth-wall/DNS
-run, the literal first grid cell can violate this badly (e.g. $y_\text{ref}/z_0
-\approx 1.85$ puts the sample point almost inside the roughness sublayer, where
+run, the literal first grid cell can violate this badly (e.g. $y_\text{ref}/z_0 \approx 1.85$ puts the sample point almost inside the roughness sublayer, where
 $u_\tau$ becomes extremely sensitive to noise in the sampled velocity). To avoid
 this, `flat_wall_model_flag = 2` resolves a **matching-height** grid index once at
 startup -- the nearest interior point whose distance to the wall clears
@@ -628,8 +625,7 @@ Wall boundary conditions are adiabatic (zero-gradient) or isothermal (Dirichlet)
 independently settable at the bottom and top walls; streamwise/spanwise BCs follow the
 velocity field's (periodic, or SEM-inflow/convective-outflow when `x_bc_type = 1`), and
 IBM surfaces support per-object adiabatic/isothermal conditions. The Reynolds stress
-budget module (§9) additionally reports the buoyancy production term $\beta_T g \langle
-v'T'\rangle$ when both `&STATISTICS` and `&BOUSSINESQ` are active. Configured via
+budget module (§9) additionally reports the buoyancy production term $\beta_T g \langle v'T'\rangle$ when both `&STATISTICS` and `&BOUSSINESQ` are active. Configured via
 `&BOUSSINESQ` — see
 [Input Parameters § BOUSSINESQ](Input-Parameters.md#boussinesq).
 
