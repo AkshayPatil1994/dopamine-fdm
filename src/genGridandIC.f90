@@ -1,21 +1,18 @@
 ! Module for generating grid and initial conditions
 Module genGridAndIC
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
   Use synthetic_eddy_method, Only : mean_profile_U, init_inflow_profile
   !Use ifport   ! Only for intel compiler
 
-  ! prevent implicit typing
   Implicit None
 
 Contains
 	!Subroutine to generate the grid!
 	Subroutine generateGrid
 
-		! Local variables
 		Integer(Int32) :: i, j, n_smooth, io_unit, N_sp, iter_geom, ios_gz
 		Real   (Int64) :: eta, dy_k, Ly_smooth, y_start, yp_c, dy_c, &
 		                  r_geom, r_lo, r_hi, r_mid, f_lo, f_mid
@@ -271,7 +268,6 @@ Contains
 	! Generate the initial condition
 	Subroutine generateIC
 
-		! Local variables
 		Integer(Int32) :: ii, jj, kk
 		Real   (Int64) :: y_c, y_wall, y_plus, U_base
 		Real   (Int64) :: u_tau, noise_frac
@@ -307,7 +303,8 @@ Contains
 		! Requires x_bc_type==0 and y_bc_type==0 (validated in initialization.f90).
 		If ( ic_type == 6 ) Then
 
-			kx_tgv = 2d0*pi / Merge(Lx_i - dxmin, Lx_i, x_bc_type == 0)   ! periodic period is L - d (last point duplicates the first)
+			! periodic period is L - d (last point duplicates the first)
+			kx_tgv = 2d0*pi / Merge(Lx_i - dxmin, Lx_i, x_bc_type == 0)
 			ky_tgv = 2d0*pi / Ly_i
 			kz_tgv = 2d0*pi / Merge(Lz_i - dzmin, Lz_i, z_bc_type == 0)
 
@@ -328,9 +325,8 @@ Contains
 				End Do
 			End Do
 
-			! -- V: x-center, y-face, z-center -- faces 1 and ny_global are the
-			! same physical periodic point (y=0==y=Ly), so the plain analytic
-			! formula is exact there with no wraparound special-casing needed
+			! -- V: x-center, y-face, z-center -- faces 1 and ny_global are the same physical periodic point
+			! (y=0==y=Ly), so the plain analytic formula is exact there with no wraparound special-casing needed
 			V = 0d0
 			Do kk = 2, nzg-1
 				kk_glob = k1_global(myid) + kk - 1
@@ -437,7 +433,8 @@ Contains
 
 		End If
 
-		! x_bc_type==1: load the inflow mean profile now so it can seed U_base below, avoiding a step-1 IC/BC divergence spike
+		! x_bc_type==1: load the inflow mean profile now so it can seed U_base below, avoiding a step-1 IC/BC
+		! divergence spike
 		If ( x_bc_type == 1 ) Call init_inflow_profile
 
 		! ---- Reichardt profile parameters for channel_perturb IC --------
@@ -450,8 +447,8 @@ Contains
 		alpha_ss = 17.0d0 * 2.0d0*pi / llx_ch
 		beta_ss  = 13.0d0 * 2.0d0*pi / llz_ch
 
-		! Re_tau derived from dPdx, nu, and channel reference height
-		! (same physics as the u_tau estimate for ic_type==1)
+		! Re_tau derived from dPdx, nu, and channel reference height (same physics as the u_tau estimate for
+		! ic_type==1)
 		If ( bc_face_yhi == 2 ) Then
 			h_ch = Ly_i           ! open channel: full height
 		Else
@@ -466,8 +463,7 @@ Contains
 			Re_tau_ch = u_tau_ch * h_ch / Max( nu, 1d-15 )
 		End If
 
-		! Re_b from trapezoidal integration of the Reichardt profile
-		! (exact formula; consistent across all Re_tau).
+		! Re_b from trapezoidal integration of the Reichardt profile (exact formula; consistent across all Re_tau).
 		n_int_ch  = 10000
 		dyp_ch    = Re_tau_ch / Real(n_int_ch, Int64)
 		sum_ubulk = 0d0
@@ -556,7 +552,8 @@ Contains
 			U_base = U_base * u_tau_ch
 
 			Case (5)  ! Inverse-linear profile: large near walls, zero at centre
-				! Closed channel: anti-tent (U=Utarget at walls, 0 at centre); open channel: inverted ramp (U=Utarget at bottom, 0 at top); strong shear promotes transition
+				! Closed channel: anti-tent (U=Utarget at walls, 0 at centre); open channel: inverted ramp (U=Utarget at
+				! bottom, 0 at top); strong shear promotes transition
 				If ( bc_face_yhi == 1 ) Then
 					U_base = Utarget * ( 1d0 - 2d0*Min(y_c, Ly_i - y_c)/Ly_i )
 				Else
@@ -565,7 +562,8 @@ Contains
 
 			End Select
 
-			! x_bc_type==1: seed the interior mean with the inflow BC's own profile instead of ic_type's, so step 1 doesn't see a large inflow-face divergence
+			! x_bc_type==1: seed the interior mean with the inflow BC's own profile instead of ic_type's, so step 1
+			! doesn't see a large inflow-face divergence
 			If ( x_bc_type == 1 ) U_base = mean_profile_U( y_c )
 
 			U(:, jj, :) = U_base

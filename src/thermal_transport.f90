@@ -13,7 +13,8 @@ Module thermal_transport
 
 Contains
 
-  !> Compute RHS for temperature advection-diffusion; molecular+turbulent diffusivity from Pr/Pr_t, no settling term
+  !> Compute RHS for temperature advection-diffusion; molecular+turbulent diffusivity from Pr/Pr_t, no
+  !  settling term
   Subroutine compute_rhs_temperature(T_, U_, V_, W_, Ft_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: T_
@@ -27,8 +28,8 @@ Contains
   End Subroutine compute_rhs_temperature
 
 
-  !> Apply boundary conditions to temperature T (x-periodic or SEM-inflow/convective-outflow, z-MPI halo, y-wall adiabatic/isothermal);
-  !  one rank works on the device copy, several ranks stage the host copy
+  !> Apply boundary conditions to temperature T (x-periodic or SEM-inflow/convective-outflow, z-MPI halo,
+  !  y-wall adiabatic/isothermal); one rank works on the device copy, several ranks stage the host copy
   Subroutine apply_temperature_bc(T_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: T_
@@ -72,8 +73,9 @@ Contains
 
     !$acc update host(T_)
 
-    ! x direction: interior-rank seam planes, then Dirichlet-SEM inflow / convective outflow (periodic wrap comes in finish_scalar_halos)
-    ! the seam exchange runs on device memory in multi-GPU builds: push the host state, exchange, bring the planes back
+    ! x direction: interior-rank seam planes, then Dirichlet-SEM inflow / convective outflow (periodic wrap
+    ! comes in finish_scalar_halos) the seam exchange runs on device memory in multi-GPU builds: push the
+    ! host state, exchange, bring the planes back
     !$acc update device(T_)
     Call update_ghost_interior_planes_x(T_, 4)
     !$acc update host(T_)
@@ -106,7 +108,8 @@ Contains
        T_(:,nyg,:) = T_(:,nyg-1,:)
     End If
 
-    ! Fallback safety net inside IBM solid cells; apply_ghost_cell_ibm_scalar (ibm.f90) enforces the actual physical wall condition
+    ! Fallback safety net inside IBM solid cells; apply_ghost_cell_ibm_scalar (ibm.f90) enforces the actual
+    ! physical wall condition
     If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
        Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) < 0d0 )
           T_(2:nxg-1, 2:nyg-1, 2:nzg-1) = T_ref

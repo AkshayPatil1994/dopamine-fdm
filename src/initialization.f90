@@ -1,7 +1,6 @@
 ! Module with initialization of global variables
 Module initialization
 
-  ! Modules
   Use, Intrinsic :: iso_c_binding
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
@@ -30,10 +29,8 @@ Module initialization
 #endif
   Use particles, Only : setup_particles
 
-  ! prevent implicit typing
   Implicit None
 
-  ! declarations
 Contains
 
   ! Initialize everything
@@ -51,15 +48,13 @@ Contains
     ! creates its context on this rank's device, not device 0 -- see src/gpu_device.f90
     Call assign_gpu_device_pre_mpi
 #endif
-    ! first initialize MPI
     Call Mpi_init(ierr)
     Call Mpi_comm_size(MPI_COMM_WORLD, nprocs, ierr)
     Call Mpi_comm_rank(MPI_COMM_WORLD,   myid, ierr)
 
 #ifdef GPU_POISSON
-    ! Must run before any device allocation or cuFFT/cuSPARSE plan creation
-    ! (gpu_poisson_init, called later below) so every rank binds to its own
-    ! physical GPU first -- see src/gpu_device.f90.
+    ! Must run before any device allocation or cuFFT/cuSPARSE plan creation so every rank binds to its own GPU
+    ! (src/gpu_device.f90).
     Call assign_gpu_device
 #endif
 
@@ -82,7 +77,6 @@ Contains
        Write(*,'(A)') ' '
     End If
 
-    ! read parameters from standard input
     If ( myid==0 ) Then
        If ( Present(input_file) ) Then
           Write(*,'(A)') ' [1/4] Reading input parameters from '//Trim(input_file)//' ...'
@@ -106,8 +100,8 @@ Contains
               '(periodic x), alone or as the 4-wall duct (y_bc_type=1); a duct with inflow/outflow x needs the CPU build' )
 #endif
 
-    ! time: on restart, t_start (explicit) takes precedence over nstep_init*dt --
-    ! required under adaptive dt, where step count no longer maps to a fixed dt
+    ! on restart the explicit t_start overrides nstep_init*dt, needed under adaptive dt where the step count
+    ! no longer maps to a fixed dt
     If ( restart == 1 ) Then
        If ( t_start >= 0d0 ) Then
           t = t_start
@@ -118,26 +112,24 @@ Contains
        t = 0d0
     End If
 
-    ! time-based save cadence (only meaningful when nsave < 0): first
-    ! snapshot is due one tsave interval after the run's starting time
+    ! time-based save cadence (nsave < 0 only): the first snapshot is due one tsave interval after the start
+    ! time
     If ( nsave < 0 ) tsave_next = t + tsave
 
-    ! sim_end_time and the time-based intervals are absolute / relative to this start time: an end time at or before it would give a negative dt
+    ! sim_end_time is absolute and the time-based intervals are relative to this start time: an end time at or
+    ! before it would give a negative dt
     If ( nsteps < 0 .And. sim_end_time <= t ) &
          Call abort_input( 'ERROR: &NUMERICS sim_end_time (absolute, not a duration) must exceed the start time' )
     If ( nsave < 0 .And. tsave <= 0d0 ) Call abort_input( 'ERROR: &NUMERICS nsave<0 requires tsave > 0' )
     
-    ! restrictions
     If ( Mod( nx_global, 2 )/=0 ) Call abort_input( 'Error: nx must be even' )
     If ( Mod( nz_global, 2 )/=0 ) Call abort_input( 'Error: nz must be even' )
     If ( y_bc_type == 0 .And. grid_type /= 1 ) Call abort_input( &
          'ERROR: y_bc_type=0 (periodic y) requires grid_type=1 (uniform y grid)' )
     If ( ic_type == 6 .And. ( x_bc_type /= 0 .Or. y_bc_type /= 0 ) ) &
        Call abort_input( 'ERROR: ic_type=6 (Taylor-Green Vortex) requires x_bc_type=0 and y_bc_type=0 (fully periodic box)' )
-    ! y_bc_type==0 (periodic y, e.g. Taylor-Green vortex): there is no wall at all,
-    ! so bc_face_ylo/yhi are meaningless here -- skip the wall-model check entirely
-    ! instead of possibly Stop-ing on a stale flat_wall_model_flag=2 left over from
-    ! a different (wall-bounded) namelist
+    ! periodic y has no wall: skip the wall-model check so a stale flat_wall_model_flag=2 from a wall-bounded
+    ! namelist does not abort
     If ( flat_wall_model_flag == 2 .And. y_bc_type /= 0 ) Then
        If ( bc_face_ylo /= 2 .And. z0_ylo <= 0d0 ) &
           Call abort_input( 'ERROR: flat_wall_model_flag=2 (rough z0 EQWM) requires z0_ylo > 0 for a no-slip bottom wall' )
@@ -158,15 +150,16 @@ Contains
           Call abort_input( 'ERROR: T_bc_top=2 requires z0h_yhi > 0' )
     End If
 
-    ! domain decomposition: resolves p_row/p_col (auto-factorized when both are 0, see decomp_auto_factorize), then builds this rank's x/z ownership ranges via 2decomp&fft's own distribute() algorithm, replicated locally -- no restriction that nx_global/nz_global divide evenly by p_row/p_col
+    ! domain decomposition: resolves p_row/p_col (auto-factorized when both are 0, see decomp_auto_factorize)
+    ! and this rank's x/z ranges with 2decomp&fft's distribute() algorithm; nx_global/nz_global need not
+    ! divide evenly by p_row/p_col
     Call decomp_init_pencil
     If ( myid==0 ) Write(*,'(A,I0,A,I0)') '   p_row, p_col (resolved)     =  ', p_row, '  ', p_col
     Call decomp_build_xz_ranges
 
-    ! Sub-communicator for outflow_convection_velocity (boundary_conditions.f90): x_bc_type
-    ! is a broadcast namelist value (identical on every rank), so this If is not
-    ! rank-divergent -- every rank enters (or skips) the collective MPI_Comm_split together.
-    ! Unused (comm_outflow_x stays MPI_COMM_NULL) unless x_bc_type==1.
+    ! Sub-communicator for outflow_convection_velocity (boundary_conditions.f90). x_bc_type is identical on
+    ! every rank, so this collective MPI_Comm_split is entered or skipped by all ranks together; unused
+    ! (comm_outflow_x stays MPI_COMM_NULL) unless x_bc_type==1.
     If ( x_bc_type == 1 ) Call init_outflow_x_comm
 
     ! restriction for MPI boundaries (ghost-cell stencils need >=2 interior cells per rank)
@@ -233,7 +226,6 @@ Contains
        Pb = 0d0;  phib = 0d0
     End If
     
-    ! read data
     If ( myid==0 ) Then
        If ( restart == 1 ) Then
           Write(*,'(A,A,A)') ' [3/4] Restarting from ', Trim(Adjustl(filein)), ' ...'
@@ -247,7 +239,7 @@ Contains
        Call init_flow
     End If
 
-    ! definie global grids from x_global, y_global and z_global (face to centers)
+    ! global grids from x_global, y_global and z_global (face to centers)
     ! local faces
     x = x_global( i1_global(myid):i2_global(myid) )
     y = y_global
@@ -264,7 +256,6 @@ Contains
        zm_global(k) = 0.5d0*( z_global(k) + z_global(k+1) )
     End Do
 
-    ! global 
     xg_global(2:nxm_global+1) = xm_global
     xg_global(1)              = xm_global(1)          - 2d0*(xm_global(1)-x_global(1))
     xg_global(nxm_global+2)   = xm_global(nxm_global) + 2d0*(x_global(nx_global)-xm_global(nxm_global))
@@ -293,32 +284,29 @@ Contains
     Ly = y_global(ny_global) - y_global(1)
     Lz = z_global(nz_global) - z_global(1)
 
-    ! SEM inflow profile + eddy population (no-op unless x_bc_type==1 and
-    ! inflow_type==1): must come after y_global/z_global/Ly/Lz are set
+    ! SEM inflow profile + eddy population (no-op unless x_bc_type==1 and inflow_type==1): needs
+    ! y_global/z_global/Ly/Lz
     Call init_inflow
 
-    ! Boundary-condition z-plane buffers: only depend on grid-size integers (already
-    ! set), not on xg/yg/zg contents; allocated here (ahead of IBM setup below) because
-    ! read_phi_from_sdf_file/smooth_ibm_corners now call apply_periodic_bc_z(phi,4) for
-    ! periodic-z domains, which reads/writes these same shared buffers.
+    ! Boundary-condition z-plane buffers depend only on grid-size integers; allocated before the IBM setup
+    ! because read_phi_from_sdf_file/smooth_ibm_corners call apply_periodic_bc_z(phi,4) for periodic z, which
+    ! uses these buffers.
     ! local velocity, initial z-planes
     Allocate ( buffer_ui(nx,nyg,2:3), buffer_vi(nxg,ny,2:3), buffer_wi(nxg,nyg), buffer_ci(nxg,nyg,2:3) )
     ! local velocity, ending  z-planes
     Allocate ( buffer_ue(nx,nyg),     buffer_ve(nxg,ny),     buffer_we(nxg,nyg), buffer_ce(nxg,nyg) )
 
-    ! IBM setup: must come after xg/yg/zg/dxmin/dymin/dzmin are set
-    ! (compute_normal_at_face_* divides by grid spacings).
+    ! IBM setup: needs xg/yg/zg/dxmin/dymin/dzmin (compute_normal_at_face_* divides by grid spacings).
     If ( ibm_input_mode >= 1 ) Then
        Call setup_ibm
        If ( nsampling > 0 ) Call open_force_csv
     End If
 
-    ! UAV actuator disk marker setup (no-op unless uav_active>=1); no grid
-    ! dependency but grouped here alongside IBM setup for readability
+    ! UAV actuator disk marker setup (no-op unless uav_active>=1)
     If ( uav_active >= 1 ) Call setup_uav
 
-    ! Point-particle seeding/restart (no-op unless particles_active>=1); needs the grid
-    ! (xg/yg/zg) and x/z periodic-partner topology, both already set up above
+    ! Point-particle seeding/restart (no-op unless particles_active>=1); needs the grid and the x/z
+    ! periodic-partner topology
     Call setup_particles
 
     ! Boundary conditions
@@ -341,7 +329,8 @@ Contains
     dx = dxmin
     dz = dzmin
 
-    ! Length for periodic domain; periodic-vs-DCT-IV point-count rationale
+    ! Length for periodic domain: the last interior cell duplicates the first, so one point is dropped; the
+    ! DCT-IV path keeps all points
     If ( x_bc_type == 0 ) Then
        Lxp        = Lx - dx
        nxp_global = nxm_global - 1
@@ -349,7 +338,7 @@ Contains
        Lxp        = Lx
        nxp_global = nxm_global
     End If
-    ! Length for periodic domain, or full physical extent for a z-wall (no periodic-reduction point dropped)
+    ! Length for periodic domain, or full physical extent for a z-wall (no point dropped)
     If ( z_bc_type == 0 ) Then
        Lzp        = Lz - dz
        nzp_global = nzm_global - 1
@@ -362,12 +351,14 @@ Contains
     mx_global = nxp_global - 1
     mz_global = nzp_global - 1
 
-    ! local z-slab count for physical-space rhs_p ghost fill (apply_periodic_xz_pressure), independent of the pencil-transpose chain below
+    ! local z-slab count for the physical-space rhs_p ghost fill (apply_periodic_xz_pressure), independent of
+    ! the transpose chain below
     Call z_periodic_partner(is_first_z, is_last_z, z_partner)
     nzp = nzm
     If ( is_last_z ) nzp = nzm - 1
 
-    ! Poisson pencil grid: sized to the Fourier-transform grid (nxp_global x nym_global x nzp_global), not the face-point grid decomp_init_pencil used
+    ! Poisson pencil grid: sized to the Fourier-transform grid (nxp_global x nym_global x nzp_global), not the
+    ! face-point grid
     Call decomp_init_poisson_pencil( Int(nxp_global,Int32), nym_global, Int(nzp_global,Int32) )
 
     ! this rank's local mode-count range in the y-pencil (post transpose chain)
@@ -388,7 +379,8 @@ Contains
     Allocate ( poisson_z_c ( decomp_poisson%zsz(1), decomp_poisson%zsz(2), decomp_poisson%zsz(3) ) )
 #endif
 
-    ! local (non-MPI) batched complex 1-D FFT in z, dimension 3 (fully local in the z-pencil); periodic z only (z_bc_type==0) -- the wall case (z_bc_type==1) solves z via Zgtsv/Dzz instead, see below
+    ! local batched complex 1-D FFT in z (dim 3, local in the z-pencil); periodic z only, the z-wall case
+    ! solves z via Zgtsv/Dzz below
     If ( z_bc_type == 0 ) Then
     plan_fz_fwd = fftw_plan_many_dft( 1_C_INT, [Int(nzp_global,C_INT)],                          &
              Int(DSPEC%zsz(1)*DSPEC%zsz(2),C_INT),                             &
@@ -404,9 +396,10 @@ Contains
 
     If ( x_bc_type == 0 ) Then
 
-       ! ---- periodic x: local batched complex 1-D FFT in x, dimension 1 (fully local in the x-pencil) ----------
+       ! ---- periodic x: local batched complex 1-D FFT in x (dim 1, local in the x-pencil) ----
 #ifndef GPU_POISSON
-       ! (the GPU build transforms x with cuFFT D2Z/Z2D on decomp_spec-sized arrays instead; see poisson_gpu.f90)
+       ! (the GPU build transforms x with cuFFT D2Z/Z2D on decomp_spec-sized arrays instead; see
+       ! poisson_gpu.f90)
        plan_fx_fwd = fftw_plan_many_dft( 1_C_INT, [Int(nxp_global,C_INT)],                    &
                 Int(decomp_poisson%xsz(2)*decomp_poisson%xsz(3),C_INT),                       &
                 poisson_x_c, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),         &
@@ -420,7 +413,7 @@ Contains
 
 #endif
 
-       ! global Fourier coeficients with modified wave-number for the second derivative
+       ! global Fourier coefficients with modified wave-number for the second derivative
        Allocate ( kxx(0:mx_global), kzz(0:mz_global) )
        kxx = 0d0
        kzz = 0d0
@@ -442,14 +435,15 @@ Contains
 
     Else
 
-       ! Inflow/outflow x: local (non-MPI) batched DCT-IV in x, dimension 1 (fully local in the x-pencil); DCT-IV (FFTW_REDFT11) is self-inverse (up to 1/(2N) FFTW normalisation), so reused forward/backward
+       ! Inflow/outflow x: local batched DCT-IV in x (dim 1); DCT-IV (FFTW_REDFT11) is self-inverse up to the
+       ! 1/(2N) normalisation, so one plan serves forward and backward
        plan_dct = fftw_plan_many_r2r( 1_C_INT, [Int(nxp_global,C_INT)],                       &
                   Int(decomp_poisson%xsz(2)*decomp_poisson%xsz(3),C_INT),                     &
                   poisson_x_r, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),       &
                   poisson_x_r, [Int(nxp_global,C_INT)], 1_C_INT, Int(nxp_global,C_INT),       &
                   [FFTW_REDFT11], FFTW_MEASURE )
 
-       ! DCT-IV (quarter-wave) modified wavenumber; BC/null-space rationale
+       ! DCT-IV (quarter-wave) modified wavenumber
        Allocate ( kxx(0:mx_global), kzz(0:mz_global) )
        Do i = 0, mx_global
           kxx(i) = 2d0*( dcos( pi*Real(2*i+1,8)/(2d0*Real(nxp_global,8)) ) - 1d0 )/dx**2d0
@@ -466,10 +460,10 @@ Contains
 
     End If
 
-    ! Periodic y (y_bc_type==0): local batched complex 1-D FFT along dim 2 (y is never MPI-split). As for periodic x/z the last
-    ! interior cell duplicates the first, so the FFT length is nyp = decomp_poisson%ysz(2)-1 = nym_global-1; cell nyg-1 is copied
-    ! from index 2 after the solve (cf. apply_periodic_xz_pressure). The plan batches over the stride-1 x index only; the
-    ! z index is looped at execute time (fftw_plan_many_dft batches one stride/dist pair).
+    ! Periodic y: local batched complex 1-D FFT along dim 2 (y is never MPI-split). The last interior cell
+    ! duplicates the first, so the FFT length is nyp = nym_global-1; cell nyg-1 is copied from index 2 after
+    ! the solve (cf. apply_periodic_xz_pressure). The plan batches over the x index only; z is looped at
+    ! execute time (fftw_plan_many_dft batches one stride/dist pair).
     If ( y_bc_type == 0 ) Then
 
        plan_fy_fwd = fftw_plan_many_dft( 1_C_INT, [Int(decomp_poisson%ysz(2)-1,C_INT)],                      &
@@ -483,7 +477,7 @@ Contains
                 poisson_y_c, [Int(decomp_poisson%ysz(2)-1,C_INT)], Int(DSPEC%ysz(1),C_INT), 1_C_INT, &
                 FFTW_BACKWARD, FFTW_MEASURE )
 
-       ! global Fourier coefficients with modified wave-number for the second derivative; uniform y grid (grid_type=1 enforced above)
+       ! modified wave-number of the second derivative; uniform y grid (grid_type=1 enforced above)
        Allocate ( kyy(0:decomp_poisson%ysz(2)-2) )
        kyy = 0d0
        dy  = y_global(2) - y_global(1)
@@ -496,11 +490,9 @@ Contains
 
     End If
 
-    ! Tridiagonal linear solver: builds Dyy always (cheap), and Dzz too when the spanwise
-    ! direction is wall-bounded. D/DL/DU are the shared Zgtsv scratch arrays, sized to whichever
-    ! direction the innermost tridiagonal solve in solve_poisson_equation actually runs along:
-    ! z (Zgtsv-in-z, z_bc_type==1 .And. y_bc_type==0) or y (Zgtsv-in-y, every other case,
-    ! including the 4-wall duct's per-z-eigenmode solve -- see the Qz/lambda_z block below).
+    ! Tridiagonal solver: Dyy always, Dzz too with a z wall. D/DL/DU are the shared Zgtsv scratch, sized to
+    ! the direction of the innermost tridiagonal solve in solve_poisson_equation: z for z_bc_type==1 .And.
+    ! y_bc_type==0, else y (including the 4-wall duct's per-eigenmode solve, see the Qz/lambda_z block below).
     If ( myid==0 ) Write(*,*) 'initializing pressure solver...'
     Allocate ( Dyy(2:nyg-1,2:nyg-1) )
     Allocate ( Dzz(2:nzg_global-1,2:nzg_global-1) )
@@ -546,10 +538,9 @@ Contains
     !$acc enter data create(Dyy)
     !$acc update device(Dyy)
 
-    ! Spanwise (z) wall: same second-derivative-matrix construction as Dyy above, but
-    ! using the GLOBAL z_global/zg_global grid (z is domain-decomposed, unlike y, so the
-    ! local zg here would only cover this rank's slice -- the Zgtsv-in-z solve runs in a
-    ! fully-local-in-z pencil during the Poisson solve and needs the true global operator).
+    ! Spanwise wall: same construction as Dyy but on the GLOBAL z_global/zg_global grid, because the
+    ! Zgtsv-in-z solve runs in a z-local pencil and needs the true global operator (the local zg covers only
+    ! this rank's slab).
     If ( z_bc_type == 1 ) Then
 
        Do k=3,nzg_global-2
@@ -585,10 +576,10 @@ Contains
 
     End If
 
-    ! 4-wall duct: the (y,z) pressure problem does not separate by FFT, so Dzz's interior tridiagonal part is diagonalised with
-    ! LAPACK's symmetric-tridiagonal eigensolver, via the symmetrised S = W^(1/2) Dzz W^(-1/2) on stretched z (see lambda_z/Qz/
-    ! sqrt_w_z in global.f90). Each z-mode then gives an independent y-tridiagonal solve with lambda_z(m) in place of the
-    ! periodic-z wavenumber kzz.
+    ! 4-wall duct: the (y,z) pressure problem does not separate by FFT, so the interior tridiagonal part of
+    ! Dzz is diagonalised with LAPACK's symmetric-tridiagonal eigensolver via S = W^(1/2) Dzz W^(-1/2) (see
+    ! lambda_z/Qz/sqrt_w_z in global.f90); each z-mode is then an independent y-tridiagonal solve with
+    ! lambda_z(m) in place of kzz.
     If ( y_bc_type == 1 .And. z_bc_type == 1 ) Then
 
        Allocate ( lambda_z(nzm_global), Qz(nzm_global,nzm_global), sqrt_w_z(nzm_global) )
@@ -597,14 +588,15 @@ Contains
          Integer(Int32) :: eig_info
          Allocate ( tz_diag(nzm_global), tz_sub(nzm_global-1), eig_work(Max(1,2*nzm_global-2)) )
          Allocate ( cell_w(nzm_global) )
-         ! cell_w(m) = width of the interior cell at local index m (global row m+1 of Dzz),
-         ! i.e. the same z_global(k)-z_global(k-1) factor Dzz's own construction divides by
+         ! cell_w(m) = width of the interior cell at local index m (global row m+1 of Dzz), the
+         ! z_global(k)-z_global(k-1) factor of Dzz's construction
          Do k = 1, nzm_global
             cell_w(k) = z_global(k+1) - z_global(k)
          End Do
          sqrt_w_z = Sqrt(cell_w)
          Do k = 1, nzm_global
-            tz_diag(k) = Real( Dzz(k+1,k+1), Int64 )   ! S's diagonal == Dzz's diagonal (unchanged by the similarity transform)
+            ! S's diagonal == Dzz's diagonal (invariant under the similarity transform)
+            tz_diag(k) = Real( Dzz(k+1,k+1), Int64 )
          End Do
          Do k = 1, nzm_global-1
             ! S(k,k+1) = S(k+1,k) = 1 / [ (zg(k+2)-zg(k+1)) * sqrt(cell_w(k)*cell_w(k+1)) ]
@@ -617,8 +609,8 @@ Contains
          Deallocate ( tz_diag, tz_sub, eig_work, cell_w )
        End Block
 
-       ! Complex copies + z_hat scratch, built once here instead of every
-       ! solve_poisson_equation call -- see global.f90's comment on Qz_c/sqrt_w_z_c/z_hat_duct
+       ! Complex copies + z_hat scratch, built once here instead of per solve (see Qz_c/sqrt_w_z_c/z_hat_duct
+       ! in global.f90)
        Allocate ( Qz_c(nzm_global,nzm_global), sqrt_w_z_c(nzm_global) )
        Allocate ( z_hat_duct(decomp_poisson%ysz(2),decomp_poisson%ysz(3)) )
        Qz_c       = Dcmplx(Qz)
@@ -642,10 +634,9 @@ Contains
     weight_y_0 = ( yg(2:nyg) - y(1:ny) ) / ( yg(2:nyg) - yg(1:nyg-1)  )
     weight_y_1 = 1d0 - weight_y_0
     Allocate ( weight_z_0(nz), weight_z_1(nz) )
-    ! Explicit loop, not an array expression: on z-decomposed ranks whose slab has nz == nzg (e.g. rank 0
-    ! of a 2-rank z-split) zg(2:nzg) has one element fewer than z(1:nz), so the whole-array form was a
-    ! non-conformable assignment (undefined; nvfortran zeroed element 1, breaking the first z plane's
-    ! interpolation). Face nz then has no upper cell centre locally and is never read (interpolate_z runs to nzg-1).
+    ! Explicit loop, not an array expression: on z-decomposed ranks with nz == nzg (e.g. rank 0 of a 2-rank
+    ! split) zg(2:nzg) has one element fewer than z(1:nz), a non-conformable assignment (nvfortran zeroed
+    ! element 1). Face nz has no upper cell centre locally and is never read (interpolate_z runs to nzg-1).
     weight_z_0 = 0.5d0
     Do k = 1, Min(nz, nzg-1)
        weight_z_0(k) = ( zg(k+1) - z(k) ) / ( zg(k+1) - zg(k) )
@@ -684,11 +675,11 @@ Contains
     Allocate( nu_t     (1:nxg,1:nyg,1:nzg) )
     Allocate( kappa_t  (1:nxg,1:nyg,1:nzg) )
 
-    !	Define eddy viscosity to 0
     nu_t = 0d0
     kappa_t = 0d0
 
-    ! incremental pressure (ibm_pressure > 0): continue from the stage pressure stored in the restart file's P block
+    ! incremental pressure (ibm_pressure > 0): continue from the stage pressure stored in the restart file's
+    ! P block
     If ( restart == 1 .And. ibm_pressure > 0 ) Then
        Call read_pressure_restart
        Pst = P(2:nxg,2:nyg-1,2:nzg)
@@ -757,11 +748,9 @@ Contains
     L_obukhov_ylo = 1d10   ! neutral seed; solve_most iterates this in place each call
     L_obukhov_yhi = 1d10
 
-    ! Rough-EQWM matching height: smallest interior j (bottom) / largest interior j
-    ! (top) whose distance to the wall clears 20*z0, so the log-law u_tau/theta_tau
-    ! solves in wallmodel.f90 aren't sampled from inside the roughness sublayer just
-    ! because the near-wall grid happens to be fine (same threshold as wallmodel.f90's
-    ! MATCH_RATIO_MIN -- kept as a literal here to avoid a new module dependency).
+    ! Rough-EQWM matching height: smallest (bottom) / largest (top) interior j whose wall distance clears
+    ! 20*z0, so the log-law solves in wallmodel.f90 are not sampled inside the roughness sublayer on a fine
+    ! grid (same threshold as MATCH_RATIO_MIN there, a literal here to avoid a module dependency).
     j_match_ylo = 2;  j_match_yhi = nyg-1
     If ( flat_wall_model_flag == 2 ) Then
        j_match_ylo = 2
@@ -792,25 +781,31 @@ Contains
        End If
     End If
 
-    ! Push host values once for scalars `!$acc declare create`d in global.f90 (needed by !$acc routine seq procedures)
+    ! Push host values once for scalars `!$acc declare create`d in global.f90 (needed by !$acc routine seq
+    ! procedures)
     !$acc update device(nx,ny,nz,nxg,nyg,nzg,nu,pi,inflow_type,inflow_Uconst,sem_n_eddies,sem_length_scale,sem_seed,sem_eddy_placement,sem_use_esem,sem_divergence_free,sem_wall_damping)
     !$acc update device(flat_wall_model_flag,z0_ylo,z0_yhi,z0h_ylo,z0h_yhi,j_match_ylo,j_match_yhi)
     !$acc update device(boussinesq_flag,beta_T,T_ref,Pr,Pr_t,grav,ibm_T_bc_type,ibm_T_wall,ibm_z0)
     !$acc update device(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
     ! OpenACC: static grid arrays copied once, scratch arrays created once, never re-transferred
     !$acc enter data copyin(y,yg,z,zg,weight_y_0,weight_y_1,weight_z_0,weight_z_1)
-    ! x,xg needed on device by compute_rhs_scalar_core (non-uniform-grid-style stencil, even though x itself is uniform)
+    ! x,xg are read on device by compute_rhs_scalar_core (non-uniform-grid-style stencil, even though x itself
+    ! is uniform)
     !$acc enter data copyin(x,xg)
     !$acc enter data create(term_1,term_2)
-    ! zero them (host+device): stencils read planes/rows a given call may not write, so uninitialised device scratch makes results decomposition/allocation dependent
+    ! zero them (host+device): stencils read planes/rows a call may not write, so uninitialised device scratch
+    ! makes results depend on decomposition/allocation
     term_1 = 0d0; term_2 = 0d0
     !$acc update device(term_1,term_2)
-    ! Evolving per-substage fields: allocated here (create, not copyin) so time_integration.f90's per-RK-substage update device/host calls have a target
+    ! Evolving per-substage fields: allocated with create (not copyin) as the target of the per-RK-substage
+    ! update device/host calls in time_integration.f90
     !$acc enter data create(U,V,W,nu_t,kappa_t,Fu1,Fv1,Fw1,Fu2,Fv2,Fw2,Fu3,Fv3,Fw3)
-    ! One-time initial sync: enter data create only allocates, so push host U,V,W or step 1 runs on uninitialized device data
-    ! nu_t too: DNS (sgs_model==0) never writes it on device, but the viscous stencils read it (incl. z wrap ghost planes)
+    ! One-time initial sync: enter data create only allocates, so push host U,V,W or step 1 runs on
+    ! uninitialized device data. nu_t too: DNS never writes it on device, but the viscous stencils read it
+    ! (incl. z wrap ghost planes)
     !$acc update device(U,V,W,nu_t,kappa_t)
-    ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written, GPU-read)
+    ! rhs_p, RK3 base-state snapshots (Uo/Vo/Wo), and Robin-BC slip-length coefficients (host-written,
+    ! GPU-read)
     !$acc enter data create(rhs_p,Uo,Vo,Wo,alpha_x,alpha_y,alpha_z,tau_x,tau_z,tau_zu,tau_zv,qT_wall,wmf_ux,wmf_wx,wmf_tx,wmf_uz,wmf_wz,wmf_tz)
     !$acc update device(wmf_ux,wmf_wx,wmf_tx,wmf_uz,wmf_wz,wmf_tz)
     If ( ibm_pressure > 0 ) Then
@@ -825,20 +820,23 @@ Contains
        !$acc update device(Tscal,Tscal_o)
     End If
     !$acc enter data copyin(L_obukhov_ylo,L_obukhov_yhi)
-    ! Sediment scalar: device residency required by the shared compute_rhs_scalar_core (see scalar_transport.f90)
+    ! Sediment scalar: device residency required by the shared compute_rhs_scalar_core (see
+    ! scalar_transport.f90)
     If ( sediment_flag >= 1 ) Then
        !$acc enter data create(Cscal,Cscal_o,Fcs1,Fcs2,Fcs3)
        !$acc update device(Cscal,Cscal_o)
     End If
 #ifdef GPU_POISSON
-    ! P is also device-resident: the periodic-BC fill in solve_poisson_equation reuses the device apply_periodic_bc_x/z routines
+    ! P is also device-resident: the periodic-BC fill in solve_poisson_equation reuses the device
+    ! apply_periodic_bc_x/z routines
     !$acc enter data create(P)
     !$acc update device(P)
 #endif
 
-    ! Fill the rank-seam halos and periodic wraps of the initial U,V,W once: the IC (and a restart file's unwritten ghosts) leave
-    ! them unset, which made step 1 depend on the rank count. Wall/inflow BCs are left to the per-step application (they need
-    ! wall-model coefficients that do not exist yet, and outflow relaxation is not idempotent). Fresh starts only.
+    ! Fill the rank-seam halos and periodic wraps of the initial U,V,W once: the IC (and a restart file's
+    ! unwritten ghosts) leave them unset, so step 1 would depend on the rank count. Wall/inflow BCs are left
+    ! to the per-step application (they need wall-model coefficients not yet built, and outflow relaxation is
+    ! not idempotent). Fresh starts only.
     If ( restart == 0 ) Then
        Call exchange_velocity_halos
        If ( x_bc_type == 0 ) Then
@@ -857,10 +855,8 @@ Contains
     If ( ibm_method == 1 .And. vof_flow < 1 ) Call vp_init_masked   ! needs the grid spacings, the masks and the weights
     If ( vof_active >= 1 ) Call vof_init
 
-    ! Done
     Call Mpi_barrier(MPI_COMM_WORLD,ierr)
 
-    ! Measure time
     time1 = MPI_WTIME()
     
   End Subroutine initialize
@@ -946,7 +942,8 @@ Contains
 
   End Subroutine init_scalar_profile
 
-  ! Set the initial temperature profile; T_ic_type 0=uniform (T_ref), 1=linear gradient in y from the bottom wall
+  ! Set the initial temperature profile; T_ic_type 0=uniform (T_ref), 1=linear gradient in y from the bottom
+  ! wall
   Subroutine init_temperature_profile
 
     Integer(Int32) :: jj
@@ -968,7 +965,7 @@ Contains
 
     Tscal_o = Tscal
 
-    ! Zero temperature perturbation inside IBM solid cells so the IC never persists inside solid and pollutes adjacent fluid via diffusion
+    ! Zero the temperature perturbation inside IBM solid cells so the IC cannot diffuse into adjacent fluid
     If ( ibm_input_mode >= 1 .And. Allocated(phi) ) Then
        Where ( phi(2:nxg-1, 2:nyg-1, 2:nzg-1) < 0d0 )
           Tscal(2:nxg-1, 2:nyg-1, 2:nzg-1) = T_ref

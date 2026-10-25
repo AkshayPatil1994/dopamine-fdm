@@ -1,16 +1,12 @@
-!> Two-fluid time step on the staggered grid (VOF liquid fraction C, one-fluid momentum):
-!>
-!>   Strang step:  A(dt/2) - project - RK3(forces, frozen density) - A(dt/2) - project
-!>
-!>   A(tau)  advances C with the Weymouth-Yue sweeps and the momentum rho*u with the same mass fluxes, so mass and momentum are
-!>           transported consistently (uniform velocity is reproduced exactly at any density ratio); the c-tilde*div(u) term of
-!>           the C update enters the momentum update with rho-tilde. Central face interpolation of the transported velocity.
-!>   RK3     Wray stages with the solver's coefficients: viscous stress (variable viscosity), gravity with the still-water
-!>           hydrostatic part removed, and the pressure as an explicit predictor (previous stage) plus an increment from a few
-!>           PCG iterations preconditioned by the fast solver (vof_pressure).
-!>
-!> Supported: DNS/LES without wall model, periodic or wall boundaries, ghost-cell IBM (velocity condition), wave inlet and
-!> relaxation zones. Not supported (checked at input): scalars, particles, UAV, wall models.
+!> Two-fluid time step on the staggered grid (VOF liquid fraction C, one-fluid momentum). Strang step:
+!>   A(dt/2) - project - RK3(forces, frozen density) - A(dt/2) - project
+!> A(tau) advances C (Weymouth-Yue sweeps) and the momentum rho*u with the same mass fluxes, so mass and
+!> momentum are transported consistently (uniform velocity is exact at any density ratio). RK3 stages:
+!> variable-viscosity stress, gravity without the still-water hydrostatic part, pressure as an explicit
+!> predictor plus a PCG increment (vof_pressure). Input checks (check_vof_inputs): no UAV, rotation,
+!> dPdx/dPdz/mass-flux forcing, Reynolds-stress budget or tavg; y walls and periodic z only; x inlet only
+!> inflow_type 0 or 3; with particles particle_rho_f = vof_rho_l; with Boussinesq or inertial particles
+!> grav = vof_grav.
 Module vof_twofluid
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -42,29 +38,37 @@ Module vof_twofluid
 
   Implicit None
 
-  ! transported momentum density and its face velocity, mass flux of the current sweep, c-tilde density, volume-flux divergence
+  ! transported momentum density and its face velocity, mass flux of the current sweep, c-tilde density,
+  ! volume-flux divergence
   Real(Int64), Allocatable, Dimension(:,:,:) :: qu, qv, qw, uqu, uqv, uqw, Md, rt, Dd
   ! pseudo-time RK3 of the momentum update: start-of-sweep momentum and the stage tendency
   Real(Int64), Allocatable, Dimension(:,:,:) :: q0u, q0v, q0w, dqu, dqv, dqw, Fl
-  ! padded copies (E=3 planes each side) of the transported velocity for the wide momentum-reconstruction stencils
+  ! padded copies (E=3 planes each side) of the transported velocity for the wide momentum-reconstruction
+  ! stencils
   Integer(Int32), Parameter :: EP = 3
   Real(Int64), Allocatable, Dimension(:,:,:) :: PadU, PadV, PadW
-  ! staggered densities before the sweep and the smaller of before/after (mass of a control volume that empties or fills in the sweep)
+  ! staggered densities before the sweep and the smaller of before/after (mass of a control volume that
+  ! empties or fills in the sweep)
   Real(Int64), Allocatable, Dimension(:,:,:) :: rou, rov, row, rmu, rmv, rmw
   ! transporting velocity (exactly divergence-free) and a scratch copy of the velocity
   Real(Int64), Allocatable, Dimension(:,:,:) :: Ut, Vt, Wt, Utmp, Vtmp, Wtmp
-  ! RK3: start-of-step velocity is Uo/Vo/Wo (global); stage force combinations H = F_explicit - beta grad p of stages 1 and 2
+  ! RK3: start-of-step velocity is Uo/Vo/Wo (global); stage force combinations H = F_explicit - beta grad p
+  ! of stages 1 and 2
   Real(Int64), Allocatable, Dimension(:,:,:) :: Hu1, Hv1, Hw1, Hu2, Hv2, Hw2, Fu_, Fv_, Fw_, Gu_, Gv_, Gw_
   Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c, mr_c, kap_c
-  ! stage force workspace (predictor pressure gradient), padded-transport staging, transport-projection potential
+  ! stage force workspace (predictor pressure gradient), padded-transport staging, transport-projection
+  ! potential
   Real(Int64), Allocatable, Dimension(:,:,:) :: Bu_, Bv_, Bw_, tmpU, tmpV, tmpW, phT
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
-  ! flat-wall EQWM stress fluxes on the u and w faces of the bottom (3rd index 1) and top (2) wall, and where they replace the molecular flux
+  ! flat-wall EQWM stress fluxes on the u and w faces of the bottom (3rd index 1) and top (2) wall, and where
+  ! they replace the molecular flux
   Real(Int64), Allocatable, Dimension(:,:,:) :: wt_u, wt_w
-  ! scalar (sediment, temperature) work: start-of-step copy, stage RHS, effective y velocity with the settling folded in
+  ! scalar (sediment, temperature) work: start-of-step copy, stage RHS, effective y velocity with the
+  ! settling folded in
   Real(Int64), Allocatable, Dimension(:,:,:) :: Fsc, Vsc, Csc0
   Logical,     Allocatable, Dimension(:,:,:) :: wt_on_u, wt_on_w
-  ! IBM wall-model stress (ibm_stress): on when the IBM wall model is active; kinematic viscosity of the phase at the cells (0 = off)
+  ! IBM wall-model stress (ibm_stress): on when the IBM wall model is active; kinematic viscosity of the
+  ! phase at the cells (0 = off)
   Logical :: ibm_wm_on = .False.
   ! relaxation-zone targets per x station (vof_relax)
   Real(Int64), Allocatable, Dimension(:)   :: rl_fr_c, rl_top, rl_fr_u
@@ -73,8 +77,9 @@ Module vof_twofluid
   Integer(Int32) :: vf_proj_its_last = 0, vf_proj_its_sum = 0
   ! IBM load output: whether this step is a sampling step
   Logical :: ibm_sampling_now = .False.
-  Integer(Int32) :: vf_tr_warn = 0   ! transporting-velocity projections that did not converge (warnings are limited to the first few)
-  Real(Int64) :: vf_bnd_loc = 0d0, vf_relax_loc = 0d0   ! rank-local liquid volume through the x boundaries / added by relaxation this step
+  Integer(Int32) :: vf_tr_warn = 0   ! transporting-velocity projections that did not converge (warnings limited to 5)
+  ! rank-local liquid volume through the x boundaries / added by relaxation this step
+  Real(Int64) :: vf_bnd_loc = 0d0, vf_relax_loc = 0d0
 
 Contains
 
@@ -188,8 +193,9 @@ Contains
     ! the initial fields above were set on the host
     !$acc update device(U,V,W)
 
-    ! pseudo-time RK3 of the momentum needs less than half of a control volume's mass to leave in one sweep, which fails for
-    ! density ratios above a few thousand (drop in a uniform stream, 1e4 .. 1e6): forward Euler with small sub-steps there
+    ! pseudo-time RK3 of the momentum needs less than half of a control volume's mass to leave in one sweep,
+    ! which fails for density ratios above a few thousand (drop in a uniform stream, 1e4 .. 1e6): forward
+    ! Euler with small sub-steps there
     If ( vof_rk_nth <= 0 ) vof_rk_nth = 1
     If ( vof_rho_l/vof_rho_g >= 2d3 .And. vof_rk_mom >= 1 ) Then
        vof_rk_mom = 0;  vof_co_sub = Min(vof_co_sub, 3d-2)
@@ -221,7 +227,8 @@ Contains
   End Subroutine vof_flow_init
 
 
-  !> Exact dynamic pressure of the initial state (u = 0): div(beta grad p) = div(gravity deficit), the first predictor
+  !> Exact dynamic pressure of the initial state (u = 0): div(beta grad p) = div(gravity deficit), the first
+  !  predictor
   Subroutine vof_initial_pressure
 
     Real(Int64), Allocatable :: gz(:,:,:), zu(:,:,:), zw(:,:,:)
@@ -259,7 +266,8 @@ Contains
   End Subroutine vof_initial_pressure
 
 
-  !> Halo exchange of face fields shaped like U, V, W (rank seams and periodic wraps); wall rows are left to the caller
+  !> Halo exchange of face fields shaped like U, V, W (rank seams and periodic wraps); wall rows are left to
+  !  the caller
   Subroutine face_halo(Fu, Fv, Fw)
 
     Real(Int64), Intent(InOut) :: Fu(nx,nyg,nzg), Fv(nxg,ny,nzg), Fw(nxg,nyg,nz)
@@ -284,8 +292,8 @@ Contains
   End Subroutine face_halo
 
 
-  !> Ghost-cell IBM on U, V, W followed by a halo refresh: the image-point corrections change interior values next to the rank
-  !  seams, whose neighbours' ghost planes must follow before the next stencil reads them
+  !> Ghost-cell IBM on U, V, W followed by a halo refresh: the image-point corrections change interior values
+  !  next to the rank seams, whose neighbours' ghost planes must follow before the next stencil reads them
   Subroutine enforce_ibm
 
     Call apply_ghost_cell_ibm(U, V, W)
@@ -294,7 +302,8 @@ Contains
   End Subroutine enforce_ibm
 
 
-  !> Advance C and the momentum rho*u by tau with the current velocity U, V, W as the (divergence-free) transporting field
+  !> Advance C and the momentum rho*u by tau with the current velocity U, V, W as the (divergence-free)
+  !  transporting field
   Subroutine vof_advect_half(tau, keep_transport)
 
     Real(Int64), Intent(In) :: tau
@@ -332,8 +341,8 @@ Contains
 
     Do isw = 1, 3
        d = order(isw)
-       ! Cv, its pad and the density are already current here (set above for the first sweep, by momentum_update after the
-       ! previous one); the geometric density has also reconstructed the planes
+       ! Cv, its pad and the density are already current here (set above for the first sweep, by
+       ! momentum_update after the previous one); the geometric density has also reconstructed the planes
        Call profiler_start(PROF_ADV_RECON)
        If ( vof_geo_density < 1 ) Call vof_reconstruct(Cv, nxg, nyg, nzg, vof_normal_scheme)
        Call profiler_stop(PROF_ADV_RECON)
@@ -395,15 +404,17 @@ Contains
        End Do
     End Do
 
-    ! the interior was rewritten: refresh the seam and periodic ghost faces before the next sub-step rebuilds q = rho*u from them
+    ! the interior was rewritten: refresh the seam and periodic ghost faces before the next sub-step rebuilds
+    ! q = rho*u from them
     Call face_halo(U, V, W)
     Call profiler_stop(PROF_VOF_ADVECT)
 
   End Subroutine vof_advect_half
 
 
-  !> Transporting velocity: the current velocity made exactly divergence-free by one constant-coefficient fast solve, so the
-  !  volume of liquid is conserved to round-off whatever residual the variable-density PCG leaves
+  !> Transporting velocity: the current velocity made exactly divergence-free by one constant-coefficient fast
+  !  solve, so the volume of liquid is conserved to round-off whatever residual the variable-density PCG
+  !  leaves
   Subroutine make_transport_velocity
 
     If ( vp_masked ) Then
@@ -427,9 +438,9 @@ Contains
   End Subroutine make_transport_velocity
 
 
-  !> Transporting velocity with an immersed body: the fast solver cannot honour the closed faces, so the constant-coefficient
-  !  projection is done by PCG on the masked operator (Neumann at the body), to round-off. Closed faces carry no flux, hence no
-  !  liquid or momentum crosses the body, and the divergence-free field is exact in every fluid cell.
+  !> Transporting velocity with an immersed body: the fast solver cannot honour closed faces, so the
+  !  constant-coefficient projection is a PCG on the masked operator (Neumann at the body) to round-off;
+  !  closed faces carry no flux, so the field is divergence-free in every fluid cell.
   Subroutine make_transport_velocity_masked
 
     Real(Int64) :: beta0_save, umax
@@ -448,8 +459,8 @@ Contains
     vp_mg_stale = ( pcg_precond >= 1 )
 
     Call vp_div(U, V, W, fdiv)
-    ! the iteration stops at the round-off level of the velocity (a relative tolerance alone is unreachable once the field is
-    ! already nearly divergence free, and PCG then amplifies noise)
+    ! the iteration stops at the round-off level of the velocity (a relative tolerance alone is unreachable
+    ! once the field is already nearly divergence free, and PCG then amplifies noise)
     umax = Max( maxabs3(U, nx, nyg, nzg), maxabs3(V, nxg, ny, nzg), maxabs3(W, nxg, nyg, nz) )
     Call MPI_Allreduce(MPI_IN_PLACE, umax, 1, MPI_real8, MPI_MAX, MPI_COMM_WORLD, ierr)
     Call profiler_start(PROF_PCG)
@@ -457,7 +468,8 @@ Contains
     Call vp_pcg(fdiv, 800, 1d-13, phT, rfloor=vof_tr_floor*umax*Sqrt(vp_wsum)/Min(dx, dymin, dzmin))
     Call profiler_stop(PROF_PCG_TRANSPORT)
     Call profiler_stop(PROF_PCG)
-    ! Ut must be solenoidal for the liquid volume to be conserved: report a solve that hit the cap or broke down at the start
+    ! Ut must be solenoidal for the liquid volume to be conserved: report a solve that hit the cap or broke
+    ! down at the start
     If ( ( vp_iters_last >= 800 .And. vp_res_last > 1d-6 ) .Or. &
          ( vp_iters_last == 0 .And. maxabs3(fdiv, nxg, nyg, nzg) > 0d0 ) ) Then
        vf_tr_warn = vf_tr_warn + 1
@@ -477,7 +489,8 @@ Contains
     Call dev_copy(V, Vtmp)
     Call dev_copy(W, Wtmp)
 
-    ! vp_bu.. keep the mask coefficients: every solve with the density coefficients starts with a full vp_set_density
+    ! vp_bu.. keep the mask coefficients: every solve with the density coefficients starts with a full
+    ! vp_set_density
     vp_beta0 = beta0_save
     vp_mg_stale = ( pcg_precond >= 1 )
 
@@ -505,7 +518,8 @@ Contains
   End Function maxabs3
 
 
-  !> Liquid volume that crossed the inlet (positive in) and outlet (positive out) faces in the x-sweep just done
+  !> Liquid volume that crossed the inlet (positive in) and outlet (positive out) faces in the x-sweep just
+  !  done
   Subroutine tally_x_boundary_flux
 
     Logical :: is_first_x, is_last_x, is_first_z, is_last_z
@@ -542,7 +556,8 @@ Contains
   End Subroutine tally_x_boundary_flux
 
 
-  !> Mass crossing each face of the sweep direction d in this sweep, and the volume-flux divergence Dd of the sweep
+  !> Mass crossing each face of the sweep direction d in this sweep, and the volume-flux divergence Dd of the
+  !  sweep
   Subroutine sweep_mass_flux(d, tau)
 
     Integer(Int32), Intent(In) :: d
@@ -612,11 +627,10 @@ Contains
   End Subroutine sweep_mass_flux
 
 
-  !> Momentum update of the sweep along d with the exact mass fluxes Md of the geometric sweep. The staggered density moves
-  !  linearly from rou (before) to vp_rau (after) along the sweep pseudo-time theta, so the momentum ODE
-  !  dq/dtheta = tendency(q/rho(theta)) is integrated by forward Euler (vof_rk_mom = 0) SSP-RK3 (1; theta = 0, 1, 1/2) or SSP-RK2 (2; theta = 0, 1)
-  !  with the same fluxes at every stage; vof_rk_nth > 1 splits the pseudo-time into equal segments (a stage may step
-  !  past the end of the density path, which needs less than half of a control volume's mass to leave in one segment)
+  !> Momentum update of the sweep along d with the exact mass fluxes Md. The staggered density moves linearly
+  !  from rou to vp_rau along the pseudo-time theta, so dq/dtheta = tendency(q/rho(theta)) is integrated by
+  !  forward Euler (vof_rk_mom = 0), SSP-RK3 (1) or SSP-RK2 (2) with the same fluxes at every stage;
+  !  vof_rk_nth > 1 splits it into equal segments.
   Subroutine momentum_update(d)
 
     Integer(Int32), Intent(In) :: d
@@ -668,8 +682,9 @@ Contains
   End Subroutine momentum_update
 
 
-  !> Flux of q through the faces of each staggered control volume (mass flux averaged onto the CV face, face value of the
-  !  transported velocity uq) plus the rho-tilde * volume-flux-divergence correction, divided by the control volume
+  !> Flux of q through the faces of each staggered control volume (mass flux averaged onto the CV face, face
+  !  value of the transported velocity uq) plus the rho-tilde * volume-flux-divergence correction, divided by
+  !  the control volume
   Subroutine momentum_tendency(d)
 
     Integer(Int32), Intent(In) :: d
@@ -681,8 +696,8 @@ Contains
   End Subroutine momentum_tendency
 
 
-  !> Tendency of component c (1 u, 2 v, 3 w) for the sweep along d: each control-volume face flux is evaluated once and used
-  !  by the two control volumes that share it
+  !> Tendency of component c (1 u, 2 v, 3 w) for the sweep along d: each control-volume face flux is evaluated
+  !  once and used by the two control volumes that share it
   Subroutine tend_comp(c, d, dq, uc, i0, i1, j0, j1, k0, k1)
 
     Integer(Int32), Intent(In)    :: c, d, i0, i1, j0, j1, k0, k1
@@ -715,11 +730,10 @@ Contains
   End Subroutine tend_comp
 
 
-  !> Fl = momentum flux of component c through the face of its control volume on the high side in direction d (the flux through the
-  !  low face of the next control volume): centre-plane mass flux of the two cells the CV spans (Md), face value of the padded
-  !  transported velocity pad blended to first-order upwind where the control volume is refilled within a step (rm: the smaller
-  !  of the CV densities before and after the sweep). vof_mom_scheme 0 is the weighted central value (stretched-grid weights
-  !  wy0/wy1 at j+wsh along y), others come from mom_recon (index-space formulas); WENO5-Z uses the branch-free form of mom_recon.
+  !> Fl = momentum flux of component c through the high-side face of its control volume: centre-plane mass
+  !  flux Md times the padded face value, blended to first-order upwind where the CV is refilled within a step
+  !  (rm: smaller CV density before/after the sweep). vof_mom_scheme 0 is the stretched-grid weighted central
+  !  value (wy0/wy1 at j+wsh), others come from mom_recon.
   Subroutine face_fluxes(c, d, i0, i1, j0, j1, k0, k1, pad, rm, wy0, wy1, wsh)
 
     Integer(Int32), Intent(In) :: c, d, i0, i1, j0, j1, k0, k1, wsh
@@ -775,8 +789,9 @@ Contains
   End Subroutine face_fluxes
 
 
-  !> Padded copies of uqu, uqv, uqw: EP planes beyond the ghost plane in x and z (neighbour rank / periodic partner via pad_field),
-  !  EP rows beyond the wall ghost row in y by reflection (tangential: odd for no-slip, even for free-slip; normal: odd about the wall face)
+  !> Padded copies of uqu, uqv, uqw: EP planes beyond the ghost plane in x and z (neighbour rank / periodic
+  !  partner via pad_field), EP rows beyond the wall ghost row in y by reflection (tangential: odd for
+  !  no-slip, even for free-slip; normal: odd about the wall face)
   Subroutine pad_transported
 
     Real(Int64) :: s_lo, s_hi
@@ -790,8 +805,8 @@ Contains
     PadU(:,1:nyg,:) = tmpU
     PadV(:,1:ny,:) = tmpV
     PadW(:,1:nyg,:) = tmpW
-    ! the wall ghost rows: the stored ones are the boundary-condition values of the start of the step, not the reflection of the
-    ! rows just advected (alpha = 0 / large for no-slip / free-slip gives exactly -1 / +1)
+    ! the wall ghost rows: the stored ones are the boundary-condition values of the start of the step, not the
+    ! reflection of the rows just advected (alpha = 0 / large for no-slip / free-slip gives exactly -1 / +1)
     PadU(:,1,:) = s_lo*PadU(:,2,:);  PadU(:,nyg,:) = s_hi*PadU(:,nyg-1,:)
     PadW(:,1,:) = s_lo*PadW(:,2,:);  PadW(:,nyg,:) = s_hi*PadW(:,nyg-1,:)
     !$acc end kernels
@@ -806,8 +821,9 @@ Contains
   End Subroutine pad_transported
 
 
-  !> Project U, V, W onto the divergence-free space of the current density: solve div(beta grad phi) = div u by PCG (at most
-  !  maxit iterations, relative residual tol) and subtract beta grad phi from the interior faces, as project_velocity does
+  !> Project U, V, W onto the divergence-free space of the current density: solve div(beta grad phi) = div u
+  !  by PCG (at most maxit iterations, relative residual tol) and subtract beta grad phi from the interior
+  !  faces, as project_velocity does
   Subroutine vof_project(tol, maxit)
 
     Real(Int64),    Intent(In) :: tol
@@ -832,7 +848,8 @@ Contains
 
 
 
-  !> Dynamic viscosity (molecular mixture plus the SGS contribution scaled by the local density) at the cell centres
+  !> Dynamic viscosity (molecular mixture plus the SGS contribution scaled by the local density) at the cell
+  !  centres
   Subroutine set_viscosity
 
     Integer(Int32) :: i, j, k
@@ -849,7 +866,8 @@ Contains
           End Do
        End Do
     End Do
-    ! the SGS model leaves nu_t at a free-slip wall's ghost row unset: use the nearest interior value there (no-slip keeps zero)
+    ! the SGS model leaves nu_t at a free-slip wall's ghost row unset: use the nearest interior value there
+    ! (no-slip keeps zero)
     If ( bc_face_ylo == 2 ) Then
        !$acc parallel loop collapse(2) present(mu_c,mr_c,Cv,vp_rho,nu_t)
        Do k = 1, nzg
@@ -870,8 +888,9 @@ Contains
 
   End Subroutine set_viscosity
 
-  !> Kinematic viscosity of the phase at each cell for the IBM wall model: that of the fluid when the cell and its 26 neighbours hold
-  !  one fluid (C within 0.05 of 0 or 1), else 0 (the wall model is off and the stencil flux stays), as for the flat wall in set_wall_stress
+  !> Kinematic viscosity of the phase at each cell for the IBM wall model: that of the fluid when the cell and
+  !  its 26 neighbours hold one fluid (C within 0.05 of 0 or 1), else 0 (the wall model is off and the stencil
+  !  flux stays), as for the flat wall in set_wall_stress
   Subroutine set_cell_phase_nu
 
     Real(Int64), Parameter :: cgate = 0.05d0
@@ -918,10 +937,10 @@ Contains
   End Subroutine set_cell_phase_nu
 
 
-  !> Flat-wall EQWM stress at the y walls: wt_u / wt_w are the tangential stress fluxes (rho u_tau**2 along the local tangential velocity,
-  !  signed as the momentum flux through the wall-edge of the first interior row) that viscous_accel uses in place of the molecular
-  !  edge flux. u_tau is solved from the first interior row with the viscosity of the phase there. The log law holds in a single
-  !  fluid only: where the interface lies within the wall cell, the one above it or one cell sideways the face stays no-slip.
+  !> Flat-wall EQWM stress at the y walls: wt_u / wt_w are tangential stress fluxes (rho u_tau**2 along the
+  !  local tangential velocity) used by viscous_accel instead of the molecular edge flux. u_tau is solved from
+  !  the first interior row with that phase's viscosity; the log law holds in one fluid only, so a face stays
+  !  no-slip where the interface lies within the wall cell, above it or one cell sideways.
   Subroutine set_wall_stress
 
     Real(Int64), Parameter :: cgate = 0.05d0
@@ -997,8 +1016,8 @@ Contains
 
   !> Acceleration from the viscous stress, (1/rho_face) div( mu (grad u + grad u^T) ), at the interior faces
   Subroutine viscous_accel(Fu, Fv, Fw)
-  ! shear stresses at the edges use the weighted harmonic mean of mu (series layers carry a continuous shear stress), the
-  ! arithmetic mean over-weights the dense fluid next to an interface by the viscosity ratio
+  ! shear stresses at the edges use the weighted harmonic mean of mu (series layers carry a continuous shear
+  ! stress), the arithmetic mean over-weights the dense fluid next to an interface by the viscosity ratio
 
     Real(Int64), Intent(Out) :: Fu(nx,nyg,nzg), Fv(nxg,ny,nzg), Fw(nxg,nyg,nz)
 
@@ -1121,8 +1140,9 @@ Contains
   End Subroutine viscous_accel
 
 
-  !> Balanced-force surface tension acceleration sigma kappa grad(C)/rho on the faces (the face gradient of C, the mean of the
-  !  curvatures of the interface cells next to the face, the same face density as the pressure gradient)
+  !> Balanced-force surface tension acceleration sigma kappa grad(C)/rho on the faces (the face gradient of C,
+  !  the mean of the curvatures of the interface cells next to the face, the same face density as the pressure
+  !  gradient)
   Subroutine add_surface_tension(Fx, Fy, Fz)
 
     Real(Int64), Intent(InOut) :: Fx(nx,nyg,nzg), Fy(nxg,ny,nzg), Fz(nxg,nyg,nz)
@@ -1173,7 +1193,8 @@ Contains
   End Function face_kappa
 
 
-  !> Wray RK3 stages with frozen density: explicit viscous stress and hydrostatic-reduced gravity, pressure predictor + PCG increment
+  !> Wray RK3 stages with frozen density: explicit viscous stress and hydrostatic-reduced gravity, pressure
+  !  predictor + PCG increment
   Subroutine vof_forces_rk3(to)
 
     Real(Int64), Intent(In) :: to
@@ -1245,7 +1266,8 @@ Contains
           End Do
        End If
 
-       ! Boussinesq buoyancy of the liquid only; the sweeps and the pressure operator keep the unperturbed phase densities
+       ! Boussinesq buoyancy of the liquid only; the sweeps and the pressure operator keep the unperturbed
+       ! phase densities
        If ( boussinesq_flag >= 1 ) Then
           !$acc parallel loop collapse(3) present(Fv_,Tscal,Cv,vp_riv,weight_y_0,weight_y_1)
           Do k = 2, nzg-1
@@ -1265,7 +1287,8 @@ Contains
        Call profiler_start(PROF_F_PRED)
        ass = rk_coef(s,s)
        dta = dt*ass
-       ! stage predictor u* = u_o + dt sum_{j<s} a_sj H_j + dt a_ss F_s  (interior faces; seams and walls come from the BCs)
+       ! stage predictor u* = u_o + dt sum_{j<s} a_sj H_j + dt a_ss F_s  (interior faces; seams and walls
+       ! come from the BCs)
        a1 = rk_coef(s,1);  a2 = rk_coef(s,2)
        !$acc parallel loop collapse(3) present(U,Uo,Fu_,Hu1,Hu2)
        Do k = 2, nzg-1
@@ -1351,7 +1374,8 @@ Contains
   End Function relax_strength
 
 
-  !> Zone strength at the streamwise position xs and whether it is the generation zone (target: the wave) or the absorption zone
+  !> Zone strength at the streamwise position xs and whether it is the generation zone (target: the wave) or
+  !  the absorption zone
   Subroutine zone_at(xs, strength, generation)
 
     Real(Int64), Intent(In)  :: xs
@@ -1370,8 +1394,8 @@ Contains
   End Subroutine zone_at
 
 
-  !> Relax C and the velocity toward the target (wave in the generation zone, still water at rest in the absorption zone) over dts;
-  !  the liquid volume added to C is tallied for the ledger
+  !> Relax C and the velocity toward the target (wave in the generation zone, still water at rest in the
+  !  absorption zone) over dts; the liquid volume added to C is tallied for the ledger
   Subroutine vof_relax(dts)
 
     Real(Int64), Intent(In) :: dts
@@ -1429,7 +1453,7 @@ Contains
              Do k = 2, nzg-1
                 fr = rl_fr_c(i)
                 ct = Min(1d0, Max(0d0, (rl_top(i) - y(j-1))/(y(j) - y(j-1))))
-                If ( fr > 0d0 .And. vp_act(i,j,k) >= 0.5d0 ) Then   ! IBM solid cell: its liquid fraction is a continuation, not a state
+                If ( fr > 0d0 .And. vp_act(i,j,k) >= 0.5d0 ) Then   ! active cells only (a solid cell's C is a continuation)
                    vol = Cv(i,j,k)
                    Cv(i,j,k) = Cv(i,j,k) + fr*(ct - Cv(i,j,k))
                    If ( k <= khi ) vf_relax_loc = vf_relax_loc + (Cv(i,j,k) - vol)*dx*hy(j)*hz(k)
@@ -1496,9 +1520,10 @@ Contains
   End Subroutine tally_ledger
 
 
-  !> Explicit SSP-RK3 step of dts for one cell-centred scalar (kind 1 sediment with settling, kind 2 temperature) with the end-of-step
-  !  velocity. The flux form -div(u C) + C div(u) keeps a uniform field exactly uniform whatever divergence the velocity has; the
-  !  molecular diffusivity is nu/Sc (nu/Pr) of the phase at each cell blended by the liquid fraction, harmonic on the faces.
+  !> Explicit SSP-RK3 step of dts for one cell-centred scalar (kind 1 sediment with settling, kind 2
+  !  temperature) with the end-of-step velocity. The flux form -div(u C) + C div(u) keeps a uniform field
+  !  exactly uniform whatever divergence the velocity has; the molecular diffusivity is nu/Sc (nu/Pr) of the
+  !  phase at each cell blended by the liquid fraction, harmonic on the faces.
   Subroutine vof_scalar_rk3(Cs, kind, dts)
 
     Real(Int64), Intent(InOut) :: Cs(nxg,nyg,nzg)
@@ -1575,7 +1600,8 @@ Contains
   End Subroutine vof_scalar_rk3
 
 
-  !> One two-fluid time step: dt from the CFL (the Courant limit sees the gas currents too), then the Strang sequence
+  !> One two-fluid time step: dt from the CFL (the Courant limit sees the gas currents too), then the Strang
+  !  sequence
   Subroutine compute_time_step_vof
 
     Real(Int64) :: to, cfl_conv, cfl_visc, cfl_accel, dt_presnap, dt_in, hmin_w, om2
@@ -1592,9 +1618,10 @@ Contains
     cfl_conv_last  = cfl_conv
     cfl_visc_last  = cfl_visc
     cfl_accel_last = cfl_accel
-    ! shortest resolvable gravity-capillary wave (k = pi/h, omega^2 = g k + sigma k^3/(rho_l + rho_g)): dt stays below (pi/2)/omega,
-    ! the form of Brackbill's capillary limit sqrt((rho_l + rho_g) h^3/(4 pi sigma)) that this reduces to for g = 0. Without it the
-    ! step grows with the (small) flow velocities of a nearly still free surface until the explicit interface coupling goes unstable.
+    ! shortest resolvable gravity-capillary wave (k = pi/h, omega^2 = g k + sigma k^3/(rho_l + rho_g)): dt
+    ! stays below (pi/2)/omega, the form of Brackbill's capillary limit sqrt((rho_l + rho_g) h^3/(4 pi
+    ! sigma)) that this reduces to for g = 0. Without it the step grows with the (small) flow velocities of a
+    ! nearly still free surface until the explicit interface coupling goes unstable.
     If ( vof_sigma > 0d0 .Or. vof_grav > 0d0 ) Then
        hmin_w = Min(dx, dymin, dzmin)
        om2 = vof_grav*4d0*Atan(1d0)/hmin_w + vof_sigma*(4d0*Atan(1d0))**3/((vof_rho_l + vof_rho_g)*hmin_w**3)
@@ -1605,7 +1632,8 @@ Contains
     dt_in = dt
     Call select_dt(cfl_current, dt_presnap)
     to = t
-    ! the convective outflow relaxation runs once per RK stage inside vof_forces_rk3 (stage shares of dt sum to dt)
+    ! the convective outflow relaxation runs once per RK stage inside vof_forces_rk3 (stage shares of dt sum
+    ! to dt)
     outflow_relax_on = .False.
 
     nsub = vof_nsub
@@ -1652,8 +1680,9 @@ Contains
     If ( sediment_flag >= 1 ) Call vof_scalar_rk3(Cscal, 1, dt)
     If ( boussinesq_flag >= 1 ) Call vof_scalar_rk3(Tscal, 2, dt)
     Call tally_ledger
-    ! the whole array, ghost planes included: snapshots copy every rank's full local block, so a stale (zero) seam ghost plane would
-    ! overwrite the neighbour's last real plane in the file, and a restart reads that file back as the pressure predictor
+    ! the whole array, ghost planes included: snapshots copy every rank's full local block, so a stale (zero)
+    ! seam ghost plane would overwrite the neighbour's last real plane in the file, and a restart reads that
+    ! file back as the pressure predictor
     Call dev_copy(P, ppre)
     !$acc kernels present(P)
     P(:,1,:) = P(:,2,:);  P(:,nyg,:) = P(:,nyg-1,:)

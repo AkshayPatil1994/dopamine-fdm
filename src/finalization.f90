@@ -1,7 +1,6 @@
 ! Module to finalize FFT and MPI
 Module finalization
   
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
@@ -10,7 +9,6 @@ Module finalization
   Use decomp_2d, Only : decomp_2d_finalize, decomp_info_finalize
   Use decomp,    Only : comm_outflow_x, decomp_poisson
   
-  ! prevent implicit typing
   Implicit None
   
 Contains

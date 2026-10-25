@@ -1,7 +1,6 @@
 !   Module for boundary conditions
 Module boundary_conditions
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
@@ -9,11 +8,10 @@ Module boundary_conditions
   Use synthetic_eddy_method
   Use waves, Only : wave_inlet_profile, wv_in_u, wv_in_v, wv_in_m, wv_in_mv
 
-  ! prevent implicit typing
   Implicit None
 
-  ! .False. skips the convective outflow relaxation of apply_outflow_bc_x: the two-fluid step calls apply_boundary_conditions
-  ! outside its RK stages, where the relaxation (whose Courant number is the stage share of dt) must not be repeated
+  ! False skips the convective outflow relaxation: the two-fluid step calls this outside its RK stages, where
+  ! the relaxation (Courant number = stage share of dt) must not repeat
   Logical :: outflow_relax_on = .True.
 
 #ifdef GPU_POISSON
@@ -23,7 +21,7 @@ Module boundary_conditions
 Contains
 
 #ifdef GPU_POISSON
-  !> Lazily allocate the device-resident MPI staging buffers (GPU-aware MPI: MPI reads/writes these device arrays directly)
+  !> Lazily allocate the device-resident MPI staging buffers (GPU-aware MPI reads/writes them directly)
   Subroutine gpu_halo_buffers_init
 
     Integer :: nmax
@@ -93,7 +91,9 @@ Contains
 
   End Subroutine gpu_plane_unpack
 
-  !> Interior-rank seam halo swap (both directions, non-blocking) of one plane each way, directly between device buffers (GPU-aware MPI). k_send_hi: highest interior plane, sent to +; plane 2 is sent to -. k_ghost_hi: ghost plane filled from +; plane 1 is filled from -.
+  !> Interior-rank seam halo swap (non-blocking, one plane each way) straight between device buffers.
+  !  k_send_hi: highest interior plane, sent to +; plane 2 goes to -. k_ghost_hi: ghost plane filled from +;
+  !  plane 1 from -.
   Subroutine gpu_halo_exchange(F, dirx, k_send_hi, k_ghost_hi, up, down)
 
     Real   (Int64), Intent(InOut) :: F(:,:,:)
@@ -124,7 +124,10 @@ Contains
 
   End Subroutine gpu_halo_exchange
 
-  !> Periodic wrap between the first and last rank along one decomposed direction, device buffers straight into MPI. nP = number of wrapped planes (1 for face-located F, 2 for cell-centred F); N = plane count of F along the direction. First rank sends planes 2..1+nP and fills plane 1 from the last rank's plane N-nP; last rank sends plane N-nP and fills planes N-nP+1..N. Self-pairs (single rank in that direction) are handled by the caller's device kernels.
+  !> Periodic wrap between the first and last rank, device buffers straight into MPI. nP = wrapped planes (1
+  !  face-located, 2 cell-centred); N = plane count of F. First rank sends planes 2..1+nP and fills plane 1
+  !  from the last rank's N-nP; last rank sends N-nP and fills N-nP+1..N. Single-rank self-pairs are handled
+  !  by the caller.
   Subroutine gpu_periodic_wrap(F, dirx, nwrap, nplanes, is_first, is_last, partner, tag)
 
     Real   (Int64), Intent(InOut) :: F(:,:,:)
@@ -197,19 +200,21 @@ Contains
        Call apply_periodic_bc_x(V,2)
        Call apply_periodic_bc_x(W,2)
     Else
-       Call update_inflow_recycle(t)   ! no-op unless inflow_type==2 (recycled precursor inflow); advances the bracketing donor frames to the current stage time
+       Call update_inflow_recycle(t)   ! no-op unless inflow_type==2; self-contained in case this runs first
        Call apply_inflow_bc_x (U,1)
        Call apply_inflow_bc_x (V,2)
        Call apply_inflow_bc_x (W,3)
        Uc = outflow_convection_velocity()
        outflow_Uc = Uc
        If ( .Not. skip_outflow_u ) Call apply_outflow_bc_x(U,Uc)
-       ! V/W's convective relaxation isn't idempotent (unlike the zero-gradient BC it replaced), so apply once per RK stage, on the post-projection refresh, not twice
+       ! V/W's convective relaxation is not idempotent, so apply it once per RK stage (post-projection
+       ! refresh), not twice
        If ( skip_outflow_u ) Call apply_outflow_bc_x(V,Uc)
        If ( skip_outflow_u ) Call apply_outflow_bc_x(W,Uc)
     End If
 
-    ! z direction: periodic, or no-slip wall (the EQWM stress enters through tau_zu / tau_zv in the viscous flux)
+    ! z direction: periodic, or no-slip wall (the EQWM stress enters through tau_zu / tau_zv in the viscous
+    ! flux)
     If ( z_bc_type == 0 ) Then
        Call apply_periodic_bc_z(U,1)
        Call apply_periodic_bc_z(V,2)
@@ -236,11 +241,9 @@ Contains
        Call apply_Robin_bc_y(W,alpha_z,2)
     End If
 
-    ! The y-wall rows (Robin from wall-model slip lengths, or periodic) were just applied over the seam ghost planes too, from
-    ! this rank's own coefficients, so they disagree with the owning rank's rows (and with the periodic partner's). Refill the
-    ! seam ghost planes and the periodic wraps from the owners: pure copies, so this is idempotent (it never re-applies an
-    ! inflow/outflow or wall condition). Without it a particle whose interpolation stencil touches a ghost plane next to a
-    ! wall sees a value that depends on the rank layout, and a restart file inherits the inconsistent row.
+    ! The y-wall rows just applied over the seam ghost planes use this rank's own coefficients and disagree
+    ! with the owner's. Refill seam ghosts and periodic wraps from the owners (pure copies, idempotent); else
+    ! particle stencils at a wall and restart files depend on the rank layout.
     Call exchange_velocity_halos
     If ( x_bc_type == 0 ) Then
        Call apply_periodic_bc_x(U,1)
@@ -338,7 +341,8 @@ Contains
     ! Note: handles non-periodic ICs; redundant after the first time step.
   End Subroutine apply_periodic_bc_x
 
-  ! Dirichlet inflow (x_bc_type==1): F face/ghost = mean profile + SEM fluctuation (sem.f90); comp: 1=U,2=V,3=W; F in/out; no-op except on the rank owning the x=1 boundary
+  ! Dirichlet inflow (x_bc_type==1): F = mean profile + SEM fluctuation (sem.f90); comp 1=U,2=V,3=W; no-op
+  ! except on the rank owning x=1
   Subroutine apply_inflow_bc_x(F,comp)
 
     Real   (Int64), Intent(InOut) :: F(:,:,:)
@@ -355,7 +359,8 @@ Contains
     n2 = Size(F,2)
     n3 = Size(F,3)
 
-    ! wave inlet (inflow_type==3): water follows the wave target, the air returns its flux; V mirrors about the target, W target is 0
+    ! wave inlet (inflow_type==3): water follows the wave target, air returns its flux; V mirrors about the
+    ! target, W target 0
     If ( inflow_type == 3 ) Then
        Call wave_inlet_profile(t)
        If ( wave_turb == 1 ) Call update_inflow_recycle(t)
@@ -383,12 +388,13 @@ Contains
     sem_cached = ( inflow_type == 1 .And. sem_divergence_free == 0 )
     If ( sem_cached ) Call sem_cache_refresh(t)
 
-    ! F's y/z coords depend on staggered-grid placement: U=(yc,zc), V=(yf,zc), W=(yc,zf); every (j,k) is independent -- sem_fluctuation/mean_profile_U/recycle_value are !$acc routine seq
+    ! F's y/z coords: U=(yc,zc), V=(yf,zc), W=(yc,zf); every (j,k) is independent
+    ! (sem_fluctuation/mean_profile_U/recycle_value are !$acc routine seq)
     !$acc parallel loop collapse(2) present(F,y,yg,z,zg) private(up,vp,wp,target_val)
     Do k = 1, n3
        Do j = 1, n2
           If ( inflow_type == 2 ) Then
-             ! recycled precursor inflow: donor data is already the full field (mean+fluctuation), no mean_profile/SEM decomposition needed
+             ! recycled precursor inflow: donor data is already the full field, no mean/SEM split
              If ( comp == 1 ) Then
                 F(1,j,k) = recycle_value(1, j, k)               ! Dirichlet face value, exact
              Else If ( comp == 2 ) Then
@@ -417,7 +423,8 @@ Contains
 
   End Subroutine apply_inflow_bc_x
 
-  ! Dirichlet inflow for the cell-centred temperature field (x_bc_type==1, host routine: fills a host array or the host plane apply_temperature_bc pushes to the device); no fluctuation coupling; no-op except on the rank owning the x=1 boundary
+  ! Dirichlet inflow for cell-centred T (x_bc_type==1, host routine); no fluctuation coupling; no-op except
+  ! on the rank owning x=1
   Subroutine apply_inflow_bc_scalar_x(T_)
 
     Real(Int64), Intent(InOut) :: T_(:,:,:)
@@ -432,7 +439,9 @@ Contains
     n2 = Size(T_,2)
     n3 = Size(T_,3)
 
-    Call update_inflow_recycle(t)   ! no-op unless inflow_type==2; self-contained here in case this runs before apply_boundary_conditions in some call ordering
+    ! no-op unless inflow_type==2; self-contained here in case this runs before apply_boundary_conditions in
+    ! some call ordering
+    Call update_inflow_recycle(t)
 
     If ( inflow_type == 2 ) Then
        Do k = 1, n3
@@ -450,7 +459,8 @@ Contains
 
   End Subroutine apply_inflow_bc_scalar_x
 
-  ! Dirichlet inflow for the cell-centred sediment concentration field (x_bc_type==1, sediment_flag==1; host routine, see apply_inflow_bc_scalar_x); no mean-profile file support (unlike T) -- constant C_ref fallback, or recycled donor value under inflow_type==2; no-op except on the rank owning the x=1 boundary
+  ! Dirichlet inflow for cell-centred C (x_bc_type==1, sediment_flag==1, host routine): C_ref, or the donor
+  ! value under inflow_type==2 (no profile file, unlike T); no-op except on the rank owning x=1
   Subroutine apply_inflow_bc_scalar_x_C(C_)
 
     Real(Int64), Intent(InOut) :: C_(:,:,:)
@@ -465,7 +475,9 @@ Contains
     n2 = Size(C_,2)
     n3 = Size(C_,3)
 
-    Call update_inflow_recycle(t)   ! no-op unless inflow_type==2; self-contained here in case this runs before apply_boundary_conditions in some call ordering
+    ! no-op unless inflow_type==2; self-contained here in case this runs before apply_boundary_conditions in
+    ! some call ordering
+    Call update_inflow_recycle(t)
 
     If ( inflow_type == 2 ) Then
        Do k = 1, n3
@@ -479,7 +491,8 @@ Contains
 
   End Subroutine apply_inflow_bc_scalar_x_C
 
-  ! Plane-averaged streamwise velocity at the outlet (x_bc_type==1), reduced over every rank of the last x-row so all z-slabs share one convection speed (collective: every rank must call it), used as the convection speed for apply_outflow_bc_x
+  ! Plane-mean outlet speed (x_bc_type==1), reduced over the last x-row so all z-slabs share one convection
+  ! speed (collective); the speed of apply_outflow_bc_x
   Function outflow_convection_velocity() Result(Uc)
 
     Real(Int64) :: Uc
@@ -498,11 +511,9 @@ Contains
     khi = n3-1
     If ( z_bc_type == 0 .And. is_last_z ) khi = n3-2
 
-    ! Only the outflow row (is_last_x, one row of p_col ranks) has anything to
-    ! contribute -- apply_outflow_bc_x is itself a no-op on every other rank, so this
-    ! function's result is never read there either. Reduce over comm_outflow_x (built
-    ! once at init, decomp.f90) rather than MPI_COMM_WORLD: at high p_row this avoids
-    ! synchronising the whole p_row*p_col process grid just to share one scalar.
+    ! Only the outflow row (is_last_x) contributes; apply_outflow_bc_x is a no-op elsewhere. Reduce over
+    ! comm_outflow_x (decomp.f90), not MPI_COMM_WORLD: at high p_row this avoids synchronising the whole
+    ! process grid for one scalar.
     Uc = 0d0
     If ( .Not. is_last_x ) Return
 
@@ -523,8 +534,8 @@ Contains
 
   End Function outflow_convection_velocity
 
-  !> Time increment covered by the current RK stage: the outflow relaxation is applied once per stage, so its Courant number must use
-  !> the stage's share of dt (8/15, 2/15, 1/3 -- summing to 1), not the full dt (which relaxed ~3x per step)
+  !> Time covered by the current RK stage: the outflow relaxation runs once per stage, so its Courant number
+  !  uses the stage share of dt (8/15, 2/15, 1/3), not dt
   Function outflow_stage_dt() Result(dts)
 
     Real(Int64) :: dts
@@ -540,7 +551,8 @@ Contains
 
   End Function outflow_stage_dt
 
-  ! Convective outflow (x_bc_type==1): dF/dt + Uc*dF/dx = 0, explicit upwind from interior; pairs with homogeneous Dirichlet pressure BC in the DCT-IV solve; F (U,V, or W) in/out; no-op except on the rank owning the x=nx_global boundary
+  ! Convective outflow (x_bc_type==1): dF/dt + Uc*dF/dx = 0, explicit upwind; pairs with the homogeneous
+  ! Dirichlet pressure BC of the DCT-IV solve; no-op except on the rank owning x=nx_global
   Subroutine apply_outflow_bc_x(F,Uc)
 
     Real(Int64), Intent(InOut) :: F(:,:,:)
@@ -555,7 +567,7 @@ Contains
     If ( .Not. is_last ) Return
 
     nlast = Size(F,1)
-    ! clip to [0,1]: negative Uc (local backflow) would pull the outlet value from outside the domain, and Courant>1 is unconditionally unstable
+    ! clip to [0,1]: backflow (Uc<0) would pull the outlet value from outside; Courant>1 is unstable
     courant = Min(Max(Uc,0d0)*outflow_stage_dt()/dx,1d0)
 
     !$acc kernels present(F)
@@ -719,11 +731,9 @@ Contains
     
   End Subroutine apply_periodic_bc_z
 
-  ! Dirichlet (no-slip) BC in z; z is domain-decomposed (unlike y) so only the
-  ! rank(s) owning the z=0/z=Lz physical boundary act, identified via
-  ! z_periodic_partner's is_first/is_last (its "partner" is unused here --
-  ! no communication needed for a local Dirichlet condition).
-  ! id: 1,2=z-centres (U,V; ghost-mirror, matches apply_Dirichlet_bc_y id==2), 3=z-faces (W; exact zero)
+  ! Dirichlet (no-slip) BC in z; only the ranks owning z=0/z=Lz act (z_periodic_partner's is_first/is_last;
+  ! no communication needed). id: 1,2=z-centres (U,V; ghost-mirror as apply_Dirichlet_bc_y id==2), 3=z-faces
+  ! (W; exact zero)
   Subroutine apply_Dirichlet_bc_z(F,id)
 
     Real   (Int64), Intent(InOut) :: F(:,:,:)
@@ -756,9 +766,8 @@ Contains
 
     !$acc kernels present(F)
     If ( id==1 ) Then
-       ! F defined at y faces (V): face 1 and face ny are the same physical
-       ! periodic location (y=0 == y=Ly); each takes the opposite side's
-       ! nearest interior face
+       ! F at y faces (V): faces 1 and ny are the same periodic point (y=0 == y=Ly); each takes the opposite
+       ! side's nearest interior face
        F(:, 1,:) = F(:,ny-1,:)
        F(:,ny,:) = F(:,   2,:)
     Else
@@ -795,8 +804,8 @@ Contains
   End Subroutine apply_Robin_bc_y
 
   !          Update ghost interior planes (z-direction, same row/adjacent column)
-  !          Both directions (+z,-z) are exchanged concurrently via non-blocking MPI instead of two sequential blocking round trips
-  !          host_only: F holds the authoritative state on the host (callers that bracket this with their own update host/device)
+  !          Both directions (+z,-z) are exchanged concurrently via non-blocking MPI
+  !          host_only: F holds the authoritative state on the host (callers use update host/device)
   Subroutine update_ghost_interior_planes(F,id,host_only)
 
     Real   (Int64), Intent(InOut) :: F(:,:,:)
@@ -874,7 +883,7 @@ Contains
   End Subroutine update_ghost_interior_planes
 
   !          Update ghost interior planes (x-direction, same column/adjacent row)
-  ! Both directions (+x,-x) are exchanged concurrently via non-blocking MPI instead of two sequential blocking round trips
+  ! Both directions (+x,-x) are exchanged concurrently via non-blocking MPI
   Subroutine update_ghost_interior_planes_x(F,id)
 
     Real   (Int64), Intent(InOut) :: F(:,:,:)
@@ -900,8 +909,8 @@ Contains
     n2 = Size(F,2)
     n3 = Size(F,3)
 
-    ! buffer_bcx* hold the largest (n2,n3) this routine sees and are sent/received whole: they must stay contiguous and valid
-    ! until Mpi_waitall, which an array-section argument copied into a compiler temporary would not.
+    ! buffer_bcx* are sent/received whole and must stay contiguous and valid until Mpi_waitall (an
+    ! array-section argument would be copied to a temporary)
     If ( id == 1 ) Then
        ! F defined at x faces (U): interior faces are 2..nx-1
        buffer_bcxs1(1:n2,1:n3) = F(nx-1,:,:) ! send buffer, towards +x

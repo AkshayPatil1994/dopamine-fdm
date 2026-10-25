@@ -1,20 +1,12 @@
-!> UAV actuator-disk body force. Loading is uniform or parabolic tip-tapered; the reaction force is purely vertical (flat disk)
-!  or a full 3-component vector when the disk auto-tilts along its own path kinematics, with optional in-plane swirl (rotor
-!  torque reaction). The centre can follow a prescribed path and the thrust a prescribed schedule.
-!
-!  The disk is a ring of Lagrangian markers carrying shares of the total kinematic thrust, spread onto the U/V/W grids with a
-!  normalised Gaussian kernel so that force density times cell volume over the kernel support reproduces each marker's share
-!  for any grid non-uniformity or MPI split: each rank deposits only into cells it owns but normalises against the marker's
-!  FULL kernel-box sum (computed from the uniform x/z spacing, not neighbour cells).
-!
-!  Tilt (uav_tilt_active=1): the thrust vector must equal m*(a + g*yhat), so the normal is n = normalize(ax, uav_grav+ay, az),
-!  independent of mass. The Catmull-Rom path is only C1, so the raw acceleration jumps at knots; n is low-pass filtered
-!  (uav_tilt_tau). With uav_tilt_active=0 (default) n=(0,1,0) and everything reduces to the flat, vertical-only model.
-!
-!  Known simplifications:
-!   - the swirl direction (uav_swirl_frac) is arbitrary, not derived from a rotor RPM or rotation sense
-!   - the kernel support is not wrapped across periodic x/z edges: keep the disk uav_kernel_ncell*max(dx,dz) away from one
-!   - no OpenACC inside this module: apply_uav_forcing_u/v/w run on the host and equations.f90 syncs rhs_u/v/w around each call
+!> UAV actuator-disk body force: uniform or parabolic tip-tapered loading; the reaction force is vertical
+!  (flat disk) or 3-component when the disk tilts with its path kinematics, with optional in-plane swirl. A
+!  ring of Lagrangian markers carries the kinematic thrust, spread with a normalised Gaussian kernel so force
+!  density times cell volume over the support reproduces each share for any grid or MPI split: ranks deposit
+!  into their own cells but normalise against the marker's full kernel-box sum (from the uniform x/z spacing).
+!  Tilt: n = normalize(ax, uav_grav+ay, az), independent of mass; the Catmull-Rom path is only C1, so n is
+!  low-pass filtered (uav_tilt_tau). uav_tilt_active=0 gives n=(0,1,0). Limits: the swirl direction is
+!  arbitrary; the kernel is not wrapped across periodic x/z edges (keep the disk uav_kernel_ncell*max(dx,dz)
+!  away); no OpenACC here: apply_uav_forcing_u/v/w run on the host, equations.f90 syncs rhs_u/v/w.
 Module uav_actuator
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -24,13 +16,15 @@ Module uav_actuator
   Implicit None
 
   Integer(Int32) :: n_uav_markers = 0
-  ! Marker offsets from the (moving/tilted) disk centre in the disk-local frame (e1,e2 below); uav_mk_theta is each marker's
-  ! azimuth in that frame, stored for the swirl direction. uav_mk_frac is its dimensionless share of the total thrust (sums to 1),
-  ! so a time-varying thrust (uav_hover_thrust or uav_current_thrust(t)) needs no marker rebuild.
+  ! Marker offsets from the (moving/tilted) disk centre in the disk-local frame (e1,e2 below); uav_mk_theta
+  ! is each marker's azimuth in that frame, stored for the swirl direction. uav_mk_frac is its dimensionless
+  ! share of the total thrust (sums to 1), so a time-varying thrust (uav_hover_thrust or
+  ! uav_current_thrust(t)) needs no marker rebuild.
   Real   (Int64), Allocatable :: uav_mk_dx(:), uav_mk_dz(:), uav_mk_frac(:), uav_mk_theta(:)
 
-  ! Path waypoints "t x y z" (uav_path_active==1 only), sorted by increasing t; the disk centre is cubic-Hermite (Catmull-Rom
-  ! tangent) interpolated between them and clamped outside [path_t(1),path_t(n_path)]
+  ! Path waypoints "t x y z" (uav_path_active==1 only), sorted by increasing t; the disk centre is
+  ! cubic-Hermite (Catmull-Rom tangent) interpolated between them and clamped outside
+  ! [path_t(1),path_t(n_path)]
   Integer(Int32) :: n_path = 0
   Real   (Int64), Allocatable :: path_t(:), path_x(:), path_y(:), path_z(:)
 
@@ -39,10 +33,9 @@ Module uav_actuator
   Integer(Int32) :: n_thrust = 0
   Real   (Int64), Allocatable :: thrust_t(:), thrust_val(:)
 
-  ! Persisted low-pass state for the auto-tilt disk normal (uav_tilt_active
-  ! only); uav_tilt_last_t starts at a large-negative sentinel so the first
-  ! call's effective filter gain saturates to 1 (i.e. the filter output is
-  ! just the first raw sample, no special-case branch needed).
+  ! Persisted low-pass state for the auto-tilt disk normal (uav_tilt_active only); uav_tilt_last_t starts at
+  ! a large-negative sentinel so the first call's effective filter gain saturates to 1 (i.e. the filter
+  ! output is just the first raw sample, no special-case branch needed).
   Real   (Int64) :: uav_tilt_smooth(3) = (/ 0d0, 1d0, 0d0 /)
   Real   (Int64) :: uav_tilt_last_t    = -1d300
   ! In-plane frame for uav_tilt_smooth, cached alongside it so repeated calls
@@ -59,10 +52,9 @@ Contains
     Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
   End Subroutine uav_abort
 
-  !> Build the marker ring (uav_n_r radial bands x uav_n_theta azimuthal
-  !  sectors), each carrying a thrust share proportional to its annulus-
-  !  sector area (uniform disk loading) times a radial weight (uav_load_profile),
-  !  and read the path/thrust files if active.
+  !> Build the marker ring (uav_n_r radial bands x uav_n_theta azimuthal sectors), each carrying a thrust
+  !  share proportional to its annulus- sector area (uniform disk loading) times a radial weight
+  !  (uav_load_profile), and read the path/thrust files if active.
   Subroutine setup_uav
 
     Integer(Int32) :: ir, ith, n
@@ -104,8 +96,9 @@ Contains
        Call read_uav_path
     End If
 
-    ! Seed the tilt filter at the run's start time t (0 fresh, the restart time on restart) instead of the sentinel, so the first
-    ! uav_disk_state call is a no-op (tt==uav_tilt_last_t, smoothed = raw normal): no orientation jump across a restart.
+    ! Seed the tilt filter at the run's start time t (0 fresh, the restart time on restart) instead of the
+    ! sentinel, so the first uav_disk_state call is a no-op (tt==uav_tilt_last_t, smoothed = raw normal): no
+    ! orientation jump across a restart.
     If ( uav_tilt_active >= 1 .And. uav_path_active >= 1 ) Then
        uav_tilt_smooth(1) = hermite_accel(t, path_t, path_x, n_path)
        uav_tilt_smooth(2) = uav_grav + hermite_accel(t, path_t, path_y, n_path)
@@ -140,9 +133,8 @@ Contains
 
   End Subroutine setup_uav
 
-  !> Read the waypoint file: free-form text, blank/'#' lines skipped, each
-  !  data row "t x y z", sorted by strictly increasing t. Every rank reads
-  !  the (small, shared) file independently, mirroring sem.f90's
+  !> Read the waypoint file: free-form text, blank/'#' lines skipped, each data row "t x y z", sorted by
+  !  strictly increasing t. Every rank reads the (small, shared) file independently, mirroring sem.f90's
   !  read_mean_profile convention for inflow_profile_file.
   Subroutine read_uav_path
 
@@ -189,9 +181,8 @@ Contains
 
   End Subroutine read_uav_path
 
-  !> Read the thrust schedule: free-form text, blank/'#' lines skipped,
-  !  each data row "t T" (T = kinematic thrust [m^4/s^2]), sorted by
-  !  strictly increasing t. Same per-rank-independent-read convention as
+  !> Read the thrust schedule: free-form text, blank/'#' lines skipped, each data row "t T" (T = kinematic
+  !  thrust [m^4/s^2]), sorted by strictly increasing t. Same per-rank-independent-read convention as
   !  read_uav_path.
   Subroutine read_uav_thrust
 
@@ -238,10 +229,9 @@ Contains
 
   End Subroutine read_uav_thrust
 
-  !> Cubic Hermite (Catmull-Rom tangent) interpolation of one path
-  !  component at time tt, clamped outside [vals_t(1),vals_t(n)].
-  !  Endpoint tangents use the one-sided (forward/backward) difference in
-  !  place of the missing neighbour.
+  !> Cubic Hermite (Catmull-Rom tangent) interpolation of one path component at time tt, clamped outside
+  !  [vals_t(1),vals_t(n)]. Endpoint tangents use the one-sided (forward/backward) difference in place of the
+  !  missing neighbour.
   Pure Function hermite_eval(tt, vals_t, vals_p, n) Result(val)
 
     Integer(Int32), Intent(In) :: n
@@ -292,9 +282,9 @@ Contains
 
   End Function hermite_eval
 
-  !> Second time derivative of the cubic-Hermite segment of hermite_eval, for the auto-tilt acceleration. Exact per segment
-  !  (linear in s) but only C0 across knots, which the low-pass filter in uav_disk_state tames. Zero outside [vals_t(1),vals_t(n)]
-  !  where the position is clamped.
+  !> Second time derivative of the cubic-Hermite segment of hermite_eval, for the auto-tilt acceleration.
+  !  Exact per segment (linear in s) but only C0 across knots, which the low-pass filter in uav_disk_state
+  !  tames. Zero outside [vals_t(1),vals_t(n)] where the position is clamped.
   Pure Function hermite_accel(tt, vals_t, vals_p, n) Result(acc)
 
     Integer(Int32), Intent(In) :: n
@@ -354,9 +344,8 @@ Contains
 
   End Subroutine uav_current_center
 
-  !> Current total kinematic thrust: the schedule interpolated from
-  !  uav_thrust_file (uav_thrust_active=1) or the fixed uav_hover_thrust
-  !  otherwise.
+  !> Current total kinematic thrust: the schedule interpolated from uav_thrust_file (uav_thrust_active=1) or
+  !  the fixed uav_hover_thrust otherwise.
   Pure Function uav_current_thrust(tt) Result(Qtot)
 
     Real(Int64), Intent(In) :: tt
@@ -370,11 +359,10 @@ Contains
 
   End Function uav_current_thrust
 
-  !> Orthonormal in-disk-plane frame (e1,e2) for a given unit disk normal n,
-  !  chosen so that at n=(0,1,0) (no tilt) e1=(1,0,0), e2=(0,0,1) exactly --
-  !  i.e. identical to the original flat-disk marker layout (dx along x,
-  !  dz along z). Degenerates only if n is within a few degrees of +-xhat,
-  !  which a physically modest rotor tilt never approaches.
+  !> Orthonormal in-disk-plane frame (e1,e2) for a given unit disk normal n, chosen so that at n=(0,1,0) (no
+  !  tilt) e1=(1,0,0), e2=(0,0,1) exactly -- i.e. identical to the original flat-disk marker layout (dx along
+  !  x, dz along z). Degenerates only if n is within a few degrees of +-xhat, which a physically modest rotor
+  !  tilt never approaches.
   Pure Subroutine uav_disk_frame(nvec, e1, e2)
 
     Real(Int64), Intent(In)  :: nvec(3)
@@ -395,9 +383,10 @@ Contains
 
   End Subroutine uav_disk_frame
 
-  !> Evaluate the disk's centre, total thrust, normal and in-plane frame at time tt. With uav_tilt_active=0 the normal is
-  !  (0,1,0); with 1 it comes from the path acceleration, low-pass filtered, and cached (uav_tilt_smooth/uav_tilt_last_t) so
-  !  the three calls per RK sub-stage (rhs_u/v/w) at the same tt do not re-blend it.
+  !> Evaluate the disk's centre, total thrust, normal and in-plane frame at time tt. With uav_tilt_active=0
+  !  the normal is (0,1,0); with 1 it comes from the path acceleration, low-pass filtered, and cached
+  !  (uav_tilt_smooth/uav_tilt_last_t) so the three calls per RK sub-stage (rhs_u/v/w) at the same tt do not
+  !  re-blend it.
   Subroutine uav_disk_state(tt, xc, yc, zc, Qtot, nvec, e1, e2)
 
     Real(Int64), Intent(In)  :: tt
@@ -443,8 +432,8 @@ Contains
 
   End Subroutine uav_disk_state
 
-  !> Add the disk's reaction force into rhs_u, once per RK3 sub-stage from compute_rhs_u (guarded by uav_active). Same
-  !  normalisation/deposit convention as apply_uav_forcing_v, on the x-face/yg/zg grid of u.
+  !> Add the disk's reaction force into rhs_u, once per RK3 sub-stage from compute_rhs_u (guarded by
+  !  uav_active). Same normalisation/deposit convention as apply_uav_forcing_v, on the x-face/yg/zg grid of u.
   Subroutine apply_uav_forcing_u(rhs_u)
 
     Real(Int64), Dimension(2:nx-1,2:nyg-1,2:nzg-1), Intent(InOut) :: rhs_u
@@ -529,9 +518,8 @@ Contains
 
   End Subroutine apply_uav_forcing_u
 
-  !> Add the disk's reaction force into rhs_v (y-component, the only
-  !  component the original flat/untilted model had). Called once per RK3
-  !  sub-stage from compute_rhs_v, guarded by uav_active.
+  !> Add the disk's reaction force into rhs_v (y-component, the only component the original flat/untilted
+  !  model had). Called once per RK3 sub-stage from compute_rhs_v, guarded by uav_active.
   Subroutine apply_uav_forcing_v(rhs_v)
 
     Real(Int64), Dimension(2:nxg-1,2:ny-1,2:nzg-1), Intent(InOut) :: rhs_v
@@ -556,12 +544,14 @@ Contains
        e_theta = -Sin(uav_mk_theta(n))*e1 + Cos(uav_mk_theta(n))*e2
        Fy = -Qn*nvec(2) + uav_swirl_frac*Qn*e_theta(2)
 
-       ! locate the nearest local cell-centre index in x (uniform spacing); z is located globally below (may be stretched)
+       ! locate the nearest local cell-centre index in x (uniform spacing); z is located globally below (may
+       ! be stretched)
        i0 = Nint( (xp - xg(2))/dx ) + 2
        kk0 = nearest_zg_index(zp)
        k0  = kk0 - kg1_global(myid) + 1
 
-       ! locate the nearest local y-face index (non-uniform grid: linear search over this rank's small local y array)
+       ! locate the nearest local y-face index (non-uniform grid: linear search over this rank's small local
+       ! y array)
        j0 = 2
        best = Abs( y(2) - yp )
        Do j = 3, ny-1
@@ -585,11 +575,12 @@ Contains
        sigz = Max(uav_kernel_ncell,1) * ( z_face_at(kk0) - z_face_at(kk0-1) ) * 0.5d0
        sigy = Max(uav_kernel_ncell,1) * (yg(j0+1)-yg(j0))     * 0.5d0
 
-       ! Pass 1: normalise so sum(wgt*dV) over the support equals the marker's thrust share. The sum runs over the marker's
-       ! FULL kernel box (ifull_lo:ifull_hi, kfull_lo:kfull_hi), not just the owned ilo:ihi/klo:khi: x is uniform, so xg(i)-xp
-       ! is xg(2)+(i-2)*dx-xp for any i, and z positions/widths come from the global arrays zg_at/z_face_at (they extrapolate
-       ! past the ends). A local-only sum would renormalise each rank's partial sum to the full share and double-count where a
-       ! support straddles ranks. y is not decomposed, so jlo:jhi (clipped at the wall) is fine.
+       ! Pass 1: normalise so sum(wgt*dV) over the support equals the marker's thrust share. The sum runs
+       ! over the marker's FULL kernel box (ifull_lo:ifull_hi, kfull_lo:kfull_hi), not just the owned
+       ! ilo:ihi/klo:khi: x is uniform, so xg(i)-xp is xg(2)+(i-2)*dx-xp for any i, and z positions/widths
+       ! come from the global arrays zg_at/z_face_at (they extrapolate past the ends). A local-only sum would
+       ! renormalise each rank's partial sum to the full share and double-count where a support straddles
+       ! ranks. y is not decomposed, so jlo:jhi (clipped at the wall) is fine.
        norm = 0d0
        Do k = kfull_lo, kfull_hi
           kk  = kk0 + (k - k0)
@@ -606,7 +597,8 @@ Contains
           End Do
        End Do
 
-       If ( norm < 1d-30 ) Cycle   ! kernel support present but entirely between/outside sampled points (degenerate); nothing to add
+       ! kernel support present but entirely between/outside sampled points (degenerate); nothing to add
+       If ( norm < 1d-30 ) Cycle
 
        ! Pass 2: spread the marker's y-force share as an acceleration density
        Do k = klo, khi
@@ -625,9 +617,8 @@ Contains
 
   End Subroutine apply_uav_forcing_v
 
-  !> Add the disk's reaction force into rhs_w (z-component). Called once
-  !  per RK3 sub-stage from compute_rhs_w, guarded by uav_active. Mirrors
-  !  apply_uav_forcing_v on the xg-centre/yg-centre/z-face grid w lives on
+  !> Add the disk's reaction force into rhs_w (z-component). Called once per RK3 sub-stage from compute_rhs_w,
+  !  guarded by uav_active. Mirrors apply_uav_forcing_v on the xg-centre/yg-centre/z-face grid w lives on
   !  (only the z index is a face; x,y are cell centres).
   Subroutine apply_uav_forcing_w(rhs_w)
 
@@ -711,7 +702,8 @@ Contains
 
   End Subroutine apply_uav_forcing_w
 
-  !> Global cell-centre z position for any (possibly out-of-range) global index, linearly extrapolated past the ends (kernel boxes can extend past this rank's or the domain's z range)
+  !> Global cell-centre z position for any (possibly out-of-range) global index, linearly extrapolated past
+  !  the ends (kernel boxes can extend past this rank's or the domain's z range)
   Pure Function zg_at(kk) Result(zv)
     Integer(Int32), Intent(In) :: kk
     Real(Int64) :: zv
@@ -737,8 +729,9 @@ Contains
     End If
   End Function z_face_at
 
-  !> Global index of the interior cell centre nearest zp (z stretched and MPI-decomposed, so
-  !  searched over the global array). zg_global is monotonic, so bracket by binary search (same structure as sem.f90's invert_cdf).
+  !> Global index of the interior cell centre nearest zp (z stretched and MPI-decomposed, so searched over the
+  !  global array). zg_global is monotonic, so bracket by binary search (same structure as sem.f90's
+  !  invert_cdf).
   Function nearest_zg_index(zp) Result(kbest)
     Real(Int64), Intent(In) :: zp
     Integer(Int32) :: kbest, kk, lo, hi

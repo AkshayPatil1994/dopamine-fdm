@@ -1,7 +1,6 @@
 ! Module to compute right-hand side of Navier-Stokes eq.
 Module equations
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global,          Only : x, xg, y, yg, z, zg, term_1, &
                               term_2, nx, nxg, ny, nyg, nz, nzg, &
@@ -18,12 +17,11 @@ Module equations
   Use ibm_stress, Only : ovr_u, ovr_v, ovr_w, ovr_none
   Use uav_actuator, Only : apply_uav_forcing_u, apply_uav_forcing_v, apply_uav_forcing_w
   
-  ! prevent implicit typing
   Implicit None
   
 Contains
 
-  ! Compute RHS for du/dt: du/dt = -du^2/dx - duv/dy - duw/dz + div(nu grad(u)) + 2*Omega_z*v
+  ! Compute RHS for du/dt: du/dt = -du^2/dx - duv/dy - duw/dz + div(nu grad(u))
   Subroutine compute_rhs_u(U_,V_,W_,rhs_u)
 
     Real(Int64), Dimension(nx,nyg,nzg), Intent(In) :: U_
@@ -42,13 +40,15 @@ Contains
     Real   (Int64) :: inv_dy3    ! 1/dy_3
     Real   (Int64) :: inv_dz3    ! 1/dz_3
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
-    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure divergence form in every
-    ! direction (skew-symmetric form is not momentum conserving where the gradients are under-resolved)
+    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure
+    ! divergence form in every direction (skew-symmetric form is not momentum conserving where the gradients
+    ! are under-resolved)
     Real   (Int64) :: wa, wd
     Integer(Int32) :: nwl
     Logical        :: wcell
     Logical        :: wm_lo, wm_hi  ! wall-modelled y walls
-    Logical        :: wall_lo, wall_hi   ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
+    ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
+    Logical        :: wall_lo, wall_hi
     Logical        :: zwall_lo, zwall_hi   ! this rank owns a modelled z wall
     Integer(Int32) :: partner
 
@@ -76,7 +76,8 @@ Contains
     ! interpolate u in x (faces to centers)
     Call interpolate_x(U_,term_1,in1)
 
-    ! -du^2/dx: w_div*(divergence form) + w_adv*(advective form u*du/dx), skew-symmetric suppresses aliasing near sharp gradients
+    ! -du^2/dx: w_div*(divergence form) + w_adv*(advective form u*du/dx), skew-symmetric suppresses aliasing
+    ! near sharp gradients
     !$acc parallel loop collapse(3) present(term_1,rhs_u,U_)
     Do k=2,nzg-1
        Do j=2,nyg-1
@@ -174,10 +175,9 @@ Contains
 
        Do j=2,nyg-1
 
-          ! second derivation in z (U at faces) — non-uniform z only; computed
-          ! per-j (not hoisted above the j loop) since collapse(2) requires the
-          ! two collapsed Do statements to be immediately nested, with nothing
-          ! between them
+          ! second derivative in z (U at faces), non-uniform z only; computed per-j (not hoisted above the j
+          ! loop) since collapse(2) requires the two collapsed Do statements to be immediately nested, with
+          ! nothing between them
           dz_3    = z(k) - z(k-1)
           inv_dz3 = 1d0 / dz_3
 
@@ -231,9 +231,12 @@ Contains
 
              ! viscous term
              rhs_u(i,j,k) = rhs_u(i,j,k) +                                                                  &
-                           2d0*inv_dx2*(nu_x2*(U_(i+1,j,k)-U_(i,j,k)) - nu_x1*(U_(i,j,k)-U_(i-1,j,k)) )    + & !d(2(nu+nu_t)*du/dx)/dx
-                           inv_dy3*( fy2 - fy1 )                                         + & !d((nu+nu_t)*(du/dy+dv/dx))/dy
-                           inv_dz3*( fz2 - fz1 )                                                   + & !d((nu+nu_t)*(du/dz+dw/dx))/dz
+                           ! d(2(nu+nu_t)*du/dx)/dx
+                           2d0*inv_dx2*(nu_x2*(U_(i+1,j,k)-U_(i,j,k)) - nu_x1*(U_(i,j,k)-U_(i-1,j,k)) )    + &
+                           ! d((nu+nu_t)*(du/dy+dv/dx))/dy
+                           inv_dy3*( fy2 - fy1 )                                         + &
+                           ! d((nu+nu_t)*(du/dz+dw/dx))/dz
+                           inv_dz3*( fz2 - fz1 )                                                   + &
                            dPdx ! constant pressure gradient forcing
 
           End Do
@@ -254,7 +257,7 @@ Contains
   End Subroutine compute_rhs_u
 
   !                       Compute RHS for dv/dt
-  ! dv/dt = -duv/dx - dv^2/dy - dvw/dz + div(nu grad(v)) - 2*Omega_z*u [+ 2*Omega_x*w + Omega_x^2*(y-y0_rot) if rotation_active]
+  ! dv/dt = -duv/dx - dv^2/dy - dvw/dz + div(nu grad(v)) [+ 2*Omega_x*w + Omega_x^2*(y-y0_rot), rotation]
   Subroutine compute_rhs_v(U_,V_,W_,rhs_v)
 
     Real(Int64), Dimension(nx,nyg,nzg), Intent(In) :: U_
@@ -275,8 +278,9 @@ Contains
     Real   (Int64) :: inv_dz3    ! 1/dz_3; z spacing varies with k (z_bc_type==1, alpha_grid_z>0)
     Real   (Int64) :: inv_dzg1, inv_dzg2   ! 1/(zg(k)-zg(k-1)), 1/(zg(k+1)-zg(k))
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
-    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure divergence form in every
-    ! direction (skew-symmetric form is not momentum conserving where the gradients are under-resolved)
+    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure
+    ! divergence form in every direction (skew-symmetric form is not momentum conserving where the gradients
+    ! are under-resolved)
     Real   (Int64) :: wa, wd
     Integer(Int32) :: nwl
     Logical        :: wcell
@@ -436,7 +440,8 @@ Contains
     End Do
     !$acc end parallel loop
 
-    ! Boussinesq buoyancy: gravity acts along -y; T_face is the stretched-grid-aware cell-centre-to-v-face interpolation of Tscal (same weight_y_0/weight_y_1 used for nu_t elsewhere in this file)
+    ! Boussinesq buoyancy: gravity acts along -y; T_face is the stretched-grid-aware cell-centre-to-v-face
+    ! interpolation of Tscal (same weight_y_0/weight_y_1 used for nu_t elsewhere in this file)
     If ( boussinesq_flag >= 1 ) Then
        !$acc parallel loop collapse(3) present(rhs_v,Tscal,weight_y_0,weight_y_1)
        Do k=2,nzg-1
@@ -449,9 +454,9 @@ Contains
        !$acc end parallel loop
     End If
 
-    ! Rigid-body rotation about the streamwise (x) axis: Coriolis (+2*Omega_x*w) + centrifugal (Omega_x^2*(y-y0_rot)).
-    ! w is interpolated onto v's (y-face,z-centre) point via the same weight_y_0/weight_y_1
-    ! centre-to-face blend used for nu_t above, averaged with the neighbouring z-face.
+    ! Rigid-body rotation about the streamwise (x) axis: Coriolis (+2*Omega_x*w) + centrifugal
+    ! (Omega_x^2*(y-y0_rot)). w is interpolated onto v's (y-face,z-centre) point via the same
+    ! weight_y_0/weight_y_1 centre-to-face blend used for nu_t above, averaged with the neighbouring z-face.
     If ( rotation_active >= 1 ) Then
        !$acc parallel loop collapse(3) present(rhs_v,W_,weight_y_0,weight_y_1,y)
        Do k=2,nzg-1
@@ -467,10 +472,10 @@ Contains
        !$acc end parallel loop
     End If
 
-    ! UAV actuator disk: vertical reaction force, static or path-following
-    ! apply_uav_forcing is host-only (no OpenACC); on GPU builds rhs_v (Fv1/Fv2/Fv3) is a
-    ! separate device allocation from the terms computed above, so it must be pulled to the
-    ! host before the host loop touches it and pushed back before the RK update reads it on device.
+    ! UAV actuator disk: vertical reaction force, static or path-following apply_uav_forcing is host-only (no
+    ! OpenACC); on GPU builds rhs_v (Fv1/Fv2/Fv3) is a separate device allocation from the terms computed
+    ! above, so it must be pulled to the host before the host loop touches it and pushed back before the RK
+    ! update reads it on device.
     If ( uav_active >= 1 ) Then
        !$acc update host(rhs_v)
        Call apply_uav_forcing_v(rhs_v)
@@ -480,7 +485,7 @@ Contains
   End Subroutine compute_rhs_v
 
   !                Compute RHS for dw/dt
-  !  dw/dt = -duw/dx - dvw/dy - dw^2/dz + div(nu grad(w)) [- 2*Omega_x*v + Omega_x^2*(z-z0_rot) if rotation_active]
+  ! dw/dt = -duw/dx - dvw/dy - dw^2/dz + div(nu grad(w)) [- 2*Omega_x*v + Omega_x^2*(z-z0_rot), rotation]
   Subroutine compute_rhs_w(U_,V_,W_,rhs_w)
 
     Real(Int64), Dimension(nx,nyg,nzg), Intent(In) :: U_
@@ -498,13 +503,15 @@ Contains
     Real   (Int64) :: inv_dy3    ! 1/dy_3
     Real   (Int64) :: inv_dz1, inv_dz2, inv_dz3, two_inv_dz3  ! z-spacing inverses
     Real   (Int64) :: w_adv, w_div   ! convective blend weights, see advection_scheme
-    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure divergence form in every
-    ! direction (skew-symmetric form is not momentum conserving where the gradients are under-resolved)
+    ! wa, wd: blend weights of one cell. adv_wall_layers cells next to a wall-modelled wall use the pure
+    ! divergence form in every direction (skew-symmetric form is not momentum conserving where the gradients
+    ! are under-resolved)
     Real   (Int64) :: wa, wd
     Integer(Int32) :: nwl
     Logical        :: wcell
     Logical        :: wm_lo, wm_hi  ! wall-modelled y walls
-    Logical        :: wall_lo, wall_hi   ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
+    ! no-slip y walls only: nu_t is zeroed there, unlike periodic-y or free-slip faces
+    Logical        :: wall_lo, wall_hi
 
     wall_lo = ( y_bc_type == 1 .And. bc_face_ylo == 1 )
     wall_hi = ( y_bc_type == 1 .And. bc_face_yhi == 1 )
@@ -613,10 +620,9 @@ Contains
 
        Do j=2,nyg-1
 
-          ! z spacings at cell-faces (dz_1,dz_2) and cell-centres (dz_3); non-uniform z
-          ! only, W's own face-indexed convention (mirrors V's dy_1/dy_2/dy_3 above) --
-          ! computed per-j (not hoisted above the j loop) since collapse(2) requires the
-          ! two collapsed Do statements to be immediately nested
+          ! z spacings at cell-faces (dz_1,dz_2) and cell-centres (dz_3); non-uniform z only, W's own
+          ! face-indexed convention (mirrors V's dy_1/dy_2/dy_3 above) -- computed per-j (not hoisted above
+          ! the j loop) since collapse(2) requires the two collapsed Do statements to be immediately nested
           dz_1 = z(k  ) - z(k-1)
           dz_2 = z(k+1) - z(k  )
           dz_3 = zg(k+1) - zg(k)
@@ -672,9 +678,12 @@ Contains
 
              ! viscous term
              rhs_w(i,j,k) = rhs_w(i,j,k) +                                                                                &
-                           inv_dx*( fx2 - fx1 )                                                                             + & !d((nu+nu_t)*(dw/dx+du/dz))/dx
-                           inv_dy3*( fy2 - fy1 )                                         + & !d((nu+nu_t)*(dw/dy+dv/dz))/dy
-                           two_inv_dz3*(nu_z2*(W_(i,j,k+1)-W_(i,j,k))*inv_dz2 - nu_z1*(W_(i,j,k)-W_(i,j,k-1))*inv_dz1)     + & !d(2(nu+nu_t)*dw/dz)/dz
+                           ! d((nu+nu_t)*(dw/dx+du/dz))/dx
+                           inv_dx*( fx2 - fx1 )                                                                             + &
+                           ! d((nu+nu_t)*(dw/dy+dv/dz))/dy
+                           inv_dy3*( fy2 - fy1 )                                         + &
+                           ! d(2(nu+nu_t)*dw/dz)/dz
+                           two_inv_dz3*(nu_z2*(W_(i,j,k+1)-W_(i,j,k))*inv_dz2 - nu_z1*(W_(i,j,k)-W_(i,j,k-1))*inv_dz1)     + &
                            dPdz ! constant pressure gradient forcing
 
           End Do
@@ -682,9 +691,9 @@ Contains
     End Do
     !$acc end parallel loop
 
-    ! Rigid-body rotation about the streamwise (x) axis: Coriolis (-2*Omega_x*v) + centrifugal (Omega_x^2*(z-z0_rot)).
-    ! v is interpolated onto w's (y-centre,z-face) point: plain averaging in y (faces to centres) and
-    ! weight_z_0/1 in z (centres to faces, z may be stretched).
+    ! Rigid-body rotation about the streamwise (x) axis: Coriolis (-2*Omega_x*v) + centrifugal
+    ! (Omega_x^2*(z-z0_rot)). v is interpolated onto w's (y-centre,z-face) point: plain averaging in y (faces
+    ! to centres) and weight_z_0/1 in z (centres to faces, z may be stretched).
     If ( rotation_active >= 1 ) Then
        !$acc parallel loop collapse(3) present(rhs_w,V_,z,weight_z_0,weight_z_1)
        Do k=2,nz-1

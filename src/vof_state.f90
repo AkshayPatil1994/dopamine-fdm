@@ -1,14 +1,10 @@
-!> Solver-side state and coupling of the geometric PLIC VOF liquid fraction C: padded field, halo exchange on the decomposed
-!  grid, initial interface shapes, RK3 sub-step advance and global diagnostics. The kernels (vof_plic, vof_normals, vof_advect)
-!  know nothing of MPI or solver globals; this module adapts them. Host-resident: the halo exchange reuses the scalar-transport
-!  host path, so a GPU build needs the field moved on-device first.
-!
-!  C is advanced in three sub-steps (8/15, 2/15, 1/3 dt) ending at the RK stage times, each with the stage-consistent linearly
-!  extrapolated midpoint velocity (second order):
-!    sub-step 1  u^n and the previous step's stage-2 velocity,  midpoint t_n + 4/15 dt
-!    sub-step 2  u^n and u^(1),                                 midpoint t_n + 3/5 dt
-!    sub-step 3  u^(1) and u^(2),                               midpoint t_n + 5/6 dt
-!  Sub-step s must precede the stage-s projection so that C^(s) exists when that projection needs the density.
+!> Solver-side state and coupling of the geometric PLIC VOF liquid fraction C: padded field, halo exchange,
+!  initial interface shapes, RK3 sub-step advance, global diagnostics. The kernels (vof_plic, vof_normals,
+!  vof_advect) know nothing of MPI or solver globals. Host-resident: the halo exchange reuses the scalar host
+!  path (a GPU build must move C first). C is advanced in three sub-steps (8/15, 2/15, 1/3 dt) ending at the
+!  RK stage times, with the linearly extrapolated midpoint velocity of each stage (second order): 1: u^n and
+!  the previous stage-2 velocity, t_n + 4/15 dt; 2: u^n and u^(1), t_n + 3/5 dt; 3: u^(1) and u^(2), t_n + 5/6
+!  dt. Sub-step s precedes the stage-s projection, which needs C^(s).
 Module vof_state
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -30,22 +26,28 @@ Module vof_state
 
   Implicit None
 
-  ! padded C: cell indices match the solver's (1:nxg,1:nyg,1:nzg), the extra layer 0 / n+1 is the second ghost layer
+  ! padded C: cell indices match the solver's (1:nxg,1:nyg,1:nzg), the extra layer 0 / n+1 is the second
+  ! ghost layer
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cv, Cw, Pw, Cinit
   Real(Int64), Allocatable, Dimension(:)     :: hx, hy, hz
-  ! transporting velocities: stage 1 and 2 of this step, stage 2 of the previous step, and the extrapolated midpoint field
+  ! transporting velocities: stage 1 and 2 of this step, stage 2 of the previous step, and the extrapolated
+  ! midpoint field
   Real(Int64), Allocatable, Dimension(:,:,:) :: Us1, Vs1, Ws1, Us2, Vs2, Ws2, Ue, Ve, We
 
   Integer(Int32), Parameter :: VOF_MIN_SLAB = 3   ! planes of padding the VOF stencils need from the neighbouring rank
   Integer(Int32) :: vof_unit = 0, gauge_unit = 0
-  Logical :: vof_unit_open = .False., gauge_unit_open = .False.   ! newunit numbers are negative, so they cannot flag 'not opened'
-  Real(Int64), Allocatable, Dimension(:) :: vof_rho_ref   ! still-water row densities of the initial state (hydrostatic reference)
+  ! newunit numbers are negative, so they cannot flag 'not opened'
+  Logical :: vof_unit_open = .False., gauge_unit_open = .False.
+  ! still-water row densities of the initial state (hydrostatic reference)
+  Real(Int64), Allocatable, Dimension(:) :: vof_rho_ref
   Logical        :: vof_have_prev = .False.
-  Real(Int64)    :: vof_bnd_cum = 0d0, vof_relax_cum = 0d0   ! cumulative liquid volume through the x boundaries and from relaxation
+  ! cumulative liquid volume through the x boundaries and from relaxation
+  Real(Int64)    :: vof_bnd_cum = 0d0, vof_relax_cum = 0d0
   Character(*), Parameter :: diag_fmt = '(I9,2ES18.9E3,ES23.14E3,ES13.4E3,2ES12.3E3,I8,2ES12.3E3,3ES18.9E3,ES15.6E3,' // &
                                        'ES18.9E3,3ES14.5E3,I6,ES12.3E3,I4,*(ES16.7E3))'
   Integer(Int32) :: vof_nsub_last = 1
-  Integer(Int64) :: vof_hf_fail = 0   ! interface cells without a valid height function in the last curvature evaluation (this rank)
+  ! interface cells without a valid height function in the last curvature evaluation (this rank)
+  Integer(Int64) :: vof_hf_fail = 0
   Integer(Int64) :: vof_its_prev = 0
   Real(Int64)    :: vof_dt_prev = 0d0, vof_vol0 = 0d0, vof_clip_total = 0d0, vof_co_max = 0d0
   Integer(Int32) :: vof_nadv = 0
@@ -61,8 +63,9 @@ Contains
     Integer(Int64) :: nint
     Integer(Int32) :: wmin, wmin_g, wreq
 
-    ! the padded stencils (two-fluid momentum reconstruction, height-function curvature) reach VOF_MIN_SLAB planes into the
-    ! neighbouring rank, the passive transport one plane: a thinner slab silently gives rank-layout-dependent results
+    ! the padded stencils (two-fluid momentum reconstruction, height-function curvature) reach VOF_MIN_SLAB
+    ! planes into the neighbouring rank, the passive transport one plane: a thinner slab silently gives
+    ! rank-layout-dependent results
     wreq = Merge(VOF_MIN_SLAB, 1, vof_flow >= 1)
     wmin = Min( nxg-2, nzg-2 )
     Call MPI_Allreduce(wmin, wmin_g, 1, MPI_INTEGER, MPI_MIN, MPI_COMM_WORLD, ierr)
@@ -139,8 +142,8 @@ Contains
   End Subroutine vof_init
 
 
-  !> The wave inlet profile, its return flow and the relaxation zone assume the still-water depth above a flat bed at y = 0: a body in
-  !  the generation zone (or at the inlet) would be inconsistent with them
+  !> The wave inlet profile, its return flow and the relaxation zone assume the still-water depth above a flat
+  !  bed at y = 0: a body in the generation zone (or at the inlet) would be inconsistent with them
   Subroutine check_bed_outside_generation_zone
 
     Integer(Int32) :: i, j, k, nbad, nbad_g
@@ -210,9 +213,11 @@ Contains
        Return
     End If
     If ( vof_ic_type == 4 ) Then
-       ! standing/sloshing wave: liquid below y = level + amp cos(2 pi x/lambda), column average over 32 sub-columns
+       ! standing/sloshing wave: liquid below y = level + amp cos(2 pi x/lambda), column average over 32
+       ! sub-columns
        If ( vof_smooth_w > 0d0 ) Then
-          ! smoothed Heaviside of the signed vertical distance (interface normal distance ~ dy/sqrt(1+eta_x^2)), width vof_smooth_w cells
+          ! smoothed Heaviside of the signed vertical distance (interface normal distance ~
+          ! dy/sqrt(1+eta_x^2)), width vof_smooth_w cells
           px = 0.5d0*(x0 + x1);  py = 0.5d0*(y0 + y1);  pz = y1 - y0
           qx = vof_level + vof_wave_amp*Cos(2d0*pi_*px/vof_wave_lambda)
           qy = -vof_wave_amp*(2d0*pi_/vof_wave_lambda)*Sin(2d0*pi_*px/vof_wave_lambda)
@@ -238,15 +243,16 @@ Contains
     If ( vof_ic_type == 5 ) Then
        ! liquid box x < vof_center(1), y < vof_center(2) (dam-break column): exact overlap fraction
        c = Min(1d0, Max(0d0, (vof_center(1) - x0)/(x1 - x0)))
-       ! vof_radius > 0: mirror image against the periodic wrap (a column of twice the width centred on the x = 0 plane)
+       ! vof_radius > 0: mirror image against the periodic wrap (a column of twice the width centred on the x
+       ! = 0 plane)
        If ( vof_radius > 0d0 ) c = Min(1d0, c + Min(1d0, Max(0d0, (x1 - (Lx - dx - vof_center(1)))/(x1 - x0))))
        c = c*Min(1d0, Max(0d0, (vof_center(2) - y0)/(y1 - y0)))
        Return
     End If
 
     If ( vof_ic_type == 6 .Or. vof_ic_type == 7 ) Then
-       ! disk in the x-y plane (uniform in z): vof_center(1:2), vof_radius; sampled 20 x 20 per cell. Type 7 is Zalesak's slotted
-       ! disk: slot of width R/3 from the bottom of the disk up to 2R/3 above the centre
+       ! disk in the x-y plane (uniform in z): vof_center(1:2), vof_radius; sampled 20 x 20 per cell. Type 7
+       ! is Zalesak's slotted disk: slot of width R/3 from the bottom of the disk up to 2R/3 above the centre
        cnt = 0
        Do b = 1, 20
           py = y0 + (y1 - y0)*(Real(b,Int64) - 0.5d0)/20d0
@@ -295,7 +301,8 @@ Contains
   End Function initial_fraction
 
 
-  !> Initial surface elevation of the vof_ic_type=4 wave: cosine, plus the second-order Stokes harmonic if vof_wave_stokes = 1
+  !> Initial surface elevation of the vof_ic_type=4 wave: cosine, plus the second-order Stokes harmonic if
+  !  vof_wave_stokes = 1
   Pure Function wave_surface(xx) Result(eta)
 
     Real(Int64), Intent(In) :: xx
@@ -309,8 +316,9 @@ Contains
   End Function wave_surface
 
 
-  !> Refresh both ghost layers of the padded C: rank seams and periodic wraps through the scalar-transport host path, zero-gradient
-  !  at x inflow/outflow and y walls (periodic in y when y_bc_type=0). Matches vof_advect's fill_pad_iface.
+  !> Refresh both ghost layers of the padded C: rank seams and periodic wraps through the scalar-transport
+  !  host path, zero-gradient at x inflow/outflow and y walls (periodic in y when y_bc_type=0). Matches
+  !  vof_advect's fill_pad_iface.
   Subroutine vof_fill_pad(Cp, n1, n2, n3)
 
     Integer(Int32), Intent(In)    :: n1, n2, n3
@@ -368,7 +376,8 @@ Contains
     !$acc end kernels
     If ( vp_masked ) Then
        Call fill_solid_fraction(Cp, n1, n2, n3)
-       ! wall ghost rows from the filled rows, and the x/z pad layers (second ghost layer) from the neighbours' filled cells
+       ! wall ghost rows from the filled rows, and the x/z pad layers (second ghost layer) from the
+       ! neighbours' filled cells
        Cw = Cp(1:n1,1:n2,1:n3)
        Cw(:,1,:)  = Cw(:,2,:)
        Cw(:,n2,:) = Cw(:,n2-1,:)
@@ -381,10 +390,9 @@ Contains
   End Subroutine vof_fill_pad
 
 
-  !> Liquid fraction of the IBM solid cells (every face closed): the mean of the active cells among the 26 neighbours (zero where
-  !  there are none), i.e. a zero-gradient continuation into the body. The reconstruction, the densities of the faces next to the
-  !  body and the curvature read these cells; the transport never changes them (their faces carry no flux). Only active cells
-  !  contribute, so the result is independent of the rank layout.
+  !> Liquid fraction of the IBM solid cells: mean of the active cells among the 26 neighbours (zero-gradient
+  !  continuation into the body), read by reconstruction, face densities and curvature; transport never
+  !  changes it. Only active cells contribute, so it is rank-layout independent.
   Subroutine fill_solid_fraction(Cp, n1, n2, n3)
 
     Integer(Int32), Intent(In)    :: n1, n2, n3
@@ -515,9 +523,10 @@ Contains
   End Subroutine vof_advance_substep
 
 
-  !> Analytic divergence-free test velocity at time tm on the staggered faces, evaluated as the discrete curl of a vector potential
-  !  at the cell edges so that the discrete divergence is zero to round-off: 1 LeVeque vortex reversal, 2 Enright deformation,
-  !  3 steady rigid rotation about (0.5,0.5) with period vof_presc_T (Zalesak)
+  !> Analytic divergence-free test velocity at time tm on the staggered faces, evaluated as the discrete curl
+  !  of a vector potential at the cell edges so that the discrete divergence is zero to round-off: 1 LeVeque
+  !  vortex reversal, 2 Enright deformation, 3 steady rigid rotation about (0.5,0.5) with period vof_presc_T
+  !  (Zalesak)
   Subroutine prescribed_velocity(tm, Uf, Vf, Wf)
 
     Real(Int64), Intent(In)  :: tm
@@ -598,8 +607,8 @@ Contains
   End Subroutine vof_sync_io
 
 
-  !> Append one row to vof_diag.dat (rank 0): time, liquid volume, relative drift against the initial volume, C range, interface
-  !  cells, cumulative clip loss, largest sub-step Courant number seen since the last row
+  !> Append one row to vof_diag.dat (rank 0): time, liquid volume, relative drift against the initial volume,
+  !  C range, interface cells, cumulative clip loss, largest sub-step Courant number seen since the last row
   Subroutine vof_output_monitor
 
     Real(Int64) :: vliq, cmin, cmax, mom(7), vv, vel_loc(3), vel_glb(3), xloc, yloc, serr, pjump, pcs(2)
@@ -677,7 +686,8 @@ Contains
       End If
     End Block
     End If
-    ! diagnostic (vof_debug = 1, single rank): where the fastest |V| is and the phase fractions above and below that face
+    ! diagnostic (vof_debug = 1, single rank): where the fastest |V| is and the phase fractions above and
+    ! below that face
     If ( vof_debug == 1 .And. nprocs == 1 ) Then
        Block
           Integer(Int32) :: ia(3)
@@ -695,7 +705,8 @@ Contains
           Flush(uvm)
        End Block
     End If
-    ! diagnostic (vof_debug = 1): leading edge of the liquid in the bottom cell row inside the first half period (dam break)
+    ! diagnostic (vof_debug = 1): leading edge of the liquid in the bottom cell row inside the first half
+    ! period (dam break)
     If ( vof_debug == 1 ) Then
        Block
           Real(Int64) :: xf, xfg
@@ -774,7 +785,8 @@ Contains
   End Subroutine write_snapshot
 
 
-  !> Volume integral of |C - C_init| over the distinct cells (vof_prescribed runs: the reversal test returns to the initial shape)
+  !> Volume integral of |C - C_init| over the distinct cells (vof_prescribed runs: the reversal test returns
+  !  to the initial shape)
   Function shape_error() Result(e)
 
     Real(Int64) :: e, el
@@ -806,7 +818,8 @@ Contains
   End Function shape_error
 
 
-  !> Volume-mean pressure of the liquid cells (C > 0.99) minus that of the gas cells (C < 0.01): the Laplace jump of a static drop
+  !> Volume-mean pressure of the liquid cells (C > 0.99) minus that of the gas cells (C < 0.01): the Laplace
+  !  jump of a static drop
   Function pressure_jump() Result(pj)
 
     Real(Int64) :: pj, loc(4), glb(4), vc
@@ -843,7 +856,8 @@ Contains
   End Function pressure_jump
 
 
-  !> Volume integrals of P and P^2 over the distinct cells: independent of the rank layout when the pressure halos/seams are right
+  !> Volume integrals of P and P^2 over the distinct cells: independent of the rank layout when the pressure
+  !  halos/seams are right
   Function pressure_checksums() Result(pc)
 
     Real(Int64) :: pc(2), loc(2), vc
@@ -899,7 +913,8 @@ Contains
              Do k = 2, khi
                 col = 0d0
                 Do j = 2, nyg-1
-                   ! solid cells (IBM) count as bed: the gauge reports the surface elevation above the still level, not above the bed
+                   ! solid cells (IBM) count as bed: the gauge reports the surface elevation above the still
+                   ! level, not above the bed
                    col = col + hy(j)*( Cv(i,j,k)*fluid_weight(i,j,k) + 1d0 - fluid_weight(i,j,k) )
                 End Do
                 loc(ig) = loc(ig) + col - vof_level
@@ -925,8 +940,9 @@ Contains
   End Subroutine vof_write_gauges
 
 
-  !> Global liquid volume, extremes of C and interface-cell count over the owned cells (periodic duplicate cells left out), plus
-  !  mom = (first moments of the liquid in x, y, z, integral of C(1-C) as a smearing measure)
+  !> Global liquid volume, extremes of C and interface-cell count over the owned cells (periodic duplicate
+  !  cells left out), plus mom = (first moments of the liquid in x, y, z, integral of C(1-C) as a smearing
+  !  measure)
   Subroutine vof_diagnostics(vliq, cmin, cmax, nint, mom)
 
     Real(Int64),    Intent(Out) :: vliq, cmin, cmax, mom(7)

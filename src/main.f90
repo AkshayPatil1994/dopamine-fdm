@@ -1,7 +1,6 @@
 !			Main Dopamine Program
 Program dopamine
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use input_output
@@ -16,7 +15,6 @@ Program dopamine
   Use restart_output, Only : trim_restart_text_files
   Use vof_twofluid, Only : vof_flow_init, compute_time_step_vof
   
-  ! prevent implicit typing
   Implicit None
 
   Character(300) :: input_file
@@ -44,13 +42,12 @@ Program dopamine
   ! two-fluid VOF state (density, pressure predictor, hydrostatic reference) from the initialised C and U,V,W
   If ( vof_flow >= 1 ) Call vof_flow_init
 
-  ! small summary of input parameters
   Call summary
      
-  ! fill ghost/halo cells of the initial fields: the first RK stage's RHS and scalar RHS read them before any stage-end BC call.
-  ! Not on a restart: the file already holds the previous step's filled ghost and wall rows, and re-applying the wall (Robin) BCs
-  ! here would use slip lengths that are not in the file yet (wall-model alpha), so the restarted run would differ from an
-  ! uninterrupted one.
+  ! fill ghost/halo cells of the initial fields, since the first RK stage's RHS reads them before any
+  ! stage-end BC call. Skipped on restart: the file already holds the filled ghost and wall rows, and
+  ! re-applying the wall (Robin) BCs would use slip lengths not yet in the file (wall-model alpha), so the run
+  ! would differ from an uninterrupted one.
   If ( restart == 0 ) Call apply_boundary_conditions(after_projection=.True.)
   If ( sediment_flag >= 1 .And. ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar_noflux(Cscal)
   If ( boussinesq_flag >= 1 .And. ibm_input_mode >= 1 ) Call apply_ghost_cell_ibm_scalar(Tscal)
@@ -61,7 +58,7 @@ Program dopamine
 
      istep = istep + 1
 
-     ! time step (pressure forcing update handled inside )
+     ! time step
      If ( vof_flow >= 1 ) Then
         Call compute_time_step_vof
      Else
@@ -79,10 +76,8 @@ Program dopamine
 
      Call accumulate_tavg
 
-     ! output some key values
      Call output_monitor
 
-     ! write snapshot if needed
      Call output_data
 
      ! write 2-D slice and 1-D line probes (gated on slice_freq/line_freq)
@@ -92,13 +87,12 @@ Program dopamine
      If ( nsteps > 0 ) Then
         If ( istep >= nsteps ) Exit
      Else
-        ! tolerance guards against t landing one ULP short of sim_end_time after dt-snapping in compute_time_step_RK3
+        ! tolerance: t can land one ULP short of sim_end_time after dt-snapping in compute_time_step_RK3
         If ( t >= sim_end_time - 1d-10 ) Exit
      End If
 
   End Do
 
-  ! finalize stuff
   Call finalize_probes
   Call finalize_rsb
   Call finalize_tavg

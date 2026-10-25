@@ -1,15 +1,11 @@
-!> Wave generation for the two-fluid solver: target free-surface elevation and velocity of a long-crested wave travelling in +x
-!  over the still-water depth d = vof_level (bed at y = 0), used for the Dirichlet inlet and the relaxation zones.
-!
-!    wave_type 1  linear (Airy) wave of height wave_height and period wave_period
-!    wave_type 2  Rienecker-Fenton stream-function wave of the same height and period (nonlinear)
-!    wave_type 3  JONSWAP spectrum (wave_Hs, wave_Tp, wave_gamma) as wave_nfreq linear components with seeded random phases,
-!                 finite-depth dispersion and Wheeler stretching of the velocity profile
-!
-!  A mean current (current_type, throughflow) adds to the water velocity. Above the surface the water velocity is undefined; the
-!  air carries the uniform return flow that makes the inlet flux zero (closed flume): u_air = -Q/(Ly - d - eta), Q the water
-!  column's volume flux. All setup (dispersion roots, spectrum, phases, stream-function solve) runs on every rank from the same
-!  inputs and seed, so no communication is needed.
+!> Wave generation for the two-fluid solver: target free-surface elevation and velocity of a long-crested wave
+!  in +x over the still-water depth d = vof_level (bed at y = 0), for the Dirichlet inlet and the relaxation
+!  zones. wave_type 1 linear (Airy), 2 Rienecker-Fenton stream function, 3 JONSWAP (wave_Hs, wave_Tp,
+!  wave_gamma) as wave_nfreq linear components with seeded random phases, finite-depth dispersion and Wheeler
+!  stretching. A mean current (current_type) adds to the water velocity. Above the surface the water velocity
+!  is undefined; the air carries the uniform return flow that zeroes the inlet flux (closed flume): u_air =
+!  -Q/(Ly - d - eta), Q the water column's volume flux. Setup runs on every rank from the same inputs and
+!  seed, so no communication is needed.
 Module waves
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -23,14 +19,16 @@ Module waves
   Integer(Int32) :: wv_n = 0                   ! number of linear components
   Real(Int64), Allocatable, Dimension(:) :: wv_a, wv_k, wv_w, wv_ph
   Real(Int64) :: wv_d = 0d0, wv_g = 9.81d0
-  ! stream-function solution (wave_type 2): wave number, phase speed, Eulerian mean-current definition, coefficients
+  ! stream-function solution (wave_type 2): wave number, phase speed, Eulerian mean-current definition,
+  ! coefficients
   Integer(Int32) :: sf_n = 0
   Real(Int64) :: sf_k = 0d0, sf_c = 0d0, sf_ubar = 0d0, sf_q = 0d0, sf_r = 0d0
   Real(Int64) :: sf_b(0:SF_MAX_N) = 0d0, sf_e(0:SF_MAX_N) = 0d0
-  ! inlet profiles on the solver's y grid, refreshed by wave_inlet_profile
-  Real(Int64), Allocatable, Dimension(:) :: wv_in_u, wv_in_v, wv_in_m, wv_in_mv   ! m, mv: water fraction (x ramp) at the u/w and v heights
+  ! m, mv: water fraction (x ramp) at the u/w and v heights
+  Real(Int64), Allocatable, Dimension(:) :: wv_in_u, wv_in_v, wv_in_m, wv_in_mv
   Real(Int64) :: wv_in_eta = 0d0
-  Real(Int64) :: wv_in_t = -1d300   ! time of the stored inlet profile: it is a pure function of t, so equal-t calls reuse it
+  ! time of the stored inlet profile: it is a pure function of t, so equal-t calls reuse it
+  Real(Int64) :: wv_in_t = -1d300
 
 Contains
 
@@ -169,7 +167,8 @@ Contains
   End Function wave_eta_raw
 
 
-  !> Water velocity (u, v) at the point (x, y), y from the bed, for y up to the surface (the caller handles the air)
+  !> Water velocity (u, v) at the point (x, y), y from the bed, for y up to the surface (the caller handles
+  !  the air)
   Subroutine wave_vel_raw(x, y, t, u, v)
 
     Real(Int64), Intent(In)  :: x, y, t
@@ -233,7 +232,8 @@ Contains
   End Function ratio_sinh
 
 
-  !> Residuals of the Fenton Fourier stream-function problem for z = (k, c, B0, psi_s, R, B_1..B_N, s_0..s_N), height h
+  !> Residuals of the Fenton Fourier stream-function problem for z = (k, c, B0, psi_s, R, B_1..B_N, s_0..s_N),
+  !  height h
   Subroutine sf_residual(z, n, h, res)
 
     Integer(Int32), Intent(In)  :: n
@@ -278,7 +278,8 @@ Contains
   End Subroutine sf_residual
 
 
-  !> Newton solve with a finite-difference Jacobian, continuing in wave height from a small wave to wave_height
+  !> Newton solve with a finite-difference Jacobian, continuing in wave height from a small wave to
+  !  wave_height
   Subroutine stream_function_solve
 
     Integer(Int32) :: n, nu, it, ih, nh, i, info
@@ -344,8 +345,9 @@ Contains
   End Subroutine stream_function_solve
 
 
-  !> Full target at the inlet plane x = 0 on the solver's grid: eta, u at the cell-centre heights yg, v at the face heights y.
-  !  Water below the surface follows the wave; above it the air returns the water flux uniformly.
+  !> Full target at the inlet plane x = 0 on the solver's grid: eta, u at the cell-centre heights yg, v at the
+  !  face heights y. Water below the surface follows the wave; above it the air returns the water flux
+  !  uniformly.
   Subroutine wave_inlet_profile(t)
 
     Real(Int64), Intent(In) :: t
@@ -368,7 +370,8 @@ Contains
   End Subroutine wave_inlet_profile
 
 
-  !> Mean current at height ys (clamped to the still-water depth, so the water above it keeps the surface value); depth-mean current_U
+  !> Mean current at height ys (clamped to the still-water depth, so the water above it keeps the surface
+  !  value); depth-mean current_U
   Function current_vel(ys, t) Result(u)
 
     Real(Int64), Intent(In) :: ys, t
@@ -389,7 +392,8 @@ Contains
   End Function current_vel
 
 
-  !> Cell-centre velocity of the current alone (water below the still level, nothing above): the target of the absorption zone
+  !> Cell-centre velocity of the current alone (water below the still level, nothing above): the target of the
+  !  absorption zone
   Subroutine current_profile(t, uc)
 
     Real(Int64), Intent(In)  :: t
@@ -427,8 +431,9 @@ Contains
        q = q + Merge(0.5d0, 1d0, m == 0 .Or. m == nq)*u*dys
     End Do
     ua = -q/Max(Ly_i - hs, 1d-12)
-    ! cell-averaged inlet velocity: the water part of each cell moves with the wave, the air part with the return flow, so that
-    ! the face velocities integrate to the same zero net flux as the analytic profile (no flux mismatch in the surface cell)
+    ! cell-averaged inlet velocity: the water part of each cell moves with the wave, the air part with the
+    ! return flow, so that the face velocities integrate to the same zero net flux as the analytic profile
+    ! (no flux mismatch in the surface cell)
     Do j = 1, nyg
        jj = Min(Max(j, 2), nyg-1)
        cf = Min(1d0, Max(0d0, (hs - y(jj-1))/(y(jj) - y(jj-1))))

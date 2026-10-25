@@ -1,5 +1,6 @@
-!> Restart handling of the time-series output files: on restart=1 the run continues from the snapshot, which can be older than
-!  the point where the previous run stopped, so the records written after the snapshot are dropped before new ones are appended.
+!> Restart handling of the time-series output files: on restart=1 the run continues from the snapshot, which
+!  can be older than the point where the previous run stopped, so the records written after the snapshot are
+!  dropped before new ones are appended.
 Module restart_output
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -42,8 +43,8 @@ Contains
   End Subroutine truncate_file
 
 
-  !> Drop the rows of a text file whose time (field tcol, blanks or commas as separators) is later than tmax; comment lines (#) and
-  !  the header line of a csv (first line, not numeric) stay
+  !> Drop the rows of a text file whose time (field tcol, blanks or commas as separators) is later than tmax;
+  !  comment lines (#) and the header line of a csv (first line, not numeric) stay
   Subroutine trim_rows_after(fname, tcol, tmax)
 
     Character(*), Intent(In) :: fname
@@ -88,7 +89,8 @@ Contains
   End Subroutine trim_rows_after
 
 
-  !> Restart (rank 0): drop the rows after the restart time from a time-series file, which must not be open yet
+  !> Restart (rank 0): drop the rows after the restart time from a time-series file, which must not be open
+  !  yet
   Subroutine trim_restart_file(fname, tcol)
 
     Character(*), Intent(In) :: fname

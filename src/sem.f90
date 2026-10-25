@@ -1,28 +1,29 @@
 !> Streamwise inflow BC (x_bc_type==1): constant uniform flow, Ensemble SEM, or recycled precursor slice
 Module synthetic_eddy_method
 
-  ! Modules
   Use iso_fortran_env, Only : Int32, Int64
   Use global
   Use mpi
 
-  ! prevent implicit typing
   Implicit None
 
   ! ---- mean/Reynolds-stress reference profile (inflow_type==1) ----------
   Integer(Int32) :: n_profile = 0
   Real   (Int64), Allocatable :: prof_y(:), prof_U(:)
-  ! z-mean of the donor's first frame over its unique cells (the periodic last cell repeats the first); the wave inlet subtracts it
+  ! donor first-frame z-mean over unique cells (the periodic last cell repeats the first); the wave inlet
+  ! subtracts it
   Real   (Int64), Allocatable :: prof_U_fl(:)
   Real   (Int64), Allocatable :: prof_R11(:), prof_R22(:), prof_R33(:), prof_R12(:)
   Logical :: inflow_profile_loaded = .False.   ! guards init_inflow_profile against a second (redundant) file read
 
-  ! optional SEM inflow mean-temperature profile (inflow_temperature_file); n_profile_T==0 -> mean_profile_T falls back to T_ref
+  ! optional mean-temperature profile (inflow_temperature_file); n_profile_T==0 -> mean_profile_T falls back
+  ! to T_ref
   Integer(Int32) :: n_profile_T = 0
   Real   (Int64), Allocatable :: prof_y_T(:), prof_T(:)
   !$acc declare create(n_profile_T, prof_y_T, prof_T)
 
-  ! inhomogeneous eddy length-scale profile sigma_ij(y) (i=u,v,w; j=x,y,z); n_sigma==0 (sem_sigma_file unset) => homogeneous mode
+  ! eddy length-scale profile sigma_ij(y) (i=u,v,w; j=x,y,z); n_sigma==0 (sem_sigma_file unset) =>
+  ! homogeneous mode
   Integer(Int32) :: n_sigma = 0
   Real   (Int64), Allocatable :: sig_y(:)
   Real   (Int64), Allocatable :: sig_ux(:), sig_uy(:), sig_uz(:)
@@ -33,42 +34,48 @@ Module synthetic_eddy_method
   Integer(Int32) :: n_cdf = 0
   Real   (Int64), Allocatable :: cdf_y(:), cdf_val(:)
 
-  ! eddy population (inflow_type==1): fixed size class/x-phase, but (y,z) and sign re-drawn every recycle -- eddy-recycling/phase-locking rationale
+  ! eddy population (inflow_type==1): size class and x-phase fixed; (y,z) and sign re-drawn every recycle
+  ! (eddy_realize) so the signal does not repeat with the eddy transit period
   Real   (Int64), Allocatable :: eddy_x0(:)
-  Real   (Int64), Allocatable :: eddy_y0(:)        ! (sem_n_eddies): placement height this eddy's size class (eddy_sig) was calibrated at; anchors eddy_realize's per-cycle y_r redraw (inhomogeneous mode) so a wall-sized eddy can't wander into the outer layer and vice versa
+  ! placement height the eddy's size class was calibrated at; anchors eddy_realize's y redraw so a wall-sized
+  ! eddy cannot wander into the outer layer and vice versa (inhomogeneous mode)
+  Real   (Int64), Allocatable :: eddy_y0(:)
   Real   (Int64), Allocatable :: eddy_sig(:,:,:)   ! (3,3,sem_n_eddies): (i,j,k)=sigma_ij of eddy k
   Real   (Int64), Allocatable :: eddy_smax(:,:)    ! (3,sem_n_eddies): (j,k)=max_i(sigma_ij) of eddy k
   Real   (Int64), Allocatable :: eddy_Tperiod(:)   ! (sem_n_eddies): 2*eddy_smax(1,k)/Uconv_sem
   Real   (Int64) :: Uconv_sem = 0d0                ! eddy-box convection velocity
 
-  ! per-eddy realisation at time sem_cache_t (position along x, active flag, re-drawn y/z/sign), shared by every inlet point of a BC call
+  ! per-eddy realisation at time sem_cache_t (x position, active flag, re-drawn y/z/sign), shared by all
+  ! inlet points of a BC call
   Integer(Int32), Allocatable :: sc_act(:)
   Real   (Int64), Allocatable :: sc_xk(:), sc_y(:), sc_z(:), sc_eps(:,:)
   Real   (Int64) :: sem_cache_t = -Huge(1d0)
   !$acc declare create(sc_act, sc_xk, sc_y, sc_z, sc_eps)
 
-  Real   (Int64), Parameter :: sem_placement_band_factor = 3d0  ! half-width (in units of eddy_smax(2,k)) of the y-band eddy_realize confines eddy k's re-realized position to, inhomogeneous mode only
+  Real   (Int64), Parameter :: sem_placement_band_factor = 3d0   ! y-band half-width, units of eddy_smax(2,k)
 
-  ! placement box bounds, needed at runtime (not just at init) by
-  ! eddy_realize's per-cycle re-randomization
+  ! placement box bounds, needed at runtime by eddy_realize
   Real   (Int64) :: box_y_lo, box_y_hi, box_z_lo, box_z_hi
 
-  ! ESEM empirical normalisation (Schau et al. 2022 sec. 3): per-grid-point mean/std of the raw eddy-kernel sum over an ensemble window, computed once at start-up; each staggered component (U,V,W) needs its own table(s)
+  ! ESEM normalisation (Schau et al. 2022 sec. 3): per-point mean/std of the raw eddy sum, per staggered
+  ! component
   Real   (Int64), Allocatable :: ens_mean_uU(:,:), ens_std_uU(:,:)   ! U's grid (nyg,nzg): u* stats
   Real   (Int64), Allocatable :: ens_mean_uV(:,:), ens_std_uV(:,:)   ! V's grid (ny,nzg):  u* stats
   Real   (Int64), Allocatable :: ens_mean_vV(:,:), ens_std_vV(:,:)   ! V's grid (ny,nzg):  v* stats
   Real   (Int64), Allocatable :: ens_mean_wW(:,:), ens_std_wW(:,:)   ! W's grid (nyg,nz):  w* stats
 
-  ! classical (oSEM, Jarrin 2006) analytical normalisation, used only when sem_use_esem==0, for comparison against ESEM (homogeneous mode only, see init_inflow)
+  ! classical (oSEM, Jarrin 2006) analytical normalisation, only for sem_use_esem==0 (homogeneous mode, see
+  ! init_inflow)
   Real   (Int64) :: sem_norm = 1d0   ! sqrt(V_B); tent_kernel already carries sigma^-3/2
 
   Real   (Int64), Parameter :: sem_clip_sigma = 5d0  ! safety-net clip, local target std-devs
 
-  ! near-wall no-slip enforcement for the fluctuating field (Section sem_fluctuation): precomputed once (host-side, init_inflow) from y_global/y_bc_type/bc_face_ylo/yhi so sem_fluctuation's !$acc routine seq body only needs these device-resident scalars, not y_global itself
+  ! near-wall no-slip enforcement (sem_fluctuation): set once in init_inflow so the device routine needs no
+  ! y_global; only at Dirichlet walls
   Integer(Int32) :: wall_active_lo = 0, wall_active_hi = 0
   Real   (Int64) :: wall_y_lo = 0d0, wall_y_hi = 0d0, wall_Ltaper_lo = 1d0, wall_Ltaper_hi = 1d0
 
-  ! device residency for the state sem_fluctuation's per-step (!$acc routine seq) call chain reads; populated once by init_inflow (see its !$acc update device calls), read-only thereafter
+  ! device-resident state of sem_fluctuation's call chain; set once by init_inflow, read-only afterwards
   !$acc declare create(n_profile, prof_y, prof_U, prof_U_fl, prof_R11, prof_R22, prof_R33, prof_R12)
   !$acc declare create(n_sigma, sig_y, sig_ux, sig_uy, sig_uz, sig_vx, sig_vy, sig_vz, sig_wx, sig_wy, sig_wz)
   !$acc declare create(n_cdf, cdf_y, cdf_val)
@@ -78,31 +85,32 @@ Module synthetic_eddy_method
   !$acc declare create(sem_norm)
   !$acc declare create(wall_active_lo, wall_active_hi, wall_y_lo, wall_y_hi, wall_Ltaper_lo, wall_Ltaper_hi)
 
-  ! Recycled precursor inflow (inflow_type==2). rec_active is .True. only on the rank owning the x=1 face (row==0); every
-  ! routine below is a no-op elsewhere. rec_unit's sign cannot tell open from closed: Open(newunit=...) always returns a
-  ! negative unit, so "rec_unit<0" held both before and after a successful open and no donor frame was ever read.
+  ! Recycled precursor inflow (inflow_type==2). rec_active: only the rank owning the x=1 face (row==0); other
+  ! ranks no-op. Not rec_unit<0: Open(newunit=) always returns a negative unit.
   Logical        :: rec_active  = .False.
   Integer(Int32) :: rec_unit    = -1
   Integer(Int32) :: rec_ncomp   = 0
   Integer(Int32) :: rec_n1      = 0   ! U/W/T/C's native n1 = nym_global (cell-centre y)
-  Integer(Int32) :: rec_n1_v    = 0   ! V's own native n1 = ny_global (y-face, no half-cell shift needed) when rec_v_native; else == rec_n1 (legacy shared-grid donor, see rec_v_native)
-  Logical        :: rec_v_native = .True.  ! .True.: donor meta had 'n1_V' (dopamine-ESEM / per-component-native-grid writer) -- V read at its own y-face index, no shift. .False.: older/generic probe_output.f90 x-normal slice donor, which cell-centre-interpolates V onto the same (nym_global) grid as U/W -- V must then be indexed with the same j-1 cell-centre shift as U/W (see recycle_value)
+  Integer(Int32) :: rec_n1_v    = 0   ! V's native n1 = ny_global when rec_v_native, else rec_n1
+  ! donor has 'n1_V': V on its own y-face grid, no shift; else V is cell-centre-interpolated like U/W and
+  ! needs the j-1 shift (see recycle_value)
+  Logical        :: rec_v_native = .True.
   Integer(Int32) :: rec_n2_global = 0 ! all components' donor n2 = nzm_global (U/V cell-centre z; W left-face-of-cell z)
-  Integer(Int32) :: rec_col_U   = 0, rec_col_V = 0, rec_col_W = 0   ! presence flags (1 if the component is in the donor's comps, 0 if absent) -- U,V,W always required
-  Integer(Int32) :: rec_col_T   = 0   ! 0 if the donor slice didn't record T (fine unless boussinesq_flag>=1, checked in init_inflow_recycle)
-  Integer(Int32) :: rec_col_C   = 0   ! 0 if the donor slice didn't record C (fine unless sediment_flag>=1, checked in init_inflow_recycle)
+  Integer(Int32) :: rec_col_U   = 0, rec_col_V = 0, rec_col_W = 0   ! component present in the donor (U,V,W required)
+  Integer(Int32) :: rec_col_T   = 0   ! 0: donor has no T (needed if boussinesq_flag>=1)
+  Integer(Int32) :: rec_col_C   = 0   ! 0: donor has no C (needed if sediment_flag>=1)
   Integer(Int32) :: rec_nsnaps  = 0
-  Real   (Int64), Allocatable :: rec_times(:)   ! full donor snapshot-time array; tiny (one Real64 per snapshot), kept resident on the host only
-  Integer(Int32) :: rec_k1 = 0, rec_k2 = 0       ! this rank's local donor z range (global 1-based interior cc/face indices, same convention as kg1_global/kg2_global-2)
-  Integer(Int64) :: rec_frame_bytes = 0_Int64    ! bytes per full per-snapshot frame (sum of the selected components' own (n1_c,n2) blocks, fixed U,V,W,T,C order)
-  Integer(Int64) :: rec_off_U = 0_Int64, rec_off_V = 0_Int64, rec_off_W = 0_Int64   ! each component's byte offset of its block's start within a frame
+  Real   (Int64), Allocatable :: rec_times(:)
+  ! this rank's donor z range, global 1-based interior cell/face indices (as kg1_global/kg2_global-2)
+  Integer(Int32) :: rec_k1 = 0, rec_k2 = 0
+  Integer(Int64) :: rec_frame_bytes = 0_Int64
+  Integer(Int64) :: rec_off_U = 0_Int64, rec_off_V = 0_Int64, rec_off_W = 0_Int64
   Integer(Int64) :: rec_off_T = 0_Int64, rec_off_C = 0_Int64
-  Integer(Int32) :: rec_idx_lo = -1, rec_idx_hi = -1   ! cached bracketing donor frame indices, so a step that doesn't cross a donor sample re-reads nothing
-  Integer(Int32) :: rec_shift_z   = 0                   ! spanwise shift (donor z-cells) for the current pass through the donor timeline; re-drawn every donor-loop wrap (inflow_recycle_shift_z==1)
-  Integer(Int32) :: rec_loop_idx  = -999999              ! which pass through the donor timeline rec_shift_z was drawn for
-  Integer(Int32) :: rec_idx_shift = -999999              ! shift value currently baked into rec_lo_*/rec_hi_* (vs. rec_shift_z, the shift that should be active now)
-  ! bracketing frames per component -- each on its OWN native (n1_c, local nz) grid (no
-  ! half-cell shift needed on read: U/W index directly via rec_n1, V via rec_n1_v)
+  Integer(Int32) :: rec_idx_lo = -1, rec_idx_hi = -1
+  Integer(Int32) :: rec_shift_z   = 0   ! donor z-cells; re-drawn at every loop wrap
+  Integer(Int32) :: rec_loop_idx  = -999999
+  Integer(Int32) :: rec_idx_shift = -999999   ! shift baked into rec_lo_*/rec_hi_*
+  ! bracketing frames per component on its own native (n1_c, local nz) grid
   Real   (Int64), Allocatable :: rec_lo_U(:,:), rec_hi_U(:,:)
   Real   (Int64), Allocatable :: rec_lo_V(:,:), rec_hi_V(:,:)
   Real   (Int64), Allocatable :: rec_lo_W(:,:), rec_hi_W(:,:)
@@ -114,14 +122,15 @@ Module synthetic_eddy_method
 
 Contains
 
-  !> Abort every rank on a fatal error (a bare Stop exits with status 0 and, on a rank subset, hangs the others)
+  !> Abort every rank on a fatal error (a bare Stop exits with status 0 and, on a rank subset, hangs the
+  !  others)
   Subroutine sem_abort(msg)
     Character(*), Intent(In) :: msg
     Write(*,'(A)') Trim(msg)
     Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
   End Subroutine sem_abort
 
-  !> Minimum grid spacing over the whole domain (x,y,z faces); resolvability floor for the SEM/TI-rescale auto-tuning heuristics
+  !> Minimum grid spacing (x,y,z faces); floor for the SEM/TI-rescale auto-tuning
   Real(Int64) Function min_grid_spacing() Result(dmin)
 
     dmin = Min( Minval(x_global(2:nx_global)-x_global(1:nx_global-1)), &
@@ -130,11 +139,8 @@ Contains
 
   End Function min_grid_spacing
 
-  !> Per-direction maximum grid spacing (x,y,z), the building block behind both max_grid_spacing()
-  !> (isotropic sem_length_scale's floor) and enforce_sigma_floor (sem_sigma_file's per-direction
-  !> sigma_ij floor, which matches each component to the spacing in ITS OWN direction rather than one
-  !> isotropic value -- a wall-clustered y-grid's coarse mid-channel spacing shouldn't be diluted by a
-  !> fine spanwise z-grid, or vice versa).
+  !> Per-direction maximum grid spacing, for max_grid_spacing() and enforce_sigma_floor (each sigma_ij is
+  !  floored against the spacing of its own direction)
   Subroutine max_grid_spacing_xyz(dx_max, dy_max, dz_max)
 
     Real(Int64), Intent(Out) :: dx_max, dy_max, dz_max
@@ -145,9 +151,8 @@ Contains
 
   End Subroutine max_grid_spacing_xyz
 
-  !> Maximum grid spacing over the domain (x,y,z faces): the resolvability floor for sem_length_scale needs this rather than
-  !> min_grid_spacing(). An eddy spans ~2*sem_length_scale in every direction (eddy_sig is isotropic in homogeneous mode), so the
-  !> coarsest relevant spacing matters, not the tiny near-wall cell.
+  !> Maximum grid spacing (x,y,z faces): an eddy spans ~2*sem_length_scale, so its floor needs the coarsest
+  !  spacing, not min_grid_spacing()
   Real(Int64) Function max_grid_spacing() Result(dmax)
 
     Real(Int64) :: dx_max, dy_max, dz_max
@@ -157,7 +162,7 @@ Contains
 
   End Function max_grid_spacing
 
-  !> Friction-velocity estimate from the imposed pressure gradient, or (dPdx~0, e.g. open-channel/free-stream) from the wall-normal derivative of the mean inflow profile, used by place_eddies' wall damping
+  !> Friction velocity from dPdx or, if dPdx~0, the mean-profile wall gradient (place_eddies wall damping)
   Real(Int64) Function estimate_u_tau() Result(u_tau)
 
     Real(Int64) :: dUdy_wall
@@ -171,7 +176,8 @@ Contains
 
   End Function estimate_u_tau
 
-  !> Provisional sem_length_scale from domain/grid geometry alone, used while parsing the inflow profile when sem_length_scale<=0 requests auto-tuning; refined by refine_sem_length_scale once the profile is available
+  !> Provisional sem_length_scale from geometry while the profile is parsed (<=0); refined by
+  !  refine_sem_length_scale
   Real(Int64) Function geometric_length_scale_estimate() Result(L0)
 
     L0 = 0.3d0 * Min(Ly, Lz)
@@ -179,7 +185,8 @@ Contains
 
   End Function geometric_length_scale_estimate
 
-  !> Refines the provisional sem_length_scale using the now-parsed inflow profile: average of the measured/derived streamwise length-scale profile (sig_ux) if available, else a direct mixing-length estimate sqrt(R11)/|dU/dy| from prof_R11/prof_U (mirrors derive_mixing_length); clamped to [5*min grid spacing, 0.3*min(Ly,Lz)]
+  !> Refines sem_length_scale from the mean sig_ux, else sqrt(R11)/|dU/dy| (as derive_mixing_length); clamped
+  !  to [5*min spacing, 0.3*min(Ly,Lz)]
   Subroutine refine_sem_length_scale
 
     Real(Int64) :: Lfloor, Lcap, dUdy, Lsum
@@ -212,11 +219,9 @@ Contains
 
   End Subroutine refine_sem_length_scale
 
-  !> Unconditional resolvability floor on sem_length_scale, auto-tuned or user-set: an eddy spans ~2*sem_length_scale in every
-  !> direction (isotropic eddy_sig in homogeneous mode), and one narrower than a few cells is destroyed by advection/projection
-  !> within the first cells, collapsing the injected stresses at the inflow although the target statistics were exact. Keyed off
-  !> max_grid_spacing(), not min_grid_spacing() as the auto-tune's own floor is, which a wall-clustered near-wall cell makes too
-  !> permissive when the streamwise spacing is much coarser.
+  !> Floor on sem_length_scale: an eddy spans ~2*sem_length_scale, and one narrower than a few cells is
+  !  destroyed within the first cells, collapsing the injected stresses. Uses max_grid_spacing() (a
+  !  wall-clustered min spacing would be too permissive).
   Subroutine enforce_sem_length_scale_floor
 
     Real(Int64) :: Lfloor
@@ -233,11 +238,8 @@ Contains
 
   End Subroutine enforce_sem_length_scale_floor
 
-  !> Per-direction resolvability floor on the inhomogeneous eddy length-scale profile (sem_sigma_file, or sem_profile_format=1's
-  !> derived sig_*), the counterpart of enforce_sem_length_scale_floor; no-op when n_sigma==0. sigma_ij is eddy component i's
-  !> footprint in direction j (see place_eddies/unified_kernel), so each of the 9 profiles is floored against the spacing in its own
-  !> direction (sig_*x streamwise, sig_*y y, sig_*z spanwise). Clamps in place and warns once per profile (pre-clamp minimum
-  !> vs floor).
+  !> Per-direction floor on the sigma_ij profiles (sem_sigma_file or derived), each against the spacing of its
+  !  own direction; clamps in place and warns once per profile. No-op when n_sigma==0.
   Subroutine enforce_sigma_floor
 
     Real(Int64) :: dx_max, dy_max, dz_max, Lfloor_x, Lfloor_y, Lfloor_z
@@ -280,7 +282,8 @@ Contains
 
   End Subroutine enforce_sigma_floor
 
-  !> Auto-sets sem_n_eddies (sem_n_eddies<=0 requests this) from Jarrin's box-fill density guideline: ~1 eddy per sem_length_scale^3 cell of the padded inflow box; mirrors build_analytical_normalisation's recommended_N diagnostic
+  !> Auto-sets sem_n_eddies (<=0): ~1 eddy per sem_length_scale^3 of the padded inflow box (Jarrin); mirrors
+  !  build_analytical_normalisation's recommended_N
   Subroutine auto_set_n_eddies
 
     Real(Int64) :: y_lo, y_hi, z_lo, z_hi, VB, recommended_N
@@ -306,8 +309,8 @@ Contains
 
   End Subroutine auto_set_n_eddies
 
-  ! One-time inflow setup. No-op unless x_bc_type==1.
-  !> Read just the mean-profile file (prof_y/prof_U/prof_R**) so an IC generator can seed the interior from the same mean profile the inflow BC will impose; safe to call before the rest of init_inflow's eddy-population setup, and idempotent (init_inflow skips re-reading via inflow_profile_loaded)
+  ! One-time inflow setup (no-op unless x_bc_type==1). Reading the mean profile first lets an IC generator
+  ! seed the interior from it; idempotent via inflow_profile_loaded
   Subroutine init_inflow_profile
 
     If ( x_bc_type /= 1 ) Return
@@ -323,8 +326,8 @@ Contains
        End If
        inflow_profile_loaded = .True.
     Else If ( inflow_type == 2 ) Then
-       ! mean profile only (z-average of the donor's first frame), so genGridandIC can
-       ! seed the interior mean without a step-1 inflow/IC divergence spike, same as inflow_type==1
+       ! mean profile only (z-average of the donor's first frame), so genGridandIC seeds the interior without
+       ! a step-1 divergence spike
        Call read_recycle_mean_profile
        inflow_profile_loaded = .True.
     End If
@@ -338,7 +341,8 @@ Contains
     If ( x_bc_type /= 1 ) Return
 
     If ( inflow_type == 2 .Or. ( inflow_type == 3 .And. wave_turb == 1 ) ) Then
-       If ( inflow_type == 3 ) Call read_recycle_mean_profile   ! the wave inlet takes only the donor's fluctuation, so its mean is needed
+       ! the wave inlet takes only the donor fluctuation, so its mean (z-mean of the first frame) is needed
+       If ( inflow_type == 3 ) Call read_recycle_mean_profile
        If ( inflow_type == 2 ) Call init_inflow_profile
        Call init_inflow_recycle
        Return
@@ -350,8 +354,8 @@ Contains
     If ( auto_length_scale ) sem_length_scale = geometric_length_scale_estimate()
 
     Call init_inflow_profile
-    Call read_sigma_profile   ! sem_sigma_file, if set, overrides any length scales read_mean_profile_TI derived from inflow_profile_file
-    Call enforce_sigma_floor  ! unconditional: catches a sig_* profile (explicit file or mixing-length-derived) too small for the grid to resolve, same rationale as enforce_sem_length_scale_floor below
+    Call read_sigma_profile   ! sem_sigma_file overrides derived length scales
+    Call enforce_sigma_floor   ! clamp sig_* the grid cannot resolve
 
     If ( boussinesq_flag >= 1 .And. Len_trim(inflow_temperature_file) > 0 ) Call read_mean_profile_T
 
@@ -366,7 +370,8 @@ Contains
     Uconv_sem = Sum(prof_U) / Real(n_profile,8)
     If ( Uconv_sem <= 0d0 ) Call sem_abort( 'ERROR: SEM inflow profile has non-positive bulk velocity' )
 
-    ! near-wall no-slip enforcement setup (see wall_taper/sem_fluctuation): only active at faces that are literal Dirichlet (no-slip) walls, not periodic or free-slip
+    ! near-wall no-slip setup (wall_taper/sem_fluctuation): only at literal Dirichlet walls, not periodic or
+    ! free-slip
     wall_active_lo = Merge( 1, 0, y_bc_type == 1 .And. bc_face_ylo == 1 )
     wall_active_hi = Merge( 1, 0, y_bc_type == 1 .And. bc_face_yhi == 1 )
     wall_y_lo      = y_global(1)
@@ -375,7 +380,7 @@ Contains
     wall_Ltaper_hi = 2d0*( y_global(ny_global) - y_global(ny_global-1) )
 
     If ( auto_length_scale ) Call refine_sem_length_scale
-    Call enforce_sem_length_scale_floor   ! unconditional: also catches an explicitly-set sem_length_scale too small for the grid to resolve
+    Call enforce_sem_length_scale_floor   ! also clamps an explicit sem_length_scale
     If ( sem_n_eddies <= 0 ) Call auto_set_n_eddies
 
     Call place_eddies
@@ -411,10 +416,9 @@ Contains
 
   End Subroutine init_inflow
 
-  !> Parse a recycled-inflow donor's <inflow_recycle_file>_meta.txt. Two formats: (1) dopamine-ESEM's per-component native grids,
-  !> with an explicit 'n1_V' key (V's y-face count, ny_global) next to the shared U/W/T/C n1 (nym_global); (2) the generic format
-  !> of probe_output.f90's x-normal slice output (e.g. examples/precursor_successor), with V cell-centre interpolated onto the
-  !> U/W grid and no 'n1_V'. For (2) n1_v defaults to n1 and v_native is returned .False., so V is read like U/W.
+  !> Parse a recycled-inflow donor's _meta.txt: (1) dopamine-ESEM per-component grids with an 'n1_V' key (V's
+  !  y-face count); (2) generic probe_output slice, V cell-centre interpolated onto the U/W grid, no 'n1_V'
+  !  (n1_v = n1, v_native = .False.)
   Subroutine read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native)
 
     Integer(Int32), Intent(Out) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC
@@ -481,7 +485,8 @@ Contains
 
   End Subroutine read_recycle_meta
 
-  !> Mean-profile seed for inflow_type==2 (recycled precursor inflow): every rank independently reads the donor's first frame and z-averages U(y), mirroring read_mean_profile's per-rank-independent read of a small shared file (here the read is one frame, not the whole donor file); R11/R22/R33/R12 are left at zero since sem_fluctuation is never called under inflow_type==2 -- these only feed mean_profile_U, used by genGridandIC to seed the IC mean
+  !> Mean-profile seed for inflow_type==2: every rank z-averages U(y) of the donor's first frame; R11..R12
+  !  stay zero since sem_fluctuation is not called, the profile only seeds the IC mean in genGridandIC
   Subroutine read_recycle_mean_profile
 
     Integer(Int32) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy, n2_unique
@@ -500,9 +505,7 @@ Contains
     prof_y = ym_global
     prof_R11 = 0d0;  prof_R22 = 0d0;  prof_R33 = 0d0;  prof_R12 = 0d0
 
-    ! only rank 0 pays the O(n1*n2) transient allocation+read for the donor's first frame's
-    ! U block (the first block on disk, see the per-component block order written by
-    ! dopamine-ESEM); the result (prof_U, n1 reals) is tiny, so broadcast it instead
+    ! only rank 0 reads the donor's first U block (first on disk); the result is tiny, so it is broadcast
     If ( myid == 0 ) Then
        n2_unique = n2 - Merge(1, 0, z_bc_type == 0)
        Allocate( frame_U(n1,n2) )
@@ -532,21 +535,20 @@ Contains
 
   End Subroutine read_recycle_mean_profile
 
-  !> One-time setup for inflow_type==2's runtime BC buffers: no-op on every rank except the one owning the x=1 face (row==0), which opens a persistent stream handle on the donor .bin and primes the bracketing time-interpolation frames (rec_lo/rec_hi) for this rank's own local z-slab only
+  !> One-time setup of the inflow_type==2 buffers; only the rank owning the x=1 face opens the donor .bin and
+  !  primes the rec_lo/rec_hi frames for its z-slab
   Subroutine init_inflow_recycle
 
     Integer(Int32) :: ios, u_times
     Character(300) :: fname
-    ! NVFORTRAN 23.3 fails to parse "Merge(...,rec_col_T==1)"/"...,rec_col_C==1)" inline
-    ! ("Syntax error at or near REC") -- a compiler parser bug specifically triggered by a
-    ! rec_-prefixed Integer compared inline as Merge's mask argument (confirmed in isolation;
-    ! renaming the identifier or precomputing the comparison both avoid it). Precompute the
-    ! masks into plain Logicals once instead of repeating the inline comparison at each site.
+    ! nvfortran 23.3 parser bug: an inline rec_* integer in Merge(...,rec_col_T==1) gives a bogus 'Syntax
+    ! error at or near REC'; precompute the masks into plain Logicals
     Logical :: has_T, has_C
 
     rec_unit = -1
     rec_active = .False.
-    ! this rank owns the x=1 face iff it's in row 0 of the p_row/p_col grid (mirrors decomp's x_periodic_partner, avoiding a new decomp.f90 dependency here since sem.f90 is also compiled standalone by the tests/verify_* targets)
+    ! this rank owns the x=1 face iff it is in row 0 of the p_row/p_col grid (as decomp's x_periodic_partner;
+    ! sem.f90 is also built standalone by tests)
     If ( myid/p_col /= 0 ) Return
 
     Call read_recycle_meta(rec_ncomp, rec_n1, rec_n1_v, rec_n2_global, rec_nsnaps, &
@@ -572,14 +574,14 @@ Contains
     Read(u_times) rec_times
     Close(u_times)
 
-    ! this rank's local donor z-slab: same global 1-based interior cc/face convention the writer used (kg_g = kg1_global(myid)+ka-2)
+    ! this rank's donor z-slab, same convention as the writer (kg_g = kg1_global(myid)+ka-2)
     rec_k1 = kg1_global(myid)
     rec_k2 = kg2_global(myid) - 2
     !$acc update device(rec_k1, rec_k2)
 
     has_T = ( rec_col_T == 1 );  has_C = ( rec_col_C == 1 )
 
-    ! each component's own block, fixed U,V,W,T,C disk order (only present ones actually occupy space)
+    ! blocks in fixed U,V,W,T,C disk order (only present ones occupy space)
     rec_off_U = 0_Int64
     rec_off_V = rec_off_U + 8_Int64*Int(rec_n1,  Int64)*Int(rec_n2_global,Int64)
     rec_off_W = rec_off_V + 8_Int64*Int(rec_n1_v,Int64)*Int(rec_n2_global,Int64)
@@ -587,7 +589,8 @@ Contains
     rec_off_C = rec_off_T + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, has_T)
     rec_frame_bytes = rec_off_C + Merge(8_Int64*Int(rec_n1,Int64)*Int(rec_n2_global,Int64), 0_Int64, has_C)
     If ( .Not. rec_v_native ) Then
-       ! probe_output.f90 slices are interleaved (ncomp,n1,n2): rec_off_* hold the 0-based component column instead of a byte offset
+       ! probe_output.f90 slices are interleaved (ncomp,n1,n2): rec_off_* hold the 0-based component column,
+       ! not a byte offset
        rec_off_U = 0_Int64;  rec_off_V = 1_Int64;  rec_off_W = 2_Int64
        rec_off_T = 3_Int64;  rec_off_C = Merge(4_Int64, 3_Int64, has_T)
        rec_frame_bytes = 8_Int64*Int(rec_ncomp,Int64)*Int(rec_n1,Int64)*Int(rec_n2_global,Int64)
@@ -617,7 +620,8 @@ Contains
 
   End Subroutine init_inflow_recycle
 
-  !> Read one contiguous donor-z span (z0..z0+count-1, 1-based global donor z index, no shift/wrap applied by this routine) of one component's block (comp_off = that component's byte offset within a frame, comp_n1 = its own native n1) into buf(:,zoff:zoff+count-1); each component's own (n1_c,n2) block is plain column-major (n1_c fastest), so any single z-span is a contiguous disk read
+  !> Read one contiguous donor-z span (z0..z0+count-1, global 1-based, no shift/wrap) of one component's block
+  !  into buf(:,zoff:); each block is column-major so a z-span is one contiguous read
   Subroutine read_recycle_span(frame_idx, comp_off, comp_n1, z0, count, buf, zoff)
 
     Integer(Int32), Intent(In)    :: frame_idx, comp_n1, z0, count, zoff
@@ -642,7 +646,8 @@ Contains
 
   End Subroutine read_recycle_span
 
-  !> Read one component's block from one donor frame's local z-slab, circularly shifted by shift_z donor z-cells (spanwise shift, see update_inflow_recycle); this rank's unshifted span is [rec_k1,rec_k2], so the shifted span is that window rotated by shift_z within the donor's periodic z range [1,rec_n2_global] -- at most one wrap, split into two contiguous reads when it crosses the donor's z boundary
+  !> Read one component's block of the local z-slab, circularly shifted by shift_z donor cells (periodic z
+  !  range [1,rec_n2_global]); split into two reads when it wraps
   Subroutine read_recycle_frame_comp(frame_idx, shift_z, comp_off, comp_n1, buf)
 
     Integer(Int32), Intent(In)    :: frame_idx, shift_z, comp_n1
@@ -664,7 +669,7 @@ Contains
 
   End Subroutine read_recycle_frame_comp
 
-  !> Read all active components' blocks for one donor frame (see read_recycle_frame_comp); dst_lo=.True. writes into the rec_lo_* buffers, .False. into rec_hi_*
+  !> Read all active components' blocks of one donor frame into rec_lo_* (dst_lo) or rec_hi_*
   Subroutine read_recycle_frame(frame_idx, shift_z, dst_lo)
 
     Integer(Int32), Intent(In) :: frame_idx, shift_z
@@ -686,7 +691,8 @@ Contains
 
   End Subroutine read_recycle_frame
 
-  !> Advance the recycled-inflow bracket (rec_lo/rec_hi/rec_frac) to time t_now; no-op except on the rank owning the x=1 face. Re-reads donor frames from disk only when the bracket or the spanwise shift actually changes, and only ever reads the frame(s) needed rather than the whole donor plane -- when the bracket simply slides forward (same loop pass, same shift), the old "hi" frame becomes the new "lo" and only one fresh frame is read
+  !> Advance the donor bracket (rec_lo/rec_hi/rec_frac) to t_now (rank owning x=1 only). Frames are re-read
+  !  only when the bracket or shift changes; when it slides forward the old hi becomes the new lo
   Subroutine update_inflow_recycle(t_now)
 
     Real(Int64), Intent(In) :: t_now
@@ -709,7 +715,7 @@ Contains
        t_target = Min( Max(t_target, t0), t1 )
     End If
 
-    ! new spanwise shift each time we start a fresh pass through the donor timeline (deterministic hash of (seed,loop_idx), same tool sem.f90 already uses to re-randomize eddies each recycle -- restart-safe, no RNG state to persist)
+    ! new spanwise shift per donor pass: hash of (seed,loop_idx), restart-safe, no RNG state to persist
     shift_z = 0
     If ( inflow_recycle_loop == 1 .And. inflow_recycle_shift_z == 1 .And. rec_n2_global > 1 ) Then
        If ( loop_idx /= rec_loop_idx ) Then
@@ -721,7 +727,7 @@ Contains
        shift_z = rec_shift_z
     End If
 
-    ! binary search rec_times(1:rec_nsnaps) (monotone by construction) for the bracketing pair
+    ! binary search of rec_times for the bracketing pair
     lo = 1;  hi = rec_nsnaps
     Do While ( hi - lo > 1 )
        mid = (lo+hi)/2
@@ -737,7 +743,7 @@ Contains
     changed = .False.
     If ( ilo /= rec_idx_lo .Or. ihi /= rec_idx_hi .Or. shift_z /= rec_idx_shift ) Then
        If ( ilo == rec_idx_hi .And. shift_z == rec_idx_shift ) Then
-          ! bracket slid forward, same shift: reuse the old "hi" as the new "lo", don't re-read it
+          ! bracket slid forward, same shift: reuse the old hi as the new lo
           rec_lo_U = rec_hi_U;  rec_lo_V = rec_hi_V;  rec_lo_W = rec_hi_W
           If ( rec_col_T == 1 ) rec_lo_T = rec_hi_T
           If ( rec_col_C == 1 ) rec_lo_C = rec_hi_C
@@ -764,7 +770,9 @@ Contains
 
   End Subroutine update_inflow_recycle
 
-  !> Time-interpolated recycled-inflow value for component comp (1=U,2=V,3=W,4=T,5=C) at this rank's local array position (j,k). Each component now reads its OWN native-grid donor block (see dopamine-ESEM's per-component staggered-grid writer), so this is an EXACT lookup, no half-cell interpolation/index-shift approximation: U/W use apply_inflow_bc_x's (yg,zg)-ghost-inclusive index space (j-1/k-1, matching rec_n1/rec_k1..rec_k2's cell-centre convention exactly like before); V uses its OWN (y,zg) index space -- j directly (V's local array has no y-ghost, so j already IS the y-face index, no -1 shift) and k-1 in z (V is still z ghost-cell-centred); W keeps U's y-index convention (j-1) but uses k directly (its local array has no z-ghost, so k already IS the z-face index, matching this donor's z(:) left-face-of-cell storage)
+  !> Time-interpolated recycled-inflow value of component comp (1=U,2=V,3=W,4=T,5=C) at local (j,k). Each
+  !  component reads its own donor grid, so there is no half-cell shift: U/W use j-1 (y ghost), V uses j
+  !  (y-face), U/V use k-1, W uses k (z-face, donor stores left faces).
   Real(Int64) Function recycle_value(comp, j, k) Result(val)
     !$acc routine seq
 
@@ -778,8 +786,7 @@ Contains
     Case (1)   ! U: (yg,zg) ghost cell-centre
        jy = Max( 1, Min(rec_n1, j-1) );  kz = Max( 1, Min(nzloc, k-1) )
        val = rec_lo_U(jy,kz) + rec_frac*( rec_hi_U(jy,kz) - rec_lo_U(jy,kz) )
-    Case (2)   ! V: native-grid donor -- (y,zg) y-face (no shift); legacy/generic donor -- V was
-               ! cell-centre-interpolated onto the same grid as U/W, so index it the same way (j-1)
+    Case (2)   ! V: native donor -- y-face (no shift); generic donor -- cell-centre like U/W (j-1)
        If ( rec_v_native ) Then
           jy = Max( 1, Min(rec_n1_v, j) )
        Else
@@ -841,8 +848,7 @@ Contains
 
   End Subroutine read_mean_profile_T
 
-  ! Read the mean-velocity / Reynolds-stress reference profile (unchanged
-  ! format/semantics from the original SEM implementation).
+  ! Read the mean-velocity / Reynolds-stress reference profile
   Subroutine read_mean_profile
 
     Integer(Int32) :: unit_in, ios, n
@@ -851,7 +857,9 @@ Contains
 
     If ( myid == 0 ) Write(*,'(A,A)') ' Reading SEM inflow profile from ', Trim(inflow_profile_file)
 
-    ! every rank reads the (small, shared) profile file independently; free-form text, skip blank/'#' lines, each row: y U V W uu vv ww uv [uw vw] (extra cols read but unused, see sem_fluctuation's R13=R23=0 assumption)
+    ! every rank reads the (small, shared) profile file independently; free-form text, skip blank/'#' lines,
+    ! each row: y U V W uu vv ww uv [uw vw] (extra cols read but unused, see sem_fluctuation's R13=R23=0
+    ! assumption)
     Open(newunit=unit_in, file=Trim(inflow_profile_file), status='old', action='read', iostat=ios)
     If ( ios /= 0 ) Call sem_abort( 'ERROR: cannot open inflow_profile_file' )
 
@@ -885,7 +893,7 @@ Contains
        prof_R33(n) = col(7)   ! ww
        prof_R12(n) = col(8)   ! uv
 
-       ! PSD check (R13=R23=0 assumed): R11,R33>=0 and the 2x2 leading minor R11*R22-R12^2>=0
+       ! PSD check (R13=R23=0): R11,R33>=0 and R11*R22-R12^2>=0
        If ( prof_R11(n) < 0d0 .Or. prof_R33(n) < 0d0 .Or. &
             prof_R11(n)*prof_R22(n) - prof_R12(n)**2 < -1d-10*Max(prof_R11(n)*prof_R22(n),1d-30) ) &
             Call sem_abort( 'ERROR: inflow_profile_file: Reynolds-stress tensor is not positive-semidefinite at some y' )
@@ -899,7 +907,8 @@ Contains
 
   End Subroutine read_mean_profile
 
-  !> Read a wind-tunnel style profile (sem_profile_format==1): header "# z U Iu Iv Iw [Lux Luy Luz Lvx Lvy Lvz Lwx Lwy Lwz]", intensities converted to Reynolds stresses (uv=0, no shear data), length scales optional/partial with the tiered fallback documented in sem.md
+  !> Read a wind-tunnel profile (sem_profile_format==1): header "# z U Iu Iv Iw [Lux ... Lwz]"; intensities
+  !  become Reynolds stresses (uv=0), length scales optional with the fallback tiers in sem.md
   Subroutine read_mean_profile_TI
 
     Integer(Int32), Parameter :: n_slot = 14
@@ -947,7 +956,8 @@ Contains
     Allocate( prof_y(n_profile), prof_U(n_profile) )
     Allocate( prof_R11(n_profile), prof_R22(n_profile), prof_R33(n_profile), prof_R12(n_profile) )
 
-    ! sig_* is populated whenever measured/ratio-derived (any_Lscale) or mixing-length-derived data will be used; the mixing-length fallback needs sem_use_esem==1 (classical SEM has no normalisation for inhomogeneous length scales, see init_inflow)
+    ! sig_* is filled when length scales are measured/ratio-derived or mixing-length-derived; the latter
+    ! needs sem_use_esem==1 (classical SEM cannot normalise inhomogeneous scales)
     If ( any_Lscale .Or. sem_use_esem == 1 ) Then
        n_sigma = n_profile
        Allocate( sig_y(n_sigma) )
@@ -995,7 +1005,8 @@ Contains
     Close(unit_in)
     Deallocate(row)
 
-    ! no L** column at all: derive an inhomogeneous length-scale profile from mixing-length theory instead of the old isotropic sem_length_scale fallback, see derive_mixing_length
+    ! no L** column: derive an inhomogeneous length-scale profile from mixing-length theory
+    ! (derive_mixing_length)
     If ( .Not. any_Lscale .And. n_sigma > 0 ) Call derive_mixing_length
 
     If ( prof_y(1) > y_global(1)+1d-10 .Or. prof_y(n_profile) < y_global(ny_global)-1d-10 ) Then
@@ -1005,7 +1016,9 @@ Contains
 
   End Subroutine read_mean_profile_TI
 
-  !> Prandtl mixing-length fallback for sem_profile_format=1 when no L** column is measured: L(y) = sigma_u(y)/|dU/dy|, sigma_u = sqrt(R11); same L used for all three components' x-scale (no independent shear estimate for v,w), y/z-scales via the usual sem_Lscale_ratio_y/z; clamped to [sem_length_scale, outer_frac*profile height] since |dU/dy|->0 blows the estimate up near a free-stream/outer edge
+  !> Mixing-length fallback when no L** column is given: L(y) = sqrt(R11)/|dU/dy| for all components' x-scale,
+  !  y/z via sem_Lscale_ratio_y/z; clamped to [sem_length_scale, outer_frac*profile height] because |dU/dy|->0
+  !  near the outer edge
   Subroutine derive_mixing_length
 
     Real(Int64), Parameter :: outer_frac = 0.3d0
@@ -1071,7 +1084,8 @@ Contains
 
   End Subroutine parse_TI_header
 
-  !> Map a header token to its slot id (1..n_slot), 'y' accepted as an alias for slot 1 ('z'); -1 if unrecognized
+  !> Map a header token to its slot id (1..n_slot), 'y' accepted as an alias for slot 1 ('z'); -1 if
+  !  unrecognized
   Integer(Int32) Function token_slot(tok, slot_name, n_slot) Result(islot)
 
     Character(*),   Intent(In) :: tok
@@ -1093,7 +1107,7 @@ Contains
 
   End Function token_slot
 
-  !> Fill one component's (Lox,Loy,Loz) length scales with the tiered fallback (measured > ratio*Lox > sem_length_scale), see sem.md
+  !> Fill one component's (Lox,Loy,Loz): measured > ratio*Lox > sem_length_scale (sem.md)
   Subroutine fill_length_scale(cx, cy, cz, row, ncols, Lx_out, Ly_out, Lz_out)
 
     Integer(Int32), Intent(In)  :: cx, cy, cz, ncols
@@ -1127,14 +1141,14 @@ Contains
 
   End Subroutine fill_length_scale
 
-  !> Read the optional inhomogeneous eddy length-scale profile (ESEM Section 4.1); empty sem_sigma_file => homogeneous mode (n_sigma=0)
+  !> Read the optional eddy length-scale profile (ESEM 4.1); empty sem_sigma_file => homogeneous (n_sigma=0)
   Subroutine read_sigma_profile
 
     Integer(Int32) :: unit_in, ios, n
     Real   (Int64) :: col(10)
     Character(300) :: line
 
-    If ( Len_trim(sem_sigma_file) == 0 ) Return   ! keep whatever read_mean_profile_TI already derived (n_sigma stays 0 if none)
+    If ( Len_trim(sem_sigma_file) == 0 ) Return   ! keep what read_mean_profile_TI derived
 
     If ( myid == 0 ) Write(*,'(A,A)') ' Reading inhomogeneous SEM length-scale profile from ', Trim(sem_sigma_file)
 
@@ -1187,9 +1201,8 @@ Contains
 
   End Subroutine read_sigma_profile
 
-  ! Generic piecewise-linear interpolation, clamped at the endpoints. xarr
-  ! must be non-decreasing (grid/profile y-nodes); bracket found by binary
-  ! search (called at every inflow grid point, every RK sub-stage).
+  ! Piecewise-linear interpolation clamped at the endpoints; xarr non-decreasing, bracket by binary search
+  ! (called at every inflow point and RK sub-stage)
   Real(Int64) Function linterp(xarr, yarr, n, xq) Result(val)
     !$acc routine seq
 
@@ -1231,7 +1244,8 @@ Contains
     val = linterp(sig_y, col, n_sigma, yc)
   End Function interp_sigma
 
-  !> Build each eddy's fixed size class (9-component length scales, Section 4.1) and x-phase/period; (y,z) and sign are re-drawn every cycle by eddy_realize
+  !> Build each eddy's fixed size class (ESEM 4.1) and x-phase/period; (y,z) and sign are redrawn per cycle by
+  !  eddy_realize
   Subroutine place_eddies
 
     Integer(Int32) :: kk
@@ -1258,7 +1272,7 @@ Contains
     Allocate( sc_act(sem_n_eddies), sc_xk(sem_n_eddies), sc_y(sem_n_eddies), sc_z(sem_n_eddies), sc_eps(3,sem_n_eddies) )
     sem_cache_t = -Huge(1d0)
 
-    ! identical seed/sequence on every rank: eddy population is a single shared virtual field upstream of the (MPI-decomposed-in-z) inflow plane
+    ! identical seed on every rank: one shared virtual eddy field upstream of the z-decomposed inflow plane
     Call random_seed_from(sem_seed)
 
     If ( sem_eddy_placement == 1 .And. n_sigma > 0 ) Call build_placement_cdf(box_y_lo,box_y_hi)
@@ -1267,8 +1281,7 @@ Contains
 
     Do kk = 1, sem_n_eddies
 
-       ! ---- initial placement height, used only to fix this eddy's size
-       ! class (uniform or PDF-weighted, Section 4.2) ----
+       ! initial placement height, used only to fix this eddy's size class (uniform or PDF-weighted)
        Call random_number(r1)
        If ( sem_eddy_placement == 1 .And. n_sigma > 0 ) Then
           y0 = invert_cdf(r1)
@@ -1277,8 +1290,7 @@ Contains
        End If
        eddy_y0(kk) = y0
 
-       ! ---- this eddy's own 9-component length scales (Section 4.1);
-       ! homogeneous mode: all nine = sem_length_scale
+       ! this eddy's 9 length scales (Section 4.1); homogeneous: all = sem_length_scale
        If ( n_sigma == 0 ) Then
           eddy_sig(:,:,kk) = sem_length_scale
        Else
@@ -1293,7 +1305,9 @@ Contains
           eddy_sig(3,3,kk) = interp_sigma(sig_wz,y0)
        End If
 
-       ! Van Driest-style near-wall damping: shrinks this eddy's whole size class (preserving its shape/anisotropy) based on its placement height's distance to the nearest wall, so injected turbulence intensity (set independently by prof_R11/22/33 in sem_fluctuation) stays on target while oversized near-wall eddies stop biasing the mean flow
+       ! Van Driest-style damping: shrinks the whole size class (shape kept) by the wall distance of its
+       ! placement height, so oversized near-wall eddies stop biasing the mean while the intensity stays set
+       ! by prof_R11/22/33
        If ( sem_wall_damping == 1 ) Then
           wall_dist = Max( Min( y0-y_global(1), y_global(ny_global)-y0 ), 0d0 )
           yplus     = wall_dist * u_tau / nu
@@ -1301,8 +1315,7 @@ Contains
           eddy_sig(:,:,kk) = eddy_sig(:,:,kk) * damp
        End If
 
-       ! bounding scale per direction (Section 4.3): the largest of the
-       ! three components' length scales in that direction
+       ! bounding scale per direction: largest of the three components' scales (Section 4.3)
        eddy_smax(1,kk) = Max( eddy_sig(1,1,kk), eddy_sig(2,1,kk), eddy_sig(3,1,kk) )  ! x
        eddy_smax(2,kk) = Max( eddy_sig(1,2,kk), eddy_sig(2,2,kk), eddy_sig(3,2,kk) )  ! y
        eddy_smax(3,kk) = Max( eddy_sig(1,3,kk), eddy_sig(2,3,kk), eddy_sig(3,3,kk) )  ! z
@@ -1316,7 +1329,8 @@ Contains
 
   End Subroutine place_eddies
 
-  !> Deterministic hash-based uniform(0,1), keyed by (seed,k,n,salt) via MurmurHash3's fmix64, so raw_eddy_sum stays a pure, repeatably-callable function with no mutable per-eddy state
+  !> Deterministic hash uniform(0,1) of (seed,k,n,salt) via MurmurHash3 fmix64, so raw_eddy_sum stays pure
+  !  with no per-eddy state
   Real(Int64) Function hash_uniform(seed_in, k, n, salt) Result(u)
     !$acc routine seq
 
@@ -1335,7 +1349,8 @@ Contains
 
   End Function hash_uniform
 
-  !> Fresh transverse position and fluctuation sign for eddy k's n-th cycle (uniform or PDF-weighted, see place_eddies/build_placement_cdf)
+  !> Fresh transverse position and sign for eddy k's n-th cycle (uniform or PDF-weighted,
+  !  place_eddies/build_placement_cdf)
   Subroutine eddy_realize(k, n, y_r, z_r, eps_r)
     !$acc routine seq
 
@@ -1351,10 +1366,9 @@ Contains
        y_r = box_y_lo + (box_y_hi-box_y_lo)*u1
     End If
 
-    ! Inhomogeneous mode: keep eddy k anchored to the wall-normal region its size class (eddy_sig, fixed in place_eddies from
-    ! eddy_y0(k)) was calibrated for; otherwise an outer-layer-sized eddy can be re-realised at the wall (oversized fluctuation,
-    ! biased mean) and a wall-sized one wasted in the free stream. Also needed under sem_wall_damping alone (n_sigma==0), where
-    ! place_eddies gives each eddy a damped eddy_sig/eddy_smax.
+    ! Inhomogeneous mode (and sem_wall_damping alone): keep eddy k near the wall-normal region its size class
+    ! was calibrated for, else an outer-layer eddy lands at the wall (biased mean) and a wall-sized one is
+    ! wasted outside
     If ( n_sigma > 0 .Or. sem_wall_damping == 1 ) Then
        band = sem_placement_band_factor * eddy_smax(2,k)
        y_r  = Min( Max( y_r, eddy_y0(k)-band ), eddy_y0(k)+band )
@@ -1369,7 +1383,8 @@ Contains
 
   End Subroutine eddy_realize
 
-  !> PDF-weighted eddy placement (ESEM Section 4.2, Eq. 9): trapezoidal CDF over sigma_file y-nodes, weighted inversely by eddy bounding volume so smaller eddies get proportionally more placements
+  !> PDF-weighted placement (ESEM 4.2, Eq. 9): trapezoidal CDF over sigma_file y-nodes, weighted inversely by
+  !  eddy volume so small eddies are placed more often
   Subroutine build_placement_cdf(y_lo, y_hi)
 
     Real(Int64), Intent(In) :: y_lo, y_hi
@@ -1408,9 +1423,8 @@ Contains
 
   End Subroutine build_placement_cdf
 
-  ! cdf_val is non-decreasing by construction (trapezoidal integral of a
-  ! strictly-positive weight, see build_placement_cdf); bracket found by
-  ! binary search (called per eddy per placement draw).
+  ! cdf_val is non-decreasing (trapezoid integral of a positive weight); binary search per eddy per placement
+  ! draw
   Real(Int64) Function invert_cdf(u) Result(yq)
     !$acc routine seq
 
@@ -1439,7 +1453,7 @@ Contains
 
   End Function invert_cdf
 
-  ! Deterministic RNG seed, identical on every MPI rank
+  ! identical RNG seed on every rank
   Subroutine random_seed_from(seed_in)
 
     Integer(Int32), Intent(In) :: seed_in
@@ -1454,7 +1468,8 @@ Contains
 
   End Subroutine random_seed_from
 
-  !> ESEM core (Section 3): sample the raw eddy-kernel sum over an ensemble window and store its empirical mean/std, replacing analytical normalisation; signal is periodic in timing but not value (eddy_realize redraws each cycle), so sem_ensemble_periods cycles of the slowest eddy are sampled
+  !> ESEM core (Sec. 3): empirical mean/std of the raw eddy-kernel sum over sem_ensemble_periods cycles of the
+  !  slowest eddy (periodic in timing, not value, as eddy_realize redraws each cycle)
   Subroutine build_ensemble_normalisation
 
     Integer(Int32) :: j, k, s
@@ -1502,7 +1517,7 @@ Contains
           ens_mean_vV(j,k) = sv / Ns_r
           ens_std_vV(j,k)  = Sqrt( Max( sv2/Ns_r - ens_mean_vV(j,k)**2, 0d0 ) )
 
-          ! diagnostic only: sem_fluctuation's Cholesky mixing assumes <u*v*> ~ 0
+          ! diagnostic only: Cholesky mixing assumes <u*v*> ~ 0
           If ( ens_std_uV(j,k) > 1d-300 .And. ens_std_vV(j,k) > 1d-300 ) Then
              corr = ( suv/Ns_r - ens_mean_uV(j,k)*ens_mean_vV(j,k) ) / ( ens_std_uV(j,k)*ens_std_vV(j,k) )
              max_abs_corr = Max( max_abs_corr, Abs(corr) )
@@ -1544,7 +1559,7 @@ Contains
     VB       = (2d0*sem_length_scale) * (y_hi-y_lo) * (z_hi-z_lo)
     sem_norm = Sqrt( VB )   ! tent_kernel already carries its own sigma^-3/2 factor
 
-    ! Diagnostic: Jarrin's density guideline wants ~1 eddy per sigma^3 cell of the box
+    ! diagnostic: ~1 eddy per sigma^3 of the box (Jarrin)
     recommended_N = VB / sem_length_scale**3
     If ( Real(sem_n_eddies,8) < 0.05d0*recommended_N ) Then
        If ( myid == 0 ) Then
@@ -1558,7 +1573,7 @@ Contains
 
   End Subroutine build_analytical_normalisation
 
-  !> Realise every eddy at t_now once (position along x, cycle's y/z/sign) so the per-point sums of an inlet BC call only evaluate kernels
+  !> Realise every eddy at t_now once (x position, y/z/sign) so each inlet point only evaluates kernels
   Subroutine sem_cache_refresh(t_now)
 
     Real(Int64), Intent(In) :: t_now
@@ -1591,8 +1606,8 @@ Contains
 
   End Subroutine sem_cache_refresh
 
-  !> raw_eddy_sum from the realisations cached by sem_cache_refresh, summing only the components component comp's fluctuation needs
-  !  (V mixes u* and v*); same terms in the same order as raw_eddy_sum
+  !> raw_eddy_sum from the cached realisations, summing only the terms comp needs (V mixes u* and v*); same
+  !  order as raw_eddy_sum
   Subroutine raw_eddy_sum_cached(yc, zc, comp, ustar, vstar, wstar)
     !$acc routine seq
 
@@ -1649,7 +1664,8 @@ Contains
 
   End Subroutine raw_eddy_sum_cached
 
-  !> Raw eddy-kernel sum at (yc,zc,t_now), Eq. (1) of Jarrin (2006)/Schau et al. (2022); homogeneous mode uses the tent kernel, inhomogeneous mode uses the unified (cosine) shape function (Section 4.3)
+  !> Raw eddy-kernel sum at (yc,zc,t_now), Eq. (1) of Jarrin (2006)/Schau et al. (2022): tent kernel
+  !  (homogeneous) or unified cosine shape (inhomogeneous, Sec. 4.3)
   Subroutine raw_eddy_sum(yc, zc, t_now, ustar, vstar, wstar)
     !$acc routine seq
 
@@ -1669,9 +1685,8 @@ Contains
 
     If ( n_sigma == 0 .And. sem_wall_damping == 0 ) Then
 
-       ! ---- homogeneous: original Jarrin tent-kernel formula, with a
-       ! freshly re-randomized (y,z,sign) every cycle (see eddy_realize) ----
-       ! (sem_wall_damping alone routes through the inhomogeneous branch below instead, since this branch ignores the per-eddy damped eddy_sig/eddy_smax and would otherwise make sem_wall_damping a no-op)
+       ! homogeneous: Jarrin tent kernel, (y,z,sign) redrawn per cycle (eddy_realize). sem_wall_damping alone
+       ! uses the inhomogeneous branch below, which honours the per-eddy damped eddy_sig/eddy_smax
        halfwidth = sem_length_scale
        Do kk = 1, sem_n_eddies
           phase   = (eddy_x0(kk)+halfwidth) + Uconv_sem*t_now
@@ -1694,7 +1709,8 @@ Contains
 
     Else
 
-       ! inhomogeneous: unified shape function, per-component/per-direction length scales (ESEM Sections 4.1/4.3), fresh (y,z,sign) every cycle
+       ! inhomogeneous: unified shape function, per-component/per-direction length scales (ESEM Sections
+       ! 4.1/4.3), fresh (y,z,sign) every cycle
        Do kk = 1, sem_n_eddies
           phase   = (eddy_x0(kk)+eddy_smax(1,kk)) + Uconv_sem*t_now
           n_cycle = Int( Floor( phase / (2d0*eddy_smax(1,kk)) ), Int32 )
@@ -1726,7 +1742,8 @@ Contains
 
   End Subroutine raw_eddy_sum
 
-  !> Divergence-free (Poletto, Craft & Revell 2013) raw eddy-kernel sum: curl of a separable vector potential built from the same eddy_sig/eddy_realize machinery as raw_eddy_sum
+  !> Divergence-free (Poletto, Craft & Revell 2013) eddy sum: curl of a separable vector potential from the
+  !  same eddy_sig/eddy_realize machinery
   Subroutine raw_eddy_curl_sum(yc, zc, t_now, ustar, vstar, wstar)
     !$acc routine seq
 
@@ -1741,7 +1758,8 @@ Contains
 
     ustar = 0d0; vstar = 0d0; wstar = 0d0
 
-    ! xk represents x_eddy_k(t)-x (it grows with t as the eddy convects downstream), so d(xk)/dx=-1 a.e. and dPsi/dx = -eps*f'(xk)*f*f (verified: d(xk)/dx=+1 would break div-free)
+    ! xk = x_eddy_k(t)-x grows with t, so d(xk)/dx=-1 and dPsi/dx = -eps*f'(xk)*f*f (d(xk)/dx=+1 would break
+    ! div-free)
     If ( n_sigma == 0 ) Then
 
        ! homogeneous: single sigma per eddy, shared by all three Psi components (tent kernel)
@@ -1810,7 +1828,8 @@ Contains
 
   End Subroutine raw_eddy_curl_sum
 
-  !> Target mean streamwise inflow profile: inflow_type==0 constant (inflow_Uconst), inflow_type==1 interpolated reference profile U(y)
+  !> Target mean streamwise inflow profile: inflow_type==0 constant (inflow_Uconst), inflow_type==1
+  !  interpolated reference profile U(y)
   Real(Int64) Function mean_profile_U(yc) Result(Uc)
     !$acc routine seq
 
@@ -1826,7 +1845,8 @@ Contains
 
   End Function mean_profile_U
 
-  !> Target mean inflow temperature profile: n_profile_T==0 falls back to T_ref (uniform), else interpolated prof_T(y)
+  !> Target mean inflow temperature profile: n_profile_T==0 falls back to T_ref (uniform), else interpolated
+  !  prof_T(y)
   Real(Int64) Function mean_profile_T(yc) Result(Tc)
     !$acc routine seq
 
@@ -1840,14 +1860,15 @@ Contains
 
   End Function mean_profile_T
 
-  !> Inflow velocity fluctuation at (yc,zc) for component comp (1=U,2=V,3=W): inflow_type==0 none, inflow_type==1 ESEM raw eddy sum normalised (Section 3) then Cholesky-correlated to the target Reynolds-stress tensor (R13=R23=0 assumed)
+  !> Inflow fluctuation at (yc,zc), component comp: none (inflow_type==0) or ESEM-normalised eddy sum
+  !  Cholesky-correlated to the target stresses (R13=R23=0)
   Subroutine sem_fluctuation(comp, j, k, yc, zc, t_now, up, vp, wp, use_cache)
     !$acc routine seq
 
     Integer(Int32), Intent(In)  :: comp, j, k
     Real   (Int64), Intent(In)  :: yc, zc, t_now
     Real   (Int64), Intent(Out) :: up, vp, wp
-    Logical, Intent(In)  :: use_cache   ! realisations of t_now cached by sem_cache_refresh (not for divergence-free eddies)
+    Logical, Intent(In)  :: use_cache   ! use the realisations cached by sem_cache_refresh (not div-free)
 
     Real(Int64) :: ustar, vstar, wstar, ui, vi, wi
     Real(Int64) :: R11, R22, R33, R12, a11, a21, a22, a33, taper
@@ -1865,7 +1886,7 @@ Contains
 
     ui = 0d0; vi = 0d0; wi = 0d0
     If ( sem_use_esem == 1 ) Then
-       ! ESEM: exact empirical per-grid-point normalisation
+       ! ESEM: empirical per-point normalisation
        If ( comp == 1 ) Then
           If ( ens_std_uU(j,k) > 1d-300 ) ui = (ustar - ens_mean_uU(j,k)) / ens_std_uU(j,k)
        Else If ( comp == 2 ) Then
@@ -1875,20 +1896,18 @@ Contains
           If ( ens_std_wW(j,k) > 1d-300 ) wi = (wstar - ens_mean_wW(j,k)) / ens_std_wW(j,k)
        End If
     Else
-       ! classical SEM: single analytical normalisation factor, applied
-       ! uniformly (no per-grid-point lookup, no ensemble precompute)
+       ! classical SEM: one analytical factor, no per-point lookup
        ui = ustar * sem_norm / Sqrt( Real(sem_n_eddies,8) )
        vi = vstar * sem_norm / Sqrt( Real(sem_n_eddies,8) )
        wi = wstar * sem_norm / Sqrt( Real(sem_n_eddies,8) )
     End If
 
-    ! correlate the (now exactly zero-mean, unit-variance) fluctuation
-    ! with the local target Reynolds-stress tensor via Cholesky
+    ! correlate the zero-mean, unit-variance fluctuation with the target stresses via Cholesky
     R11 = interp_profile(prof_R11,yc); R22 = interp_profile(prof_R22,yc)
     R33 = interp_profile(prof_R33,yc); R12 = interp_profile(prof_R12,yc)
 
-    ! Force no-slip on the injected fluctuation at solid walls even if the user's Reynolds-stress profile does not decay there:
-    ! linterp clamps to the profile endpoint outside its range, which would leave a nonzero R_ii right up to the wall face.
+    ! force no-slip at solid walls: linterp clamps to the profile end, which could leave a nonzero R_ii at
+    ! the wall face
     taper = 1d0
     If ( wall_active_lo == 1 ) taper = taper * wall_taper( yc-wall_y_lo, wall_Ltaper_lo )
     If ( wall_active_hi == 1 ) taper = taper * wall_taper( wall_y_hi-yc, wall_Ltaper_hi )
@@ -1903,14 +1922,15 @@ Contains
     vp = a21*ui + a22*vi
     wp = a33*wi
 
-    ! safety-net clip at a few std-devs of the local target stress; rarely triggers with exact ESEM normalisation, kept as defense-in-depth against an under-resolved ensemble window
+    ! safety-net clip at a few std-devs of the target stress; rarely active with exact ESEM normalisation
     up = Sign( Min(Abs(up), sem_clip_sigma*a11), up )
     vp = Sign( Min(Abs(vp), sem_clip_sigma*Sqrt(Max(R22,0d0))), vp )
     wp = Sign( Min(Abs(wp), sem_clip_sigma*a33), wp )
 
   End Subroutine sem_fluctuation
 
-  !> Smoothstep ramp from 0 (at the wall, d=0) to 1 (by d>=Ltaper); used to enforce no-slip on injected SEM fluctuations at literal solid walls regardless of the input Reynolds-stress profile's near-wall coverage
+  !> Smoothstep ramp 0 (wall) to 1 (d>=Ltaper): no-slip on the injected fluctuation at solid walls whatever
+  !  the profile's near-wall coverage
   Real(Int64) Function wall_taper(d, Ltaper) Result(f)
     !$acc routine seq
 
@@ -1922,7 +1942,8 @@ Contains
 
   End Function wall_taper
 
-  !> 1-D tent (triangular) SEM shape function (Jarrin 2006), normalised so integral of f^2 over its support equals 1; homogeneous mode only
+  !> 1-D tent (triangular) SEM shape function (Jarrin 2006), normalised so integral of f^2 over its support
+  !  equals 1; homogeneous mode only
   Real(Int64) Function tent_kernel(r, sigma) Result(f)
     !$acc routine seq
 
@@ -1950,7 +1971,8 @@ Contains
 
   End Function tent_kernel_deriv
 
-  !> "Unified" inhomogeneous shape function (ESEM Section 4.3, Eq. 11): bounded by sigma_max in this direction, with an extra cosine modulation at sigma_this if smaller, giving every eddy one bounding volume per direction instead of nine
+  !> Unified inhomogeneous shape function (ESEM 4.3, Eq. 11): bounded by sigma_max in the direction, cosine
+  !  modulation at sigma_this if smaller; one bounding volume per direction
   Real(Int64) Function unified_kernel(r, sigma_max, sigma_this) Result(f)
     !$acc routine seq
 
@@ -1966,7 +1988,8 @@ Contains
 
   End Function unified_kernel
 
-  !> d(unified_kernel)/dr; same zero-outside-sigma_max convention as unified_kernel at the support boundary (measure-zero)
+  !> d(unified_kernel)/dr; same zero-outside-sigma_max convention as unified_kernel at the support boundary
+  !  (measure-zero)
   Real(Int64) Function unified_kernel_deriv(r, sigma_max, sigma_this) Result(df)
     !$acc routine seq
 

@@ -1,4 +1,6 @@
-!> GPU cuFFT/cuSPARSE Poisson solve, pencil-decomposed across MPI ranks/GPUs (multi-GPU capable) for every supported BC combination: x periodic (FFT) or inflow/outflow (DCT-IV), z periodic (FFT) or walls (4-wall duct eigenmode solve), y periodic (FFT) or walls (tridiagonal)
+!> GPU cuFFT/cuSPARSE Poisson solve, pencil-decomposed over MPI ranks/GPUs for every supported BC combination:
+!  x periodic (FFT) or inflow/outflow (DCT-IV), z periodic (FFT) or walls (duct eigenmode solve), y periodic
+!  (FFT) or walls (tridiagonal)
 Module poisson_gpu
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -14,13 +16,14 @@ Module poisson_gpu
 
   Logical :: plans_created = .False.
 
-  ! 3D periodic cuFFT transform (y_bc_type==0 AND x_bc_type==0 only): batched 1-D cuFFT plans, one per pencil orientation,
-  ! wired between 2decomp&fft's CUDA-aware transposes like projection.f90's CPU FFTW path. plan_p3_x is the D2Z forward x
-  ! transform, plan_p3_xi its Z2D inverse; the spectral arrays (poisson_x_c/y_c/z_c) hold only the nxp/2+1 non-redundant kx modes
-  ! (decomp_spec), halving the data moved by the y<->z transposes.
+  ! 3D periodic cuFFT (y_bc_type==0 AND x_bc_type==0): batched 1-D plans per pencil orientation between
+  ! 2decomp&fft's CUDA-aware transposes (as projection.f90's FFTW path). plan_p3_x is the D2Z x transform,
+  ! plan_p3_xi its Z2D inverse; the spectral arrays hold only the nxp/2+1 kx modes (decomp_spec), halving the
+  ! y<->z transpose traffic.
   Integer :: plan_p3_x, plan_p3_xi, plan_p3_y, plan_p3_z
 
-  ! DCT-IV (x_bc_type==1) state: zero-padded 4N-point Z2Z FFT of every x-line of this rank's x-pencil + twiddle
+  ! DCT-IV (x_bc_type==1) state: zero-padded 4N-point Z2Z FFT of every x-line of this rank's x-pencil +
+  ! twiddle
   Integer :: plan_dct_L, Lx
   Complex(Int64), Allocatable :: dct_ext(:,:,:)
 
@@ -31,15 +34,15 @@ Module poisson_gpu
   Complex(Int64), Allocatable :: gtsv_dl(:), gtsv_d(:), gtsv_du(:), gtsv_x(:)
   Character(1), Allocatable :: gtsv_buf(:)
 
-  ! 4-wall duct (z_bc_type==1 .And. y_bc_type==1, x_bc_type==0) state: the x-FFT runs in the x-pencil like the
-  ! periodic case; the z-eigenbasis (Qz/sqrt_w_z/lambda_z, built once on the host at init from Dzz -- see
-  ! initialization.f90) is applied per local x-mode in the y-pencil (p_col==1: z fully local), then a batched
-  ! y-tridiagonal cuSPARSE solve per (x-mode, z-eigenmode) pair
+  ! 4-wall duct (z_bc_type==1 .And. y_bc_type==1, x_bc_type==0): x-FFT in the x-pencil as in the periodic
+  ! case; the z-eigenbasis (Qz/sqrt_w_z/lambda_z, built at init from Dzz) is applied per x-mode in the
+  ! y-pencil (p_col==1), then a batched y-tridiagonal solve
   Complex(Int64), Allocatable :: duct_c(:,:,:)   ! y-pencil shape: (local x-mode, y, z-eigenmode)
   Real(Int64), Allocatable :: Qz_gpu(:,:), sqrt_w_z_gpu(:), lambda_z_gpu(:)
   Real(Int64) :: lambda_z_tol
 
-  ! Spanwise wall alone (z_bc_type==1, y periodic): y-FFT in the y-pencil, then one z-tridiagonal cuSPARSE solve per (kx,ky) mode in the z-pencil
+  ! Spanwise wall alone (z_bc_type==1, y periodic): y-FFT in the y-pencil, then one z-tridiagonal cuSPARSE
+  ! solve per (kx,ky) mode in the z-pencil
   Logical :: zwall_only = .False.
 
 Contains
@@ -52,7 +55,8 @@ Contains
     Call MPI_Abort(MPI_COMM_WORLD, 1, ierr_a)
   End Subroutine gpu_abort
 
-  !> Create the batched cuFFT plans once, on first use (pencil-decomposed: one batched 1-D plan per pencil orientation)
+  !> Create the batched cuFFT plans once, on first use (pencil-decomposed: one batched 1-D plan per pencil
+  !  orientation)
   Subroutine gpu_poisson_init
 
     Integer :: ierr, nx1, nxh, nz1, nyp_l
@@ -60,9 +64,7 @@ Contains
     nx1    = Int(nxp_global)
     nz1    = Int(nzp_global)
 
-    ! kxx/kzz are set once in initialization.f90 and never touched again, so a
-    ! one-time upload here (rather than re-copying them from host on every call)
-    ! is all they ever need.
+    ! kxx/kzz are set once in initialization.f90, so they are uploaded once here
     !$acc enter data create(kxx,kzz)
     !$acc update device(kxx,kzz)
 
@@ -107,7 +109,8 @@ Contains
                                     [nz1], decomp_spec%zsz(1)*decomp_spec%zsz(2), 1, CUFFT_Z2Z, &
                                     decomp_spec%zsz(1)*decomp_spec%zsz(2) )
     End If
-    ! y-pencil (periodic y only): length-nyp transforms at stride ysz1, batch over i (one plan execution per k-slice)
+    ! y-pencil (periodic y only): length-nyp transforms at stride ysz1, batch over i (one plan execution per
+    ! k-slice)
     If ( y_bc_type == 0 ) Then
        ierr = ierr + cufftPlanMany( plan_p3_y, 1, [nyp_l], [nyp_l], decomp_spec%ysz(1), 1, &
                                     [nyp_l], decomp_spec%ysz(1), 1, CUFFT_Z2Z, decomp_spec%ysz(1) )
@@ -131,7 +134,8 @@ Contains
 
   End Subroutine gpu_poisson_init
 
-  !> Forward DCT-IV along x of every line of this rank's x-pencil: poisson_x_r -> poisson_x_c (real-valued), via a zero-padded 4N-point FFT + twiddle
+  !> Forward DCT-IV along x of every x-pencil line: poisson_x_r -> poisson_x_c (real-valued) via a zero-padded
+  !  4N-point FFT + twiddle
   Subroutine gpu_dct_x_forward
 
     Integer :: i, j, k, ierr, nx1, n2, n3
@@ -175,7 +179,8 @@ Contains
 
   End Subroutine gpu_dct_x_forward
 
-  !> Inverse of gpu_dct_x_forward (DCT-IV is self-inverse up to 2N): Real(poisson_x_c) -> poisson_x_r, scaled by 1/(2*nxp*extra_norm) with extra_norm = nzp for the periodic-z FFT (1 otherwise)
+  !> Inverse of gpu_dct_x_forward (DCT-IV is self-inverse up to 2N): scaled by 1/(2*nxp*extra_norm),
+  !  extra_norm = nzp with periodic-z FFT, else 1
   Subroutine gpu_dct_x_inverse(extra_norm)
 
     Real(Int64), Intent(In) :: extra_norm
@@ -220,7 +225,8 @@ Contains
 
   End Subroutine gpu_dct_x_inverse
 
-  !> Pencil-decomposed forward transform: y(real) -> x (cuFFT or DCT-IV) -> y -> z (cuFFT, periodic z only) -> y, leaving poisson_y_c in (kx,y,kz) space; mirrors projection.f90's CPU chain with device-resident arrays and CUDA-aware transposes
+  !> Forward transform: y(real) -> x (cuFFT or DCT-IV) -> y -> z (cuFFT, periodic z only) -> y, leaving
+  !  poisson_y_c in (kx,y,kz) space (device version of projection.f90's CPU chain)
   Subroutine gpu_forward_transform_3d
 
     Integer :: i, j, k, ierr, n1, n2, n3
@@ -263,7 +269,8 @@ Contains
 
   End Subroutine gpu_forward_transform_3d
 
-  !> y-FFT, elementwise divide by (kxx+kyy+kzz) in Fourier space, inverse y-FFT on this rank's y-pencil; (0,0,0) mode fixed to zero (periodic Poisson null-space), owned by whichever rank holds global mode (0,0,0)
+  !> y-FFT, divide by (kxx+kyy+kzz), inverse y-FFT in the y-pencil; the (0,0,0) mode (periodic null space) is
+  !  set to zero on the rank owning it
   Subroutine gpu_solve_periodic_3d
 
     Integer :: i, j, k, k_global, i_global, ierr, nyp, n1, n3, yst1, yst3
@@ -319,7 +326,8 @@ Contains
 
   End Subroutine gpu_solve_periodic_3d
 
-  !> Pencil-decomposed inverse transform: y -> z (inverse cuFFT, periodic z) -> y -> x (inverse cuFFT or DCT-IV) -> y(real) -> rhs_p, normalised here except for the y factor (applied in gpu_solve_periodic_3d)
+  !> Inverse transform: y -> z (inverse cuFFT, periodic z) -> y -> x (inverse cuFFT or DCT-IV) -> y(real) ->
+  !  rhs_p; normalised here except the y factor (applied in gpu_solve_periodic_3d)
   Subroutine gpu_inverse_transform_3d
 
     Integer :: i, j, k, ierr, n1, n2, n3
@@ -402,8 +410,8 @@ Contains
     ierr = cusparseCreate( cusparse_h )
     If ( ierr /= 0 ) Call gpu_abort('ERROR: cusparseCreate failed')
 
-    ! gtsv_dl/d/du/x are per-call scratch, fully overwritten before use in gpu_solve_tridiagonal_batched, so one device allocation
-    ! here (the placeholder values only serve the sizing query) replaces create/destroy on every call.
+    ! gtsv_dl/d/du/x are per-call scratch, overwritten before use, so one device allocation here (placeholder
+    ! values only serve the sizing query) replaces create/destroy per call
     !$acc enter data create(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
     !$acc update device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
     !$acc host_data use_device(gtsv_dl,gtsv_d,gtsv_du,gtsv_x)
@@ -419,7 +427,8 @@ Contains
 
   End Subroutine gpu_gtsv_init
 
-  !> Wall-normal (y) solve for the pencil path with periodic-FFT z and y walls (x periodic FFT or DCT-IV): batched cuSPARSE tridiagonal solve, one system per (kx,kz) mode this rank owns, operating in place on the y-pencil poisson_y_c; global mode indices come from decomp_poisson%yst
+  !> y solve for periodic-FFT z and y walls (x FFT or DCT-IV): batched cuSPARSE tridiagonal, one system per
+  !  (kx,kz) mode, in place on poisson_y_c; global mode indices from decomp_poisson%yst
   Subroutine gpu_solve_tridiagonal_pencil
 
     Integer :: i, k, ii, j, idx, b, ierr, n1, n3, yst1, yst3, i_global, k_global
@@ -483,7 +492,9 @@ Contains
 
   End Subroutine gpu_solve_tridiagonal_pencil
 
-  !> 4-wall duct solve in the y-pencil (z fully local, p_col==1): z-eigenmode transform of poisson_y_c per local x-mode, batched cuSPARSE y-tridiagonal solve per (x-mode, z-eigenmode) pair with lambda_z(m) standing in for kzz, then the inverse eigenmode transform back into poisson_y_c (Qz orthonormal -> inverse == transpose; sqrt_w_z scaling recovers Dzz's own eigenbasis, see global.f90's lambda_z/Qz/sqrt_w_z comment)
+  !> 4-wall duct solve in the y-pencil (z local, p_col==1): z-eigenmode transform of poisson_y_c per x-mode,
+  !  batched y-tridiagonal solve per (x-mode, eigenmode) with lambda_z(m) for kzz, then the inverse transform
+  !  (Qz orthonormal: inverse = transpose; sqrt_w_z scaling, see global.f90)
   Subroutine gpu_solve_duct_pencil
 
     Integer :: i, jy, k, m, ii, j, idx, b, ierr, n1, ny_i, nz1, yst1, i_global
@@ -577,7 +588,8 @@ Contains
 
   End Subroutine gpu_solve_duct_pencil
 
-  !> Spanwise-wall solve (y periodic): y-FFT in the y-pencil, batched cuSPARSE z-tridiagonal solve per (kx,ky) mode in the z-pencil with Dzz, inverse y-FFT; the padding y-slot is solved as the identity so it stays finite
+  !> Spanwise-wall solve (y periodic): y-FFT, batched z-tridiagonal cuSPARSE solve per (kx,ky) mode in the
+  !  z-pencil with Dzz, inverse y-FFT; the padding y-slot is solved as the identity so it stays finite
   Subroutine gpu_solve_zwall_pencil
 
     Integer :: i, j, k, ii, kz, idx, b, ierr, n1, n2, nyp, n1y, n3y, zst1, zst2, i_global, j_global

@@ -1,8 +1,10 @@
-!> Geometry of a planar interface inside an axis-aligned box (PLIC): volume under a plane and the inverse (plane position for a given
-!  volume fraction). Pure functions with no solver dependencies, so they can be unit-tested and reused for wave initialisation.
+!> Geometry of a planar interface inside an axis-aligned box (PLIC): volume under a plane and the inverse
+!  (plane position for a given volume fraction). Pure functions with no solver dependencies, so they can be
+!  unit-tested and reused for wave initialisation.
 !
-!  Conventions: cell coordinates are scaled to the unit cube centred on the origin (x_i in [-1/2,1/2]); the interface is m.x = alpha
-!  with m the L1-normalised normal pointing from liquid to gas (m = -grad C), liquid on the side m.x < alpha.
+! Conventions: cell coordinates are scaled to the unit cube centred on the origin (x_i in [-1/2,1/2]); the
+!  interface is m.x = alpha with m the L1-normalised normal pointing from liquid to gas (m = -grad C), liquid
+!  on the side m.x < alpha.
 Module vof_plic
 
   Use iso_fortran_env, Only : Int64
@@ -80,7 +82,8 @@ Contains
   End Function plic_box_fraction
 
 
-  !> Plane constant alpha (centred cell coordinates, normal L1-normalised on return) for liquid fraction c in 0<c<1
+  !> Plane constant alpha (centred cell coordinates, normal L1-normalised on return) for liquid fraction c in
+  !  0<c<1
   Pure Function plic_alpha(c, m1, m2, m3) Result(alpha)
     !$acc routine seq
 
@@ -142,7 +145,8 @@ Contains
   End Function plic_alpha
 
 
-  !> Liquid fraction of a sub-box of the cell for the plane m.x = alpha (m L1-normalised): the box spans x_i in [xlo_i, xlo_i + w_i]
+  !> Liquid fraction of a sub-box of the cell for the plane m.x = alpha (m L1-normalised): the box spans x_i
+  !  in [xlo_i, xlo_i + w_i]
   Pure Function plic_subbox_fraction(m1, m2, m3, alpha, xlo1, xlo2, xlo3, w1, w2, w3) Result(f)
     !$acc routine seq
 

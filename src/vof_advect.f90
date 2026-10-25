@@ -1,9 +1,9 @@
-!> Geometric PLIC advection of the liquid volume fraction on the staggered Cartesian grid: Weymouth & Yue (2010) directional
-!  sweeps, each face flux being the exact liquid volume in the slab |u| dt upstream of the face.
-!  Conventions: C lives on a padded Cp(0:n1+1,0:n2+1,0:n3+1) with interior 2..n-1 (1 and n ghost, 0 and n+1 the second layer
-!  for the donor cell's normal); face velocities U(1:n1-1,:,:), V(:,1:n2-1,:), W(:,:,1:n3-1) sit on the upper face of cell i.
-!  Cell widths h1,h2,h3 allow stretching. The velocity must be discretely divergence-free for boundedness and conservation.
-!  No dependence on MPI, solver globals or I/O.
+!> Geometric PLIC advection of the liquid volume fraction on the staggered Cartesian grid: Weymouth & Yue
+!  (2010) directional sweeps, each face flux being the exact liquid volume in the slab |u| dt upstream of the
+!  face. Conventions: C lives on a padded Cp(0:n1+1,0:n2+1,0:n3+1) with interior 2..n-1 (1 and n ghost, 0 and
+!  n+1 the second layer for the donor cell's normal); face velocities U(1:n1-1,:,:), V(:,1:n2-1,:),
+!  W(:,:,1:n3-1) sit on the upper face of cell i. Cell widths h1,h2,h3 allow stretching. The velocity must be
+!  discretely divergence-free for boundedness and conservation. No dependence on MPI, solver globals or I/O.
 Module vof_advect
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -13,7 +13,8 @@ Module vof_advect
   Implicit None
 
   Real(Int64), Allocatable, Dimension(:,:,:) :: vof_mx, vof_my, vof_mz, vof_al, vof_flux, vof_cc
-  ! face-flux model: 0 = geometric PLIC, 1 = THINC (tanh profile, diffuse interface over ~2-3 cells; beta sets the sharpness)
+  ! face-flux model: 0 = geometric PLIC, 1 = THINC (tanh profile, diffuse interface over ~2-3 cells; beta
+  ! sets the sharpness)
   Integer(Int32) :: vof_flux_scheme = 0
   Real(Int64)    :: vof_thinc_beta = 2d0
 
@@ -43,8 +44,8 @@ Contains
   End Subroutine vof_advect_init
 
 
-  !> Plane normal and constant in every cell holding an interface (0 < C < 1), from the padded C; the other cells are left
-  !  untouched (every reader tests C against vof_eps before using the plane)
+  !> Plane normal and constant in every cell holding an interface (0 < C < 1), from the padded C; the other
+  !  cells are left untouched (every reader tests C against vof_eps before using the plane)
   Subroutine vof_reconstruct(Cp, n1, n2, n3, scheme)
 
     Integer(Int32), Intent(In) :: n1, n2, n3, scheme
@@ -87,8 +88,9 @@ Contains
   End Function lncosh
 
 
-  !> One directional sweep (dir = 1,2,3): face volume fluxes from the reconstructed planes, then the conservative update with the
-  !  c-tilde * div(u) correction. co_max = max donor-cell Courant number seen, clip_loss = liquid volume removed by clamping C to [0,1]
+  !> One directional sweep (dir = 1,2,3): face volume fluxes from the reconstructed planes, then the
+  !  conservative update with the c-tilde * div(u) correction. co_max = max donor-cell Courant number seen,
+  !  clip_loss = liquid volume removed by clamping C to [0,1]
   Subroutine vof_sweep(dir, Cp, n1, n2, n3, uf, h1, h2, h3, dt, co_max, clip_loss)
 
     Integer(Int32), Intent(In)    :: dir, n1, n2, n3
@@ -147,7 +149,8 @@ Contains
                    mdir = vof_mz(id,jd,kd)
                 End If
                 mn = Sqrt( vof_mx(id,jd,kd)**2 + vof_my(id,jd,kd)**2 + vof_mz(id,jd,kd)**2 )
-                ! the profile steepens only across the interface: beta scales with the normal's component along the sweep
+                ! the profile steepens only across the interface: beta scales with the normal's component
+                ! along the sweep
                 beta = vof_thinc_beta*Abs(mdir)/Max(mn, 1d-300)
                 If ( beta < 1d-3 .Or. s < 1d-14 ) Then
                    frac = c
@@ -204,9 +207,9 @@ Contains
   End Subroutine vof_sweep
 
 
-  !> Full advection step: normals/planes are rebuilt before each sweep; the sweep order alternates with istep to cancel the
-  !  directional-splitting bias. c-tilde (the c > 1/2 indicator) is frozen for the whole step so the three corrections sum to
-  !  c-tilde * div(u) = 0.
+  !> Full advection step: normals/planes are rebuilt before each sweep; the sweep order alternates with istep
+  !  to cancel the directional-splitting bias. c-tilde (the c > 1/2 indicator) is frozen for the whole step so
+  !  the three corrections sum to c-tilde * div(u) = 0.
   Subroutine vof_advect_step(Cp, n1, n2, n3, U, V, W, h1, h2, h3, dt, istep, scheme, fill_pad, co_max, clip_loss)
 
     Integer(Int32), Intent(In)    :: n1, n2, n3, istep, scheme
@@ -256,8 +259,8 @@ Contains
   End Subroutine vof_advect_step
 
 
-  !> Local-rank diagnostics (reduce across ranks in the caller): liquid volume, min/max C, interface-cell count, volume of the
-  !  interface cells' mixed liquid. Ghost cells are excluded.
+  !> Local-rank diagnostics (reduce across ranks in the caller): liquid volume, min/max C, interface-cell
+  !  count, volume of the interface cells' mixed liquid. Ghost cells are excluded.
   Subroutine vof_local_stats(Cp, n1, n2, n3, h1, h2, h3, vliq, cmin, cmax, nint)
 
     Integer(Int32), Intent(In)  :: n1, n2, n3

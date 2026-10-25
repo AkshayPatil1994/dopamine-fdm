@@ -1,14 +1,12 @@
 !     Module for LES wall-models
 Module wallmodel
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
   Use interpolation
   Use boundary_conditions
 
-  ! prevent implicit typing
   Implicit None
 
   ! Log-law constants
@@ -89,9 +87,9 @@ Contains
 
   End Subroutine solve_u_tau_rough
 
-  !> Rough-wall counterpart to reichardt_uplus: u+ = ln(y/z0)/kappa at a given
-  !  (dimensional) height y_eval -- used by compute_ibm_wall_model to reconstruct
-  !  the image-point velocity at the ghost distance once u_tau is known
+  !> Rough-wall counterpart to reichardt_uplus: u+ = ln(y/z0)/kappa at a given (dimensional) height y_eval --
+  !  used by compute_ibm_wall_model to reconstruct the image-point velocity at the ghost distance once u_tau
+  !  is known
   Pure Subroutine rough_uplus(y_eval, z0, uplus)
     !$acc routine seq
     Real(Int64), Intent(In)  :: y_eval, z0
@@ -116,7 +114,8 @@ Contains
 
   End Subroutine solve_u_tau_wall
 
-  !> Stability-corrected rough-wall u_tau, u_tau = kappa*u_ref/[ln(y_ref/z0) - psi_m(y_ref/L)], with L lagged from the thermal EQWM
+  !> Stability-corrected rough-wall u_tau, u_tau = kappa*u_ref/[ln(y_ref/z0) - psi_m(y_ref/L)], with L lagged
+  !  from the thermal EQWM
   Pure Subroutine solve_u_tau_most(u_ref, y_ref, z0, L, u_tau)
     !$acc routine seq
     Real(Int64), Intent(In)  :: u_ref, y_ref, z0, L
@@ -129,10 +128,9 @@ Contains
 
   End Subroutine solve_u_tau_most
 
-  !> Businger-Dyer MOST stability functions psi_m/psi_h(zeta), zeta=y/L.
-  !  Unstable (Paulson 1970 / Dyer 1974 integrated form), stable (linear).
-  !  zeta is clipped to +-2 -- these empirical forms aren't trusted, and can
-  !  blow up, outside roughly that range.
+  !> Businger-Dyer MOST stability functions psi_m/psi_h(zeta), zeta=y/L. Unstable (Paulson 1970 / Dyer 1974
+  !  integrated form), stable (linear). zeta is clipped to +-2 -- these empirical forms aren't trusted, and
+  !  can blow up, outside roughly that range.
   Pure Subroutine most_stability_functions(zeta, psi_m, psi_h)
     !$acc routine seq
     Real(Int64), Intent(In)  :: zeta
@@ -153,12 +151,12 @@ Contains
 
   End Subroutine most_stability_functions
 
-  !> Coupled MOST solve for (u_tau, theta_tau) and the Obukhov length L by fixed-point iteration of the Businger-Dyer log laws:
+  !> Coupled MOST solve for (u_tau, theta_tau) and the Obukhov length L (Businger-Dyer, fixed point):
   !    u_tau     = kappa*u_ref  / [ln(y_ref/z0 ) - psi_m(y_ref/L)]
   !    theta_tau = kappa*dtheta / [ln(y_ref/z0h) - psi_h(y_ref/L)]
-  !    L         = u_tau^2 / (kappa*beta_T*grav*theta_tau)   (neutral when beta_T*grav = 0; T_ref is only an offset)
-  !  L is seeded from the caller's persisted value (typically 1-2 passes once quasi-steady) and updated in place. Reduces to
-  !  solve_u_tau_rough/solve_theta_tau_rough when neutral (psi_m=psi_h=0).
+  !    L         = u_tau^2 / (kappa*beta_T*grav*theta_tau)   (neutral when beta_T*grav = 0)
+  !  L is seeded from the caller's persisted value (1-2 passes when quasi-steady), updated in place. Neutral
+  !  (psi_m=psi_h=0) reduces to solve_u_tau_rough/solve_theta_tau_rough.
   Subroutine solve_most(u_ref, dtheta, y_ref, z0, z0h, u_tau, theta_tau, L)
     !$acc routine seq
     Real(Int64), Intent(In)    :: u_ref, dtheta, y_ref, z0, z0h
@@ -221,8 +219,8 @@ Contains
        End If
     End If
 
-    ! Spanwise (z) wall: smooth Reichardt EQWM only (rough is rejected at input); the wall-normal Robin coefficient is zero, so the
-    ! pressure operator keeps its Neumann rows
+    ! Spanwise (z) wall: smooth Reichardt EQWM only (rough is rejected at input); the wall-normal Robin
+    ! coefficient is zero, so the pressure operator keeps its Neumann rows
     If ( z_bc_type == 1 .And. flat_wall_model_flag == 1 ) Then
        Call compute_flat_wall_eqwm_z(U_, V_)
     End If
@@ -386,14 +384,16 @@ Contains
     End Do
     !$acc end parallel loop
 
-    ! the EQWM values just written into ghost cells next to a rank seam are stale in the neighbour's halo copy until refreshed
+    ! the EQWM values just written into ghost cells next to a rank seam are stale in the neighbour's halo
+    ! copy until refreshed
     If ( nprocs > 1 ) Call exchange_velocity_halos
 
   End Subroutine compute_ibm_wall_model
 
-  !> Advance the temporal filter of the flat-wall EQWM input by one time step (wm_filter_mode == 1): the tangential velocity vector
-  !  at the matching height is relaxed with eps = dt/Tf, Tf = wm_filter_Tf_fac*y_match/(kappa*u_tau) from the u_tau of the last
-  !  wall-model call. Called once per step, so the RK stages all see the same filtered input. The first call seeds with the raw field.
+  !> Advance the temporal filter of the flat-wall EQWM input by one time step (wm_filter_mode == 1): the
+  !  tangential velocity vector at the matching height is relaxed with eps = dt/Tf, Tf =
+  !  wm_filter_Tf_fac*y_match/(kappa*u_tau) from the u_tau of the last wall-model call. Called once per step,
+  !  so the RK stages all see the same filtered input. The first call seeds with the raw field.
   Subroutine update_wm_filter(U_, W_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
@@ -441,10 +441,11 @@ Contains
   !  Flat-wall equilibrium wall model — local per-point EQWM
   Subroutine compute_flat_wall_eqwm(U_, W_)
 
-    ! Local per-point EQWM for flat channel walls. u_tau comes from the log law at the matching height (nu only: nu_t would contaminate
-    ! the wall law); the wall shear u_tau^2 along the first-cell velocity goes to tau_x / tau_z, which compute_rhs_u / _w use in place of
-    ! the molecular wall-edge flux. The ghost rows stay a no-slip mirror (alpha = 0): a Robin slip length that reproduced the stress
-    ! would be negative for y+ > ~10, and a ghost far from the interior value corrupts the SGS gradient at j=2.
+    ! Local per-point EQWM for flat channel walls. u_tau comes from the log law at the matching height (nu
+    ! only: nu_t would contaminate the wall law); the wall shear u_tau^2 along the first-cell velocity goes
+    ! to tau_x / tau_z, which compute_rhs_u / _w use in place of the molecular wall-edge flux. The ghost rows
+    ! stay a no-slip mirror (alpha = 0): a Robin slip length that reproduced the stress would be negative for
+    ! y+ > ~10, and a ghost far from the interior value corrupts the SGS gradient at j=2.
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
     Real(Int64), Dimension(nxg, nyg, nz ), Intent(In) :: W_
@@ -508,7 +509,8 @@ Contains
     End Do
     !$acc end parallel loop
 
-    ! Fill x-halo planes (periodic in x), z-halo planes (copy from nearest interior; avoids extra MPI exchange)
+    ! Fill x-halo planes (periodic in x), z-halo planes (copy from nearest interior; avoids extra MPI
+    ! exchange)
     !$acc kernels present(alpha_x,tau_x)
     alpha_x( 1, :, :) = alpha_x(   2, :, :)
     alpha_x(nx, :, :) = alpha_x(nx-1, :, :)
@@ -580,10 +582,11 @@ Contains
 
   End Subroutine compute_flat_wall_eqwm
 
-  !> Spanwise (z) flat-wall EQWM: smooth Reichardt log law only (flat_wall_model_flag==2 with z_bc_type==1 is rejected at input).
-  !  U and V are tangential to a z wall; W stays exact no-penetration. The wall shear u_tau^2 along the first-cell velocity goes to
-  !  tau_zu/tau_zv, which compute_rhs_u/_v use instead of the molecular wall-edge flux (as tau_x/tau_z at the y walls); the ghost
-  !  planes stay a no-slip mirror. z is decomposed, so only the rank(s) owning z=0/z=Lz compute real values.
+  !> Spanwise (z) flat-wall EQWM: smooth Reichardt log law only (flat_wall_model_flag==2 with z_bc_type==1 is
+  !  rejected at input). U and V are tangential to a z wall; W stays exact no-penetration. The wall shear
+  !  u_tau^2 along the first-cell velocity goes to tau_zu/tau_zv, which compute_rhs_u/_v use instead of the
+  !  molecular wall-edge flux (as tau_x/tau_z at the y walls); the ghost planes stay a no-slip mirror. z is
+  !  decomposed, so only the rank(s) owning z=0/z=Lz compute real values.
   Subroutine compute_flat_wall_eqwm_z(U_, V_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
@@ -646,10 +649,11 @@ Contains
 
   End Subroutine compute_flat_wall_eqwm_z
 
-  !> Flat-wall rough-EQWM thermal coupling: the kinematic wall heat flux u_tau*theta_tau of the iterated MOST law at the matching height
-  !  is stored in qT_wall as the wall-edge flux kappa*dT/dy that replaces the diffusive flux of the first-cell balance (the temperature
-  !  analogue of tau_x/tau_z). The ghost row is zero-gradient. The Obukhov length it stores is read one step later by
-  !  compute_flat_wall_eqwm for the momentum stress. Only active on walls where T_bc_bot/top==2.
+  !> Flat-wall rough-EQWM thermal coupling: the kinematic wall heat flux u_tau*theta_tau of the iterated MOST
+  !  law at the matching height is stored in qT_wall as the wall-edge flux kappa*dT/dy that replaces the
+  !  diffusive flux of the first-cell balance (the temperature analogue of tau_x/tau_z). The ghost row is
+  !  zero-gradient. The Obukhov length it stores is read one step later by compute_flat_wall_eqwm for the
+  !  momentum stress. Only active on walls where T_bc_bot/top==2.
   Subroutine compute_flat_wall_thermal_eqwm(U_, W_, T_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
@@ -690,8 +694,9 @@ Contains
 
   End Subroutine compute_flat_wall_thermal_eqwm
 
-  !> Sums over this rank's interior wall-parallel columns of the y-wall model state, for the wall_diag.dat monitor file:
-  !  s = (u_tau lower, u_tau upper, qT lower, qT upper, 1/L lower, 1/L upper, number of columns); the thermal sums stay zero unless thermal=.True.
+  !> Sums over this rank's interior wall-parallel columns of the y-wall model state, for the wall_diag.dat
+  !  monitor file: s = (u_tau lower, u_tau upper, qT lower, qT upper, 1/L lower, 1/L upper, number of
+  !  columns); the thermal sums stay zero unless thermal=.True.
   Subroutine wall_diag_sums(thermal, s)
 
     Logical,                    Intent(In)  :: thermal
@@ -716,7 +721,8 @@ Contains
 
   End Subroutine wall_diag_sums
 
-  !> Set constant Robin BC alpha for y-walls (bc_face=1 -> Dirichlet no-slip alpha=0; bc_face=2 -> Neumann free-slip alpha=1e10)
+  !> Set constant Robin BC alpha for y-walls (bc_face=1 -> Dirichlet no-slip alpha=0; bc_face=2 -> Neumann
+  !  free-slip alpha=1e10)
   Subroutine compute_constant_alpha
 
     Real(Int64) :: alpha_lo, alpha_hi

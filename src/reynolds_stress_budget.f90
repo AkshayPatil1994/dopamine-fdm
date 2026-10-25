@@ -26,11 +26,12 @@ Module reynolds_stress_budget
 
   ! ── accumulation counter ─────────────────────────────────────────────────
   Integer(Int32) :: n_accum = 0        ! steps accumulated in current window
-  Real   (Int64) :: t_accum = 0d0      ! physical time accumulated in current window (accumulators are dt-weighted, so adaptive dt doesn't bias the averages)
+  ! physical time accumulated in the current window; accumulators are dt-weighted, so adaptive dt does not
+  ! bias averages
+  Real   (Int64) :: t_accum = 0d0
   Integer(Int32) :: nsamples = 0       ! windows written so far (across restarts)
 
-  ! accumulator arrays (cell-centre, local z-slab): shape (nxm, nym_global, nzm) -- x and y always full since MPI decomposition is along z only
-  !  1st moments
+  ! accumulators (cell-centre, local z-slab): shape (nxm, nym_global, nzm); MPI decomposition is along z only
   Real(Int64), Allocatable :: acc_U(:,:,:), acc_V(:,:,:), acc_W(:,:,:)
   Real(Int64), Allocatable :: acc_P(:,:,:)
 
@@ -50,18 +51,19 @@ Module reynolds_stress_budget
   !  Pressure-velocity for pressure diffusion: PU, PV, PW
   Real(Int64), Allocatable :: acc_PVel(:,:,:,:)     ! (3, nxm, nym_global, nzm)
 
-  !  Triple correlations for turbulent diffusion: d<u_i'u_j'u_k'>/dx_k needs UiUjUk products; flux divergences stored per direction (y always; UiUj*V' for 6 pairs)
+  ! Triple correlations for turbulent diffusion, d<u_i'u_j'u_k'>/dx_k: flux divergences stored per direction
+  ! (UiUj*V' for 6 pairs)
   Real(Int64), Allocatable :: acc_TijY(:,:,:,:)    ! (6, nxm, nym_global, nzm)
   Real(Int64), Allocatable :: acc_TijX(:,:,:,:)    ! (6, nxm, nym_global, nzm)  ! only if !hom_x
   Real(Int64), Allocatable :: acc_TijZ(:,:,:,:)    ! (6, nxm, nym_global, nzm)  ! only if !hom_z
 
-  !  Boussinesq temperature statistics (only allocated when boussinesq_flag>=1): mean, variance, and turbulent heat flux <u_i'T'>
+  ! Boussinesq T statistics (boussinesq_flag>=1 only): mean, variance, heat flux <u_i'T'>
   Real(Int64), Allocatable :: acc_T(:,:,:), acc_TT(:,:,:)
   Real(Int64), Allocatable :: acc_UiT(:,:,:,:)   ! (3, nxm, nym_global, nzm): uT, vT, wT
 
 Contains
 
-  !> init_rsb: called once after grid allocation; parses rsb_hom_dir, allocates accumulator arrays, opens/appends output files depending on restart
+  !> init_rsb: parses rsb_hom_dir, allocates accumulators, opens/appends output files (restart-aware)
   Subroutine init_rsb
 
     Character(200) :: hd
@@ -142,7 +144,7 @@ Contains
   End Subroutine init_rsb
 
 
-  !> accumulate_rsb: called every step, accumulates once istep >= rsb_nstart; interpolates staggered U/V/W to cell centres, computes gradients, accumulates raw moments
+  !> accumulate_rsb: each step once istep >= rsb_nstart; U/V/W to cell centres, gradients, raw moments
   Subroutine accumulate_rsb
 
     Integer(Int32) :: i, j, k
@@ -168,7 +170,7 @@ Contains
 
     inv_dx = 1d0 / dx
 
-    ! loop over interior cell centres i,j,k in [2..nxg-1]x[2..nyg-1]x[2..nzg-1]; cell-centre (i,j,k) maps to accumulator index (i-1,j-1,k-1)
+    ! interior cell centres (i,j,k) map to accumulator index (i-1,j-1,k-1)
     Do k = 2, nzg-1
        ! per-k z-grid reciprocals (z may be stretched when z_bc_type==1)
        inv_zg_km = 1d0 / ( zg(k)   - zg(k-1) )
@@ -329,14 +331,12 @@ Contains
   End Subroutine accumulate_rsb
 
 
-  !> output_rsb: called every rsb_freq steps; MPI-reduces accumulators, converts to central moments, computes all budget terms, appends one slice per .bin file, updates meta, resets accumulators
+  !> output_rsb: every rsb_freq steps; reduces accumulators, forms central moments and all budget terms,
+  !  appends a slice, resets
   Subroutine output_rsb
 
-    ! ── global (rank-0) arrays after MPI-reduce and hom. averaging ───────
-    ! Save + guarded Allocate below: these are always the same shape for the
-    ! whole run, so they're allocated once on the first call and reused every
-    ! rsb_freq window instead of paying Allocate/Deallocate heap churn on each
-    ! (rank-0-sized, multi-MB) array every window.
+    ! allocated once on the first call and reused every rsb_freq window (Save + guarded Allocate), avoiding
+    ! heap churn on these multi-MB rank-0 arrays
     Real(Int64), Allocatable, Save :: g_U(:,:,:),  g_V(:,:,:),  g_W(:,:,:)
     Real(Int64), Allocatable, Save :: g_P(:,:,:)
     Real(Int64), Allocatable, Save :: g_UiUj(:,:,:,:)
@@ -458,7 +458,8 @@ Contains
        Call write_rsb_slice('PhiPij',   PhiPij,   N_COMP)
        Call write_rsb_slice('Resid',    Resid,    N_COMP)
 
-       ! Boussinesq temperature statistics: mean, variance, turbulent heat flux, buoyancy production -beta_T*grav*<v'T'>
+       ! Boussinesq temperature statistics: mean, variance, turbulent heat flux, buoyancy production
+       ! -beta_T*grav*<v'T'>
        If ( boussinesq_flag >= 1 ) Then
           g_T  = g_T  * dn;  g_TT = g_TT * dn;  g_UiT = g_UiT * dn
 
@@ -551,7 +552,7 @@ Contains
   End Subroutine zero_accumulators
 
 
-  !> ensure_rsb_dir (rank 0 only): extracts the directory component of rsb_fileout and creates it (with parents) if missing
+  !> ensure_rsb_dir (rank 0): create the directory of rsb_fileout (with parents) if missing
   Subroutine ensure_rsb_dir
 
     Character(200) :: dir
@@ -620,7 +621,8 @@ Contains
   End Subroutine reduce_to_rank0_4d
 
 
-  !> compute_budget_terms: all arithmetic on rank-0 only over the full global grid; budget terms are homogeneously averaged after central moments are computed
+  !> compute_budget_terms: rank 0 only, full global grid; homogeneous averaging comes after the central
+  !  moments
   Subroutine compute_budget_terms( &
        gU, gV, gW, gP, gUiUj, gGijRes, gGijSGS,     &
        gPiStrain, gPVel, gTijY, gTijX, gTijZ,         &
@@ -713,12 +715,12 @@ Contains
              Rij_g(5,i,j,k) = gUiUj(5,i,j,k) - Ub*Wb
              Rij_g(6,i,j,k) = gUiUj(6,i,j,k) - Vb*Wb
 
-             ! resolved dissipation eps_ij = 2*nu*<(dui/dxk)(duj/dxk)>; mean-gradient term (d<ui>/dxk)(d<uj>/dxk) subtracted below via centred differences
+             ! resolved dissipation eps_ij = 2*nu*<(dui/dxk)(duj/dxk)>; the mean-gradient part is subtracted
+             ! below
              epsRes_g(:,i,j,k) = 2d0 * nu * gGijRes(:,i,j,k)
-             ! (mean-gradient correction is done in the production loop below
-             !  using the same mean-gradient estimates)
 
-             ! pressure-strain (raw <p(dui/dxj+duj/dxi)>); mean part <p><dui/dxj>+<p><duj/dxi> ~=0 for periodic, so raw value equals the fluctuation part to leading order
+             ! pressure-strain, raw <p(dui/dxj+duj/dxi)>; the mean part ~0 for periodic, so raw = fluctuation
+             ! part
              PiStrain_g(:,i,j,k) = gPiStrain(:,i,j,k)
 
              ! ── SGS dissipation ────────────────────────────────────────
@@ -792,7 +794,8 @@ Contains
        End Do
     End Do
 
-    ! mean-velocity gradients + production P_ij=-R_ik dUj/dxk-R_jk dUi/dxk (Pope 7.176) and viscous diffusion D^nu_ij=nu d^2 R_ij/dxk dxk
+    ! mean-velocity gradients, production P_ij=-R_ik dUj/dxk-R_jk dUi/dxk (Pope 7.176), viscous diffusion
+    ! D^nu_ij=nu d^2 R_ij/dxk dxk
     Pij_g   = 0d0
     Dnuij_g = 0d0
 
@@ -852,7 +855,7 @@ Contains
                        (zm_global(nzm_global)-zm_global(nzm_global-1))
              End If
 
-             ! production P_ij=-R_ik dUj/dxk-R_jk dUi/dxk; component order 1=11,2=22,3=33,4=12,5=13,6=23 (R21=R12, R31=R13, R32=R23 by symmetry)
+             ! production; components 1=11,2=22,3=33,4=12,5=13,6=23 (symmetric)
              Rij_val = Rij_g(:,i,j,k)
 
              !  P_11 = -2(R11 dU/dx + R12 dU/dy + R13 dU/dz)
@@ -874,7 +877,8 @@ Contains
              Pij_g(6,i,j,k) = -( Rij_val(4)*dWdx + Rij_val(2)*dWdy + Rij_val(6)*dWdz &
                                 + Rij_val(5)*dVdx + Rij_val(6)*dVdy + Rij_val(3)*dVdz )
 
-             ! viscous diffusion nu*Laplacian(R_ij): three-point second derivative using cell-centre spacing, one-sided first differences at boundary nodes
+             ! viscous diffusion nu*Laplacian(R_ij): 3-point second derivative on cell-centre spacing,
+             ! one-sided at boundaries
              Do c = 1, N_COMP
                 ! d^2 R_ij / dy^2  (always computed)
                 If ( j > 1 .And. j < nym_global ) Then
@@ -904,7 +908,7 @@ Contains
                 Dnuij_g(c,i,j,k) = nu * (dRij_dx + dRij_dy + dRij_dz)
              End Do
 
-             ! correct epsRes: subtract mean-gradient contribution, eps_ij(fluct) = 2nu*<(dui/dxk)(duj/dxk)> - 2nu*(d<ui>/dxk)(d<uj>/dxk)
+             ! epsRes: subtract the mean-gradient part, 2nu*(d<ui>/dxk)(d<uj>/dxk)
              epsRes_g(1,i,j,k) = epsRes_g(1,i,j,k) - 2d0*nu*(dUdx**2 + dUdy**2 + dUdz**2)
              epsRes_g(2,i,j,k) = epsRes_g(2,i,j,k) - 2d0*nu*(dVdx**2 + dVdy**2 + dVdz**2)
              epsRes_g(3,i,j,k) = epsRes_g(3,i,j,k) - 2d0*nu*(dWdx**2 + dWdy**2 + dWdz**2)
@@ -912,7 +916,7 @@ Contains
              epsRes_g(5,i,j,k) = epsRes_g(5,i,j,k) - 2d0*nu*(dUdx*dWdx + dUdy*dWdy + dUdz*dWdz)
              epsRes_g(6,i,j,k) = epsRes_g(6,i,j,k) - 2d0*nu*(dVdx*dWdx + dVdy*dWdy + dVdz*dWdz)
 
-             ! correct PiStrain: subtract mean-pressure x mean-strain-rate, Pi_ij(fluct) = <p(dui/dxj+duj/dxi)> - <p>*(d<ui>/dxj + d<uj>/dxi)
+             ! PiStrain: subtract <p>*(d<ui>/dxj + d<uj>/dxi)
              PiStrain_g(1,i,j,k) = PiStrain_g(1,i,j,k) - 2d0*gP(i,j,k)*dUdx
              PiStrain_g(2,i,j,k) = PiStrain_g(2,i,j,k) - 2d0*gP(i,j,k)*dVdy
              PiStrain_g(3,i,j,k) = PiStrain_g(3,i,j,k) - 2d0*gP(i,j,k)*dWdz
@@ -956,7 +960,8 @@ Contains
        End Do
     End Do
 
-    ! pressure diffusion Phi^P_ij=-(d<p'u_i'>/dx_j+d<p'u_j'>/dx_i), using central-moment arrays pu_c/pv_c/pw_c = <pu_k>-<p><u_k>, all 6 components via centred differences
+    ! pressure diffusion Phi^P_ij=-(d<p'u_i'>/dx_j+d<p'u_j'>/dx_i) from central moments pu_c/pv_c/pw_c =
+    ! <pu_k>-<p><u_k>
     PhiP_g = 0d0
     Do k = 1, nzm_global
        Do j = 1, nym_global
@@ -1027,7 +1032,7 @@ Contains
   End Subroutine compute_budget_terms
 
 
-  !> hom_avg_4d: average a (nc, nxm_global, nym_global, nzm_global) array along the homogeneous directions, returning (nc, out_nx, out_ny, out_nz)
+  !> hom_avg_4d: average a (nc,nxm_global,nym_global,nzm_global) array along the homogeneous directions
   Subroutine hom_avg_4d(src, nc, dst)
 
     Integer(Int32), Intent(In)  :: nc
@@ -1073,7 +1078,7 @@ Contains
   End Subroutine hom_avg_4d
 
 
-  !> write_rsb_slice: append one (nc, out_nx, out_ny, out_nz) slice to rsb_<base>_<tag>.bin in little-endian float64 (direct-access stream)
+  !> write_rsb_slice: append one slice to rsb_<base>_<tag>.bin (little-endian float64)
   Subroutine write_rsb_slice(tag, arr, nc)
 
     Character(*),   Intent(In) :: tag
@@ -1099,7 +1104,7 @@ Contains
   End Subroutine write_rsb_slice
 
 
-  !> write_meta: (re)write the .meta companion file with current grid dimensions and sample count, called after every successful output_rsb
+  !> write_meta: rewrite the .meta file (grid dimensions, sample count) after each output_rsb
   Subroutine write_meta
 
     Character(300)  :: fpath
@@ -1138,8 +1143,6 @@ Contains
   End Subroutine write_meta
 
 
-  !  Private: parse_meta_nsamples
-  !  Read the 'nsamples' line from an open meta file unit.
   Subroutine parse_meta_nsamples(funit, n)
 
     Integer(Int32), Intent(In)  :: funit
@@ -1162,8 +1165,6 @@ Contains
   End Subroutine parse_meta_nsamples
 
 
-  !  Private: truncate_rsb_files
-  !  Delete (truncate) any pre-existing RSB output files for a fresh run.
   Subroutine truncate_rsb_files
 
     Character(300)  :: fpath

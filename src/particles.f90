@@ -1,7 +1,8 @@
-!> Lagrangian point-particle tracking. A rank owns a particle whose (x,z) lies in its cell-centre interior range, extended to
-!  +-infinity at the true global x/z edges (owns_particle); y is never decomposed. Particles advance once per RK3 step against
-!  the frozen post-step U/V/W (caller: time_integration.f90) with a self-contained RK3 for the tracer ODE dx/dt = u(x).
-!  Migration is a two-pass (x then z) exchange over decomp.f90's halo-neighbour/periodic-partner topology.
+!> Lagrangian point-particle tracking. A rank owns a particle whose (x,z) lies in its cell-centre interior
+!  range, extended to +-infinity at the true global x/z edges (owns_particle); y is never decomposed.
+!  Particles advance once per RK3 step against the frozen post-step U/V/W (caller: time_integration.f90) with
+!  a self-contained RK3 for the tracer ODE dx/dt = u(x). Migration is a two-pass (x then z) exchange over
+!  decomp.f90's halo-neighbour/periodic-partner topology.
 Module particles
 
   Use iso_fortran_env, Only : error_unit, Int32, Int64
@@ -13,23 +14,24 @@ Module particles
 
   Implicit None
 
-  ! Structure-of-Arrays particle storage (per-rank; capacity grows by doubling). Particle IDs
-  ! are Int32: seed particles get 0..n_particles_init-1 (identical candidate list generated on
-  ! every rank, see seed_particles_fresh, so IDs are globally unique without communication);
-  ! inflow-reinjected particles get myid*10_000_000 + a per-rank running counter, unique as
-  ! long as n_particles_init and per-rank reinjection counts both stay under 10 million.
+  ! Structure-of-Arrays particle storage (per-rank; capacity grows by doubling). Particle IDs are Int32: seed
+  ! particles get 0..n_particles_init-1 (identical candidate list generated on every rank, see
+  ! seed_particles_fresh, so IDs are globally unique without communication); inflow-reinjected particles get
+  ! myid*10_000_000 + a per-rank running counter, unique as long as n_particles_init and per-rank reinjection
+  ! counts both stay under 10 million.
   Integer(Int32) :: n_particles_local = 0
   Integer(Int32) :: particle_capacity = 0
   Integer(Int32), Allocatable :: p_id(:)
   Real   (Int64), Allocatable :: p_x(:), p_y(:), p_z(:)
   Real   (Int64), Allocatable :: p_u(:), p_v(:), p_w(:)
-  ! Per-step acceleration: inertial mode stores the exact total (drag+gravity+added-mass) acceleration of its exponential
-  ! integrator; tracer mode stores (k3-k1)/dt from the RK3 stage velocity samples (2nd order in dt). The persistent SGS
-  ! fluctuation (p_sgs_u/v/w) is added identically to all 3 stages, so it cancels in that difference.
+  ! Per-step acceleration: inertial mode stores the exact total (drag+gravity+added-mass) acceleration of its
+  ! exponential integrator; tracer mode stores (k3-k1)/dt from the RK3 stage velocity samples (2nd order in
+  ! dt). The persistent SGS fluctuation (p_sgs_u/v/w) is added identically to all 3 stages, so it cancels in
+  ! that difference.
   Real   (Int64), Allocatable :: p_ax(:), p_ay(:), p_az(:)
   Real   (Int64), Allocatable :: p_age(:)
-  ! SGS velocity fluctuation of each particle (sgs_particle_model==1 only), evolved by advance_sgs_velocity and added to the
-  ! resolved fluid velocity
+  ! SGS velocity fluctuation of each particle (sgs_particle_model==1 only), evolved by advance_sgs_velocity
+  ! and added to the resolved fluid velocity
   Real   (Int64), Allocatable :: p_sgs_u(:), p_sgs_v(:), p_sgs_w(:)
 
   ! Resolved per-direction BC codes (0=periodic,1=exit,2=reflect,3=absorb) and this rank's
@@ -41,9 +43,10 @@ Module particles
   ! Per-rank event counters since the last report_particle_counts call
   Integer(Int64) :: n_exited_local = 0, n_deposited_local = 0, n_reinjected_local = 0
   Integer(Int32) :: n_exit_outflow_local = 0   ! outflow (is_last_x, x exit) exits this step, feeds reinject_at_inflow
-  ! Reinjection is layout independent: every step the IDs of the particles that left through the outflow are gathered over all
-  ! ranks and sorted; the j-th of them is replaced by a new particle with the next global ID, placed from a hash of that ID,
-  ! and created by whichever inlet-row rank owns its (x,z). next_particle_id is identical on every rank.
+  ! Reinjection is layout independent: every step the IDs of the particles that left through the outflow are
+  ! gathered over all ranks and sorted; the j-th of them is replaced by a new particle with the next global
+  ! ID, placed from a hash of that ID, and created by whichever inlet-row rank owns its (x,z).
+  ! next_particle_id is identical on every rank.
   Integer(Int32), Allocatable :: exit_ids_local(:)
   Integer(Int32) :: n_exit_ids_local = 0
   Integer(Int32) :: next_particle_id = 0
@@ -51,21 +54,24 @@ Module particles
   ! Stokes response time (particle_mode==1 only), computed once in setup_particles
   Real(Int64) :: tau_p_stokes
 
-  ! Per-rank streamwise deposition-rate accumulator, sized nxg_global and indexed by global cell-centre index (bracket_index on
-  ! xg_global, see apply_ibm_collision). Each rank increments only its own x-range, so summing over ranks gives the profile
-  ! without double counting. Reset after each write: the output is a RATE per particle_deposit_freq*nmonitor steps.
+  ! Per-rank streamwise deposition-rate accumulator, sized nxg_global and indexed by global cell-centre index
+  ! (bracket_index on xg_global, see apply_ibm_collision). Each rank increments only its own x-range, so
+  ! summing over ranks gives the profile without double counting. Reset after each write: the output is a
+  ! RATE per particle_deposit_freq*nmonitor steps.
   Real(Int64), Allocatable :: particle_deposit_x(:)
 
-  ! Padded copies of U, V, W with one extra plane on each x and z side (local indices 0 and n+1, filled from the neighbouring
-  ! rank, the periodic partner, or by clamping at a non-periodic domain edge) and the matching padded coordinate axes. The
-  ! tracer's RK3 evaluates the velocity at positions displaced by up to about one step of travel, which near a rank seam can
-  ! lie beyond the single ghost cell; without the extra plane the interpolation clamps there and the result depends on the
-  ! rank layout.
+  ! Padded copies of U, V, W with one extra plane on each x and z side (local indices 0 and n+1, filled from
+  ! the neighbouring rank, the periodic partner, or by clamping at a non-periodic domain edge) and the
+  ! matching padded coordinate axes. The tracer's RK3 evaluates the velocity at positions displaced by up to
+  ! about one step of travel, which near a rank seam can lie beyond the single ghost cell; without the extra
+  ! plane the interpolation clamps there and the result depends on the rank layout.
   Real(Int64), Allocatable :: Upad(:,:,:), Vpad(:,:,:), Wpad(:,:,:)
   Real(Int64), Allocatable :: xpad_f(:), xpad_c(:), zpad_f(:), zpad_c(:)
-  ! padded SDF for the IBM collision normal (a finite difference over +-0.5 cell, which also reaches past the ghost cell); static
+  ! padded SDF for the IBM collision normal (a finite difference over +-0.5 cell, which also reaches past the
+  ! ghost cell); static
   Real(Int64), Allocatable :: phipad(:,:,:)
-  ! two-fluid VOF: padded liquid fraction (particles live in the liquid and reflect at the free surface) and the carrier's viscosity
+  ! two-fluid VOF: padded liquid fraction (particles live in the liquid and reflect at the free surface) and
+  ! the carrier's viscosity
   Real(Int64), Allocatable :: Cvpad(:,:,:)
   Logical :: surf_on = .False.
   Real(Int64) :: p_nu_f = 0d0
@@ -95,8 +101,8 @@ Contains
     n_particles_local = 0
     particle_capacity = 0
     next_particle_id = n_particles_init
-    ! per-rank stream for the stochastic terms (Brownian kick, SGS Langevin); seeding and reinjection use id_uniform instead, which
-    ! does not depend on it
+    ! per-rank stream for the stochastic terms (Brownian kick, SGS Langevin); seeding and reinjection use
+    ! id_uniform instead, which does not depend on it
     Call random_seed_from( particle_seed_seed + 7919*myid )
 
     If ( ibm_input_mode >= 1 ) Then
@@ -118,16 +124,17 @@ Contains
 
   End Subroutine setup_particles
 
-  !> Uniform-random seed within the particle_seed_[xyz]min/max box: every rank draws the
-  !  SAME n_particles_init candidates (identical RNG seed/sequence), then keeps only the
-  !  ones it owns -- avoids any seed-time communication while keeping candidate index i-1
-  !  (globally unique, no rank collision) as each kept particle's ID.
+  !> Uniform-random seed within the particle_seed_[xyz]min/max box: every rank draws the SAME n_particles_init
+  !  candidates (identical RNG seed/sequence), then keeps only the ones it owns -- avoids any seed-time
+  !  communication while keeping candidate index i-1 (globally unique, no rank collision) as each kept
+  !  particle's ID.
   Subroutine seed_particles_fresh
 
     Integer(Int32) :: i
     Real   (Int64) :: xp, yp, zp, rx, ry, rz, xmax_s, zmax_s
 
-    ! a periodic direction has period Lxp = Lx - dx: seeding into the duplicate last cell would double its weight
+    ! a periodic direction has period Lxp = Lx - dx: seeding into the duplicate last cell would double its
+    ! weight
     xmax_s = particle_seed_xmax;  zmax_s = particle_seed_zmax
     If ( bcx_resolved == 0 ) xmax_s = Min( xmax_s, x_global(1) + Lxp )
     If ( bcz_resolved == 0 ) zmax_s = Min( zmax_s, z_global(1) + Lzp )
@@ -161,11 +168,11 @@ Contains
 
   End Subroutine seed_particles_fresh
 
-  !> True if this rank owns (xp,zp): the half-open range [xg(2),xg(nxg))/[zg(2),zg(nzg)), extended to +-infinity at the true
-  !  global edges (is_first/is_last) so seeding/restart never drops an out-of-domain point. The upper bound is the ghost
-  !  coordinate (nxg/nzg), which coincides with the right neighbour's first interior coordinate (kg2_global(A) =
-  !  kg1_global(A_right)+1); using the last interior point instead leaves a one-cell band at each internal seam that no rank
-  !  claims.
+  !> True if this rank owns (xp,zp): the half-open range [xg(2),xg(nxg))/[zg(2),zg(nzg)), extended to
+  !  +-infinity at the true global edges (is_first/is_last) so seeding/restart never drops an out-of-domain
+  !  point. The upper bound is the ghost coordinate (nxg/nzg), which coincides with the right neighbour's
+  !  first interior coordinate (kg2_global(A) = kg1_global(A_right)+1); using the last interior point instead
+  !  leaves a one-cell band at each internal seam that no rank claims.
   Logical Function owns_particle(xp, zp) Result(owns)
 
     Real(Int64), Intent(In) :: xp, zp
@@ -177,10 +184,10 @@ Contains
 
   End Function owns_particle
 
-  !> Binary search for the bracket lo such that arr(lo)<=pos<arr(lo+1) (clamped at the ends),
-  !  for a monotonically increasing arr. Same structure as sem.f90's invert_cdf and
-  !  uav_actuator.f90's nearest_zg_index; reused here for every interpolation axis (x,y,z,
-  !  whichever grid -- face or cell-centre -- a given field component is staggered on).
+  !> Binary search for the bracket lo such that arr(lo)<=pos<arr(lo+1) (clamped at the ends), for a
+  !  monotonically increasing arr. Same structure as sem.f90's invert_cdf and uav_actuator.f90's
+  !  nearest_zg_index; reused here for every interpolation axis (x,y,z, whichever grid -- face or cell-centre
+  !  -- a given field component is staggered on).
   Integer(Int32) Function bracket_index(arr, n, pos) Result(lo)
 
     Integer(Int32), Intent(In) :: n
@@ -277,10 +284,11 @@ Contains
 
   End Subroutine interpolate_velocity
 
-  !> Advance local particle i one step with the inertial (Maxey-Riley-reduced) model dv/dt = (u_f-v)/tau_eff + a_other. With u_f,
-  !  tau_eff (Schiller-Naumann drag correction) and a_other (gravity + optional added mass) frozen at the step start the ODE is
-  !  linear, so the exponential solution is exact with no sub-cycling even for tau_eff << dt. Optional Brownian motion
-  !  (particle_brownian==1) is added as an independent random walk. Saffman-Mei lift is not implemented.
+  !> Advance local particle i one step with the inertial (Maxey-Riley-reduced) model dv/dt = (u_f-v)/tau_eff +
+  !  a_other. With u_f, tau_eff (Schiller-Naumann drag correction) and a_other (gravity + optional added mass)
+  !  frozen at the step start the ODE is linear, so the exponential solution is exact with no sub-cycling even
+  !  for tau_eff << dt. Optional Brownian motion (particle_brownian==1) is added as an independent random
+  !  walk. Saffman-Mei lift is not implemented.
   Subroutine advance_particle_inertial(i)
 
     Integer(Int32), Intent(In) :: i
@@ -361,9 +369,8 @@ Contains
 
   End Subroutine exp_integrate
 
-  !> Fluid velocity at (xp,yp,zp) from the PREVIOUS step's start-of-step field (Uo,Vo,Wo,
-  !  global.f90) -- same staggering/interpolation as interpolate_velocity, used only by
-  !  the simplified added-mass term above.
+  !> Fluid velocity at (xp,yp,zp) from the PREVIOUS step's start-of-step field (Uo,Vo,Wo, global.f90) -- same
+  !  staggering/interpolation as interpolate_velocity, used only by the simplified added-mass term above.
   Subroutine interpolate_velocity_old(xp, yp, zp, up, vp, wp)
 
     Real(Int64), Intent(In)  :: xp, yp, zp
@@ -513,11 +520,11 @@ Contains
 
   End Subroutine remove_particle
 
-  !> Per-particle boundary handling on the just-updated position, applied per direction
-  !  (x,y,z independently); returns .True. if the particle should be removed (exit/absorb/
-  !  aged-out). Reflect mirrors the position and flips the matching velocity component;
-  !  periodic (case 0) does nothing here -- the true-global-edge crossing is detected and
-  !  handled (with wrap) by exchange_particles_1d, which alone knows the periodic partner.
+  !> Per-particle boundary handling on the just-updated position, applied per direction (x,y,z independently);
+  !  returns .True. if the particle should be removed (exit/absorb/ aged-out). Reflect mirrors the position
+  !  and flips the matching velocity component; periodic (case 0) does nothing here -- the true-global-edge
+  !  crossing is detected and handled (with wrap) by exchange_particles_1d, which alone knows the periodic
+  !  partner.
   Logical Function apply_particle_bc(i) Result(do_remove)
 
     Integer(Int32), Intent(In) :: i
@@ -602,10 +609,11 @@ Contains
 
   End Function apply_particle_bc
 
-  !> IBM/SDF collision (ibm_input_mode>=1). Reads phi/Umask_cc/ibm_obj_id from global.f90 directly (no `Use ibm`), so
-  !  particles.f90 stays usable by dopamine-ESEM, which never compiles ibm.f90. phi<0 means penetration: the particle is pushed
-  !  out along the interpolated phi gradient by about its penetration depth. particle_ibm_bc selects absorb/reflect/
-  !  deposit_resuspend (restitution heuristic: see particle_ibm_tau_crit in global.f90). Returns .True. if the particle is removed.
+  !> IBM/SDF collision (ibm_input_mode>=1). Reads phi/Umask_cc/ibm_obj_id from global.f90 directly (no `Use
+  !  ibm`), so particles.f90 stays usable by dopamine-ESEM, which never compiles ibm.f90. phi<0 means
+  !  penetration: the particle is pushed out along the interpolated phi gradient by about its penetration
+  !  depth. particle_ibm_bc selects absorb/reflect/ deposit_resuspend (restitution heuristic: see
+  !  particle_ibm_tau_crit in global.f90). Returns .True. if the particle is removed.
   Logical Function apply_ibm_collision(i) Result(do_remove)
 
     Integer(Int32), Intent(In) :: i
@@ -626,7 +634,7 @@ Contains
     gz = interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i), p_z(i)+eps) - &
          interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, p_x(i), p_y(i), p_z(i)-eps)
     gmag = Sqrt(gx*gx + gy*gy + gz*gz)
-    If ( gmag < 1d-14 ) Return   ! degenerate gradient (shouldn't happen inside a real solid); leave the particle as-is rather than divide by ~0
+    If ( gmag < 1d-14 ) Return   ! degenerate gradient: leave the particle as-is rather than divide by ~0
     gx = gx/gmag;  gy = gy/gmag;  gz = gz/gmag   ! unit normal, points from solid toward fluid
 
     obj_r = interp3(ibm_obj_id, xg, nxg, yg, nyg, zg, nzg, p_x(i), p_y(i), p_z(i))
@@ -663,7 +671,8 @@ Contains
 
   End Function apply_ibm_collision
 
-  !> Refresh the padded liquid fraction the free-surface reflection reads (two-fluid VOF; Cv with its ghost cells, nxg x nyg x nzg)
+  !> Refresh the padded liquid fraction the free-surface reflection reads (two-fluid VOF; Cv with its ghost
+  !  cells, nxg x nyg x nzg)
   Subroutine particles_load_surface(Cv_in)
 
     Real(Int64), Intent(In) :: Cv_in(nxg,nyg,nzg)
@@ -709,8 +718,9 @@ Contains
 
   End Subroutine particles_check_gas_seeds
 
-  !> A particle that ended the step in the gas goes back to where it started and its velocity is mirrored about the surface normal
-  !  n = -grad(Cv)/|grad(Cv)| (pointing into the gas) taken at the start position; only an outward normal velocity is reversed
+  !> A particle that ended the step in the gas goes back to where it started and its velocity is mirrored
+  !  about the surface normal n = -grad(Cv)/|grad(Cv)| (pointing into the gas) taken at the start position;
+  !  only an outward normal velocity is reversed
   Subroutine reflect_at_surface(i, xo, yo, zo)
 
     Integer(Int32), Intent(In) :: i
@@ -734,9 +744,10 @@ Contains
 
   End Subroutine reflect_at_surface
 
-  !> Advance every local particle one step against the frozen post-projection U/V/W, apply boundary handling, migrate, and
-  !  report counters at the monitor cadence. Called once per step from compute_time_step_RK3 (time_integration.f90) after the
-  !  final host U/V/W sync. particle_mode==0: classical RK3 on dx/dt=u_fluid(x); ==1: see advance_particle_inertial.
+  !> Advance every local particle one step against the frozen post-projection U/V/W, apply boundary handling,
+  !  migrate, and report counters at the monitor cadence. Called once per step from compute_time_step_RK3
+  !  (time_integration.f90) after the final host U/V/W sync. particle_mode==0: classical RK3 on
+  !  dx/dt=u_fluid(x); ==1: see advance_particle_inertial.
   Subroutine advance_particles
 
     Integer(Int32) :: i
@@ -818,10 +829,11 @@ Contains
 
   End Subroutine migrate_particles
 
-  !> Two-directional particle exchange (Mpi_sendrecv) along one axis. At a true global edge the "missing" neighbour
-  !  (MPI_PROC_NULL from x/z_halo_neighbors) is used only when that direction is periodic, where it is the periodic partner and
-  !  the coordinate is unwrapped by the domain length at hand-off, so no multi-hop relay is needed. Non-periodic edge crossings
-  !  were already resolved (exit/absorb/reflect) by apply_particle_bc.
+  !> Two-directional particle exchange (Mpi_sendrecv) along one axis. At a true global edge the "missing"
+  !  neighbour (MPI_PROC_NULL from x/z_halo_neighbors) is used only when that direction is periodic, where it
+  !  is the periodic partner and the coordinate is unwrapped by the domain length at hand-off, so no multi-hop
+  !  relay is needed. Non-periodic edge crossings were already resolved (exit/absorb/reflect) by
+  !  apply_particle_bc.
   Subroutine exchange_particles_1d(dir)
 
     Integer(Int32), Intent(In) :: dir
@@ -993,9 +1005,10 @@ Contains
 
   End Subroutine record_exit_id
 
-  !> Uniform (0,1) draws that depend only on (id, salt): Park-Miller minimal standard generator seeded from a mix of the two,
-  !  in Int64 arithmetic without overflow, so a seeded or reinjected particle's position is the same for every rank layout and
-  !  every compiler (Fortran's Random_Number is not: gfortran and nvfortran give different streams)
+  !> Uniform (0,1) draws that depend only on (id, salt): Park-Miller minimal standard generator seeded from a
+  !  mix of the two, in Int64 arithmetic without overflow, so a seeded or reinjected particle's position is
+  !  the same for every rank layout and every compiler (Fortran's Random_Number is not: gfortran and nvfortran
+  !  give different streams)
   Subroutine id_uniform(id, salt, r1, r2, r3)
 
     Integer(Int32), Intent(In)  :: id, salt
@@ -1018,8 +1031,8 @@ Contains
 
   End Subroutine id_uniform
 
-  !> Replace particles that exited through the outflow face (particle_reinit_on_exit==1) by fresh ones at the inflow, at a
-  !  hash-determined (y,z) with zero velocity. Collective: every rank takes part in the gather.
+  !> Replace particles that exited through the outflow face (particle_reinit_on_exit==1) by fresh ones at the
+  !  inflow, at a hash-determined (y,z) with zero velocity. Collective: every rank takes part in the gather.
   Subroutine reinject_at_inflow
 
     Integer(Int32), Allocatable :: counts(:), displs(:), all_ids(:)
@@ -1146,11 +1159,11 @@ Contains
 
   End Subroutine write_deposit_profile
 
-  !> Rank-0 gather of every particle's (id) and (x,y,z,u,v,w,ax,ay,az,age) into flat arrays,
-  !  shared by write_particle_restart and write_particle_snapshot. On return, id_all/
-  !  dat_all are allocated and populated on EVERY rank the same way write_particle_restart
-  !  always did (harmless on non-root ranks: Mpi_gatherv only reads counts/displs at the
-  !  root) -- total is 0 (and the arrays size-1 placeholders) on non-root ranks.
+  !> Rank-0 gather of every particle's (id) and (x,y,z,u,v,w,ax,ay,az,age) into flat arrays, shared by
+  !  write_particle_restart and write_particle_snapshot. On return, id_all/ dat_all are allocated and
+  !  populated on EVERY rank the same way write_particle_restart always did (harmless on non-root ranks:
+  !  Mpi_gatherv only reads counts/displs at the root) -- total is 0 (and the arrays size-1 placeholders) on
+  !  non-root ranks.
   Subroutine gather_all_particles(id_all, dat_all, total)
 
     Integer(Int32), Allocatable, Intent(Out) :: id_all(:)
@@ -1190,9 +1203,10 @@ Contains
 
   End Subroutine gather_all_particles
 
-  !> Write a flat particle-restart file (rank-0 gather): a global count header, then (id, x,y,z,u,v,w,ax,ay,az,age) records.
-  !  Overwrites particle_restart_file on every call (latest state for hot restart; the time series is write_particle_snapshot).
-  !  Called from output_data at the field-snapshot cadence.
+  !> Write a flat particle-restart file (rank-0 gather): a global count header, then (id,
+  !  x,y,z,u,v,w,ax,ay,az,age) records. Overwrites particle_restart_file on every call (latest state for hot
+  !  restart; the time series is write_particle_snapshot). Called from output_data at the field-snapshot
+  !  cadence.
   Subroutine write_particle_restart
 
     Integer(Int32) :: total, funit
@@ -1217,11 +1231,11 @@ Contains
 
   End Subroutine write_particle_restart
 
-  !> Write a timestamped particle snapshot for visualization (same (id,x,y,z,u,v,w,ax,ay,az,
-  !  age) binary layout as write_particle_restart, but to fname -- normally 'fields/<fileout>
-  !  _particles.<istep>', one file per saved step, called from output_data alongside the
-  !  main field snapshot so postProcessing/generate_particles_xmf.py can build a ParaView
-  !  time series that scrubs together with the field snapshots' own XDMF timeline).
+  !> Write a timestamped particle snapshot for visualization (same (id,x,y,z,u,v,w,ax,ay,az, age) binary
+  !  layout as write_particle_restart, but to fname -- normally 'fields/<fileout> _particles.<istep>', one
+  !  file per saved step, called from output_data alongside the main field snapshot so
+  !  postProcessing/generate_particles_xmf.py can build a ParaView time series that scrubs together with the
+  !  field snapshots' own XDMF timeline).
   Subroutine write_particle_snapshot(fname)
 
     Character(*), Intent(In) :: fname

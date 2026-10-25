@@ -12,12 +12,14 @@ Module scalar_transport
 
   Implicit None
 
-  ! Scalar copy with a second x and z ghost layer (indices 0 and nxg+1 / nzg+1) for the MUSCL far-upwind cell, so the scheme
-  ! stays second order across MPI seams and periodic wraps instead of dropping to first order there
+  ! Scalar copy with a second x/z ghost layer (indices 0, nxg+1 / nzg+1) for the MUSCL far-upwind cell: stays
+  ! second order across MPI seams and periodic wraps
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cpad
-  ! MPI staging planes for scalar_fill_pad (device-resident in GPU builds; the exchange itself runs on the host copies)
+  ! MPI staging planes for scalar_fill_pad (device-resident in GPU builds; the exchange itself runs on the
+  ! host copies)
   Real(Int64), Allocatable, Dimension(:,:) :: xs, xr, zs, zr
-  ! Cell-wise molecular diffusivity (two-fluid VOF: phase-dependent), face value = harmonic mean of the two cells; off = kappa_mol
+  ! Cell-wise molecular diffusivity (two-fluid VOF: phase-dependent), face value = harmonic mean; off =
+  ! kappa_mol
   Logical :: kf_on = .False.
   Real(Int64), Allocatable, Dimension(:,:,:) :: kfield
 
@@ -50,7 +52,8 @@ Contains
   End Function vanleer_slope
 
 
-  !> Compute RHS for scalar advection-diffusion (MUSCL advection + central diffusion), Sc/Sc_t diffusivity, with settling velocity
+  !> RHS for scalar advection-diffusion (MUSCL advection + central diffusion), Sc/Sc_t diffusivity, settling
+  !  velocity
   Subroutine compute_rhs_scalar(C_, U_, V_, W_, Fc_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: C_
@@ -64,7 +67,8 @@ Contains
   End Subroutine compute_rhs_scalar
 
 
-  !> Shared MUSCL advection-diffusion core for any cell-centred scalar (sediment concentration, temperature, ...)
+  !> Shared MUSCL advection-diffusion core for any cell-centred scalar (sediment concentration, temperature,
+  !  ...)
   Subroutine compute_rhs_scalar_core(C_, U_, V_, W_, w_settle, kappa_mol, kappa_t_inv, temp_wall_flux, Fc_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In)    :: C_
@@ -114,7 +118,8 @@ Contains
                 slp = vanleer_slope(gf, gb)
                 C_hi = Cpad(i,j,k) + slp * ( x(i) - xg(i) )
              Else
-                ! upwind cell = i+1; far-upwind C(i+2) comes from the padded halo (x is uniform, so dx stands in for xg(i+2)-xg(i+1))
+                ! upwind cell = i+1; far-upwind C(i+2) from the padded halo (x uniform, so dx stands in for
+                ! xg(i+2)-xg(i+1))
                 gf  = ( Cpad(i+2,j,k) - Cpad(i+1,j,k) ) / dx
                 gb  = ( Cpad(i+1,j,k) - Cpad(i,j,k)   ) / ( xg(i+1) - xg(i)   )
                 slp = vanleer_slope(gf, gb)
@@ -194,7 +199,8 @@ Contains
                 slp = vanleer_slope(gf, gb)
                 C_hi = Cpad(i,j,k) + slp * ( z(k) - zg(k) )
              Else
-                ! upwind cell = k+1; far-upwind C(k+2) comes from the padded halo (scalars need uniform z, so dz stands in for zg(k+2)-zg(k+1))
+                ! upwind cell = k+1; far-upwind C(k+2) from the padded halo (uniform z required, dz stands in
+                ! for zg(k+2)-zg(k+1))
                 gf  = ( Cpad(i,j,k+2) - Cpad(i,j,k+1) ) / dz
                 gb  = ( Cpad(i,j,k+1) - Cpad(i,j,k)   ) / ( zg(k+1) - zg(k)   )
                 slp = vanleer_slope(gf, gb)
@@ -221,7 +227,7 @@ Contains
              adv_z = ( W_(i,j,k)*C_hi - W_(i,j,k-1)*C_lo ) / dz_f
 
              !-------- x-diffusion -----------------------------------------
-             ! kappa at high x-face (x uniform: plain average; y, z use the interpolation weights): average of nu_t at (i,j,k) and (i+1,j,k)
+             ! kappa at the high x-face: plain average of nu_t at (i,j,k), (i+1,j,k) (x uniform)
              km_hi = kappa_mol;  km_lo = kappa_mol
              If ( kf_on ) Then
                 km_hi = 2d0*kfield(i,j,k)*kfield(i+1,j,k)/( kfield(i,j,k) + kfield(i+1,j,k) )
@@ -273,7 +279,8 @@ Contains
   End Subroutine compute_rhs_scalar_core
 
 
-  !> Load C_ into the padded work array Cpad and fill its outer x/z ghost layer: neighbour-rank cells across MPI seams, the periodic partner's cells across a periodic wrap, else a copy of the adjacent ghost cell (zero slope, i.e. first-order upwind at true domain edges)
+  !> Load C_ into Cpad and fill its outer x/z ghost layer: neighbour rank across seams, periodic partner
+  !  across a wrap, else a copy of the adjacent ghost (first-order upwind at true edges)
   Subroutine scalar_fill_pad(C_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(In) :: C_
@@ -317,8 +324,8 @@ Contains
        Return
     End If
 
-    ! multi-rank: x planes first for k=1..nzg, then z planes over the x-extended extent so corners are consistent. The MPI
-    ! exchange runs on host copies; in GPU builds only the planes that are sent or received go through the host.
+    ! multi-rank: x planes first, then z planes over the x-extended extent (consistent corners); MPI runs on
+    ! host copies, in GPU builds only the exchanged planes go through the host
     Call x_halo_neighbors(up, down)
     xsend_up = nxg-2
     xsend_dn = 3
@@ -333,7 +340,8 @@ Contains
        End If
     End If
 
-    ! x planes: pack on the device into contiguous buffers, stage those through the host for MPI, unpack on the device
+    ! x planes: pack on the device into contiguous buffers, stage those through the host for MPI, unpack on
+    ! the device
     !$acc kernels present(Cpad,xs)
     xs = Cpad(xsend_up,:,1:nzg)
     !$acc end kernels
@@ -404,14 +412,16 @@ Contains
   End Subroutine scalar_fill_pad
 
 
-  !> z-halo exchange plus the periodic x/z wraps for a cell-centred scalar, after the caller's x seam exchange and inflow/outflow update; host-side (runs the wraps on the device via a round trip)
+  !> z-halo exchange plus periodic x/z wraps for a cell-centred scalar, after the caller's x seam exchange and
+  !  inflow/outflow update; host-side (wraps run on device via a round trip)
   Subroutine finish_scalar_halos(C_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
 
     ! z-halo via MPI (ring exchange, non-periodic)
     Call update_ghost_interior_planes(C_, 4, host_only=.True.)
-    ! Push host state to device first: the periodic wraps run device-resident at nprocs==1, else their fill is clobbered by the caller's later blanket update device
+    ! Push host state to device first: the periodic wraps run device-resident at nprocs==1, else the caller's
+    ! later blanket update device clobbers the fill
     !$acc update device(C_)
     If ( x_bc_type == 0 ) Call apply_periodic_bc_x(C_, 2)
     Call apply_periodic_bc_z(C_, 4)
@@ -420,7 +430,8 @@ Contains
   End Subroutine finish_scalar_halos
 
 
-  !> Single-rank counterpart of finish_scalar_halos on the device-resident C_: the periodic x and z wraps are local copies
+  !> Single-rank counterpart of finish_scalar_halos on the device-resident C_: the periodic x and z wraps are
+  !  local copies
   Subroutine finish_scalar_halos_dev(C_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
@@ -431,7 +442,8 @@ Contains
   End Subroutine finish_scalar_halos_dev
 
 
-  !> Single-rank x inflow and convective outflow of the device-resident C_; plane is the Dirichlet inflow plane built on the host
+  !> Single-rank x inflow and convective outflow of the device-resident C_; plane is the Dirichlet inflow
+  !  plane built on the host
   Subroutine scalar_x_inflow_outflow_dev(C_, plane)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
@@ -449,8 +461,8 @@ Contains
   End Subroutine scalar_x_inflow_outflow_dev
 
 
-  !> Apply boundary conditions to scalar C (x-periodic or Dirichlet inflow/convective outflow, z-MPI halo, y-wall fluxes);
-  !  one rank works on the device copy, several ranks stage the host copy
+  !> Boundary conditions of scalar C (x periodic or Dirichlet inflow/convective outflow, z-MPI halo, y-wall
+  !  fluxes); one rank works on the device copy, several stage the host copy
   Subroutine apply_scalar_bc(C_)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: C_
@@ -479,8 +491,9 @@ Contains
 
     !$acc update host(C_)
 
-    ! x direction: interior-rank seam planes, then Dirichlet inflow / convective outflow (periodic wrap comes in finish_scalar_halos)
-    ! the seam exchange runs on device memory in multi-GPU builds: push the host state, exchange, bring the planes back
+    ! x direction: seam planes, then Dirichlet inflow / convective outflow (periodic wrap is in
+    ! finish_scalar_halos); multi-GPU seam exchange runs on device memory: push host state, exchange, bring
+    ! planes back
     !$acc update device(C_)
     Call update_ghost_interior_planes_x(C_, 4)
     !$acc update host(C_)
@@ -506,7 +519,8 @@ Contains
 
     !$acc update device(C_)
 
-    ! IBM solid cells are deliberately not zeroed: image-point interpolation and the MUSCL stencil read them, and zeros would drain nearby fluid; the no-flux ghost fill (apply_ghost_cell_ibm_scalar_noflux) supplies the boundary condition
+    ! IBM solid cells are not zeroed: image-point interpolation and the MUSCL stencil read them and zeros
+    ! would drain nearby fluid; apply_ghost_cell_ibm_scalar_noflux supplies the boundary condition
 
   End Subroutine apply_scalar_bc
 

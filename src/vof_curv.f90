@@ -1,8 +1,8 @@
-!> Interface curvature of the VOF field C for surface tension: height functions ((2 NH + 1)-cell columns, 3x3 columns, Popinet 2009) in
-!  the coordinate direction closest to the interface normal; cells whose columns do not terminate in a full and an empty cell
-!  (thin ligaments, drops of a few cells) take the mean of the valid height-function curvatures of their neighbours, else zero.
-!  Convention: kappa = div(n_out) with n_out pointing out of the liquid, i.e. 2/R for a spherical drop; the force on the fluid
-!  is sigma kappa grad(C).
+!> Interface curvature of the VOF field C for surface tension: height functions ((2 NH + 1)-cell columns, 3x3
+!  columns, Popinet 2009) in the coordinate direction closest to the interface normal; cells whose columns do
+!  not terminate in a full and an empty cell (thin ligaments, drops of a few cells) take the mean of the valid
+!  height-function curvatures of their neighbours, else zero. Convention: kappa = div(n_out) with n_out
+!  pointing out of the liquid, i.e. 2/R for a spherical drop; the force on the fluid is sigma kappa grad(C).
 Module vof_curv
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -77,7 +77,8 @@ Contains
     kap0 = kap
     !$acc end kernels
 
-    ! interface cells without a height function: mean of the valid neighbours (the halo carries the seam cells)
+    ! interface cells without a height function: mean of the valid neighbours (the halo carries the seam
+    ! cells)
     !$acc parallel loop collapse(3) private(c,acc,cnt) present(Pc,kap,kap0,valid)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
@@ -106,9 +107,10 @@ Contains
   End Subroutine vof_curvature
 
 
-  !> Height-function curvature of interface cell (i,j,k): direction d of the largest central difference of C, heights of the
-  !  3x3 neighbouring columns, valid only if every column starts in a full (or empty) and ends in an empty (full) cell.
-  !  hyc, hzc: cell sizes of the rows and planes, dxs the x spacing (a device routine takes no module data).
+  !> Height-function curvature of interface cell (i,j,k): direction d of the largest central difference of C,
+  !  heights of the 3x3 neighbouring columns, valid only if every column starts in a full (or empty) and ends
+  !  in an empty (full) cell. hyc, hzc: cell sizes of the rows and planes, dxs the x spacing (a device routine
+  !  takes no module data).
   Subroutine height_curvature(P, hyc, hzc, dxs, i, j, k, kv, ok)
     !$acc routine seq
 

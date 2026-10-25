@@ -1,17 +1,12 @@
-!> Mask-aware geometric multigrid preconditioner for the masked PCG of vof_pressure (pcg_precond = 1).
-!
-!  The operator is the symmetric conductance form S = -V A of A = div(beta grad) (V the cell volumes), so z = A^-1 r is
-!  z = -S^-1 (V r) and the preconditioner is symmetric negative definite like A. Coarse cells aggregate 2x2x2 (or fewer, see
-!  mg_coarsen) rank-local fine cells; transfers are piecewise constant (restriction = sum = transpose of prolongation); coarse
-!  conductances sum the fine ones crossing a coarse face, scaled by (fine centre distance)/(coarse centre distance) in the
-!  coarsened direction. Closed faces stay closed, a coarse face is open if any fine face under it is, and solid cells and sealed
-!  pockets give empty or singular rows that the smoother leaves alone. The smoother is a Chebyshev polynomial of the y-line-Jacobi
-!  iteration (exact tridiagonal solves along the stretched y direction, which carries the anisotropy), the same before and after
-!  the coarse correction, so the V-cycle from a zero guess is a fixed symmetric operator.
-!
-!  Level arrays are flat 1D storage with one offset per level, indexed (0:ni+1,0:nj+1,0:nk+1) through explicit-shape dummies:
-!  cells 1:n are the distinct unknowns (not the periodic duplicate cell of the last rank), 0 and n+1 the ghost layer (neighbour
-!  rank, periodic partner, Neumann copy or the Dirichlet reflection of the x outlet). cx(i) joins cells i and i+1.
+!> Mask-aware geometric multigrid preconditioner for the masked PCG of vof_pressure (pcg_precond = 1). The
+!  operator is the symmetric conductance form S = -V A of A = div(beta grad) (V the cell volumes), so z = A^-1
+!  r = -S^-1 (V r) and the preconditioner is symmetric negative definite like A. Coarse cells aggregate up to
+!  2x2x2 rank-local fine cells (strides mg_sx/mg_sy/mg_sz); transfers are piecewise constant; coarse
+!  conductances sum the fine ones crossing a coarse face, scaled by the centre-distance ratio. A coarse face
+!  is open if any fine face under it is; solid cells and sealed pockets give empty or singular rows the
+!  smoother leaves alone. The smoother is a Chebyshev polynomial of the y-line-Jacobi iteration (exact
+!  tridiagonal solves along the stretched y direction, which carries the anisotropy), identical before and
+!  after the coarse correction, so the V-cycle from a zero guess is a fixed symmetric operator.
 Module vof_mg
 
   Use iso_fortran_env, Only : Int32, Int64, Real32
@@ -21,8 +16,8 @@ Module vof_mg
 
   Implicit None
 
-  ! storage kind of the V-cycle (the outer PCG stays in double): the preconditioner only needs ~1e-7 relative accuracy
-  ! and is memory-bound
+  ! storage kind of the V-cycle (the outer PCG stays in double): the preconditioner only needs ~1e-7 relative
+  ! accuracy and is memory-bound
   Integer(Int32), Parameter :: mgk = Real32
   Integer(Int32) :: mg_mpi_t
   Integer(Int32), Parameter :: mg_maxlev = 24
@@ -32,8 +27,12 @@ Module vof_mg
   Integer(Int32) :: mg_ni(mg_maxlev), mg_nj(mg_maxlev), mg_nk(mg_maxlev)
   Integer(Int32) :: mg_sx(mg_maxlev), mg_sy(mg_maxlev), mg_sz(mg_maxlev)   ! coarsening stride from level l to l+1
   Integer(Int32) :: mg_off(mg_maxlev+1)
+  ! flat storage, one offset (mg_off) per level, indexed (0:ni+1,0:nj+1,0:nk+1): cells 1:n are the unknowns,
+  ! 0 and n+1 the ghost layer (neighbour rank, periodic partner, Neumann copy or Dirichlet reflection of the
+  ! x outlet); cx(i) joins cells i, i+1
   Real(mgk), Allocatable, Dimension(:) :: mg_cx, mg_cy, mg_cz, mg_dd, mg_x, mg_b, mg_t, mg_d, mg_m, mg_iw, mg_s
-  Real(Int64), Allocatable, Dimension(:,:) :: mg_fx, mg_fy, mg_fz   ! centre-distance ratios of the coarse faces, level l -> l+1
+  ! centre-distance ratios of the coarse faces, level l -> l+1
+  Real(Int64), Allocatable, Dimension(:,:) :: mg_fx, mg_fy, mg_fz
   Real(Int64), Allocatable, Dimension(:) :: mg_hy1, mg_hz1, mg_dcy1, mg_dcz1   ! level-1 cell sizes and centre distances
   Real(mgk), Allocatable, Dimension(:,:) :: mg_sbx, mg_rbx, mg_sbz, mg_rbz
   Integer(Int32) :: mg_xup, mg_xdn, mg_zup, mg_zdn
@@ -157,7 +156,8 @@ Contains
 
 
 
-  !> Ghost sizes of a 1D size array h(1:n): the neighbour's end cell, or the own cell where there is no neighbour
+  !> Ghost sizes of a 1D size array h(1:n): the neighbour's end cell, or the own cell where there is no
+  !  neighbour
   Subroutine mg_ghost_size(h, n, up, dn, self, tag)
 
     Integer(Int32), Intent(In) :: n, up, dn, tag
@@ -177,8 +177,9 @@ Contains
   End Subroutine mg_ghost_size
 
 
-  !> Sizes and centre distances of the coarse cells of one direction, and the ratio fr(I) of the centre distance of the fine face
-  !  under each coarse face to that of the coarse face (conductance of a coarsened direction scales with it)
+  !> Sizes and centre distances of the coarse cells of one direction, and the ratio fr(I) of the centre
+  !  distance of the fine face under each coarse face to that of the coarse face (conductance of a coarsened
+  !  direction scales with it)
   Subroutine mg_coarse_geometry(h, dc, n, s, nc, up, dn, self, tag, hc, dcc, fr)
 
     Integer(Int32), Intent(In) :: n, s, nc, up, dn, tag
@@ -202,9 +203,9 @@ Contains
   End Subroutine mg_coarse_geometry
 
 
-  !> Conductances of all levels from the fine face coefficients (beta on the faces of U, V, W; zero on closed faces), the
-  !  diagonals and the tridiagonal factors of the line smoother; call whenever the coefficients change. Device-resident: bu, bv, bw
-  !  must be present on the device in a GPU build.
+  !> Conductances of all levels from the fine face coefficients (beta on the faces of U, V, W; zero on closed
+  !  faces), the diagonals and the tridiagonal factors of the line smoother; call whenever the coefficients
+  !  change. Device-resident: bu, bv, bw must be present on the device in a GPU build.
   Subroutine mg_set_coef(bu, bv, bw)
 
     Real(Int64), Intent(In) :: bu(nx,nyg,nzg), bv(nxg,ny,nzg), bw(nxg,nyg,nz)
@@ -225,7 +226,8 @@ Contains
   End Subroutine mg_set_coef
 
 
-  !> Level-1 conductances beta*area/distance on the faces between unknown cells; physical Neumann faces carry nothing
+  !> Level-1 conductances beta*area/distance on the faces between unknown cells; physical Neumann faces carry
+  !  nothing
   Subroutine mg_fine_coef(ni, nj, nk, bu, bv, bw, cx, cy, cz)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
@@ -278,7 +280,8 @@ Contains
   End Subroutine mg_fine_coef
 
 
-  !> Coarse conductances: sum of the fine conductances through a coarse face, times the centre-distance ratio fr (and mg_cscale)
+  !> Coarse conductances: sum of the fine conductances through a coarse face, times the centre-distance ratio
+  !  fr (and mg_cscale)
   Subroutine mg_coarsen_coef(nif, njf, nkf, cxf, cyf, czf, nic, njc, nkc, sx, sy, sz, fxr, fyr, fzr, cxc, cyc, czc)
 
     Integer(Int32), Intent(In) :: nif, njf, nkf, nic, njc, nkc, sx, sy, sz
@@ -343,8 +346,9 @@ Contains
   End Subroutine mg_coarsen_coef
 
 
-  !> Diagonal of S and the factors of the y-line tridiagonal T = (1+eps) diag - offdiag_y (Dirichlet reflection of the x outlet
-  !  folded into the diagonal); a zero diagonal (solid cell) gives a zero pivot inverse, so the cell is left alone
+  !> Diagonal of S and the factors of the y-line tridiagonal T = (1+eps) diag - offdiag_y (Dirichlet
+  !  reflection of the x outlet folded into the diagonal); a zero diagonal (solid cell) gives a zero pivot
+  !  inverse, so the cell is left alone
   Subroutine mg_factor(ni, nj, nk, cx, cy, cz, dd, m, iw)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
@@ -389,8 +393,8 @@ Contains
   End Subroutine mg_factor
 
 
-  !> Ghost layers of a level array: neighbour ranks and periodic partners by MPI, Neumann copies at the y walls and at physical
-  !  x/z boundaries, the reflection mg_xhi_gs at a Dirichlet x outlet
+  !> Ghost layers of a level array: neighbour ranks and periodic partners by MPI, Neumann copies at the y
+  !  walls and at physical x/z boundaries, the reflection mg_xhi_gs at a Dirichlet x outlet
   Subroutine mg_halo(a, ni, nj, nk)
 
     Integer(Int32), Intent(In) :: ni, nj, nk
@@ -589,7 +593,8 @@ Contains
   End Subroutine mg_upd
 
 
-  !> Chebyshev polynomial of degree deg in T^-1 S on [lo, hi] (hi = 2 bounds the line-Jacobi spectrum), from x = 0 when zero
+  !> Chebyshev polynomial of degree deg in T^-1 S on [lo, hi] (hi = 2 bounds the line-Jacobi spectrum), from x
+  !  = 0 when zero
   Subroutine mg_cheb(ni, nj, nk, x, b, t, d, cx, cy, cz, dd, m, iw, deg, lo, hi, zero)
 
     Integer(Int32), Intent(In) :: ni, nj, nk, deg
@@ -690,7 +695,8 @@ Contains
   End Subroutine mg_prolong
 
 
-  !> One symmetric cycle from a zero guess on the level-1 right-hand side mg_b (V-cycle for mg_cycle = 1, W-cycle for 2)
+  !> One symmetric cycle from a zero guess on the level-1 right-hand side mg_b (V-cycle for mg_cycle = 1,
+  !  W-cycle for 2)
   Subroutine mg_vcycle
 
     Call mg_level(1)
@@ -698,9 +704,9 @@ Contains
   End Subroutine mg_vcycle
 
 
-  !> Cycle on level l from a zero guess: smooth, restrict the residual, mg_cycle visits of the coarse level (each one on the
-  !  residual left by the previous ones, their corrections added), prolong, smooth. Every visit is a fixed symmetric operator,
-  !  so the result is too
+  !> Cycle on level l from a zero guess: smooth, restrict the residual, mg_cycle visits of the coarse level
+  !  (each one on the residual left by the previous ones, their corrections added), prolong, smooth. Every
+  !  visit is a fixed symmetric operator, so the result is too
   Recursive Subroutine mg_level(l)
 
     Integer(Int32), Intent(In) :: l

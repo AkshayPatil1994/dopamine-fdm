@@ -1,7 +1,6 @@
 ! Module for fractional step method
 Module projection
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
@@ -14,7 +13,6 @@ Module projection
   Use poisson_gpu
 #endif
 
-  ! prevent implicit typing
   Implicit None
 
 Contains
@@ -64,9 +62,10 @@ Contains
 
   End Subroutine compute_pseudo_pressure_rhs
 
-  !> Outlet backflow stabilisation: the face pressure of the solve becomes pb = -beta*|u|^2/2*H(-u_n) from the predicted outlet velocity
-  !  (H smoothed over 5% of the plane-mean outlet speed), so re-entering fluid has zero total pressure. phib is the increment of dt*c*Pb
-  !  that the solve must deliver at the face; the last interior cell's equation takes it as 2*phib/dx^2 on the right-hand side
+  !> Outlet backflow stabilisation: the face pressure of the solve becomes pb = -beta*|u|^2/2*H(-u_n) from the
+  !  predicted outlet velocity (H smoothed over 5% of the plane-mean outlet speed), so re-entering fluid has
+  !  zero total pressure. phib is the increment of dt*c*Pb that the solve must deliver at the face; the last
+  !  interior cell's equation takes it as 2*phib/dx^2 on the right-hand side
   Subroutine set_outflow_backflow_pressure
 
     Integer(Int32) :: j, k
@@ -96,8 +95,8 @@ Contains
 
   End Subroutine set_outflow_backflow_pressure
 
-  !> Solve pseudo-pressure equation (fast Poisson solver)
-  !  skip_p_save: leave P untouched (the two-fluid pressure solver calls this as a preconditioner several times per stage)
+  !> Solve pseudo-pressure equation (fast Poisson solver) skip_p_save: leave P untouched (the two-fluid
+  !  pressure solver calls this as a preconditioner several times per stage)
   Subroutine solve_poisson_equation(skip_p_save)
 
     Logical, Intent(In), Optional :: skip_p_save
@@ -112,10 +111,10 @@ Contains
 
     Call profiler_start(PROF_POISSON_FFT)
 #ifdef GPU_POISSON
-    ! rhs_p stays device-resident through the whole Poisson stage
-    ! z_bc_type==1 (4-wall duct, y_bc_type==1 .And. x_bc_type==0 only -- other z-wall
-    ! combinations are rejected for GPU_POISSON builds at init time, initialization.f90)
-    ! pencil-decomposed transform chain (x FFT or DCT-IV, z FFT unless duct), multi-GPU capable for every BC combination
+    ! rhs_p stays device-resident through the whole Poisson stage z_bc_type==1 (4-wall duct, y_bc_type==1
+    ! .And. x_bc_type==0 only -- other z-wall combinations are rejected for GPU_POISSON builds at init time,
+    ! initialization.f90) pencil-decomposed transform chain (x FFT or DCT-IV, z FFT unless duct), multi-GPU
+    ! capable for every BC combination
     Call gpu_forward_transform_3d
 #else
     ! Forward chain, common part: y(real) -> x(local FFT/DCT) -> y(complex)
@@ -159,7 +158,8 @@ Contains
     If ( z_bc_type == 1 .And. y_bc_type == 0 ) Then
        Call gpu_solve_zwall_pencil
     Else If ( z_bc_type == 1 ) Then
-       ! 4-wall duct: z-eigenmode transform + batched cuSPARSE solve of one y-tridiagonal system per (x-mode, z-eigenmode) pair
+       ! 4-wall duct: z-eigenmode transform + batched cuSPARSE solve of one y-tridiagonal system per (x-mode,
+       ! z-eigenmode) pair
        Call gpu_solve_duct_pencil
     Else If ( x_bc_type == 0 .And. y_bc_type == 0 ) Then
        ! Fully periodic: elementwise divide by kxx+kyy+kzz in Fourier space (no tridiagonal solve needed)
@@ -199,11 +199,11 @@ Contains
                Do j = 2, nyg-1
                   D(j) = Dyy(j,j) + wavenum_sum
                End Do
-               ! Remove singularity of the 00 mode: x_bc_type==0's zero x-wavenumber paired with
-               ! z's zero eigenvalue (the constant-function null mode of the Neumann-pressure
-               ! z-operator). Checked by magnitude, not a hardcoded index -- dstev returns
-               ! eigenvalues ascending, and Dzz is negative-semi-definite, so the zero eigenvalue
-               ! is the LARGEST (last, not first) of the ascending list.
+               ! Remove singularity of the 00 mode: x_bc_type==0's zero x-wavenumber paired with z's zero
+               ! eigenvalue (the constant-function null mode of the Neumann-pressure z-operator). Checked by
+               ! magnitude, not a hardcoded index -- dstev returns eigenvalues ascending, and Dzz is
+               ! negative-semi-definite, so the zero eigenvalue is the LARGEST (last, not first) of the
+               ! ascending list.
                If ( x_bc_type==0 .And. i_global==0 .And. Abs(lambda_z(m)) < 1d-8*Maxval(Abs(lambda_z)) ) D(2) = 3d0/2d0*D(2)
                Call Zgtsv( nr, nrhs, DL, D, DU, z_hat_duct(:,m), nr, info)
             End Do
@@ -217,9 +217,10 @@ Contains
          End Do
        End Block
     ElseIf ( z_bc_type == 1 ) Then
-       ! Spanwise wall only (y periodic): Zgtsv-in-z, one mode per (x,y)-wavenumber pair this rank owns, in the z-pencil. That
-       ! pencil splits (x,y), so the y-mode's global index needs decomp_poisson%zst(2); poisson_y_c's padding column (index nyp+1)
-       ! rides through the transpose and is skipped (j_global >= nyp).
+       ! Spanwise wall only (y periodic): Zgtsv-in-z, one mode per (x,y)-wavenumber pair this rank owns, in
+       ! the z-pencil. That pencil splits (x,y), so the y-mode's global index needs decomp_poisson%zst(2);
+       ! poisson_y_c's padding column (index nyp+1) rides through the transpose and is skipped (j_global >=
+       ! nyp).
        Call transpose_y_to_z( poisson_y_c, poisson_z_c, decomp_poisson )
        Do j = 1, decomp_poisson%zsz(2)
           j_global = decomp_poisson%zst(2) + j - 2
@@ -243,10 +244,11 @@ Contains
        End Do
        Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_poisson )
     ElseIf ( y_bc_type == 0 ) Then
-       ! Periodic y: local batched 1-D FFT along dim 2 of poisson_y_c, one k-slice at a time (fftw_plan_many_dft batches one
-       ! stride/dist pair, here the x index), then a diagonal divide by kxx+kyy+kzz and the inverse FFT, replacing the Zgtsv solve.
-       ! nyp = decomp_poisson%ysz(2)-1 as for periodic x/z (last cell duplicates the first, see apply_periodic_bc_y and the
-       ! reconstruction copy below): only the first nyp y-slots are independent.
+       ! Periodic y: local batched 1-D FFT along dim 2 of poisson_y_c, one k-slice at a time
+       ! (fftw_plan_many_dft batches one stride/dist pair, here the x index), then a diagonal divide by
+       ! kxx+kyy+kzz and the inverse FFT, replacing the Zgtsv solve. nyp = decomp_poisson%ysz(2)-1 as for
+       ! periodic x/z (last cell duplicates the first, see apply_periodic_bc_y and the reconstruction copy
+       ! below): only the first nyp y-slots are independent.
        nyp = decomp_poisson%ysz(2) - 1
        Do k = 1, decomp_poisson%ysz(3)
           Call fftw_execute_dft( plan_fy_fwd, poisson_y_c(:,1:nyp,k), poisson_y_c(:,1:nyp,k) )
@@ -270,7 +272,8 @@ Contains
        End Do
        poisson_y_c(:,1:nyp,:) = poisson_y_c(:,1:nyp,:) / Real(nyp, Int64)
     Else
-       ! one tridiagonal solve per mode this rank owns (local index -> global mode index via decomp_poisson%yst)
+       ! one tridiagonal solve per mode this rank owns (local index -> global mode index via
+       ! decomp_poisson%yst)
        Do k = 1, decomp_poisson%ysz(3)
           k_global = decomp_poisson%yst(3) + k - 2
           Do i = 1, decomp_poisson%ysz(1)
@@ -287,7 +290,8 @@ Contains
              End Do
              ! Remove singularity 00 mode
              If ( x_bc_type==0 .And. i_global==0 .And. k_global==0 ) D(2) = 3d0/2d0*D(2)
-             ! solve M*u = rhs; poisson_y_c(i,:,k) is a length-nym vector like D/DL/DU (Zgtsv only cares about sequence position, not the declared bounds), written in-place
+             ! solve M*u = rhs; poisson_y_c(i,:,k) is a length-nym vector like D/DL/DU (Zgtsv only cares
+             ! about sequence position, not the declared bounds), written in-place
              Call Zgtsv( nr, nrhs, DL, D, DU, poisson_y_c(i,:,k), nr, info)
           End Do
        End Do
@@ -305,7 +309,7 @@ Contains
        Call fftw_execute_dft(plan_fz_inv, poisson_z_c, poisson_z_c)
        Call transpose_z_to_y( poisson_z_c, poisson_y_c, decomp_poisson )
     Else If ( y_bc_type == 0 ) Then
-       ! ---- spanwise wall only: inverse y-FFT (z was already inverted in physical space by the Zgtsv above) ----
+       ! ---- spanwise wall only: inverse y-FFT (z was already inverted in physical space by the Zgtsv) ----
        Do k = 1, decomp_poisson%ysz(3)
           Call fftw_execute_dft( plan_fy_inv, poisson_y_c(:,1:nyp,k), poisson_y_c(:,1:nyp,k) )
        End Do
@@ -377,9 +381,10 @@ Contains
 
   End Subroutine solve_poisson_equation
 
-  !> Wall rows and x/z ghost planes of a pressure-shaped array Pf whose interior is set: y wall copy, cross-rank halo and domain-periodic
-  !  wrap (id=4, generic scalar-shaped convention), or the Neumann copy at an x/z domain edge. Shared by the pressure saved at the end of
-  !  the step and by the incremental stage pressure (ibm_pressure)
+  !> Wall rows and x/z ghost planes of a pressure-shaped array Pf whose interior is set: y wall copy,
+  !  cross-rank halo and domain-periodic wrap (id=4, generic scalar-shaped convention), or the Neumann copy at
+  !  an x/z domain edge. Shared by the pressure saved at the end of the step and by the incremental stage
+  !  pressure (ibm_pressure)
   Subroutine finish_pressure_ghosts(Pf)
 
     Real(Int64), Intent(InOut) :: Pf(nxg,nyg,nzg)
@@ -440,9 +445,9 @@ Contains
     Logical        :: is_first_x, is_last_x
     Integer(Int32) :: partner_x
 
-    ! x periodic ghost-fill (inflow/outflow needs none): only the row owning the
-    ! domain's x tail is missing this point (nxp_global's periodic reduction), and
-    ! only the row owning x=1 has the source value -- MPI needed unless p_row==1
+    ! x periodic ghost-fill (inflow/outflow needs none): only the row owning the domain's x tail is missing
+    ! this point (nxp_global's periodic reduction), and only the row owning x=1 has the source value -- MPI
+    ! needed unless p_row==1
     If ( x_bc_type == 0 ) Then
        Call x_periodic_partner(is_first_x, is_last_x, partner_x)
        If ( is_first_x .And. is_last_x ) Then
@@ -464,10 +469,10 @@ Contains
        End If
     End If
 
-    ! apply periodicity in z (only the column's first and last rank, MPI needed); no
-    ! equivalent needed for z_bc_type==1 (wall) -- like y_bc_type==1, project_velocity
-    ! never reads rhs_p's outermost z ghost plane in that case (W is exactly zero at
-    ! the wall face itself, so no pressure-gradient correction is needed there)
+    ! apply periodicity in z (only the column's first and last rank, MPI needed); no equivalent needed for
+    ! z_bc_type==1 (wall) -- like y_bc_type==1, project_velocity never reads rhs_p's outermost z ghost plane
+    ! in that case (W is exactly zero at the wall face itself, so no pressure-gradient correction is needed
+    ! there)
     If ( z_bc_type == 0 ) Then
        Call z_periodic_partner(is_first, is_last, partner)
        ! p_col==1: this rank self-pairs, so copy locally to avoid a blocking self-send deadlock
@@ -518,7 +523,9 @@ Contains
 
   End Subroutine update_ghost_interior_planes_pressure
 
-  !> Fill rhs_p's x row-seam ghost (nxg) from the next row's first interior point; needed by project_velocity's U update at the row-to-row boundary (distinct from the domain periodic wrap, handled in apply_periodic_xz_pressure)
+  !> Fill rhs_p's x row-seam ghost (nxg) from the next row's first interior point; needed by
+  !  project_velocity's U update at the row-to-row boundary (distinct from the domain periodic wrap, handled
+  !  in apply_periodic_xz_pressure)
   Subroutine update_ghost_interior_planes_pressure_x
 
     Integer(Int32) :: up, down
@@ -559,10 +566,10 @@ Contains
             ( rhs_p(i+1,2:nyg-1,2:nzg-1) - rhs_p(i,2:nyg-1,2:nzg-1) ) * inv_dx_proj
     End Do
 
-    ! Row-to-row seam face (x_bc_type-independent): only the last row's face nx is
-    ! the domain boundary (periodic wrap / outflow, handled separately below); every
-    ! other row's face nx is a genuine interior face against the next row, needing
-    ! the x-halo-filled ghost at nxg (update_ghost_interior_planes_pressure_x)
+    ! Row-to-row seam face (x_bc_type-independent): only the last row's face nx is the domain boundary
+    ! (periodic wrap / outflow, handled separately below); every other row's face nx is a genuine interior
+    ! face against the next row, needing the x-halo-filled ghost at nxg
+    ! (update_ghost_interior_planes_pressure_x)
     If ( .Not. is_last_x ) Then
        U(nx,2:nyg-1,2:nzg-1) = U(nx,2:nyg-1,2:nzg-1) - &
             ( rhs_p(nxg,2:nyg-1,2:nzg-1) - rhs_p(nx,2:nyg-1,2:nzg-1) ) * inv_dx_proj
@@ -609,9 +616,11 @@ Contains
        Do j = 2, nyg-1
           Do i = 2, nxg-1
              If ( ibm_input_mode >= 1 ) Then
-                ! Skip solid cells: ghost-cell face velocities make divergence inside the solid physically meaningless
+                ! Skip solid cells: ghost-cell face velocities make divergence inside the solid physically
+                ! meaningless
                 If ( phi(i,j,k) < 0d0 ) Cycle
-                ! Skip IBM-adjacent fluid cells (not for the staircase method, whose closed faces carry exactly zero flux)
+                ! Skip IBM-adjacent fluid cells (not for the staircase method, whose closed faces carry
+                ! exactly zero flux)
                 If ( ibm_method /= 1 .And. ( phi(i-1,j,k) < 0d0 .Or. phi(i+1,j,k) < 0d0 .Or. &
                      phi(i,j-1,k) < 0d0 .Or. phi(i,j+1,k) < 0d0 .Or. &
                      phi(i,j,k-1) < 0d0 .Or. phi(i,j,k+1) < 0d0 ) ) Cycle

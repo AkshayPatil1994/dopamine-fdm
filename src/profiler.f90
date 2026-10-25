@@ -24,7 +24,8 @@ Module profiler
   Integer(Int32), Parameter :: PROF_VOF_FORCES     = 16
   Integer(Int32), Parameter :: PROF_VOF_END        = 17
   Integer(Int32), Parameter :: PROF_PCG            = 18   ! inside the VOF stages above, not added to the total
-  Integer(Int32), Parameter :: PROF_ADV_DENSITY   = 19   ! inside VOF advect (this and the next four): not added to the total
+  ! inside VOF advect (this and the next four): not added to the total
+  Integer(Int32), Parameter :: PROF_ADV_DENSITY   = 19
   Integer(Int32), Parameter :: PROF_ADV_RECON     = 20
   Integer(Int32), Parameter :: PROF_ADV_SWEEP     = 21
   Integer(Int32), Parameter :: PROF_ADV_MASSFLUX  = 22

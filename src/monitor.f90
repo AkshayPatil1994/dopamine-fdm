@@ -1,7 +1,6 @@
 ! Module to monitor status of the simulation
 Module monitor
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
@@ -12,7 +11,6 @@ Module monitor
   Use restart_output, Only : trim_restart_file
   Use wallmodel, Only : wall_diag_sums
 
-  ! prevent implicit typing
   Implicit None
 
   Logical, Save :: wall_diag_started = .False.
@@ -72,7 +70,8 @@ Contains
                cfl_conv_last, cfl_visc_last, cfl_accel_last, dt, time2 - time1
        End If
 
-       ! wall_diag.dat: mean u_tau (and, with the MOST thermal wall model, wall heat flux and 1/L) of the y-wall model, per wall
+       ! wall_diag.dat: mean u_tau (and, with the MOST thermal wall model, wall heat flux and 1/L) of the
+       ! y-wall model, per wall
        wd_active  = vof_flow < 1 .And. y_bc_type == 1 .And. flat_wall_model_flag > 0
        wd_thermal = wd_active .And. boussinesq_flag >= 1 .And. ( T_bc_bot == 2 .Or. T_bc_top == 2 )
        If ( wd_active ) Then
@@ -106,7 +105,8 @@ Contains
   Subroutine summary
 
     Real(Int64)   :: u_tau_est, Re_tau_est, h_ref, visc_cfl, t_end_s, dy_max, dx_plus
-    Real(Int64), Parameter :: ADV_DXP_FINE = 150d0, ADV_DXP_COARSE = 200d0   ! provisional thresholds of the SGS advisory
+    ! provisional thresholds of the SGS advisory
+    Real(Int64), Parameter :: ADV_DXP_FINE = 150d0, ADV_DXP_COARSE = 200d0
     Character(40) :: str_sgs, str_ibm, str_ibmwm, str_wm, str_bc_top
 
     If ( myid==0 ) Then
@@ -249,7 +249,8 @@ Contains
        Else
           Write(*,'(A,A)') '    y-direction BC     :  ', Trim(str_bc_top)
        End If
-       ! SGS selection advisory from the validation runs (docs Numerics 5, "Choosing the SGS model"); it never changes the run
+       ! SGS selection advisory from the validation runs (docs Numerics 5, "Choosing the SGS model"); it
+       ! never changes the run
        If ( flat_wall_model_flag > 0 .And. y_bc_type == 1 .And. vof_flow < 1 .And. u_tau_est > 0d0 ) Then
           dx_plus = dxmin * u_tau_est / nu
           If ( sgs_model == 2 .And. dx_plus < ADV_DXP_FINE ) Write(*,'(A,F7.1,A)') &
@@ -318,11 +319,13 @@ Contains
     inv_dx2 = inv_dx * inv_dx
 
     If ( ibm_input_mode >= 1 ) Then
-       ! Kept as a separate branch (not merged behind a runtime .And. guard) since Fortran doesn't guarantee short-circuit evaluation and phi mustn't be touched when not IBM-active
+       ! Kept as a separate branch (not merged behind a runtime .And. guard) since Fortran doesn't guarantee
+       ! short-circuit evaluation and phi mustn't be touched when not IBM-active
        !$acc parallel loop collapse(2) present(U,V,W,nu_t,y,z,phi) reduction(max:local_conv,local_visc)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
-             ! y-grid is non-uniform: recompute inv_dy only once per j (inv_dz once per (k,j), z may be stretched).
+             ! y-grid is non-uniform: recompute inv_dy only once per j (inv_dz once per (k,j), z may be
+             ! stretched).
              inv_dz  = 1d0 / Max(z(k)-z(k-1), 1d-14)
              inv_dz2 = inv_dz * inv_dz
              inv_dy  = 1d0 / Max(y(j)-y(j-1), 1d-14)
@@ -366,10 +369,11 @@ Contains
        !$acc end parallel loop
     End If
 
-    ! Acceleration CFL: source terms (Boussinesq buoyancy, rotation, UAV thrust) feed rhs_v/rhs_w but are invisible to the
-    ! advection/diffusion estimate above, so a weak flow with strong stratification/thrust could be unstable while cfl_conv/cfl_visc
-    ! look safe. Gravity-wave-type limiter dt*sqrt(2*|a|/dy). Separate acc regions keep Tscal/W off the device unless their pathway
-    ! is active, as for the source terms in equations.f90.
+    ! Acceleration CFL: source terms (Boussinesq buoyancy, rotation, UAV thrust) feed rhs_v/rhs_w but are
+    ! invisible to the advection/diffusion estimate above, so a weak flow with strong stratification/thrust
+    ! could be unstable while cfl_conv/cfl_visc look safe. Gravity-wave-type limiter dt*sqrt(2*|a|/dy).
+    ! Separate acc regions keep Tscal/W off the device unless their pathway is active, as for the source
+    ! terms in equations.f90.
     If ( boussinesq_flag >= 1 ) Then
        !$acc parallel loop collapse(3) present(Tscal,y) reduction(max:local_accel)
        Do k = 2, nzg-1
@@ -419,8 +423,9 @@ Contains
 
   End Subroutine compute_cfl
 
-  !> Time step of the coming step: adaptive dt from the CFL number (cfl_adaptive = 1), then shrunk (even below dt_min) so that t lands
-  !  exactly on tsave_next (nsave < 0) or sim_end_time (nsteps < 0). dt_presnap is the step before the shrinking, restored after the step
+  !> Time step of the coming step: adaptive dt from the CFL number (cfl_adaptive = 1), then shrunk (even below
+  !  dt_min) so that t lands exactly on tsave_next (nsave < 0) or sim_end_time (nsteps < 0). dt_presnap is the
+  !  step before the shrinking, restored after the step
   Subroutine select_dt(cfl_now, dt_presnap)
 
     Real(Int64), Intent(In)  :: cfl_now
@@ -435,10 +440,11 @@ Contains
 
   End Subroutine select_dt
 
-  !> Step size that lands on a target a time rem ahead without ever leaving a step much shorter than dt_now: a remainder between dt_now
-  !  and 2 dt_now is split into two equal steps (each at least dt_now/2), a shorter one is taken in one step. A sliver step (a landing
-  !  remainder of rounding size) would make dt change by orders of magnitude from one step to the next, which the incremental pressure
-  !  of ibm_pressure = 2 amplifies by dt_prev/dt (see docs/Numerics.md 6.4)
+  !> Step size that lands on a target a time rem ahead without ever leaving a step much shorter than dt_now: a
+  !  remainder between dt_now and 2 dt_now is split into two equal steps (each at least dt_now/2), a shorter
+  !  one is taken in one step. A sliver step (a landing remainder of rounding size) would make dt change by
+  !  orders of magnitude from one step to the next, which the incremental pressure of ibm_pressure = 2
+  !  amplifies by dt_prev/dt (see docs/Numerics.md 6.4)
   Real(Int64) Function landing_dt(dt_now, rem)
 
     Real(Int64), Intent(In) :: dt_now, rem
@@ -451,7 +457,8 @@ Contains
 
   End Function landing_dt
 
-  !> Volume-weighted (non-uniform y and z, IBM-solid-excluded) domain bulk streamwise velocity, for constant-mass-flux forcing
+  !> Volume-weighted (non-uniform y and z, IBM-solid-excluded) domain bulk streamwise velocity, for
+  !  constant-mass-flux forcing
   Subroutine compute_bulk_velocity(Ub_out)
 
     Real(Int64), Intent(Out) :: Ub_out
@@ -514,8 +521,7 @@ Contains
 
   End Subroutine compute_bulk_velocity
 
-  !  Open ibm_forces.csv on rank 0 and write header row.
-  !  Call once after setup_ibm completes.
+  ! Open ibm_forces.csv on rank 0 and write header row. Call once after setup_ibm completes.
   Subroutine open_force_csv
 
     Logical :: file_exists

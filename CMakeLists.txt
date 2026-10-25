@@ -802,7 +802,7 @@ if(Python3_Interpreter_FOUND)
                     --exe-a ${CPU_REFERENCE_EXE} --mpirun-b ${TEST_MPIRUN} --exe-b $<TARGET_FILE:dopamine>
                     --np-a 1 --np-b 1 --tol 1e-6)
     endif()
-    # Variable-density steep wave: x rank seams cut the interface obliquely (np1 vs the x-split layout, tight PCG tolerance so only round-off remains)
+    # Variable-density steep wave: x rank seams cut the interface obliquely (np1 vs x-split layout, tight PCG tolerance)
     add_test(NAME vof_break_small_np1_vs_np4_4x1
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_break_small --exe $<TARGET_FILE:dopamine>
@@ -904,8 +904,8 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME wm_stream_rough
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_stream/check_wm_stream.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --rough 1e-4 --tol 0.08)
-    # Same for the spanwise (z) walls and the 4-wall duct: stream decay by the log-law stress, same on 1 and 4 ranks; rough EQWM refused with z walls
-    # (zv, zdiag: streams along y and the diagonal; zprof, zprof_stretch: unequal non-uniform (U,V) profile, uniform and stretched z, z split over ranks)
+    # Same for the spanwise (z) walls and the 4-wall duct, 1 and 4 ranks; rough EQWM is refused with z walls
+    # (zv, zdiag: streams along y and the diagonal; zprof, zprof_stretch: unequal non-uniform (U,V) profile, uniform/stretched z)
     foreach(wmz IN ITEMS "wm_stream_z|" "wm_stream_duct|--duct" "wm_stream_z_rough_rejected|--reject-rough" "wm_stream_zv|--mode=v"
             "wm_stream_zdiag|--mode=diag" "wm_stream_zprof|--mode=prof" "wm_stream_zprof_stretch|--mode=prof_stretch")
         string(REPLACE "|" ";" wmz_l "${wmz}")

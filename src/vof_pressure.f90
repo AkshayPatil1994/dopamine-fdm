@@ -1,10 +1,9 @@
-!> Variable-density pressure operator of the two-fluid solver: face coefficients beta = 1/rho_face from the VOF field, the
-!  operator A phi = div(beta grad phi) (equal to the fast Poisson solver's discrete Laplacian for constant beta), and a PCG
-!  preconditioned by that fast solver (solve_poisson_equation) with the lightest-fluid coefficient (about 17/28/39 iterations to
-!  1e-6 at density ratios 10/100/1000, independent of the grid).
-!  Cell-centred vectors have shape (nxg,nyg,nzg) with ghost layers 1 and n; face coefficients bu(1:nx,:,:), bv(:,1:ny,:),
-!  bw(:,:,1:nz) sit on the faces of U, V, W. The periodic duplicate cell of the last rank and the ghost cells have zero weight in
-!  the inner products, so the CG sees exactly the Poisson problem's distinct unknowns.
+!> Variable-density pressure operator of the two-fluid solver: face coefficients beta = 1/rho_face, the
+!  operator A phi = div(beta grad phi) (the fast Poisson solver's Laplacian for constant beta) and a PCG
+!  preconditioned by that solver with the lightest-fluid coefficient (about 17/28/39 iterations to 1e-6 at
+!  density ratios 10/100/1000). Cell vectors have shape (nxg,nyg,nzg); bu, bv, bw sit on the U, V, W faces.
+!  The periodic duplicate cell and the ghost cells have zero weight in the inner products, so the CG sees only
+!  the distinct unknowns.
 Module vof_pressure
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -31,18 +30,21 @@ Module vof_pressure
   Integer(Int32) :: vp_iters_last = 0
   Integer(Int64) :: vp_its_total = 0   ! PCG iterations since the start of the run
   Real(Int64) :: vp_res_last = 0d0
-  ! Ghost-cell IBM (ibm_input_mode>=1): faces the IBM treats as solid (face-averaged signed distance < 0, as in
-  ! apply_ghost_cell_ibm)
-  ! carry no flux in the pressure operator, the transporting velocity and the interface transport. vp_mu/mv/mw are the 1/0 face
-  ! masks (shaped like U, V, W), vp_act the 1/0 cell mask (0 = every face closed: solid cell), padded by one plane like C.
+  ! Ghost-cell IBM (ibm_input_mode>=1): faces the IBM treats as solid (face-averaged signed distance < 0, as
+  ! in apply_ghost_cell_ibm) carry no flux in the pressure operator, the transporting velocity and the
+  ! interface transport. vp_mu/mv/mw are the 1/0 face masks (shaped like U, V, W), vp_act the 1/0 cell mask
+  ! (0 = every face closed: solid cell), padded by one plane like C.
   Logical :: vp_masked = .False.
-  Logical :: vp_dev = .False.   ! masked single-phase path on the GPU: the PCG vectors and coefficients are device-resident
+  ! masked single-phase path on the GPU: the PCG vectors and coefficients are device-resident
+  Logical :: vp_dev = .False.
   Real(Int64), Allocatable, Dimension(:,:,:) :: vp_mu, vp_mv, vp_mw, vp_act
-  Logical :: vp_mg_stale = .False.      ! vp_bu/bv/bw changed since the multigrid conductances were built (rebuilt by the next preconditioner call)
+  ! vp_bu/bv/bw changed since the multigrid conductances were built (rebuilt by the next preconditioner call)
+  Logical :: vp_mg_stale = .False.
 
 Contains
 
-  !> Whole-array copy as a parallel loop: the compiler runs a multi-array `a = b` kernels region in scalar mode (one GPU thread)
+  !> Whole-array copy as a parallel loop: the compiler runs a multi-array `a = b` kernels region in scalar
+  !  mode (one GPU thread)
   Subroutine dev_copy(dst, src)
 
     Real(Int64), Intent(InOut) :: dst(:,:,:)
@@ -126,7 +128,8 @@ Contains
   End Subroutine vp_init
 
 
-  !> U -= s*gu etc. on the faces the solver's projection updates (interior faces, the row-seam face, the outflow face)
+  !> U -= s*gu etc. on the faces the solver's projection updates (interior faces, the row-seam face, the
+  !  outflow face)
   Subroutine apply_face_gradient(gu, gv, gw, s)
 
     Real(Int64), Intent(In) :: gu(nx,nyg,nzg), gv(nxg,ny,nzg), gw(nxg,nyg,nz), s
@@ -146,7 +149,8 @@ Contains
   End Subroutine apply_face_gradient
 
 
-  !> Single-phase setup for ibm_method = 1: the face masks (and the device copies); the pressure is the fast whole-box solve
+  !> Single-phase setup for ibm_method = 1: the face masks (and the device copies); the pressure is the fast
+  !  whole-box solve
   Subroutine vp_init_masked
 
     Allocate( vp_act(0:nxg+1,0:nyg+1,0:nzg+1) )
@@ -158,16 +162,18 @@ Contains
   End Subroutine vp_init_masked
 
 
-  !> Projection of the single-phase velocity with a staircase body (ibm_method = 1): the fast whole-box solve, the closed faces zeroed
-  !  before it (its divergence is that of the masked velocity) and, for ibm_pressure < 2, again after it
+  !> Projection of the single-phase velocity with a staircase body (ibm_method = 1): the fast whole-box solve,
+  !  the closed faces zeroed before it (its divergence is that of the masked velocity) and, for ibm_pressure <
+  !  2, again after it
   Subroutine vp_project_staircase
 
     !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
     U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
     !$acc end kernels
     Call compute_projection_step
-    ! ibm_pressure = 2: the body faces keep the flux of the solve, so the fluid cells stay divergence-free; they are zeroed again at
-    ! the start of the next stage, before its predictor is built (zeroing here would discard that flux, as ibm_pressure = 0 does)
+    ! ibm_pressure = 2: the body faces keep the flux of the solve, so the fluid cells stay divergence-free;
+    ! they are zeroed again at the start of the next stage, before its predictor is built (zeroing here would
+    ! discard that flux, as ibm_pressure = 0 does)
     If ( ibm_pressure >= 2 ) Return
     !$acc kernels present(U,V,W,vp_mu,vp_mv,vp_mw) if(vp_dev)
     U = U*vp_mu;  V = V*vp_mv;  W = W*vp_mw
@@ -176,8 +182,9 @@ Contains
   End Subroutine vp_project_staircase
 
 
-  !> IBM face and cell masks from the signed distance: a face is open only if both cells it joins have phi >= 0 (cell voxelisation,
-  !  so a wall one cell thick closes its faces); a cell is active if any of its faces is open.
+  !> IBM face and cell masks from the signed distance: a face is open only if both cells it joins have phi >=
+  !  0 (cell voxelisation, so a wall one cell thick closes its faces); a cell is active if any of its faces is
+  !  open.
   Subroutine vp_build_ibm_masks
 
     Real(Int64), Allocatable :: pp(:,:,:)
@@ -188,7 +195,8 @@ Contains
        If ( myid == 0 ) Write(*,'(A)') ' ERROR: IBM active but the signed distance is not available for the VOF masks'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
-    ! phi padded by two planes in x and z: neighbour ranks / periodic partners supply the planes beyond the ghost plane
+    ! phi padded by two planes in x and z: neighbour ranks / periodic partners supply the planes beyond the
+    ! ghost plane
     Allocate( pp(-1:nxg+2,nyg,-1:nzg+2) )
     Call pad_field(phi, nxg, nyg, nzg, .False., .False., 2, pp)
 
@@ -216,7 +224,8 @@ Contains
        End Do
     End Do
 
-    ! cell activity on the padded range (0:n+1) so the ghost layers agree with the owning ranks; the wall rows (j = 1, nyg) stay active
+    ! cell activity on the padded range (0:n+1) so the ghost layers agree with the owning ranks; the wall
+    ! rows (j = 1, nyg) stay active
     vp_act = 1d0
     Do k = 0, nzg+1
        Do j = 2, nyg-1
@@ -236,10 +245,11 @@ Contains
   End Subroutine vp_build_ibm_masks
 
 
-  !> Cell densities (ghosts included), face densities (arithmetic in x and z, volume-weighted across the stretched y cells so
-  !  that rho_face * u is the mass-consistent momentum of the staggered control volume) and beta = 1/rho_face, from the padded C
-  !> Density of the cells and the faces from the liquid fraction. With sweep_only the face densities and pressure coefficients of
-  !  the forces and the projections are left alone: the geometric sweeps need only the arithmetic densities and the planes
+  !> Cell densities (ghosts included), face densities (arithmetic in x and z, volume-weighted across the
+  !  stretched y cells so that rho_face * u is the mass-consistent momentum of the staggered control volume)
+  !  and beta = 1/rho_face, from the padded C Density of the cells and the faces from the liquid fraction.
+  !  With sweep_only the face densities and pressure coefficients of the forces and the projections are left
+  !  alone: the geometric sweeps need only the arithmetic densities and the planes
   Subroutine vp_set_density(Cp, sweep_only)
 
     Real(Int64), Intent(In) :: Cp(0:nxg+1,0:nyg+1,0:nzg+1)
@@ -264,7 +274,8 @@ Contains
           End Do
        End Do
     End Do
-    ! on a rank with a +x neighbour the last face is the duplicate of the neighbour's first one: its far cell is the pad layer
+    ! on a rank with a +x neighbour the last face is the duplicate of the neighbour's first one: its far cell
+    ! is the pad layer
     If ( nx == nxg ) Then
        !$acc kernels present(Cp,vp_rho,vp_rau)
        vp_rau(nx,:,:) = 0.5d0*( vp_rho(nx,:,:) + vof_rho_g + (vof_rho_l - vof_rho_g)*Cp(nxg+1,1:nyg,1:nzg) )
@@ -294,8 +305,9 @@ Contains
        End If
     End If
     If ( vof_geo_density >= 1 ) Then
-       ! geometric staggered-cell density (Fuster/Arrufat): the liquid in the half cells that make up the control volume of the
-       ! face is taken from each cell's reconstructed plane, so that a flat interface is hydrostatically exact whatever C is
+       ! geometric staggered-cell density (Fuster/Arrufat): the liquid in the half cells that make up the
+       ! control volume of the face is taken from each cell's reconstructed plane, so that a flat interface
+       ! is hydrostatically exact whatever C is
        Call profiler_start(PROF_DENS_RECON)
        Call vof_reconstruct(Cp, nxg, nyg, nzg, vof_normal_scheme)
        Call profiler_stop(PROF_DENS_RECON)
@@ -370,7 +382,8 @@ Contains
   End Subroutine vp_set_density
 
 
-  !> Liquid fraction of the upper (upper=.True.) or lower half of the cell (i,j,k) along direction dir, from its plane
+  !> Liquid fraction of the upper (upper=.True.) or lower half of the cell (i,j,k) along direction dir, from
+  !  its plane
   Function half_frac(c, mx, my, mz, al, dir, upper) Result(f)
     !$acc routine seq
 
@@ -393,9 +406,9 @@ Contains
   End Function half_frac
 
 
-  !> Ghost layers of a cell-centred field: rank seams and periodic wraps, zero gradient at y walls (periodic wrap for y_bc_type=0),
-  !  zero gradient at the x inlet and, at the x outlet, mirror (antisym=.False.) or the Dirichlet-zero reflection of the pressure
-  !  problem (antisym=.True.)
+  !> Ghost layers of a cell-centred field: rank seams and periodic wraps, zero gradient at y walls (periodic
+  !  wrap for y_bc_type=0), zero gradient at the x inlet and, at the x outlet, mirror (antisym=.False.) or the
+  !  Dirichlet-zero reflection of the pressure problem (antisym=.True.)
   Subroutine vp_halo(F, antisym)
 
     Real(Int64), Intent(InOut) :: F(nxg,nyg,nzg)
@@ -405,7 +418,8 @@ Contains
     Integer(Int32) :: partner
 
     If ( vp_dev .And. nprocs == 1 ) Then
-       ! one rank: the wraps of the host path below as device copies (z always wraps, as in finish_scalar_halos)
+       ! one rank: the wraps of the host path below as device copies (z always wraps, as in
+       ! finish_scalar_halos)
        !$acc kernels present(F)
        If ( x_bc_type == 0 ) Then
           F(1,:,:) = F(nxg-2,:,:);  F(nxg-1,:,:) = F(2,:,:);  F(nxg,:,:) = F(3,:,:)
@@ -423,7 +437,8 @@ Contains
        Return
     End If
     If ( vp_dev ) Then
-       ! several ranks, all on the device: the order of vp_halo_host (x seam, x walls, z seam, periodic wraps, y)
+       ! several ranks, all on the device: the order of vp_halo_host (x seam, x walls, z seam, periodic
+       ! wraps, y)
        Call update_ghost_interior_planes_x(F, 4)
        If ( x_bc_type == 1 ) Then
           Call x_periodic_partner(is_first, is_last, partner)
@@ -483,7 +498,8 @@ Contains
   End Subroutine vp_halo_host
 
 
-  !> out = div(beta grad phi) at the interior cells; phi needs valid ghost layers (vp_halo with antisym=.True.)
+  !> out = div(beta grad phi) at the interior cells; phi needs valid ghost layers (vp_halo with
+  !  antisym=.True.)
   Subroutine vp_apply_A(phi, out)
 
     Real(Int64), Intent(In)  :: phi(nxg,nyg,nzg)
@@ -529,8 +545,8 @@ Contains
     Real(Int64) :: inv_dx
 
     inv_dx = 1d0/dx
-    ! the loops below write gu(1:Min(nx,nxg-1)), gv(:,1:ny), gw(:,:,1:Min(nz,nzg-1)) completely: only a last face that is not
-    ! one of them (nx == nxg, nz == nzg) is left to zero
+    ! the loops below write gu(1:Min(nx,nxg-1)), gv(:,1:ny), gw(:,:,1:Min(nz,nzg-1)) completely: only a last
+    ! face that is not one of them (nx == nxg, nz == nzg) is left to zero
     !$acc kernels present(gu,gv,gw) if(vp_dev)
     If ( nx == nxg ) gu(nx,:,:) = 0d0
     If ( nz == nzg ) gw(:,:,nz) = 0d0
@@ -588,7 +604,8 @@ Contains
        End Do
     End Do
     If ( vp_masked ) Then
-       ! blocked (IBM solid) faces carry no flux: every connected fluid region keeps a compatible right-hand side
+       ! blocked (IBM solid) faces carry no flux: every connected fluid region keeps a compatible right-hand
+       ! side
        !$acc parallel loop collapse(3) present(Fu,Fv,Fw,d,vp_mu,vp_mv,vp_mw,y,z) if(vp_dev)
        Do k = 2, nzg-1
           Do j = 2, nyg-1
@@ -653,8 +670,8 @@ Contains
     Real(Int64) :: sl, s
     Integer(Int32) :: i, j, k
 
-    ! the pressure is pinned by the Dirichlet outlet when x is not periodic, so the operator is not singular: a mean removal
-    ! would perturb the system and stall the PCG at a finite residual
+    ! the pressure is pinned by the Dirichlet outlet when x is not periodic, so the operator is not singular:
+    ! a mean removal would perturb the system and stall the PCG at a finite residual
     If ( x_bc_type == 1 ) Return
     sl = 0d0
     !$acc parallel loop collapse(3) reduction(+:sl) present(vp_w,a) if(vp_dev)
@@ -668,13 +685,15 @@ Contains
     Call MPI_Allreduce(sl, s, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     !$acc kernels present(a,vp_act) if(vp_dev)
     a = a - s/vp_wsum
-    If ( vp_masked ) a = a*vp_act(1:nxg,1:nyg,1:nzg)   ! the solid cells stay exactly zero (the weighted sum is unchanged)
+    ! the solid cells stay exactly zero (the weighted sum is unchanged)
+    If ( vp_masked ) a = a*vp_act(1:nxg,1:nyg,1:nzg)
     !$acc end kernels
 
   End Subroutine vp_remove_mean
 
 
-  !> z = M^-1 r: constant-coefficient fast solve with beta0, zero weighted mean (keeps the preconditioner symmetric)
+  !> z = M^-1 r: constant-coefficient fast solve with beta0, zero weighted mean (keeps the preconditioner
+  !  symmetric)
   Subroutine vp_precond(r, z)
 
     Real(Int64), Intent(In)  :: r(nxg,nyg,nzg)
@@ -692,7 +711,8 @@ Contains
        Call solve_poisson_equation(skip_p_save=.True.)
        z(2:nxg,2:nyg-1,2:nzg) = rhs_p(2:nxg,2:nyg-1,2:nzg)
     End If
-    ! the fast solver knows nothing of the body: keep the correction out of the solid cells (rows of the operator are empty there)
+    ! the fast solver knows nothing of the body: keep the correction out of the solid cells (rows of the
+    ! operator are empty there)
     !$acc kernels present(z,vp_act) if(vp_dev)
     If ( vp_masked ) z = z*vp_act(1:nxg,1:nyg,1:nzg)
     !$acc end kernels
@@ -701,11 +721,11 @@ Contains
   End Subroutine vp_precond
 
 
-  !> Up to nit PCG iterations on A x = f from x = 0 (the mean of f is removed), stopping once the residual falls below tol times
-  !  its initial norm (tol = 0: always nit). With vof_div_tol > 0 and rscale given, the stop is rscale*max|r| < vof_div_tol (r the
-  !  divergence left after the correction, rscale the time scale of f). rfloor (optional) is an absolute residual norm, the
-  !  round-off level of the right-hand side, below which the solve stops whatever tol says. Breakdown (rz or the curvature no
-  !  longer negative; both operators are negative definite) ends the loop. Sets vp_iters_last and the final relative residual.
+  !> Up to nit PCG iterations on A x = f from x = 0 (mean of f removed), stopping at residual < tol * initial
+  !  (tol = 0: always nit). With vof_div_tol > 0 and rscale, stops at rscale*max|r| < vof_div_tol (r =
+  !  divergence left after the correction). rfloor (optional): absolute round-off residual norm below which
+  !  the solve stops. Breakdown (rz or curvature no longer negative) ends the loop. Sets vp_iters_last and the
+  !  final relative residual.
   Subroutine vp_pcg(f, nit, tol, x, rscale, rfloor)
 
     Real(Int64),    Intent(In)  :: f(nxg,nyg,nzg), tol
@@ -778,8 +798,8 @@ Contains
   End Subroutine vp_pcg
 
 
-  !> Development check, run from vof_init when vof_selftest=1: PCG iteration counts to 1e-6 and 1e-10 for a rough zero-mean right-hand
-  !  side on the current density field, and the symmetry of A (a.Ab - b.Aa)
+  !> Development check, run from vof_init when vof_selftest=1: PCG iteration counts to 1e-6 and 1e-10 for a
+  !  rough zero-mean right-hand side on the current density field, and the symmetry of A (a.Ab - b.Aa)
   Subroutine vp_selftest
 
     Real(Int64), Allocatable :: f(:,:,:), x(:,:,:), a(:,:,:), b(:,:,:), Aa(:,:,:), Ab(:,:,:)

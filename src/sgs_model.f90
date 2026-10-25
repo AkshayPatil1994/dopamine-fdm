@@ -13,7 +13,8 @@ Module sgs_models
 
   Implicit None
 
-  ! cells where the IBM pass of compute_vreman can differ from the standard one (solid neighbour or filter clamp); built on first use
+  ! cells where the IBM pass can differ from the standard one (solid neighbour or filter clamp); built on
+  ! first use
   Logical, Allocatable, Dimension(:,:,:) :: sgs_ibm_band
 
   ! horizontal (x,z) mean of the temperature per y plane, the reference of the AMD buoyancy term
@@ -21,7 +22,8 @@ Module sgs_models
 
 Contains
 
-  !> Dispatch to the selected SGS model (sgs_model==0: DNS no-op, ==1: Vreman, ==2: AMD, sharing the gradient/IBM/ghost machinery of compute_vreman)
+  !> Dispatch to the SGS model (0 DNS no-op, 1 Vreman, 2 AMD; they share compute_vreman's gradient/IBM/ghost
+  !  machinery)
   Subroutine compute_sgs_model(U_, V_, W_, nu_t_)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In)    :: U_
@@ -43,8 +45,8 @@ Contains
   End Subroutine compute_sgs_model
 
 
-  !> Cells whose Pass 2 value can differ from Pass 1: a solid cell among the six neighbours (one-sided gradients) or a distance to
-  !  the body below half the largest cell width (filter-width clamp)
+  !> Cells whose Pass 2 value can differ from Pass 1: a solid cell among the six neighbours, or body distance
+  !  below half the largest cell width (filter clamp)
   Subroutine build_sgs_ibm_band
 
     Integer(Int32) :: i, j, k
@@ -95,7 +97,8 @@ Contains
     Real   (Int64) :: buoy_c, th1, th2, th3
     Logical        :: ibm_active               ! Guard Umask_cc accesses
     Logical        :: wm_lo, wm_hi             ! flat-wall EQWM on the low / high y wall
-    Real   (Int64) :: u_c, w_c, u_mag, u_tau, fac_w, y_w   ! first-cell tangential velocity, friction velocity, wall distance
+    ! first-cell tangential velocity, friction velocity, wall distance
+    Real   (Int64) :: u_c, w_c, u_mag, u_tau, fac_w, y_w
 
     c_V = 2.5d0 * Cs_vreman**2
     use_amd = sgs_model == 2
@@ -109,12 +112,13 @@ Contains
     inv_dx = 1d0 / dx
     dx2    = dx * dx
 
-    ! Pass 1: standard (non-IBM) stencil, unconditional so it stays GPU-offloadable without phi residency; ibm_active discards it via Pass 2/solid-cell zeroing below
+    ! Pass 1: standard stencil, unconditional so it stays GPU-offloadable without phi; Pass 2 / solid-cell
+    ! zeroing discards it where IBM applies
     !$acc parallel loop collapse(2) present(U_,V_,W_,nu_t_,y,yg,z,zg,xg)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
 
-          ! Per-(k,j) constants: y- and z-grid spacings (non-uniform y, and z when z_bc_type==1 with alpha_grid_z>0; x uniform)
+          ! Per-(k,j) constants: y and z spacings (non-uniform y; z if z_bc_type==1 with alpha_grid_z>0)
           dz_c      = z(k) - z(k-1)
           dz2       = dz_c * dz_c
           inv_dz_k  = 1d0 / dz_c
@@ -149,8 +153,9 @@ Contains
              ! W on z-faces
              a33 = ( W_(i,j,k)   - W_(i,j,k-1)   ) * inv_dz_k
 
-             ! wall cell of a wall-modelled wall: the no-slip mirror ghost overstates du/dy several-fold at y+ ~ 50-100, so use the
-             ! log-law gradient u_tau/(kappa y) along the first-cell velocity (u_tau re-solved from it, so no dependence on the wall-stress halos)
+             ! wall-modelled wall cell: the no-slip mirror ghost overstates du/dy several-fold at y+ ~
+             ! 50-100, so use the log-law gradient u_tau/(kappa y) (u_tau re-solved from the first-cell
+             ! velocity)
              If ( (wm_lo .And. j == 2) .Or. (wm_hi .And. j == nyg-1) ) Then
                 y_w   = Merge(yg(2), Ly - yg(nyg-1), j == 2)
                 u_c   = 0.5d0*( U_(i-1,j,k) + U_(i,j,k) )
@@ -184,16 +189,19 @@ Contains
 
              ! ------ eddy viscosity -------------------------------------
              If ( use_amd ) Then
-                ! AMD (Rozema et al. 2015): beta_mn above is the delta-scaled gradient product, so the numerator is -beta_mn S_mn
+                ! AMD (Rozema et al. 2015): beta_mn is the delta-scaled gradient product, numerator -beta_mn
+                ! S_mn
                 amd_num = -( b11*a11 + b22*a22 + b33*a33 + b12*(a12 + a21) + b13*(a13 + a31) + b23*(a23 + a32) )
                 If ( use_buoy ) Then
-                   ! buoyancy production of the AMD model (Abkar & Moin 2017): + beta g (d_k v)(d_k theta'), theta' = T - <T>_xz
+                   ! AMD buoyancy production (Abkar & Moin 2017): + beta g (d_k v)(d_k theta'), theta' = T -
+                   ! <T>_xz
                    th1 = ( Tscal(i+1,j,k) - Tscal(i-1,j,k) ) / ( xg(i+1) - xg(i-1) )
                    th2 = ( Tscal(i,j+1,k) - Tscal(i,j-1,k) - Tm_amd(j+1) + Tm_amd(j-1) ) / ( yg(j+1) - yg(j-1) )
                    th3 = ( Tscal(i,j,k+1) - Tscal(i,j,k-1) ) / ( zg(k+1) - zg(k-1) )
                    amd_num = amd_num + buoy_c*( dx2*a12*th1 + dy2_c*a22*th2 + dz2*a32*th3 )
                 End If
-                ! the numerator cancels to round-off in near-irrotational flow: drop values below 1e-12 of the Smagorinsky-type scale
+                ! the numerator cancels to round-off in near-irrotational flow: drop values below 1e-12 of the
+                ! Smagorinsky-type scale
                 If ( alpha_sq > 1d-20 .And. amd_num > 1d-12*(dx2 + dy2_c + dz2)*alpha_sq*Sqrt(alpha_sq) ) Then
                    nu_t_loc = C_amd * amd_num / alpha_sq
                 Else
@@ -212,7 +220,7 @@ Contains
     End Do
     !$acc end parallel loop
 
-    ! Pass 2: IBM corrections (only when ibm_active); re-visits the fluid cells next to the body, the rest keeps its Pass 1 value
+    ! Pass 2: IBM corrections (ibm_active); re-visits fluid cells next to the body
     If ( ibm_active ) Then
        If ( .Not. Allocated(sgs_ibm_band) ) Call build_sgs_ibm_band
        !$acc parallel loop collapse(2) present(U_,V_,W_,nu_t_,y,yg,z,zg,xg,phi,Umask_cc,sgs_ibm_band)
@@ -327,7 +335,7 @@ Contains
 
   End Subroutine compute_vreman
 
-  !> Horizontal (x,z) mean of the temperature per y plane over the cells of all ranks (Tm_amd), the reference of the AMD buoyancy term (device reduction, host allreduce)
+  !> Horizontal (x,z) mean of T per y plane over all ranks (Tm_amd), reference of the AMD buoyancy term
   Subroutine amd_temperature_mean
 
     Integer(Int32) :: i, j, k
@@ -358,9 +366,9 @@ Contains
   End Subroutine amd_temperature_mean
 
 
-  !> Turbulent scalar diffusivity kappa_t (global) of the scalar S_ for compute_rhs_scalar_core: nu_t/Pr_t (kap_inv = 1/Pr_t or 1/Sc_t)
-  !  for the Vreman model and DNS, the AMD scalar closure (Abkar, Bae & Moin 2016) for sgs_model == 2:
-  !  kappa_t = C_amd max(0, -(delta_k d_k u_i)(delta_k d_k S) d_i S) / (d_l S d_l S), same widths and staggered gradients as the momentum model
+  !> Turbulent scalar diffusivity kappa_t for compute_rhs_scalar_core: nu_t/Pr_t (1/Sc_t) for Vreman and DNS;
+  !  AMD scalar closure (Abkar, Bae & Moin 2016) for sgs_model == 2: kappa_t = C_amd max(0, -(delta_k d_k
+  !  u_i)(delta_k d_k S) d_i S)/(d_l S d_l S)
   Subroutine compute_scalar_diffusivity(U_, V_, W_, S_, kap_inv)
 
     Real(Int64), Dimension(nx,  nyg, nzg), Intent(In) :: U_
@@ -425,7 +433,7 @@ Contains
     End Do
     !$acc end parallel loop
 
-    ! cells next to a body: the momentum model's one-sided pass has no scalar counterpart, keep the nu_t/Pr_t value there
+    ! next to a body the momentum model's one-sided pass has no scalar counterpart: keep nu_t/Pr_t
     If ( ibm_active ) Then
        !$acc parallel loop collapse(3) present(kappa_t,nu_t,sgs_ibm_band)
        Do k = 2, nzg-1
@@ -443,7 +451,8 @@ Contains
   End Subroutine compute_scalar_diffusivity
 
 
-  !> Wall, periodic, IBM-solid and rank-seam ghost values of a cell-centred SGS diffusivity (nu_t or the AMD scalar kappa_t)
+  !> Wall, periodic, IBM-solid and rank-seam ghost values of a cell-centred SGS diffusivity (nu_t or AMD
+  !  kappa_t)
   Subroutine sgs_fill_ghosts(f_, zero_solid)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: f_
@@ -455,7 +464,8 @@ Contains
 #ifdef GPU_POISSON
     Call vreman_ghosts_device(f_, zero_solid)
 #else
-    ! No-slip flat walls only (j=1, nyg): zero the field to avoid polluting the Robin BC; leave nu_t alone at a free-slip boundary (bc_face_y*==2), which has no molecular sublayer to damp it
+    ! No-slip flat walls only (j=1, nyg): zero the field so it does not pollute the Robin BC; free-slip
+    ! (bc_face_y*==2) is left alone
     If ( y_bc_type == 1 .And. bc_face_ylo == 1 ) f_(:,  1,:) = 0d0
     If ( y_bc_type == 1 .And. bc_face_yhi == 1 ) f_(:,nyg,:) = 0d0
 
@@ -467,19 +477,20 @@ Contains
        f_(:,nyg  ,:) = f_(:,    3,:)
     End If
 
-    ! IBM solid cells: suppress SGS stress to avoid polluting adjacent fluid
+    ! IBM solid cells: suppress the SGS stress (after the y fills, before the halo copy)
     If ( zero_solid ) Then
        Where ( Umask_cc(2:nxg-1, 2:nyg-1, 2:nzg-1) < 0.5d0 )
           f_(2:nxg-1, 2:nyg-1, 2:nzg-1) = 0d0
        End Where
     End If
 
-    ! x-periodicity: fill ghost planes i=1,nxg (never written above, but read by compute_rhs_v/w at the x boundaries)
-    ! (x-split: seam planes come from the x-neighbour, the wrap from the partner rank at the opposite domain edge)
+    ! x-periodicity: fill ghost planes i=1,nxg (never written above, but read by compute_rhs_v/w at the x
+    ! boundaries) (x-split: seam planes come from the x-neighbour, the wrap from the partner rank at the
+    ! opposite domain edge)
     Call update_ghost_interior_planes_x(f_, 2)
     Call x_periodic_partner(is_first, is_last, partner)
     If ( x_bc_type == 0 ) Then
-       ! periodic: ghost 1 <- cell nxg-2, cells nxg-1,nxg <- 2,3 (cell nxg-1 duplicates cell 2), as apply_periodic_bc_x does for cell-centred fields
+       ! periodic: ghost 1 <- cell nxg-2, cells nxg-1,nxg <- 2,3 (nxg-1 duplicates 2), as apply_periodic_bc_x
        If ( is_first .And. is_last ) Then
           f_(1,    :,:) = f_(nxg-2,:,:)
           f_(nxg-1,:,:) = f_(2,    :,:)
@@ -496,7 +507,8 @@ Contains
           f_(nxg-1,:,:) = xbuf3(:,:,1);  f_(nxg,:,:) = xbuf3(:,:,2)
        End If
     Else
-       ! inflow/outflow: zero-gradient at the domain edges (interior-seam planes were filled by the exchange above)
+       ! inflow/outflow: zero-gradient at the domain edges (interior-seam planes were filled by the exchange
+       ! above)
        If ( is_first ) f_(1,  :,:) = f_(2,    :,:)
        If ( is_last  ) f_(nxg,:,:) = f_(nxg-1,:,:)
     End If
@@ -506,10 +518,8 @@ Contains
     If ( z_bc_type == 0 ) Then
        Call apply_periodic_bc_z(f_, 4)
     Else
-       ! No-slip/wall-model z walls: zero the field at the wall faces (mirrors the y-wall
-       ! zeroing above) instead of periodically wrapping from the opposite domain
-       ! edge -- z is domain-decomposed, so only the rank(s) owning the z=0/z=Lz
-       ! physical boundary act (as in apply_Dirichlet_bc_z).
+       ! No-slip/wall-model z walls: zero the field at the wall faces (like the y walls) instead of wrapping;
+       ! only the ranks owning z=0/z=Lz act
        Call z_periodic_partner(is_first, is_last, partner)
        If ( is_first ) f_(:,:,1)   = 0d0
        If ( is_last  ) f_(:,:,nzg) = 0d0
@@ -521,7 +531,8 @@ Contains
 
 
 #ifdef GPU_POISSON
-  !> Device-resident equivalent of compute_vreman's post-Pass-1 host block (non-IBM only): y wall/periodic ghosts, x seam + periodic wrap, z seam + z BC, all on nu_t_ in device memory, MPI on device buffers
+  !> Device-resident equivalent of compute_vreman's post-Pass-1 host block (non-IBM): y ghosts, x seam + wrap,
+  !  z seam + BC on nu_t_, MPI on device buffers
   Subroutine vreman_ghosts_device(nu_t_, zero_solid)
 
     Real(Int64), Dimension(nxg, nyg, nzg), Intent(InOut) :: nu_t_
@@ -548,7 +559,8 @@ Contains
        !$acc end kernels
     End If
 
-    ! IBM solid cells: suppress SGS stress to avoid polluting adjacent fluid (after the y fills, before the halos copy the values)
+    ! IBM solid cells: suppress SGS stress to avoid polluting adjacent fluid (after the y fills, before the
+    ! halos copy the values)
     If ( zero_solid ) Then
        !$acc parallel loop collapse(3) present(nu_t_,Umask_cc)
        Do k = 2, nzg-1

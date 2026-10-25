@@ -1,12 +1,9 @@
-!> Upwind-biased dissipation for the momentum convection (advection_scheme = 2).
-!  The upwind-biased face value is phi_central + s*D, s the sign of the convecting velocity, D = third difference/12 (adv_order = 3)
-!  or -fifth difference/60 (adv_order = 5). The skew-symmetric second-order central convection of compute_rhs_* is kept and only
-!  beta*|uc|*D is added as a conservative flux difference, so beta = 0 is exactly advection_scheme = 0 and beta = 1 is the
-!  dissipation of UP3/UP5 on top of the second-order central part (the formal order stays 2; the added error is O(dx^3), O(dx^5)).
-!  For constant u it is -beta*|u|*dx^3/12 d4phi/dx4 (order 5: -beta*|u|*dx^5/60 d6phi/dx6): symbol (4/3) beta |u|/dx sin^4(theta/2)
-!  resp. (16/15) beta |u|/dx sin^6(theta/2), so only modes near the grid scale feel it.
-!  beta = max(adv_beta0, adv_beta_ibm in the adv_band cells around a solid cell): the damping sits where the sharp velocity jump
-!  of a body excites grid-scale ringing, and is small elsewhere. Rai & Moin (1991) use this construction.
+!> Upwind-biased dissipation for the momentum convection (advection_scheme = 2). The skew-symmetric
+!  second-order central convection of compute_rhs_* is kept and beta*|uc|*D is added as a conservative flux
+!  difference, D = third difference/12 (adv_order = 3) or -fifth difference/60 (5), signed by the convecting
+!  velocity: beta = 0 is advection_scheme = 0, beta = 1 the UP3/UP5 dissipation (symbol (4/3) beta |u|/dx
+!  sin^4(theta/2), order 5: (16/15) ... sin^6), so only near-grid-scale modes feel it. beta = max(adv_beta0,
+!  adv_beta_ibm within adv_band cells of a solid cell): damping where a body's sharp velocity jump rings.
 Module adv_hybrid
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -31,8 +28,9 @@ Contains
     Allocate( Up(1-EA:nx+EA,nyg,1-EA:nzg+EA), Vp(1-EA:nxg+EA,ny,1-EA:nzg+EA), Wp(1-EA:nxg+EA,nyg,1-EA:nz+EA) )
     Allocate( adv_bu(nx,nyg,nzg), adv_bv(nxg,ny,nzg), adv_bw(nxg,nyg,nz) )
     Up = 0d0;  Vp = 0d0;  Wp = 0d0
-    ! solid indicator on the cells, padded by adv_band+1 planes in x and z from the neighbouring ranks: the face betas read one cell
-    ! beyond the ghost plane (U has nx = nxg points on all but the last rank), and the box maximum needs adv_band more
+    ! solid indicator on the cells, padded by adv_band+1 planes in x and z from the neighbouring ranks: the
+    ! face betas read one cell beyond the ghost plane (U has nx = nxg points on all but the last rank), and
+    ! the box maximum needs adv_band more
     E = adv_band + 1
     Allocate( sp(1-E:nxg+E,nyg,1-E:nzg+E), sd(1:nxg+1,nyg,1:nzg+1) )
     sd = 0d0
@@ -115,9 +113,9 @@ Contains
   End Subroutine adv_wsel
 
 
-  !> Dissipative flux through a face between c = s(0) and d = s(1) of the advected variable: beta*|uc|*sum(w*s). Order 3:
-  !  (s(2) - 3 s(1) + 3 s(0) - s(-1))/12 (UP3 minus C4);
-  !  order 5: -(s(3) - 5 s(2) + 10 s(1) - 10 s(0) + 5 s(-1) - s(-2))/60 (UP5 minus C6)
+  !> Dissipative flux through a face between c = s(0) and d = s(1) of the advected variable:
+  !  beta*|uc|*sum(w*s). Order 3: (s(2) - 3 s(1) + 3 s(0) - s(-1))/12 (UP3 minus C4); order 5: -(s(3) - 5 s(2)
+  !  + 10 s(1) - 10 s(0) + 5 s(-1) - s(-2))/60 (UP5 minus C6)
   Pure Function adv_dflux(a, b, c, d, e, f, uc, beta, w) Result(r)
     !$acc routine seq
 

@@ -1,12 +1,10 @@
 ! Module for interpolation
 Module interpolation
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use mpi,             Only : ierr, MPI_COMM_WORLD
   Use global,          Only : weight_y_0, weight_y_1, weight_z_0, weight_z_1
 
-  ! prevent implicit typing
   Implicit None
 
 Contains
@@ -20,7 +18,8 @@ Contains
 
     Integer (Int32) :: n1
 
-    ! Uniform x-grid: simple 0.5 average; n1 computed on host since Size() on an assumed-shape dummy inside an ACC region crashed under nvfortran
+    ! Uniform x-grid: simple 0.5 average; n1 computed on host since Size() on an assumed-shape dummy inside
+    ! an ACC region crashed under nvfortran
     n1 = Size(u,1)
     !$acc kernels present(u,ui)
     ui(1:n1-1, :, :) = 0.5d0*( u(1:n1-1,:,:) + u(2:n1,:,:) )
@@ -28,7 +27,8 @@ Contains
 
   End Subroutine interpolate_x
 
-  !> Linear interpolation of u in y; di: 1=faces to center (normal average), 2=centers to faces (weighted average)
+  !> Linear interpolation of u in y; di: 1=faces to center (normal average), 2=centers to faces (weighted
+  !  average)
   Subroutine interpolate_y(u,ui,di)
 
     Real    (Int64), Intent(In)  :: u(:,:,:)
@@ -61,7 +61,8 @@ Contains
    
   End Subroutine interpolate_y
 
-  !> Linear interpolation of u in z; di: 1=faces to center (centres are face midpoints, plain average), 2=centers to faces (weighted, z may be stretched)
+  !> Linear interpolation of u in z; di: 1=faces to center (centres are face midpoints, plain average),
+  !  2=centers to faces (weighted, z may be stretched)
   Pure Subroutine interpolate_z(u,ui,di)
 
     Real    (Int64), Intent(In)  :: u(:,:,:)

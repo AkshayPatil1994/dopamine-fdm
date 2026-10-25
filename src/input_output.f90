@@ -1,7 +1,6 @@
 ! Module for I/O
 Module input_output
 
-  ! Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
   Use global
   Use mpi
@@ -9,24 +8,21 @@ Module input_output
   Use particles, Only : write_particle_restart, write_particle_snapshot
   Use time_stats, Only : write_tavg
 
-  ! prevent implicit typing
   Implicit None
 
-  Integer(Int32), Parameter :: snap_magic = -4242   ! first word of a box snapshot; a restart file starts with nx_global > 0
+  ! box snapshot marker; a restart file starts with nx_global > 0
+  Integer(Int32), Parameter :: snap_magic = -4242
 
 Contains
 
-  !  Read input parameters from a Fortran-namelist file. Defaults to
-  !  'input_parameters' in the working directory (the main solver's usual
-  !  call, see initialize() in initialization.f90); pass input_file to read
-  !  a different path instead (e.g. dopamine_esem_main.f90's --input= option).
+  ! Read the namelists from 'input_parameters' in the working directory, or from input_file when given (e.g.
+  ! the --input= option of dopamine_esem_main.f90).
   Subroutine read_input_parameters(input_file)
 
     Character(*), Intent(In), Optional :: input_file
     Character(:), Allocatable :: fname
     Integer(Int32) :: ios, unit_in
     Real(Int64)    :: grav_sediment
-    ! Local aliases so the namelist uses short, user-friendly names
     Integer(Int32) :: nx, ny, nz, nks
     Real   (Int64) :: Lx, Ly, Lz, alpha_grid
     Real   (Int64) :: T_wave_x, T_wave_z
@@ -125,8 +121,9 @@ Contains
     noise_percent = 5.0d0
     advection_scheme = 0;  adv_wall_layers = -1
     adv_order = 3;  adv_beta0 = 0.05d0;  adv_beta_ibm = 1d0;  adv_band = 2
-    nu = -1d0;  dt = 0d0;  dPdx = 0d0;  dPdz = 0d0;  Utarget = 0d0   ! nu and dt must be set (checked after the read)
-    nsteps = 0; nsave = 0; nmonitor = 0   ! no valid default: must be set in &NUMERICS (checked after the read)
+    ! nu and dt must be set (checked after the read)
+    nu = -1d0;  dt = 0d0;  dPdx = 0d0;  dPdz = 0d0;  Utarget = 0d0
+    nsteps = 0; nsave = 0; nmonitor = 0   ! must be set in &NUMERICS (checked after the read)
 
     fname = 'input_parameters'
     If ( Present(input_file) ) fname = input_file
@@ -228,9 +225,8 @@ Contains
        Else
           Write(*,'(A)') ' INFO: no &UAV found, UAV actuator disk disabled'
        End If
-       ! particle_seed_*max defaults to the full domain; resolved here (using the DOMAIN
-       ! group's local Lx/Ly/Lz aliases, already read above) rather than in the declaration
-       ! block, since the domain size isn't known until DOMAIN is read.
+       ! particle_seed_*max defaults to the full domain, resolved here because the domain size is known only
+       ! after DOMAIN is read.
        If ( namelist_group_present(unit_in, 'PARTICLES') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=PARTICLES,           iostat=ios)
@@ -271,7 +267,6 @@ Contains
           Call abort_input( 'ERROR: &STATISTICS line_freq<0 requires line_interval > 0' )
        If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
        If ( nmonitor <= 0 ) Call abort_input( 'ERROR: &NUMERICS nmonitor must be set to a positive step interval' )
-       ! Map short namelist names to the global variable names
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
        Lx_i       = Lx;  Ly_i       = Ly;  Lz_i       = Lz
        Call check_vof_inputs
@@ -280,7 +275,8 @@ Contains
             Call abort_input( 'ERROR: pcg_precond must be 0 (fast Poisson solver), 1 (multigrid) or -1 (automatic)' )
        If ( mg_cycle == 0 .Or. mg_cycle < -1 .Or. mg_cycle > 3 ) &
             Call abort_input( 'ERROR: mg_cycle must be 1 (V), 2 (W), 3 or -1 (automatic)' )
-       ! the W cycle halves the PCG iterations but visits the coarse levels 2^L times: launch-bound tiny kernels on a GPU
+       ! the W cycle halves the PCG iterations but visits coarse levels 2^L times (tiny launch-bound kernels
+       ! on a GPU)
        If ( mg_cycle < 0 ) Then
           mg_cycle = 2
 #ifdef GPU_POISSON
@@ -309,7 +305,6 @@ Contains
             Call abort_input( 'ERROR: the two-fluid solver in a GPU build needs the multigrid preconditioner (pcg_precond = 1)' )
 #endif
        alphaGrid  = alpha_grid
-       ! grid_type is used directly from the global module (no alias needed)
        nks_global = nks
 
        ! Derive angular frequencies from wave periods (omega = 2*pi/T; 0 if T=0)
@@ -324,7 +319,6 @@ Contains
           waveOmega_z = 0d0
        End If
 
-       ! Time-dependent forcing starts from the input gradients
        dPdx_t   = dPdx
        dPdz_t   = dPdz
 
@@ -338,11 +332,9 @@ Contains
        If ( flow_forcing_mode == 1 .And. x_bc_type /= 0 ) Then
           Call abort_input( 'ERROR: flow_forcing_mode=1 (constant mass flux) requires periodic streamwise BC (x_bc_type=0)' )
        End If
-       ! 4-wall duct: the coupled 2D (y,z) pressure solve (solve_poisson_equation) needs the full
-       ! z-extent locally available within the y-pencil for every rank, which only holds when z is
-       ! not MPI-split -- i.e. p_col==1 (x-only decomposition, via p_row). Auto mode (p_row=p_col=0)
-       ! handles this itself (decomp_auto_factorize forces p_col=1 for this BC combination); an
-       ! explicit p_col/=1 request is rejected here rather than silently doing the wrong thing.
+       ! 4-wall duct: the coupled (y,z) pressure solve needs the full z-extent local to every rank, i.e.
+       ! p_col==1. Auto mode (p_row=p_col=0) forces it in decomp_auto_factorize; an explicit p_col/=1 is
+       ! rejected.
        If ( alpha_grid_z > 0d0 .And. z_bc_type == 0 ) Then
           Call abort_input( 'ERROR: alpha_grid_z>0 (spanwise grid stretching) requires z_bc_type=1 -- periodic z ' // &
                '(z_bc_type=0) is FFT-based and needs uniform spacing' )
@@ -874,8 +866,9 @@ Contains
 
   End Subroutine read_input_parameters
 
-  !> Range checks of the single-phase inputs that had none (an unknown value used to act as a silent default, e.g. sgs_model = 7 ran as DNS)
-  !  and warnings for combinations that are accepted but weak or contradictory (see docs/Input-Parameters.md, docs/Numerics.md 6.4)
+  !> Range checks of the single-phase inputs (an unknown value would otherwise act as a silent default, e.g.
+  !  sgs_model = 7 as DNS) and warnings for weak or contradictory combinations (see docs/Input-Parameters.md,
+  !  docs/Numerics.md 6.4)
   Subroutine check_run_inputs
 
     Call check_numerics
@@ -886,7 +879,8 @@ Contains
   End Subroutine check_run_inputs
 
 
-  !> snapshot_location range and the sign convention of the chunk box (all six negative = face indices, none negative = lengths)
+  !> snapshot_location range and the sign convention of the chunk box (all six negative = face indices, none
+  !  negative = lengths)
   Subroutine check_snapshot_inputs
 
     Integer(Int32) :: nneg
@@ -909,7 +903,8 @@ Contains
     If ( sgs_model < 0 .Or. sgs_model > 2 ) Call abort_input( 'ERROR: sgs_model must be 0 (DNS), 1 (Vreman) or 2 (AMD)' )
     If ( amd_buoyancy < 0 .Or. amd_buoyancy > 1 ) Call abort_input( 'ERROR: amd_buoyancy must be 0 or 1' )
     If ( adv_wall_layers < -1 ) Call abort_input( 'ERROR: adv_wall_layers must be >= 0 (or -1 for automatic)' )
-    If ( adv_wall_layers < 0 ) Then   ! automatic: 8 cells keep the wall stress balanced (see docs/Numerics.md 7.1)
+    ! automatic: 8 cells keep the wall stress balanced (docs/Numerics.md 7.1)
+    If ( adv_wall_layers < 0 ) Then
        adv_wall_layers = 0
        If ( flat_wall_model_flag > 0 .And. advection_scheme /= 1 ) adv_wall_layers = 8
     End If
@@ -938,7 +933,7 @@ Contains
          Call abort_input( 'ERROR: flat_wall_model_flag must be 0 (no-slip), 1 (smooth log law) or 2 (rough log law)' )
     If ( wm_filter_mode < -1 .Or. wm_filter_mode > 1 ) &
          Call abort_input( 'ERROR: wm_filter_mode must be 0 (raw wall-model input), 1 (temporal filter) or -1 (automatic)' )
-    If ( wm_filter_mode < 0 ) Then   ! automatic: the filter is only implemented for the single-phase flat-wall EQWM
+    If ( wm_filter_mode < 0 ) Then   ! automatic: the filter exists only for the single-phase flat-wall EQWM
        wm_filter_mode = 0
        If ( flat_wall_model_flag > 0 .And. z_bc_type == 0 .And. vof_flow < 1 ) wm_filter_mode = 1
     End If
@@ -994,8 +989,8 @@ Contains
   End Subroutine check_combination_warnings
 
 
-  !> Reject feature combinations the free-surface solver does not support (rank 0, right after the namelists are read). UAV is
-  !  excluded in both VOF modes; the two-fluid solver (vof_flow>=1) additionally excludes the features listed below.
+  !> Reject feature combinations the free-surface solver does not support (rank 0, right after the namelists
+  !  are read). UAV is excluded in both VOF modes; vof_flow>=1 additionally excludes the features below.
   Subroutine check_vof_inputs
 
     If ( vof_active >= 1 .And. uav_active >= 1 ) &
@@ -1029,7 +1024,8 @@ Contains
     If ( wave_abs_len > 0d0 .And. wave_current_mode == 2 ) &
          Write(*,'(A)') ' WARNING: the absorption zone relaxes the velocity to rest: wrong for a mean current (wave_current_mode=2)'
     If ( wave_type > 0 ) Then
-       ! gauges: the writer takes the leading entries >= 0, so a hole would write the wrong stations; all must lie inside the flume
+       ! gauges: the writer takes the leading entries >= 0, so a hole would write the wrong stations; all must
+       ! lie inside the flume
        Block
           Integer(Int32) :: ig, ng_lead
           ng_lead = 0
@@ -1093,7 +1089,8 @@ Contains
 
   End Subroutine check_vof_inputs
 
-  !> Report an input-file error and abort every rank (a bare Stop on rank 0 alone leaves the others blocked in the bcast below)
+  !> Report an input-file error and abort every rank (a bare Stop on rank 0 alone leaves the others blocked in
+  !  the bcast below)
   Subroutine abort_input(msg)
 
     Character(*), Intent(In) :: msg
@@ -1103,7 +1100,8 @@ Contains
 
   End Subroutine abort_input
 
-  ! Scan the input file for an uncommented "&<group_name>" header, without consuming it; iostat-ambiguity rationale
+  ! Scan the input file for an uncommented "&<group_name>" header without consuming it, so a missing group is
+  ! not confused with a read error
   Function namelist_group_present(unit_in, group_name) result(found)
 
     Integer(Int32),   Intent(In) :: unit_in
@@ -1130,7 +1128,6 @@ Contains
        line = Adjustl(line)
        If ( line(1:1) == '!' ) Cycle           ! comment line
        If ( line(1:1) /= '&' ) Cycle           ! not a group header
-       ! Upper-case just the slice we're about to compare
        Do ic = 1, glen
           ch = line(ic+1:ic+1)
           If ( ch >= 'a' .And. ch <= 'z' ) ch = Achar(Iachar(ch) - 32)
@@ -1148,18 +1145,15 @@ Contains
 
   End Function namelist_group_present
 
-  !    Generates an initial condition for channel
-  ! Output: U,V,W
+  ! Generates an initial condition for channel; output: U,V,W
   Subroutine init_flow
 
-	! Generate the grid
 	Call generateGrid
 
-	! Generate the initial conditions
 	Call generateIc
 
-	! NOTE: readSDF (IBM setup) is deferred to initialize() so that
-	! xg/yg/zg are populated before compute_normal_at_face_* is called.
+	! readSDF (IBM setup) is deferred to initialize() so that xg/yg/zg are populated before
+	! compute_normal_at_face_* is called.
 
   End Subroutine init_flow
 
@@ -1170,7 +1164,6 @@ Contains
     Integer(Int32) :: nxm_global_f, nym_global_f, nzm_global_f
     Integer(Int64) :: file_size_actual, file_size_expected
 
-    ! processor 0 Reads the all the data
     If ( myid==0 ) Then
 
        Write(*,'(A,A,A)') '  Reading restart file: ', Trim(Adjustl(filein)), ' ...'
@@ -1214,7 +1207,6 @@ Contains
 
        Open(1,file=filein,access='stream',form='unformatted',action='Read')
 
-       ! mesh
        Read(1) nx_global_f
        If ( nx_global_f/=nx_global ) Then
           Write(*,'(A,I0,A,I0)') ' ERROR: restart file nx = ', nx_global_f, ' but input_parameters gives ', nx_global
@@ -1264,13 +1256,10 @@ Contains
     Call read_distributed_field_block(1, V, .False., .False.)
     Call read_distributed_field_block(1, W, .False., .True.)
 
-    ! close file
     If (myid==0) Then
        Close(1)
     End If
 
-    ! send data to all other processors
-    ! mesh
     Call Mpi_bcast ( x_global,nx_global,MPI_real8,0,MPI_COMM_WORLD,ierr )
     Call Mpi_bcast ( y_global,ny_global,MPI_real8,0,MPI_COMM_WORLD,ierr )
     Call Mpi_bcast ( z_global,nz_global,MPI_real8,0,MPI_COMM_WORLD,ierr )
@@ -1279,17 +1268,16 @@ Contains
     Call Mpi_bcast ( ym_global,nym_global,MPI_real8,0,MPI_COMM_WORLD,ierr )
     Call Mpi_bcast ( zm_global,nzm_global,MPI_real8,0,MPI_COMM_WORLD,ierr )
 
-    ! set solution for zero step
     Uo = U
     Vo = V
     Wo = W
 
-! NOTE: readSDF (IBM setup) is deferred to initialize() so that
-	! xg/yg/zg are populated before compute_normal_at_face_* is called.
+! readSDF (IBM setup) is deferred to initialize(), see init_flow.
 
   End Subroutine read_input_data
 
-  !> Per-rank block shape/placement within a gathered/scattered global array; ix1:ix2,iz1:iz2 as in read/write_distributed_field_block.
+  !> Per-rank block shape/placement within a gathered/scattered global array; ix1:ix2,iz1:iz2 as in
+  !  read/write_distributed_field_block
   Subroutine distributed_block_range(iproc, is_x_face, is_z_face, ix1, ix2, iz1, iz2)
 
     Integer(Int32), Intent(In)  :: iproc
@@ -1309,7 +1297,8 @@ Contains
 
   End Subroutine distributed_block_range
 
-  !> Read one x/z-decomposed field block from a stream unit open on rank 0 only, scattering to every rank's local array. Every non-zero rank's receive is posted up front (non-blocking) so rank 0's sends aren't serialized behind a one-at-a-time round trip.
+  !> Read one x/z-decomposed field block from a stream unit open on rank 0 only, scattering to every rank.
+  !  Non-zero ranks post their receive up front (non-blocking) so rank 0's sends are not serialized.
   Subroutine read_distributed_field_block(unit_no, field_local, is_x_face, is_z_face)
 
     Integer(Int32), Intent(In) :: unit_no
@@ -1328,9 +1317,9 @@ Contains
     If ( myid == 0 ) Then
        Read(unit_no) nn
 
-       ! nn is the field's global (nx1,nx2,nx3) block shape as written; cross-check it against what this call expects (x/z face vs
-       ! ghost count per is_x_face/is_z_face, y the caller's full local extent) rather than risk a shape-mismatch crash or silently
-       ! wrong data in the ix1:ix2,:,iz1:iz2 slice below.
+       ! nn is the global block shape as written; check it against what this call expects (is_x_face/is_z_face
+       ! ghost counts, y the caller's local extent) to avoid a shape-mismatch crash or silently wrong data
+       ! below.
        expect_n1 = Merge(nx_global, nxg_global, is_x_face)
        expect_n3 = Merge(nz_global, nzg_global, is_z_face)
        If ( nn(1) /= expect_n1 .Or. nn(2) /= Size(field_local,2) .Or. nn(3) /= expect_n3 ) Then
@@ -1365,9 +1354,9 @@ Contains
 
   End Subroutine read_distributed_field_block
 
-  !> Skip one x/z-decomposed field block on a stream unit open on rank 0 only, without reading or distributing the payload; used
-  !  by read_scalar_restart/read_temperature_restart to pass the U/V/W/P blocks already consumed by read_input_data. Arguments
-  !  as in read_distributed_field_block (dim2_size = its Size(field_local,2)).
+  !> Skip one x/z-decomposed field block on a stream unit open on rank 0 only, without distributing the
+  !  payload; used by read_scalar_restart/read_temperature_restart to pass the blocks already consumed by
+  !  read_input_data. Arguments as in read_distributed_field_block (dim2_size = its Size(field_local,2)).
   Subroutine skip_distributed_field_block(unit_no, dim2_size, is_x_face, is_z_face)
 
     Integer(Int32), Intent(In) :: unit_no, dim2_size
@@ -1394,14 +1383,17 @@ Contains
 
   End Subroutine skip_distributed_field_block
 
-  !> Write one x/z-decomposed field block (3-int header + global-sized data) to a stream unit open on rank 0 only, gathering from every rank's local array. Every non-zero rank's contribution is received into its own buffer via a single posted-up-front Waitall instead of one-at-a-time blocking Mpi_recv, so the gather isn't serialized behind rank 0's receive order. is_x_face/is_z_face as in read_distributed_field_block.
+  !> Write one x/z-decomposed field block (3-int header + global-sized data) to a stream unit open on rank 0
+  !  only, gathering from every rank. Contributions arrive via one posted-up-front Waitall, so the gather is
+  !  not serialized behind rank 0's receive order. is_x_face/is_z_face as in read_distributed_field_block.
   Subroutine write_distributed_field_block(unit_no, field_local, nxf_global, nyf_global, nzf_global, is_x_face, is_z_face, &
                                            interior_only)
 
     Integer(Int32), Intent(In) :: unit_no, nxf_global, nyf_global, nzf_global
     Real(Int64), Dimension(:,:,:), Intent(In) :: field_local
     Logical, Intent(In) :: is_x_face, is_z_face
-    Logical, Intent(In), Optional :: interior_only   ! write only the planes that are not x/z ghosts of this rank (halo planes not kept valid)
+    ! write only the planes that are not x/z ghosts of this rank (halo planes are not kept valid)
+    Logical, Intent(In), Optional :: interior_only
 
     Integer(Int32) :: iproc, ix1, ix2, iz1, iz2, nxl, nzl, ng
     Real(Int64), Allocatable :: global_buf(:,:,:), sbuf(:,:,:)
@@ -1456,8 +1448,8 @@ Contains
 
   End Subroutine write_distributed_field_block
 
-  !> Coordinate-mode face range f1:f2 of the box s:e on the faces xf(1:nf): nearest faces, clipped to the domain, at least one cell
-  !  wide; ok = .False. if s > e or the box lies outside the domain
+  !> Coordinate-mode face range f1:f2 of the box s:e on the faces xf(1:nf): nearest faces, clipped to the
+  !  domain, at least one cell wide; ok = .False. if s > e or the box lies outside the domain
   Subroutine coordinate_face_range(xf, nf, s, e, f1, f2, ok)
 
     Integer(Int32), Intent(In)  :: nf
@@ -1479,8 +1471,9 @@ Contains
   End Subroutine coordinate_face_range
 
 
-  !> Resolve the chunk box inputs into global 1-based face indices chunk_f1/chunk_f2 (cells f1..f2-1 lie inside), aborting if the
-  !  box is empty or outside the domain. Index mode (all six inputs negative) maps v to the 0-based face index -v-1.
+  !> Resolve the chunk box inputs into global 1-based face indices chunk_f1/chunk_f2 (cells f1..f2-1 lie
+  !  inside), aborting if the box is empty or outside the domain. Index mode (all six inputs negative) maps v
+  !  to the 0-based face index -v-1.
   Subroutine resolve_chunk_box
 
     Logical        :: index_mode, ok
@@ -1526,8 +1519,8 @@ Contains
   End Subroutine resolve_chunk_box
 
 
-  !> Stagger flags st and global index range gl:gh of field kind ic (0 scalar, 1/2/3 = U/V/W) over the face box f1:f2:
-  !  a staggered direction holds faces f1..f2, a centred one holds cells f1..f2-1
+  !> Stagger flags st and global index range gl:gh of field kind ic (0 scalar, 1/2/3 = U/V/W) over the face
+  !  box f1:f2: a staggered direction holds faces f1..f2, a centred one cells f1..f2-1
   Subroutine field_box(ic, f1, f2, st, gl, gh)
 
     Integer(Int32), Intent(In)  :: ic, f1(3), f2(3)
@@ -1541,8 +1534,9 @@ Contains
   End Subroutine field_box
 
 
-  !> Part of the field box gl:gh owned by rank r (first global index lo, counts n; n = 0 when it owns none): cells ig1..ig2-2 in x,
-  !  kg1..kg2-2 in z, all of y; the closing face of a staggered direction belongs to the last rank
+  !> Part of the field box gl:gh owned by rank r (first global index lo, counts n; n = 0 when it owns none):
+  !  cells ig1..ig2-2 in x, kg1..kg2-2 in z, all of y; the closing face of a staggered direction belongs to
+  !  the last rank
   Subroutine box_extent(r, st, gl, gh, lo, n)
 
     Integer(Int32), Intent(In)  :: r, st(3), gl(3), gh(3)
@@ -1561,7 +1555,8 @@ Contains
   End Subroutine box_extent
 
 
-  !> Fill buf with this rank's share lo:lo+n-1 of field A; velocities are averaged to cell centres when snapshot_location = 1
+  !> Fill buf with this rank's share lo:lo+n-1 of field A; velocities are averaged to cell centres when
+  !  snapshot_location = 1
   Subroutine fill_box_block(A, ic, st, lo, n, buf)
 
     Real(Int64),    Intent(In)  :: A(:,:,:)
@@ -1637,9 +1632,10 @@ Contains
   End Subroutine write_box_field
 
 
-  !> Collective: write the face box f1:f2 of every field to fname. Layout (little-endian stream): snap_magic, snapshot_location,
-  !  step, nfields (Int32); t; f1, f2; per direction x_global(f1:f2) then xm_global(f1:f2-1); per field name(8), st, gl, gh;
-  !  then the field blocks in the same order, each (gh-gl+1) column-major
+  !> Collective: write the face box f1:f2 of every field to fname. Layout (little-endian stream): snap_magic,
+  !  snapshot_location, step, nfields (Int32); t; f1, f2; per direction x_global(f1:f2) then
+  !  xm_global(f1:f2-1); per field name(8), st, gl, gh; then the field blocks in the same order, each
+  !  (gh-gl+1) column-major
   Subroutine write_box_snapshot(fname, f1, f2)
 
     Character(*),   Intent(In) :: fname
@@ -1699,8 +1695,7 @@ Contains
   End Subroutine write_box_snapshot
 
 
-  ! Input: U,V,W,x,y,z,xm,ym,zm
-  ! Output: fileout
+  ! Input: U,V,W,x,y,z,xm,ym,zm; output: fileout
   Subroutine output_data
 
     Character(200)   :: fname, pfname
@@ -1709,11 +1704,13 @@ Contains
     Logical          :: dirExists
     Logical          :: save_now
 
-    ! nsave>0: step-count cadence; nsave<0: physical-time cadence, fires once t reaches tsave_next (kept on tsave multiples by dt snapping in compute_time_step_RK3)
+    ! nsave>0: step cadence; nsave<0: physical-time cadence, fires once t reaches tsave_next (kept on tsave
+    ! multiples by dt snapping in compute_time_step_RK3)
     If ( nsave > 0 ) Then
        save_now = ( Mod(istep,nsave) == 0 )
     Else
-       ! tolerance guards against t landing one ULP short of tsave_next after dt-snapping, which would otherwise stall tsave_next forever
+       ! tolerance: after dt-snapping t can land one ULP short of tsave_next, which would stall tsave_next
+       ! forever
        save_now = ( t >= tsave_next - 1d-10 )
        If ( save_now ) tsave_next = tsave_next + tsave
     End If
@@ -1737,12 +1734,12 @@ Contains
        Write(ext,'(I8)') istep + nstep_init
 
        If ( myid==0 ) Then
-          !Create a directory to store the data, if needed
           inquire(file=trim("fields")//'/.', exist=dirExists)   !Works for gfortran
           If ( .not. dirExists ) call system('mkdir -p fields/')
        End If
 
-       ! only the staggered full snapshot is the restart format; the centred full snapshot reuses the box writer on the whole domain
+       ! only the staggered full snapshot is the restart format; the centred full snapshot reuses the box
+       ! writer on the whole domain
        If ( full_snapshot .And. snapshot_location == 1 ) Then
           fname = 'fields/'//Trim(Adjustl(fileout))//'.'//Trim(Adjustl(ext))
           Call write_box_snapshot(fname, [1, 1, 1], [nx_global, ny_global, nz_global])
@@ -1757,7 +1754,6 @@ Contains
 
        If ( full_snapshot .And. snapshot_location == 0 ) Then
 
-       ! processor 0 writes the data
        If ( myid==0 ) Then
 
           fname = 'fields/'//Trim(Adjustl(fileout))//'.'//Trim(Adjustl(ext))
@@ -1765,7 +1761,6 @@ Contains
           Write(*,'(A,A,A)') '  Writing snapshot: ', Trim(Adjustl(fname)), ' ...'
           Open(1,file=fname,access='stream',form='unformatted',action='write')
 
-          ! mesh
           Write(1) Shape(x_global), x_global
           Write(1) Shape(y_global), y_global
           Write(1) Shape(z_global), z_global
@@ -1801,7 +1796,6 @@ Contains
           Call write_distributed_field_block(1, Cvof_io, nxg_global, nyg_global, nzg_global, .False., .False.)
        End If
 
-       ! close file and report size
        If (myid==0) Then
           Close(1)
           Inquire(file=Trim(Adjustl(fname)), size=fsize)
@@ -1815,8 +1809,9 @@ Contains
 
        End If
 
-       ! Particle state (src/particles.f90): separate latest-state restart file plus a timestamped snapshot for ParaView
-       ! (postProcessing/generate_particles_xmf.py). write_particle_snapshot is collective and all ranks must agree on the filename.
+       ! Particle state (src/particles.f90): latest-state restart file plus a timestamped snapshot for
+       ! ParaView (postProcessing/generate_particles_xmf.py); write_particle_snapshot is collective, so all
+       ! ranks must agree on the filename.
        If ( particles_active >= 1 ) Then
           Call write_particle_restart
           Write(pext,'(I8)') istep + nstep_init
@@ -1831,7 +1826,8 @@ Contains
   End Subroutine output_data
 
 
-  !> Open the restart file as unit 2 on rank 0, positioned after the six mesh blocks (size header, then the coordinates)
+  !> Open the restart file as unit 2 on rank 0, positioned after the six mesh blocks (size header, then the
+  !  coordinates)
   Subroutine open_restart_skip_mesh
 
     Integer(Int32) :: m, n, nn(6)
@@ -1850,10 +1846,10 @@ Contains
   End Subroutine open_restart_skip_mesh
 
 
-  !> Read one block of a restart file into F, skipping the mesh and every block before it. Layout of the file (output_data): U, V, W,
-  !  P, then C (sediment_flag >= 1), nu_t (LES), T (boussinesq_flag >= 1) and the VOF fraction. The optional blocks are located from THIS
-  !  run's flags, not from what the file was written with: restarting with a flag flipped relative to the writing run desyncs the skip
-  !  and misreads everything after it. blk: 1 = P, 2 = C, 3 = T, 4 = VOF fraction.
+  !> Read one block of a restart file into F, skipping the mesh and every block before it. File layout
+  !  (output_data): U, V, W, P, then C (sediment_flag >= 1), nu_t (LES), T (boussinesq_flag >= 1) and the VOF
+  !  fraction. Optional blocks are located from THIS run's flags: restarting with a flag flipped relative to
+  !  the writing run misreads everything after it. blk: 1 = P, 2 = C, 3 = T, 4 = VOF fraction.
   Subroutine read_restart_block(blk, F)
 
     Integer(Int32), Intent(In) :: blk
@@ -1869,7 +1865,8 @@ Contains
     Call skip_distributed_field_block(2, nyg, .False., .True.)
     present_blk = (/ .True., sediment_flag >= 1, boussinesq_flag >= 1, .True. /)
     Do m = 1, blk
-       If ( m == 3 .And. sgs_model /= 0 ) Call skip_distributed_field_block(2, nyg, .False., .False.)   ! nu_t sits between C and T
+       ! nu_t sits between C and T
+       If ( m == 3 .And. sgs_model /= 0 ) Call skip_distributed_field_block(2, nyg, .False., .False.)
        If ( .Not. present_blk(m) ) Cycle
        If ( m == blk ) Then
           Call read_distributed_field_block(2, F, .False., .False.)
@@ -1899,7 +1896,7 @@ Contains
   End Subroutine read_pressure_restart
 
 
-  !> Read the VOF fraction into Cvof_io and the pressure history of the two-fluid step into P from a restart file
+  !> Read the VOF fraction into Cvof_io and the two-fluid pressure history into P from a restart file
   Subroutine read_vof_restart
 
     Call read_restart_block(1, P)
@@ -1908,8 +1905,8 @@ Contains
   End Subroutine read_vof_restart
 
 
-  !> Wall-model filter state (wm_filter_mode == 1) next to a staggered snapshot, as <snapshot>.wmf, so a restart continues the filter instead of
-  !  re-seeding it from the raw field; the snapshot layout itself is unchanged
+  !> Wall-model filter state (wm_filter_mode == 1) next to a staggered snapshot, as <snapshot>.wmf, so a
+  !  restart continues the filter instead of re-seeding it; the snapshot layout is unchanged
   Subroutine write_wm_filter_state(snapshot_name)
 
     Character(*), Intent(In) :: snapshot_name
@@ -1928,8 +1925,9 @@ Contains
   End Subroutine write_wm_filter_state
 
 
-  !> Read the wall-model filter state written by write_wm_filter_state next to the restart snapshot (host arrays; the caller pushes them to
-  !  the device). Without the file the filter is re-seeded from the raw field on the first step.
+  !> Read the wall-model filter state written by write_wm_filter_state next to the restart snapshot (host
+  !  arrays; the caller pushes them to the device). Without the file the filter is re-seeded on the first
+  !  step.
   Subroutine read_wm_filter_state
 
     Logical :: have
@@ -1956,7 +1954,8 @@ Contains
 
     Call read_restart_block(3, Tscal)
     Tscal_o = Tscal
-    ! Device copy deferred: Tscal/Tscal_o are not yet `!$acc enter data create`d at this point in startup (that happens later, unconditionally, in initialization.f90), so updating the device here would be undefined behavior.
+    ! Device copy deferred: Tscal/Tscal_o are `!$acc enter data create`d later in startup
+    ! (initialization.f90), so updating the device here is undefined.
 
   End Subroutine read_temperature_restart
 

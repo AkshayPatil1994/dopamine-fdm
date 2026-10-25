@@ -1,7 +1,8 @@
-!> Rank-to-GPU binding for multi-GPU runs: each rank picks a GPU by node-local rank modulo the node's GPU count, before any
-!> device allocation or cuFFT/cuSPARSE plan. Bound BEFORE MPI_Init when the launcher exports the node-local rank (Open MPI/
-!> MVAPICH2/Slurm/PMI), since a CUDA-aware MPI otherwise creates its context on device 0 for every rank and breaks peer/IPC
-!> transfers. Compiled only with ENABLE_GPU (-DGPU_POISSON); called right after MPI_Init in initialization.f90.
+!> Rank-to-GPU binding for multi-GPU runs: each rank picks a GPU by node-local rank modulo the node's GPU
+!  count, before any device allocation or cuFFT/cuSPARSE plan. Bound BEFORE MPI_Init when the launcher exports
+!  the node-local rank (Open MPI/ MVAPICH2/Slurm/PMI), since a CUDA-aware MPI otherwise creates its context on
+!  device 0 for every rank and breaks peer/IPC transfers. Compiled only with ENABLE_GPU (-DGPU_POISSON);
+!  called right after MPI_Init in initialization.f90.
 Module gpu_device
 
   Use iso_fortran_env, Only : Int32
@@ -14,7 +15,9 @@ Module gpu_device
 
 Contains
 
-  !> Bind this rank to a GPU from the launcher's node-local-rank environment variable, before MPI_Init; a no-op (bound_before_mpi stays false) if none is set, in which case assign_gpu_device binds after MPI_Init as a fallback
+  !> Bind this rank to a GPU from the launcher's node-local-rank environment variable, before MPI_Init; a
+  !  no-op (bound_before_mpi stays false) if none is set, in which case assign_gpu_device binds after MPI_Init
+  !  as a fallback
   Subroutine assign_gpu_device_pre_mpi
 
     Character(32) :: val
@@ -37,11 +40,10 @@ Contains
 
   End Subroutine assign_gpu_device_pre_mpi
 
-  !> Splits MPI_COMM_WORLD by shared-memory locality (one sub-communicator per
-  !> node) and assigns device (local_rank mod ndevices_on_node) to this rank.
-  !> acc_set_device_num binds both the OpenACC runtime and the underlying CUDA
-  !> context that cuFFT/cuSPARSE calls pick up (Use cufft/cusparse in
-  !> poisson_gpu.f90) -- no separate cudaSetDevice call is needed.
+  !> Splits MPI_COMM_WORLD by shared-memory locality (one sub-communicator per node) and assigns device
+  !  (local_rank mod ndevices_on_node) to this rank. acc_set_device_num binds both the OpenACC runtime and the
+  !  underlying CUDA context that cuFFT/cuSPARSE calls pick up (Use cufft/cusparse in poisson_gpu.f90) -- no
+  !  separate cudaSetDevice call is needed.
   Subroutine assign_gpu_device
 
     Integer :: local_comm, local_rank, local_nprocs, ndevices, device_id, ierr_local, nprocs_w
@@ -75,8 +77,9 @@ Contains
 
     Call MPI_Comm_free(local_comm, ierr_local)
 
-    ! device pointers are handed to MPI (host_data use_device in the halo/transposes): without CUDA-aware MPI this crashes or
-    ! silently corrupts. No portable Fortran query exists, so warn when no launcher/MCA hint of CUDA support is visible.
+    ! device pointers are handed to MPI (host_data use_device in the halo/transposes): without CUDA-aware MPI
+    ! this crashes or silently corrupts. No portable Fortran query exists, so warn when no launcher/MCA hint
+    ! of CUDA support is visible.
     Call MPI_Comm_size(MPI_COMM_WORLD, nprocs_w, ierr_local)
     If ( nprocs_w > 1 .And. myid == 0 ) Then
        cuda_env = ''

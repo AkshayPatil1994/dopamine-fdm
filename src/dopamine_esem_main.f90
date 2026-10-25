@@ -1,6 +1,14 @@
-!> Standalone ESEM inflow precursor generator: precomputes an x-normal inflow-plane time series (mean + Cholesky-correlated fluctuation, as apply_inflow_bc_x would inject under inflow_type==1) and writes it in probe_output.f90's donor slice format, consumed unmodified by the existing inflow_type==2 (recycled precursor inflow) reader in sem.f90 -- amortizes raw_eddy_sum's per-eddy cost to a one-time build instead of every timestep.
-!> Usage: mpirun -np N dopamine-ESEM --input=PATH [--out=BASENAME] [--samples=N | --dt=T] [--duration=T] [--ensemble-samples=N] [--ensemble-periods=P]; --input names the namelist file to read (the same namelist a live inflow_type=1/sem_use_esem=1 run would use, sem_profile_format=0 or 1 both supported) -- it is required precisely so this never silently falls back to whatever ./input_parameters happens to hold (e.g. a production inflow_type=2 config left over from the last solver run). Only z is decomposed (y never is, matching the live solver and probe_output's own writer), so the donor file is decomposition-independent -- the consuming run can use a different nprocs/p_row/p_col.
-!> --dt sets the donor's sample spacing directly (pass the consuming run's actual timestep, or an integer fraction of it) instead of letting it fall out of --samples/duration -- without this, dt_sample defaults to ~1/8 of the fastest eddy's transit period (see the auto n_samples formula below), which can be orders of magnitude finer than a CFL-limited production dt; the consuming inflow_type=2 run then samples this donor timeline at its own (much coarser) dt via recycle_value's linear time-interpolation, landing on near-uncorrelated points along the fine donor signal every step instead of a smoothly-evolving one, and the pressure projection efficiently kills that temporally-incoherent forcing (observed in practice as Reynolds stresses collapsing within the first few cells downstream of the inlet and never recovering, even though the donor file itself matches the target profile). Matching --dt to the consuming dt keeps successive donor frames the same successive instants the solver will actually query, preserving the turbulent time-correlation the recycled BC relies on.
+!> Standalone ESEM inflow precursor generator (dopamine-ESEM): precomputes an x-normal inflow-plane time
+!  series (mean + Cholesky-correlated fluctuation, as apply_inflow_bc_x injects under inflow_type==1) in
+!  probe_output.f90's donor slice format, read unchanged by the inflow_type==2 reader of sem.f90, so
+!  raw_eddy_sum's cost is paid once. Usage: mpirun -np N dopamine-ESEM --input=PATH [--out=BASENAME]
+!  [--samples=N | --dt=T] [--duration=T] [--ensemble-samples=N] [--ensemble-periods=P]. --input is required
+!  (the namelist of an inflow_type=1/sem_use_esem=1 run) so a leftover ./input_parameters is never used. Only
+!  z is decomposed: the donor file is independent of the rank layout. --dt should equal the consuming run's dt
+!  (or an integer fraction): the default spacing (~1/8 of the fastest eddy's transit period) is much finer
+!  than a CFL-limited dt, so the consuming run would sample near-uncorrelated points and the projection
+!  removes that incoherent forcing (Reynolds stresses collapse near the inlet); matching it keeps the time
+!  correlation.
 Program dopamine_esem
 
   Use iso_fortran_env, Only : Int32, Int64, output_unit
@@ -30,7 +38,7 @@ Program dopamine_esem
   Call Mpi_Comm_rank(MPI_COMM_WORLD, myid, ierr)
   Call Mpi_Comm_size(MPI_COMM_WORLD, nprocs, ierr)
 
-  ! --key=value only; --input is required (see the module-header note on why there's no fallback)
+  ! --key=value only; --input is required (no fallback, see the header)
   out_base       = 'esem_precursor'
   duration_given = .False.
   samples_given  = .False.
@@ -103,11 +111,8 @@ Program dopamine_esem
   ! grid: face points then cell centers (global)
   Allocate( x_global(nx_global), y_global(ny_global), z_global(nz_global) )
 
-  ! generateGrid's own fields/grid.out + geometry.out writer (for GenSDF) loops
-  ! over nxm_global/nym_global/nzm_global, so these must be set *before* the
-  ! call -- matching initialize()'s order in initialization.f90 -- or that
-  ! writer silently emits an empty grid.out (loop bound 0) while still
-  ! printing "Wrote fields/geometry.out and fields/grid.out".
+  ! generateGrid's grid.out/geometry.out writer loops over nxm_global/nym_global/nzm_global, so these are set
+  ! before the call (as initialize() does) or it silently writes an empty grid.out.
   nxm_global = nx_global - 1
   nym_global = ny_global - 1
   nzm_global = nz_global - 1
@@ -121,12 +126,13 @@ Program dopamine_esem
      zm_global(k) = 0.5d0*( z_global(k) + z_global(k+1) )
   End Do
 
-  ! this rank's local z-slab of the donor grid (interior cell/face count), same global-index convention write_slice_n uses (kg_g = kg1_global(myid)+ka-2)
+  ! this rank's local z-slab of the donor grid (interior cell/face count); global index kg_g =
+  ! kg1_global(myid)+ka-2 as in write_slice_n
   nz_local = kg2_global(myid) - kg1_global(myid) - 1
 
-  ! True per-component staggered grids (same y/z/yg/zg ghost extrapolation as initialization.f90), so that ens_mean_*/ens_std_*
-  ! (sized per component, e.g. ens_mean_uV (ny,nzg)) are evaluated at each component's own location, as apply_inflow_bc_x's live
-  ! SEM does. This removes the half-cell shift the old shared-grid donor forced on sem.f90's recycle_value (inflow_type=2).
+  ! Per-component staggered grids (same ghost extrapolation as initialization.f90) so ens_mean_*/ens_std_*
+  ! (sized per component) are evaluated where apply_inflow_bc_x's live SEM evaluates them; avoids a half-cell
+  ! shift in sem.f90's recycle_value (inflow_type=2).
   Allocate( yg_global(nym_global+2), zg_global(nzm_global+2) )
   yg_global(2:nym_global+1) = ym_global
   yg_global(1)              = ym_global(1)          - 2d0*(ym_global(1)-y_global(1))
@@ -138,21 +144,24 @@ Program dopamine_esem
   ny  = ny_global                                 ! V's native (y-face, no ghost) count
   nyg = nym_global + 2                            ! U/W's native (y ghost cell-centre) count
   nzg = kg2_global(myid) - kg1_global(myid) + 1   ! U/V's native LOCAL (z ghost cell-centre) count
-  nz  = nzg                                       ! W's own z count kept equal to nzg (both index via the same interior ka=2..nzg-1 range below, so this stays self-consistent even though it differs slightly from the true no-ghost local face count on the last z-rank)
+  ! W's z count equals nzg (both use interior ka=2..nzg-1); differs slightly from the true local face count on
+  ! the last z-rank
+  nz  = nzg
 
   Allocate( y(ny) );   y  = y_global
   Allocate( yg(nyg) ); yg = yg_global
   Allocate( zg(nzg) ); zg = zg_global( kg1_global(myid) : kg2_global(myid) )
   Allocate( z(nz) )
   Do k = 1, nz
-     ! z(ka) = left z-face of the cell whose centre is zg(ka) (donor global
-     ! z-index kg1_global(myid)+ka-2), i.e. W's own staggered location; ka=1/nz
-     ! (ghost slots) are never queried below (only interior ka=2..nz-1 is written)
+     ! z(ka) = left z-face of the cell centred at zg(ka) (global index kg1_global(myid)+ka-2), W's staggered
+     ! location; ghost slots ka=1/nz are never queried.
      z(k) = z_global( Max(1, Min(nzm_global, kg1_global(myid)+k-2)) )
   End Do
 
   Call init_inflow_profile   ! dispatches read_mean_profile / read_mean_profile_TI on sem_profile_format
-  Call init_inflow           ! sigma file, wall taper, Uconv_sem, length-scale/n_eddies auto-tune, place_eddies, build_ensemble_normalisation (now at this rank's cell-center slab)
+  ! sigma file, wall taper, Uconv_sem, length-scale/n_eddies auto-tune, place_eddies, ensemble normalisation
+  ! at this rank's slab
+  Call init_inflow
 
   If ( .Not. duration_given ) duration = Real(sem_ensemble_periods,8) * Maxval(eddy_Tperiod)
   If ( samples_given .And. n_samples < 2 ) Then
@@ -160,13 +169,12 @@ Program dopamine_esem
      Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
   End If
   If ( dt_given ) Then
-     ! pin the sample spacing to (a submultiple of) the consuming run's actual dt instead of
-     ! the fastest-eddy-transit-period default below, so successive donor frames are the same
-     ! successive instants the solver will query via recycle_value -- see the module-header
-     ! note on why a much-finer default dt_sample aliases into temporally-incoherent forcing
+     ! pin the sample spacing to (a submultiple of) the consuming run's dt instead of the fastest-eddy default
+     ! below, so donor frames are the instants recycle_value will query (see --dt in the header)
      n_samples = Max( 2, Ceiling(duration/dt_sample_in) + 1 )
   Else If ( .Not. samples_given ) Then
-     ! ~8 samples per the fastest eddy's transit period, capped so a very fine near-wall length scale can't blow the table up unboundedly
+     ! ~8 samples per the fastest eddy's transit period, capped so a very fine near-wall length scale cannot
+     ! blow up the table
      n_samples = Min( 200000, Max( 50, Ceiling( 8d0 * duration / Minval(eddy_Tperiod) ) ) )
   End If
   dt_sample = duration / Real(n_samples-1,8)
@@ -185,10 +193,8 @@ Program dopamine_esem
      Open(newunit=u_times, file=Trim(fname), access='stream', form='unformatted', status='replace', action='write')
   End If
 
-  ! U,W: native (yg,zg) ghost cell-centre grid (nym_global x nzm_global).
-  ! V:   native (y,zg) y-face / z ghost cell-centre grid (ny_global x nzm_global) --
-  !      its own separately-sized block, written right after U's each snapshot, so
-  !      the consumer needs no half-cell interpolation/index-shift approximation.
+  ! U,W: native (yg,zg) cell-centre grid (nym_global x nzm_global). V: native (y,zg) grid (ny_global x
+  ! nzm_global) in its own block written after U's, so the consumer needs no half-cell shift.
   Allocate( lbuf_U(nym_global,nzm_global), gbuf_U(nym_global,nzm_global) )
   Allocate( lbuf_V(ny_global, nzm_global), gbuf_V(ny_global, nzm_global) )
   Allocate( lbuf_W(nym_global,nzm_global), gbuf_W(nym_global,nzm_global) )
@@ -198,8 +204,8 @@ Program dopamine_esem
 
      lbuf_U = 0d0;  lbuf_V = 0d0;  lbuf_W = 0d0
 
-     ! Ranks sharing col = Mod(myid,p_col) own the same z-slab and would compute identical values; the Mpi_Reduce(MPI_SUM) below
-     ! would then inflate the field by p_row. Only row==0 ranks compute, the rest leave lbuf_* at zero.
+     ! Ranks sharing col = Mod(myid,p_col) own the same z-slab; only row==0 ranks compute, otherwise the
+     ! Mpi_Reduce(MPI_SUM) below would inflate the field by p_row (the rest leave lbuf_* at zero).
      If ( myid/p_col == 0 ) Then
 
         ! U: cell-centred in y and z

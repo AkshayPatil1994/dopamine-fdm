@@ -18,7 +18,8 @@ Module probe_output
   Logical        :: sli_cmask(6,MAX_PROBES)  ! component mask: U,V,W,P,T,C
   Integer(Int32) :: sli_ncomp(MAX_PROBES)    ! number of selected components
   Integer(Int32) :: sli_funit(MAX_PROBES)    ! Fortran file unit (rank 0)
-  Integer(Int32) :: sli_tunit(MAX_PROBES)    ! companion <file>_times.bin unit (rank 0): one Real64 sim-time per snapshot, for donor-time interpolation by downstream consumers (e.g. recycled inflow)
+  ! <file>_times.bin unit (rank 0): one Real64 sim-time per snapshot, for donor-time interpolation
+  Integer(Int32) :: sli_tunit(MAX_PROBES)
   Integer(Int32) :: sli_nwrit(MAX_PROBES)    ! snapshots written so far
 
   ! ── per-line resolved state ─────────────────────────────────────────────
@@ -35,7 +36,8 @@ Module probe_output
 
 Contains
 
-  !> Resolve physical positions to grid indices, open output files, and write initial metadata (call once after grid setup)
+  !> Resolve physical positions to grid indices, open output files, and write initial metadata (call once
+  !  after grid setup)
   Subroutine init_probes
 
     Integer(Int32) :: n, meta_unit
@@ -167,8 +169,7 @@ Contains
   End Subroutine init_probes
 
 
-  !  write_probes
-  !  Called every step.  Output is gated on slice_freq / line_freq.
+  ! write_probes Called every step.  Output is gated on slice_freq / line_freq.
   Subroutine write_probes
 
     Integer(Int32) :: n
@@ -210,8 +211,7 @@ Contains
   End Subroutine write_probes
 
 
-  !  finalize_probes
-  !  Close all open file units (rank 0 only).
+  ! finalize_probes Close all open file units (rank 0 only).
   Subroutine finalize_probes
 
     Integer(Int32) :: n
@@ -230,8 +230,7 @@ Contains
   End Subroutine finalize_probes
 
 
-  !  Private: write_slice_n
-  !  Extract, MPI-reduce, and append one 2-D slice snapshot.
+  ! Private: write_slice_n Extract, MPI-reduce, and append one 2-D slice snapshot.
   Subroutine write_slice_n(n)
 
     Integer(Int32), Intent(In) :: n
@@ -242,10 +241,9 @@ Contains
 
     n1 = sli_n1(n);  n2 = sli_n2(n);  nc = sli_ncomp(n)
 
-    ! All nc selected components share one MPI_Reduce instead of one each: the
-    ! owning-rank condition (fix_ia/fix_ja/fix_ka in range) only depends on
-    ! sli_ax(n)/sli_idx(n), not on comp, so every selected component is filled
-    ! (or left zero) together and can be reduced together.
+    ! All nc selected components share one MPI_Reduce instead of one each: the owning-rank condition
+    ! (fix_ia/fix_ja/fix_ka in range) only depends on sli_ax(n)/sli_idx(n), not on comp, so every selected
+    ! component is filled (or left zero) together and can be reduced together.
     Allocate( lbuf(nc,n1,n2) )
     Allocate( gbuf(nc,n1,n2) )
     lbuf = 0d0
@@ -308,11 +306,10 @@ Contains
     If (myid == 0) Then
       Write(sli_funit(n)) gbuf
       Write(sli_tunit(n)) t
-      ! flush now (not just at finalize_probes' Close): _times.bin's tiny per-call
-      ! writes can sit unflushed in the runtime buffer for the whole run, so a
-      ! run killed before a clean exit leaves it empty even though .bin (whose
-      ! larger per-call writes get flushed automatically) and _meta.txt (reopened
-      ! and closed every call) both already reflect every snapshot written so far
+      ! flush now (not just at finalize_probes' Close): _times.bin's tiny per-call writes can sit unflushed
+      ! in the runtime buffer for the whole run, so a run killed before a clean exit leaves it empty even
+      ! though .bin (whose larger per-call writes get flushed automatically) and _meta.txt (reopened and
+      ! closed every call) both already reflect every snapshot written so far
       Flush(sli_funit(n))
       Flush(sli_tunit(n))
       sli_nwrit(n) = sli_nwrit(n) + 1
@@ -324,8 +321,7 @@ Contains
   End Subroutine write_slice_n
 
 
-  !  Private: write_line_n
-  !  Extract, MPI-reduce, and append one 1-D line snapshot.
+  ! Private: write_line_n Extract, MPI-reduce, and append one 1-D line snapshot.
   Subroutine write_line_n(n)
 
     Integer(Int32), Intent(In) :: n
@@ -336,9 +332,9 @@ Contains
 
     npts = lin_npts(n);  nc = lin_ncomp(n)
 
-    ! All nc selected components share one MPI_Reduce instead of one each (see
-    ! write_slice_n's identical rationale: the owning-rank condition doesn't
-    ! depend on comp, so every selected component is filled together)
+    ! All nc selected components share one MPI_Reduce instead of one each (see write_slice_n's identical
+    ! rationale: the owning-rank condition doesn't depend on comp, so every selected component is filled
+    ! together)
     Allocate( lbuf(nc,npts) )
     Allocate( gbuf(nc,npts) )
     lbuf = 0d0
@@ -406,8 +402,7 @@ Contains
   End Subroutine write_line_n
 
 
-  !  cc_val — cell-centre interpolated value for component comp
-  !  at ghost-array position (ia, ja, ka).
+  ! cc_val — cell-centre interpolated value for component comp at ghost-array position (ia, ja, ka).
   Real(Int64) Function cc_val(comp, ia, ja, ka)
 
     Integer(Int32), Intent(In) :: comp, ia, ja, ka
@@ -466,8 +461,7 @@ Contains
   End Function nearest_cc_global
 
 
-  !  line_extent — convert physical start/end to 1-based interior cc index
-  !  range along the given axis.
+  ! line_extent — convert physical start/end to 1-based interior cc index range along the given axis.
   Subroutine line_extent(axis, pos_s, pos_e, ks, ke)
 
     Integer(Int32), Intent(In)  :: axis
@@ -544,7 +538,8 @@ Contains
   End Function records_in
 
 
-  !> Number of leading records of a Real64 time log that are <= tmax: frames a failed attempt left beyond the restart time are not kept
+  !> Number of leading records of a Real64 time log that are <= tmax: frames a failed attempt left beyond the
+  !  restart time are not kept
   Integer(Int64) Function leading_times_le(fname, tmax)
 
     Character(*), Intent(In) :: fname
@@ -564,7 +559,8 @@ Contains
   End Function leading_times_le
 
 
-  !> Stream file for appending: a fresh file when nbytes = 0, else the existing one cut to nbytes (the snapshots of a restart)
+  !> Stream file for appending: a fresh file when nbytes = 0, else the existing one cut to nbytes (the
+  !  snapshots of a restart)
   Subroutine open_probe_stream(unit, fname, nbytes)
 
     Integer(Int32), Intent(Out) :: unit
@@ -581,8 +577,7 @@ Contains
   End Subroutine open_probe_stream
 
 
-  !  ensure_dir — create directory component of file path if missing.
-  !  Called on rank 0 only.
+  ! ensure_dir — create directory component of file path if missing. Called on rank 0 only.
   Subroutine ensure_dir(fname)
 
     Character(*), Intent(In) :: fname

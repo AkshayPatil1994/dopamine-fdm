@@ -1,14 +1,11 @@
 Module mpi
 
-  ! General Modules
   Use iso_fortran_env, Only : error_unit, Int32, Int64
 
-  ! prevent implicit typing
   Implicit None
 
   Include 'mpif.h'
 
-  ! declarations
   Integer(Int32) :: ierr, myid, nprocs
   Integer        :: istat ( MPI_STATUS_SIZE )
 

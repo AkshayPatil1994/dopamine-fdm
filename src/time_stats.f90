@@ -1,8 +1,9 @@
-!> On-the-fly time-averaged velocity statistics (mean, Reynolds stresses) and optional scalar statistics (mean, variance, flux),
-!  accumulated on the device each step and written, little-endian, next to every field snapshot as fields/<fileout>_tavg.<step>.
-!  File layout: Int32 nxm,nym,nzm,nf; Real64 t_acc; nf x Character(8) names; then nf blocks of Real64 (nxm,nym,nzm), Fortran order.
-!  With chunked_snapshot the same layout holds for the chunk box (sizes of the box) plus a trailer:
-!  Int32 f1(3), f2(3); Real64 xm, ym, zm of the box cells.
+!> On-the-fly time-averaged velocity statistics (mean, Reynolds stresses) and optional scalar statistics
+!  (mean, variance, flux), accumulated on the device each step and written, little-endian, next to every field
+!  snapshot as fields/<fileout>_tavg.<step>. File layout: Int32 nxm,nym,nzm,nf; Real64 t_acc; nf x
+!  Character(8) names; then nf blocks of Real64 (nxm,nym,nzm), Fortran order. With chunked_snapshot the same
+!  layout holds for the chunk box (sizes of the box) plus a trailer: Int32 f1(3), f2(3); Real64 xm, ym, zm of
+!  the box cells.
 Module time_stats
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -16,16 +17,18 @@ Module time_stats
 
   Integer(Int32), Parameter :: NAME_LEN = 8
   Integer(Int32) :: nf = 0, iT0 = 0, iC0 = 0   ! field count; first field of the T and C blocks (0: block absent)
-  Real(Int64)    :: t_acc = 0d0                ! time accumulated (the sums are dt-weighted, so adaptive dt does not bias them)
+  Real(Int64)    :: t_acc = 0d0   ! time accumulated (the sums are dt-weighted, so adaptive dt does not bias them)
 
   ! Sums of dt*(x): U,V,W, UU,VV,WW,UV,UW,VW, then per scalar S: S, SS, uS, vS, wS
   Real(Int64), Allocatable :: acc(:,:,:,:)
-  Integer(Int32), Allocatable :: mp(:), mq(:)  ! output field c = <raw c> - <raw mp(c)><raw mq(c)>; mp = 0 for plain means
+  ! output field c = <raw c> - <raw mp(c)><raw mq(c)>; mp = 0 for plain means
+  Integer(Int32), Allocatable :: mp(:), mq(:)
   Character(NAME_LEN), Allocatable :: tname(:)
 
 Contains
 
-  !> Allocate the sums, set the field table and, on a cumulative restart, reload the sums from the snapshot-step file
+  !> Allocate the sums, set the field table and, on a cumulative restart, reload the sums from the
+  !  snapshot-step file
   Subroutine init_tavg
 
     Integer(Int32) :: c, a, b, ab(2,6), base
@@ -163,8 +166,9 @@ Contains
   End Subroutine accumulate_scalar
 
 
-  !> Collective: write the averages as of now to fields/<fileout>_tavg.<step> (full domain) and/or, with chunked_snapshot, the
-  !  chunk box to fields/<fileout>_tavgBlock.<step> (plain _tavg when full_snapshot is off); with tavg_reset = 1 the sums restart
+  !> Collective: write the averages as of now to fields/<fileout>_tavg.<step> (full domain) and/or, with
+  !  chunked_snapshot, the chunk box to fields/<fileout>_tavgBlock.<step> (plain _tavg when full_snapshot is
+  !  off); with tavg_reset = 1 the sums restart
   Subroutine write_tavg(step)
 
     Integer(Int32), Intent(In) :: step
@@ -192,7 +196,8 @@ Contains
   End Subroutine write_tavg
 
 
-  !> Collective: write all fields of the whole domain, or of the chunk box followed by the trailer f1, f2, xm, ym, zm of its cells
+  !> Collective: write all fields of the whole domain, or of the chunk box followed by the trailer f1, f2, xm,
+  !  ym, zm of its cells
   Subroutine write_tavg_file(path, box)
 
     Character(*), Intent(In) :: path
@@ -318,7 +323,8 @@ Contains
        If ( myid == 0 ) Read(unit_no) gbuf
        Call scatter_from_rank0(gbuf, buf)
        acc(:,:,:,c) = buf(1,:,:,:) * t_acc
-       ! the file holds central moments; the sums need the raw ones (the means are fields 1-3 and the scalar means, read first)
+       ! the file holds central moments; the sums need the raw ones (the means are fields 1-3 and the scalar
+       ! means, read first)
        If ( mp(c) > 0 ) acc(:,:,:,c) = acc(:,:,:,c) + acc(:,:,:,mp(c)) * acc(:,:,:,mq(c)) / t_acc
     End Do
 

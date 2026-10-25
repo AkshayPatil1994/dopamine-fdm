@@ -1,6 +1,6 @@
-!> Interface-normal estimators for PLIC, independent of the flux and update code. Each takes the 3x3x3 neighbourhood of C (in index
-!  space, so cell aspect ratio is carried by the caller's scaling of the plane) and returns the L1-normalised normal m = -grad C
-!  pointing from liquid to gas.
+!> Interface-normal estimators for PLIC, independent of the flux and update code. Each takes the 3x3x3
+!  neighbourhood of C (in index space, so cell aspect ratio is carried by the caller's scaling of the plane)
+!  and returns the L1-normalised normal m = -grad C pointing from liquid to gas.
 Module vof_normals
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -47,8 +47,8 @@ Contains
   End Subroutine vof_normal_youngs
 
 
-  !> Centred-columns height-function normal along the Youngs-dominant axis, falling back to Youngs when the 5 columns used are not
-  !  all saturated at both ends (the interface does not cross the whole 3-cell column)
+  !> Centred-columns height-function normal along the Youngs-dominant axis, falling back to Youngs when the 5
+  !  columns used are not all saturated at both ends (the interface does not cross the whole 3-cell column)
   Pure Subroutine vof_normal_cc(c, m)
     !$acc routine seq
 
@@ -101,7 +101,8 @@ Contains
        Else
           lo = c(a,b,-1);  hi = c(a,b,1)
        End If
-       ! gas on the +d side of the interface (sgn>0): liquid at the low end, gas at the high end, and vice versa
+       ! gas on the +d side of the interface (sgn>0): liquid at the low end, gas at the high end, and vice
+       ! versa
        If ( sgn > 0d0 ) Then
           If ( lo < 1d0 - vof_eps .Or. hi > vof_eps ) complete = .False.
        Else
@@ -114,8 +115,8 @@ Contains
        Return
     End If
 
-    ! m_a = -dH/da for both orientations (liquid below: h=H, m_d=+1; liquid above: h=top-H, m_d=-1); the two transverse
-    ! axes of h(a,b) are in increasing axis order
+    ! m_a = -dH/da for both orientations (liquid below: h=H, m_d=+1; liquid above: h=top-H, m_d=-1); the two
+    ! transverse axes of h(a,b) are in increasing axis order
     m(d) = sgn
     If ( d == 1 ) Then
        m(2) = -0.5d0*( h(1,0) - h(-1,0) )

@@ -18,15 +18,16 @@ Module ibm
   ! Minimum number of fluid-side cells to look ahead for image point
   Integer(Int32), Parameter :: n_image_layers = 2
 
-  ! Ghost cells whose image stencil is not usable, counted while building the lists (1=U, 2=V, 3=W, 4=cell-centre):
-  ! stencil clipping solid (concave corner) vs image outside this rank's local array (domain edge, or across a rank seam)
+  ! Ghost cells whose image stencil is not usable, counted while building the lists (1=U, 2=V, 3=W,
+  ! 4=cell-centre): stencil clipping solid (concave corner) vs image outside this rank's local array (domain
+  ! edge, or across a rank seam)
   Integer(Int32) :: ibm_drop_solid(4) = 0, ibm_drop_outside(4) = 0
 
-  ! Extended halo for everything that samples the fields at image points. The solver arrays carry ONE ghost plane per side in x
-  ! and z; the image point of a ghost cell lies up to ~2 cells from it, so near a rank seam its interpolation stencil (and the
-  ! SDF around it) reaches past that plane. ibm_E extra planes (halo_pad.f90) make the stencil, and hence the ghost-cell
-  ! boundary condition, independent of the rank layout. All setup-time lookups use the xge/xe/zge/ze axes and the phie/Umaske
-  ! fields (bounds 1-ibm_E : n+ibm_E); the runtime kernels interpolate from Uext/Vext/Wext/Cext, refreshed before use.
+  ! Extended halo for everything sampling fields at image points: the solver has ONE ghost plane per side in
+  ! x and z, but an image point lies up to ~2 cells from its ghost cell, so near a rank seam the stencil
+  ! would reach past it. ibm_E extra planes (halo_pad.f90) make the ghost-cell BC independent of the rank
+  ! layout. Setup uses the xge/xe/zge/ze axes and phie/Umaske; runtime kernels interpolate from
+  ! Uext/Vext/Wext/Cext.
   Integer(Int32), Save :: ibm_E = 2
   Logical,        Save :: ibm_lo_x = .False., ibm_hi_x = .False., ibm_lo_z = .False., ibm_hi_z = .False.
   Integer(Int32), Save :: ext_cx_lo, ext_cx_hi, ext_fx_lo, ext_fx_hi, ext_cz_lo, ext_cz_hi, ext_fz_lo, ext_fz_hi
@@ -69,7 +70,8 @@ Contains
                   ' CC:', n_ghost_cc
     End If
 
-    ! Dropped ghost cells (no boundary condition applied there), summed over ranks; 'outside' > 0 for np>1 beyond what np=1 shows is a rank-seam loss
+    ! Dropped ghost cells (no boundary condition applied there), summed over ranks; 'outside' > 0 for np>1
+    ! beyond what np=1 shows is a rank-seam loss
     Block
       Integer(Int32) :: ds(4), dout(4)
       Call MPI_Reduce(ibm_drop_solid,   ds,   4, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
@@ -93,17 +95,20 @@ Contains
     Allocate ( ghost_img_val(Max(n_ghost_u, n_ghost_v, n_ghost_w, 1)) )
     !$acc enter data create(ghost_img_val)
 
-    ! Device-resident IBM data: phi, ibm_obj_id, Umask_cc and the ghost-cell lists (all built once above), never modified afterward
+    ! Device-resident IBM data: phi, ibm_obj_id, Umask_cc and the ghost-cell lists (all built once above),
+    ! never modified afterward
     !$acc enter data copyin(phi,ibm_obj_id,Umask_cc)
     !$acc enter data copyin(ghost_u_idx,ghost_u_wgt,ghost_u_img,ghost_u_ref,ghost_u_nrm,ghost_u_yref,ghost_u_dGB,ghost_u_dGI,ghost_u_objid)
     !$acc enter data copyin(ghost_v_idx,ghost_v_wgt,ghost_v_img,ghost_v_ref,ghost_v_nrm,ghost_v_yref,ghost_v_dGB,ghost_v_dGI,ghost_v_objid)
     !$acc enter data copyin(ghost_w_idx,ghost_w_wgt,ghost_w_img,ghost_w_ref,ghost_w_nrm,ghost_w_yref,ghost_w_dGB,ghost_w_dGI,ghost_w_objid)
-    ! Cell-centre ghost list: used both by the host-only Method-2 force diagnostic and (when boussinesq_flag>=1) by the device-resident apply_ghost_cell_ibm_scalar
+    ! Cell-centre ghost list: used both by the host-only Method-2 force diagnostic and (when
+    ! boussinesq_flag>=1) by the device-resident apply_ghost_cell_ibm_scalar
     !$acc enter data copyin(ghost_cc_idx,ghost_cc_wgt_cc,ghost_cc_img_cc,ghost_cc_objid,ghost_cc_dGB,ghost_cc_dGI)
 
   End Subroutine setup_ibm
 
-  !> Exchange phi z-ghost planes between row-adjacent MPI ranks; domain-boundary Neumann values from the caller are left untouched
+  !> Exchange phi z-ghost planes between row-adjacent MPI ranks; domain-boundary Neumann values from the
+  !  caller are left untouched
   Subroutine exchange_phi_ghost_planes
 
     Real   (Int64) :: buf_s(nxg,nyg), buf_r(nxg,nyg)
@@ -154,9 +159,10 @@ Contains
 
   End Subroutine exchange_phi_x_ghost_planes
 
-  !> Periodic wrap of the cell-centred phi in x, host-only (setup runs before any device data or device scalars exist, so the
-  !  device-resident apply_periodic_bc_x cannot be used here): ghost 1 <- cell nxg-2, cells nxg-1, nxg <- 2, 3 (the periodic
-  !  duplicate cell convention of apply_periodic_bc_x), across the partner rank when x is split
+  !> Periodic wrap of the cell-centred phi in x, host-only (setup runs before any device data or device
+  !  scalars exist, so the device-resident apply_periodic_bc_x cannot be used here): ghost 1 <- cell nxg-2,
+  !  cells nxg-1, nxg <- 2, 3 (the periodic duplicate cell convention of apply_periodic_bc_x), across the
+  !  partner rank when x is split
   Subroutine phi_wrap_x_host
 
     Logical        :: is_first, is_last
@@ -216,7 +222,9 @@ Contains
 
   End Subroutine phi_wrap_z_host
 
-  !> Read a distributed cell-centre scalar field from file: (nxg_global,nyg_global,nzm_global) Real(8), column-major, big-endian (x,y already ghosted in-file, z interior-only, same convention as xg_global/kg-based reads elsewhere)
+  !> Read a distributed cell-centre scalar field from file: (nxg_global,nyg_global,nzm_global) Real(8),
+  !  column-major, big-endian (x,y already ghosted in-file, z interior-only, same convention as
+  !  xg_global/kg-based reads elsewhere)
   Subroutine read_distributed_scalar_field(filename, field)
 
     Character(*), Intent(In) :: filename
@@ -270,7 +278,8 @@ Contains
 
   End Subroutine read_distributed_scalar_field
 
-  !> Read cell-centre SDF from ibm_sdf_file and derive Umask_cc from sign(phi); optionally reads the per-solid object-ID field from ibm_objid_file
+  !> Read cell-centre SDF from ibm_sdf_file and derive Umask_cc from sign(phi); optionally reads the per-solid
+  !  object-ID field from ibm_objid_file
   Subroutine read_phi_from_sdf_file
 
     Integer(Int32) :: i, j, k
@@ -293,9 +302,9 @@ Contains
 
     Call read_distributed_scalar_field(ibm_sdf_file, phi)
 
-    ! phi ghost BCs at domain boundaries: periodic wrap for periodic x/z, zero-gradient otherwise. Index 1/nxg (1/nzg) is a
-    ! rank seam, already filled from the global file slice, so the Neumann branch skips it there. is_first_x/is_last_x are
-    ! needed by smooth_ibm_corners in either branch.
+    ! phi ghost BCs at domain boundaries: periodic wrap for periodic x/z, zero-gradient otherwise. Index
+    ! 1/nxg (1/nzg) is a rank seam, already filled from the global file slice, so the Neumann branch skips it
+    ! there. is_first_x/is_last_x are needed by smooth_ibm_corners in either branch.
     Call x_periodic_partner(is_first_x, is_last_x, partner_x)
     If ( x_bc_type == 0 ) Then
        Call phi_wrap_x_host
@@ -336,9 +345,8 @@ Contains
        If ( myid==0 ) Write(*,*) 'IBM: reading per-object ID field from ', Trim(ibm_objid_file), '...'
        Call read_distributed_scalar_field(ibm_objid_file, ibm_obj_id)
 
-       ! every ghost_*_objid assignment below clamps into [0,max_ibm_objects]; catch an
-       ! out-of-range ID here instead of silently mis-mapping it onto the wrong object's
-       ! per-object BC/roughness settings
+       ! every ghost_*_objid assignment below clamps into [0,max_ibm_objects]; catch an out-of-range ID here
+       ! instead of silently mis-mapping it onto the wrong object's per-object BC/roughness settings
        objid_max_local = Nint(Maxval(ibm_obj_id))
        Call MPI_Allreduce(objid_max_local, objid_max_global, 1, MPI_INTEGER, MPI_MAX, MPI_COMM_WORLD, ierr)
        If ( objid_max_global > max_ibm_objects ) Then
@@ -351,9 +359,10 @@ Contains
 
   End Subroutine read_phi_from_sdf_file
 
-  !> Round sharp SDF corners with smooth_ibm Jacobi passes (6-point average) on phi; no-op for smooth_ibm<=0 (default). At a
-  !> sharp corner the ghost-cell normal is discontinuous and the non-dissipative skew-symmetric advection rings (Gibbs-like);
-  !> smoothing blunts the corner by ~smooth_ibm cells at the cost of that much geometric fidelity.
+  !> Round sharp SDF corners with smooth_ibm Jacobi passes (6-point average) on phi; no-op for smooth_ibm<=0
+  !  (default). At a sharp corner the ghost-cell normal is discontinuous and the non-dissipative
+  !  skew-symmetric advection rings (Gibbs-like); smoothing blunts the corner by ~smooth_ibm cells at the cost
+  !  of that much geometric fidelity.
   Subroutine smooth_ibm_corners(is_first_x, is_last_x)
 
     Logical, Intent(In) :: is_first_x, is_last_x
@@ -379,9 +388,9 @@ Contains
        End Do
        phi(2:nxg-1,2:nyg-1,2:nzg-1) = phi_new(2:nxg-1,2:nyg-1,2:nzg-1)
 
-       ! Refresh ghosts before the next pass: true periodic wrap when x_bc_type/z_bc_type
-       ! select periodic, Neumann at true domain boundaries otherwise, MPI exchange at
-       ! interior-rank seams (both x and z; y is never decomposed)
+       ! Refresh ghosts before the next pass: true periodic wrap when x_bc_type/z_bc_type select periodic,
+       ! Neumann at true domain boundaries otherwise, MPI exchange at interior-rank seams (both x and z; y is
+       ! never decomposed)
        If ( x_bc_type == 0 ) Then
           Call phi_wrap_x_host
        Else
@@ -783,8 +792,8 @@ Contains
 
   End Subroutine build_ghost_list_w
 
-  !> Debug (DOPAMINE_TRACE_DIR set, see debug_trace.f90): write each rank's ghost-cell lists as global (i,j,k) so that
-  !  layouts can be compared cell by cell (tests/regression/ibm_ghost_diff.py)
+  !> Debug (DOPAMINE_TRACE_DIR set, see debug_trace.f90): write each rank's ghost-cell lists as global (i,j,k)
+  !  so that layouts can be compared cell by cell (tests/regression/ibm_ghost_diff.py)
   Subroutine trace_ghost_lists
 
     Character(Len=1024) :: dir, fname
@@ -819,7 +828,8 @@ Contains
 
   End Subroutine trace_ghost_lists
 
-  !> Fe(1-ibm_E:n1+ibm_E, :, 1-ibm_E:n3+ibm_E) = F plus ibm_E extra planes (halo_pad.pad_field_dev, device-aware).
+  !> Fe(1-ibm_E:n1+ibm_E, :, 1-ibm_E:n3+ibm_E) = F plus ibm_E extra planes (halo_pad.pad_field_dev,
+  !  device-aware).
   Subroutine ibm_fill_ext(F, Fe, n1, n2, n3, xface, zface)
 
     Integer(Int32), Intent(In)    :: n1, n2, n3
@@ -859,8 +869,10 @@ Contains
     Logical :: stair
 
     ee = ibm_E
-    stair = ( ibm_method == 1 .Or. vof_flow >= 1 )   ! staircase faces close with either neighbouring cell solid (thin walls)
-    ! Image-point stencils can reach into the seam halo planes, which are stale after the RK update / projection that precedes this call
+    ! staircase faces close with either neighbouring cell solid (thin walls)
+    stair = ( ibm_method == 1 .Or. vof_flow >= 1 )
+    ! Image-point stencils can reach into the seam halo planes, which are stale after the RK update /
+    ! projection that precedes this call
     If ( nprocs > 1 ) Call exchange_velocity_halos
 
     ! Zero fully-solid faces using phi-based averages (face-centred; Umask_cc is cell-centred).
@@ -957,12 +969,14 @@ Contains
     End Do
     !$acc end parallel loop
 
-    ! The neighbour's halo copies of the cells just modified are stale until refreshed; the next SGS/RHS reads them
+    ! The neighbour's halo copies of the cells just modified are stale until refreshed; the next SGS/RHS
+    ! reads them
     If ( nprocs > 1 ) Call exchange_velocity_halos
 
   End Subroutine apply_ghost_cell_ibm
 
-  !> Ghost-cell thermal condition at the immersed boundary, per solid ID: ibm_T_bc_type(id) 0=adiabatic (T_ghost=T_image), 1=isothermal (mirror against ibm_T_wall(id))
+  !> Ghost-cell thermal condition at the immersed boundary, per solid ID: ibm_T_bc_type(id) 0=adiabatic
+  !  (T_ghost=T_image), 1=isothermal (mirror against ibm_T_wall(id))
   Subroutine apply_ghost_cell_ibm_scalar(T_)
 
     Real(Int64), Dimension(nxg,nyg,nzg), Intent(InOut) :: T_
@@ -989,7 +1003,9 @@ Contains
 
   End Subroutine apply_ghost_cell_ibm_scalar
 
-  !> No-flux (zero-gradient) ghost-cell condition for a cell-centred scalar at the immersed boundary: each ghost cell takes its image-point value (used for sediment; solid cells are otherwise held at C=0, which would make the body an absorbing surface)
+  !> No-flux (zero-gradient) ghost-cell condition for a cell-centred scalar at the immersed boundary: each
+  !  ghost cell takes its image-point value (used for sediment; solid cells are otherwise held at C=0, which
+  !  would make the body an absorbing surface)
   Subroutine apply_ghost_cell_ibm_scalar_noflux(C_)
 
     Real(Int64), Dimension(nxg,nyg,nzg), Intent(InOut) :: C_
@@ -1009,16 +1025,15 @@ Contains
 
   !                     Helper routines
 
-  !  Zero the per-step IBM force accumulators.
-  !  Call once per time step before the first RK IBM application.
+  ! Zero the per-step IBM force accumulators. Call once per time step before the first RK IBM application.
   Subroutine zero_ibm_stage_accumulators
     ibm_Fx_acc = 0d0
     ibm_Fy_acc = 0d0
     ibm_Fz_acc = 0d0
   End Subroutine zero_ibm_stage_accumulators
 
-  !> Flags for the periodic duplicate cell (cell nxg-1 / nzg-1 on the last rank repeats the first cell): force sums skip it so
-  !  the wrapped image of a boundary cell is not counted twice
+  !> Flags for the periodic duplicate cell (cell nxg-1 / nzg-1 on the last rank repeats the first cell): force
+  !  sums skip it so the wrapped image of a boundary cell is not counted twice
   Subroutine dup_cell_flags(skip_x, skip_z)
     Logical, Intent(Out) :: skip_x, skip_z
     Logical        :: is_first, is_last
@@ -1191,12 +1206,10 @@ Contains
 
   End Subroutine build_ghost_list_cc
 
-  !  Wall-normal at a cell centre (i,j,k): central-difference
-  !  gradient of phi on the cell-centre grid, normalised.
-  !> SDF at the W (z-face) location (i,j,k), interpolated from the two adjacent cell centres with the local
-  !  z weights (centres are face midpoints, so this is a plain average only on a uniform z grid); built from
-  !  z/zg directly since setup_ibm runs before the interpolation weight arrays are allocated (host-only:
-  !  the device W-zeroing loop below inlines the same expression, module arrays can't be used in an acc routine)
+  !> SDF at the W (z-face) location (i,j,k), interpolated from the two adjacent cell centres with the local z
+  !  weights (a plain average only on a uniform z grid); built from z/zg because setup_ibm runs before the
+  !  weight arrays exist. Host-only: the device W-zeroing loop inlines the same expression (module arrays
+  !  cannot be used in an acc routine).
   Pure Function phi_w(i,j,k) Result(v)
     Integer(Int32), Intent(In) :: i, j, k
     Real   (Int64) :: v, w0
@@ -1204,8 +1217,9 @@ Contains
     v  = w0*phie(i,j,k) + ( 1d0 - w0 )*phie(i,j,k+1)
   End Function phi_w
 
-  !> SDF at the V (y-face) location (i,j,k), interpolated from the two adjacent cell centres with the local
-  !  y weights (plain average only on a uniform y grid); host-only, the device V-zeroing loop inlines the same expression
+  !> SDF at the V (y-face) location (i,j,k), interpolated from the two adjacent cell centres with the local y
+  !  weights (plain average only on a uniform y grid); host-only, the device V-zeroing loop inlines the same
+  !  expression
   Pure Function phi_v(i,j,k) Result(v)
     Integer(Int32), Intent(In) :: i, j, k
     Real   (Int64) :: v, w0
@@ -1234,8 +1248,7 @@ Contains
     End If
   End Subroutine compute_normal_at_cc
 
-  !  Wall-normal at a U-face (i,j,k): gradient of phi at surrounding
-  !  cell centres, normalised.
+  ! Wall-normal at a U-face (i,j,k): gradient of phi at surrounding cell centres, normalised.
   Subroutine compute_normal_at_face_u(i,j,k, nx_,ny_,nz_)
     Integer(Int32), Intent(In)  :: i, j, k
     Real   (Int64), Intent(Out) :: nx_, ny_, nz_
@@ -1288,8 +1301,8 @@ Contains
     Else; nx_=0d0; ny_=1d0; nz_=0d0; End If
   End Subroutine compute_normal_at_face_w
 
-  !> Set stencil_out when a point lies beyond the extended range on a side where the extended planes exist (data would be
-  !  missing); on a non-periodic domain edge the legacy clamp to the edge stencil is kept
+  !> Set stencil_out when a point lies beyond the extended range on a side where the extended planes exist
+  !  (data would be missing); on a non-periodic domain edge the legacy clamp to the edge stencil is kept
   Subroutine flag_out(p, lo_coord, hi_coord, has_lo, has_hi)
     Real   (Int64), Intent(In) :: p, lo_coord, hi_coord
     Logical,        Intent(In) :: has_lo, has_hi
@@ -1297,14 +1310,16 @@ Contains
     If ( has_hi .And. p >= hi_coord ) stencil_out = .True.
   End Subroutine flag_out
 
-  !> Extended-halo setup (host): depth ibm_E from the image distance, padded axes, SDF and fluid mask, anchor ranges, staging buffers
+  !> Extended-halo setup (host): depth ibm_E from the image distance, padded axes, SDF and fluid mask, anchor
+  !  ranges, staging buffers
   Subroutine setup_ibm_ext
 
     Logical        :: is_first, is_last, per
     Integer(Int32) :: up, down, partner, Eloc, Emax, wmin, wmin_g, cnt
     Real   (Int64) :: dmin_h
 
-    ! depth: image distance ~ max(2 dGB, n_image_layers*dymin) plus the trilinear corner and one cell of margin
+    ! depth: image distance ~ max(2 dGB, n_image_layers*dymin) plus the trilinear corner and one cell of
+    ! margin
     dmin_h = Min( x_global(2)-x_global(1), z_global(2)-z_global(1) )
     Eloc   = 2 + Ceiling( Real(n_image_layers,8)*dymin / dmin_h )
     If ( Eloc > 8 .And. myid == 0 ) Write(*,'(A,I0,A)') ' WARNING: IBM image-point halo depth ', Eloc, &
@@ -1361,9 +1376,10 @@ Contains
 
   End Subroutine setup_ibm_ext
 
-  ! Lower-left cell-centre index (ii,jj,kk) with xg(ii) <= xp < xg(ii+1): trilinear stencil anchor. The search spans the full
-  ! [1,Ng-1] that the ghost plane supports, not [2,Ng-2]: an image point near a z-seam can anchor in the halo plane, and
-  ! restricting to the interior misclassified ghost cells depending on the rank count.
+  ! Lower-left cell-centre index (ii,jj,kk) with xg(ii) <= xp < xg(ii+1): trilinear stencil anchor. The
+  ! search spans the full [1,Ng-1] that the ghost plane supports, not [2,Ng-2]: an image point near a z-seam
+  ! can anchor in the halo plane, and restricting to the interior misclassified ghost cells depending on the
+  ! rank count.
   Subroutine find_stencil_centre(xp, yp, zp, ii, jj, kk)
     Real   (Int64), Intent(In)  :: xp, yp, zp
     Integer(Int32), Intent(Out) :: ii, jj, kk
@@ -1385,10 +1401,10 @@ Contains
     Call flag_out(zp, zge(ext_cz_lo), zge(ext_cz_hi+1), ibm_lo_z, ibm_hi_z)
   End Subroutine find_stencil_centre
 
-  ! Staggered stencil finders, one per velocity component: U uses x-faces x cell-centres, V cell-centres x y-faces, W cell-centres x z-faces
-  ! Own-direction (x/y/z) loops below are left at [2,N-1]: those arrays aren't
-  ! MPI z-halo-limited to 1 plane the way xg/yg/zg are. The xg/yg/zg loops use
-  ! the full [1,Ng-1] range for the same reason as find_stencil_centre above.
+  ! Staggered stencil finders, one per velocity component: U uses x-faces x cell-centres, V cell-centres x
+  ! y-faces, W cell-centres x z-faces Own-direction (x/y/z) loops below are left at [2,N-1]: those arrays
+  ! aren't MPI z-halo-limited to 1 plane the way xg/yg/zg are. The xg/yg/zg loops use the full [1,Ng-1] range
+  ! for the same reason as find_stencil_centre above.
   Subroutine find_stencil_u(xp, yp, zp, ii, jj, kk)
     Real   (Int64), Intent(In)  :: xp, yp, zp
     Integer(Int32), Intent(Out) :: ii, jj, kk
@@ -1452,7 +1468,8 @@ Contains
     Call flag_out(zp, ze(ext_fz_lo), ze(ext_fz_hi+1), ibm_lo_z, ibm_hi_z)
   End Subroutine find_stencil_w
 
-  !> Compute 8 trilinear weights (unit-cube corner order) for point (xp,yp,zp) anchored at centre index (ii,jj,kk)
+  !> Compute 8 trilinear weights (unit-cube corner order) for point (xp,yp,zp) anchored at centre index
+  !  (ii,jj,kk)
   Subroutine trilinear_weights(xp, yp, zp, ii, jj, kk, w)
     Real   (Int64), Intent(In)  :: xp, yp, zp
     Integer(Int32), Intent(In)  :: ii, jj, kk
@@ -1523,8 +1540,8 @@ Contains
     w(7) = (1d0-tx)*     ty *     tz ;  w(8) =      tx *     ty *     tz
   End Subroutine trilinear_weights_w
 
-  !> Trilinear interpolation at the image point of any staggered field F_ (U, V, W or a cell-centred field) from the stencil anchor
-  !  (img) and weights (w) built in setup_ibm for that field's grid
+  !> Trilinear interpolation at the image point of any staggered field F_ (U, V, W or a cell-centred field)
+  !  from the stencil anchor (img) and weights (w) built in setup_ibm for that field's grid
   Real(Int64) Function trilinear_interp(F_, w, img, e)
     !$acc routine seq
     Integer(Int32), Intent(In) :: e   ! extended-halo depth: the array is dimensioned (1-e:n+e, :, 1-e:n+e)
@@ -1574,7 +1591,7 @@ Contains
     lFx_visc=0d0; lFy_visc=0d0; lFz_visc=0d0
 
     !--- Method 1: use accumulated impulse from all 3 RK stages ---
-    ! ibm_F?_acc holds the rank-local sum of (U_after_IBM - U_before_IBM)*dV; dividing by dt gives force per unit time
+    ! ibm_F?_acc: rank-local sum of (U_after_IBM - U_before_IBM)*dV; divided by dt it is a force
     Call MPI_Allreduce(ibm_Fx_acc/dt, Fx_ibm, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(ibm_Fy_acc/dt, Fy_ibm, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(ibm_Fz_acc/dt, Fz_ibm, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
@@ -1594,7 +1611,7 @@ Contains
     End Do
 
     !--- Method 2 viscous: staggered ghost lists, one component each ---
-    ! dA is the perpendicular face area; using dV/dGB instead would give a 1/dGB^2 singularity since the gradient already carries 1/dGB
+    ! dA is the perpendicular face area; dV/dGB would give 1/dGB^2 (the gradient already carries 1/dGB)
     ! dIB = actual boundary-to-image distance (dGI-dGB): equals dGB only when dGI is the
     ! unclamped mirror 2*dGB; the gradient must divide by the real B-to-I distance (see ghost_*_dGI)
     Do n = 1, n_ghost_u
@@ -1673,7 +1690,8 @@ Contains
     Call pad_field( P,    nxg, nyg, nzg, .False., .False., ibm_E, Pe )
     Call pad_field( nu_t, nxg, nyg, nzg, .False., .False., ibm_E, Ne )
 
-    ! Fill the rank-local per-point buffer; row layout (NF=13): 1-3 x,y,z 4-6 nx,ny,nz 7 p 8-10 fp_x,fp_y,fp_z 11-13 fv_x,fv_y,fv_z
+    ! Fill the rank-local per-point buffer; row layout (NF=13): 1-3 x,y,z 4-6 nx,ny,nz 7 p 8-10
+    ! fp_x,fp_y,fp_z 11-13 fv_x,fv_y,fv_z
     Allocate ( lbuf(NF, Max(nl,1)) )
     Do n = 1, nl
        i = ghost_cc_idx(1,n);  j = ghost_cc_idx(2,n);  k = ghost_cc_idx(3,n)

@@ -1,12 +1,9 @@
-!> Face reconstruction kernels for the convective flux of the transported velocity. Pure functions with no solver dependencies,
-!  so they can be unit-tested (tests/vof/test_mom_kernels.f90) and shared with scalar transport.
-!  Face between cells b1 (lower) and c1 (upper); stencil a3 a2 | b1 c1 | c2 c3 gives s(-2:3) in index order (s(-2)=a3 ... s(3)=c3).
-!  mf is the mass flux through the face: its sign selects the upwind side.
-!  Schemes (mom_scheme):
-!    0 central 2nd order        1 first-order upwind       2 Koren (bounded, TVD, 3rd order)
-!    3 WENO3-Z clipped          4 QUICK (3rd order)        5 central 4th order
-!    6 WENO5-Z                  7 WENO5-Z clipped          8 QUICK clipped
-!  "clipped" = limited to the range of the three cells nearest the face (up, down, far-up): max principle for the velocity.
+!> Face reconstruction kernels for the convective flux of the transported velocity: pure functions with no
+!  solver dependencies (unit-tested in tests/vof/test_mom_kernels.f90). Face between cells b1 (lower) and c1
+!  (upper); stencil a3 a2 | b1 c1 | c2 c3 gives s(-2:3); the sign of the mass flux mf selects the upwind side.
+!  Schemes (mom_scheme): 0 central 2nd order, 1 upwind, 2 Koren (TVD, 3rd order), 3 WENO3-Z clipped, 4 QUICK,
+!  5 central 4th order, 6 WENO5-Z, 7 WENO5-Z clipped, 8 QUICK clipped; "clipped" = limited to the range of the
+!  three cells nearest the face (up, down, far-up): max principle for the velocity.
 Module mom_recon
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -26,7 +23,9 @@ Contains
     Integer(Int32), Intent(In) :: sch
     Real(Int64) :: r
 
-    Real(Int64) :: v(-2:2)   ! upwind-oriented stencil: v(0) = upwind cell, v(1) = downwind cell, v(-1), v(-2) further upwind, v(2) further downwind
+    ! upwind-oriented stencil: v(0) upwind cell, v(1) downwind cell, v(-1), v(-2) further upwind, v(2)
+    ! further downwind
+    Real(Int64) :: v(-2:2)
 
     If ( sch == MOM_CENTRAL ) Then
        r = 0.5d0*( s(0) + s(1) );  Return
@@ -124,10 +123,11 @@ Contains
   End Function weno5z
 
 
-  !> Momentum flux mfc*face value of the WENO5-Z scheme (mom_face, scheme 6, blended to upwind by the refill Courant number as in
-  !  vof_twofluid fmom) for one face. The stencil values sm2..s3 are s(-2:3) of the face, mda/mdb the two cell mass fluxes
-  !  whose mean is the face flux, r1/r2 the control-volume densities each side, ivcv = 1/(control-volume volume), icm = 1/(cm1-cm0).
-  !  No branches (the three weights share one division, rational form of the WENO-Z weights) so that the row loop vectorizes.
+  !> Momentum flux mfc*face value of the WENO5-Z scheme (mom_face, scheme 6, blended to upwind by the refill
+  !  Courant number as in vof_twofluid fmom) for one face. The stencil values sm2..s3 are s(-2:3) of the face,
+  !  mda/mdb the two cell mass fluxes whose mean is the face flux, r1/r2 the control-volume densities each
+  !  side, ivcv = 1/(control-volume volume), icm = 1/(cm1-cm0). No branches (the three weights share one
+  !  division, rational form of the WENO-Z weights) so that the row loop vectorizes.
   Pure Function mom_flux_weno5z_pt(sm2, sm1, s0, s1, s2, s3, mda, mdb, r1, r2, ivcv, cm0, icm) Result(f)
     !$acc routine seq
 

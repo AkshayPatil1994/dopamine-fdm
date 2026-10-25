@@ -10,16 +10,17 @@ Module ibm_stress
 
   Implicit None
 
-  ! Kinematic momentum flux through an edge between a fluid face and a closed face, replacing the viscous flux the stencil carries there.
-  ! Last index: U faces (y-lo, y-hi, z-lo, z-hi), V faces (x-lo, x-hi, z-lo, z-hi), W faces (x-lo, x-hi, y-lo, y-hi); ovr_none = no override
+  ! Kinematic momentum flux through an edge between a fluid and a closed face, replacing the viscous stencil
+  ! flux. Last index: U faces (y-lo, y-hi, z-lo, z-hi), V (x-lo, x-hi, z-lo, z-hi), W (x-lo, x-hi, y-lo,
+  ! y-hi); ovr_none = no override
   Real(Int64), Parameter :: ovr_none = Huge(1d0)
   Real(Int64), Allocatable, Dimension(:,:,:,:) :: ovr_u, ovr_v, ovr_w
   Real(Int64), Allocatable, Dimension(:,:,:)   :: nu_const
 
 Contains
 
-  !> Allocate the override arrays: full size when the stress is used, a single element otherwise (so that the viscous-term kernels,
-  !  which list the arrays, always have them); nu_const is the kinematic viscosity at every cell for the single-phase solver
+  !> Allocate the override arrays: full size when the stress is used, one element otherwise (the viscous
+  !  kernels always list them); nu_const is the single-phase kinematic viscosity
   Subroutine ibm_stress_init(full)
 
     Logical, Intent(In) :: full
@@ -39,8 +40,8 @@ Contains
   End Subroutine ibm_stress_init
 
 
-  !> Wall shear of the log law at distance d from the closed face, along the tangential velocity (ua along the component, ub the other
-  !  tangential one); sg = +1 when the closed face is on the low side of the fluid face, -1 on the high side
+  !> Log-law wall shear at distance d from the closed face along the tangential velocity (ua along the
+  !  component, ub the other); sg = +1 if the closed face is on the low side, -1 on the high side
   Function wall_flux(ua, ub, d, nul, oid, sg) Result(f)
     !$acc routine seq
 
@@ -87,7 +88,8 @@ Contains
   End Function open_mean4
 
 
-  !> Roughness id of the closed face between two cells: that of the solid cell (phi < 0), the larger one when both are solid
+  !> Roughness id of the closed face between two cells: that of the solid cell (phi < 0), the larger one when
+  !  both are solid
   Pure Function face_id(ph, ob, i1, j1, k1, i2, j2, k2) Result(oid)
     !$acc routine seq
 
@@ -102,8 +104,9 @@ Contains
   End Function face_id
 
 
-  !> Set the flux overrides from the current velocity. mu, mv, mw are the 1 (open) / 0 (closed) face masks; nu_cell is the kinematic
-  !  viscosity at the cell centres, <= 0 where the wall model is off (the stencil flux stays). Domain-wall rows are left to the flat-wall model.
+  !> Set the flux overrides from the current velocity. mu, mv, mw: 1 (open) / 0 (closed) face masks; nu_cell:
+  !  kinematic viscosity at cell centres, <= 0 where the wall model is off. Domain-wall rows stay with the
+  !  flat-wall model.
   Subroutine ibm_stress_update(U, V, W, mu, mv, mw, nu_cell)
 
     Real(Int64), Intent(In) :: U(nx,nyg,nzg), V(nxg,ny,nzg), W(nxg,nyg,nz)
@@ -185,9 +188,9 @@ Contains
   End Subroutine ibm_stress_update
 
 
-  !> Loads on the staircase body (ibm_method = 1): pressure on the closed faces (linear extrapolation of the two fluid cells normal
-  !  to the face) and the wall shear on them, the log-law stress when ibm_wall_model_flag = 1 (the stress the flow receives)
-  !  else (nu + nu_t) u / (h/2); the impulse column is NaN
+  !> Loads on the staircase body (ibm_method = 1): pressure on closed faces (linear extrapolation of the two
+  !  fluid cells normal to the face) and wall shear: log-law stress if ibm_wall_model_flag = 1, else (nu +
+  !  nu_t) u/(h/2); the impulse column is NaN
   Subroutine ibm_stair_forces(U, V, W, Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc)
 
     Real(Int64), Intent(In)  :: U(nx,nyg,nzg), V(nxg,ny,nzg), W(nxg,nyg,nz)

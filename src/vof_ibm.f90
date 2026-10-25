@@ -1,8 +1,9 @@
-!> Hydrodynamic loads on immersed bodies in the two-fluid solver (ibm.f90's single-fluid routines assume unit density and
-!  kinematic pressure), written to ibm_forces.csv: pressure and viscous traction summed over the faces of the staircase body
-!  (where the masked pressure operator has its Neumann condition); the IBM-impulse columns are NaN. The solver's pressure has
-!  the still-water row-mean hydrostatic part removed, so the load uses P + p_s(y), p_s(y) = g*int_y^top rho_ref dy, and a body
-!  in still water feels buoyancy. Viscous stress uses the mixture viscosity at the image point plus the SGS part rho*nu_t.
+!> Hydrodynamic loads on immersed bodies in the two-fluid solver (ibm.f90's single-fluid routines assume unit
+!  density and kinematic pressure), written to ibm_forces.csv: pressure and viscous traction summed over the
+!  faces of the staircase body (where the masked pressure operator has its Neumann condition); the IBM-impulse
+!  columns are NaN. The solver's pressure has the still-water row-mean hydrostatic part removed, so the load
+!  uses P + p_s(y), p_s(y) = g*int_y^top rho_ref dy, and a body in still water feels buoyancy. Viscous stress
+!  uses the mixture viscosity at the image point plus the SGS part rho*nu_t.
 Module vof_ibm
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -26,7 +27,8 @@ Contains
     Real(Int64) :: acc
 
     ps = 0d0
-    If ( vof_hsplit /= 0 ) Return   ! the well-balanced split carries a different reference: loads are then the dynamic part only
+    ! the well-balanced split carries a different reference: loads are then the dynamic part only
+    If ( vof_hsplit /= 0 ) Return
     acc = 0d0
     Do j = nyg-1, 2, -1
        ps(j) = vof_grav*( acc + 0.5d0*vof_rho_ref(j)*hy(j) )
@@ -37,11 +39,12 @@ Contains
   End Subroutine hydrostatic_reference
 
 
-  !> Forces on the bodies. Method 1: IBM impulse over dt (density weighted). Method 2: pressure and viscous traction summed over
-  !  the closed faces between a fluid cell (phi >= 0) and a solid cell (phi < 0), where the pressure operator has its Neumann
-  !  condition, so uniform pressure gives zero and hydrostatic pressure gives the buoyancy of the staircase body. Face pressure is
-  !  the linear extrapolation of the two fluid cells normal to the face (exact for hydrostatics); shear uses the cell-centre
-  !  velocity at half a cell, or the staircase wall model's log-law stress when ibm_wall_model_flag = 1.
+  !> Forces on the bodies. Method 1: IBM impulse over dt (density weighted). Method 2: pressure and viscous
+  !  traction summed over the closed faces between a fluid cell (phi >= 0) and a solid cell (phi < 0), where
+  !  the pressure operator has its Neumann condition, so uniform pressure gives zero and hydrostatic pressure
+  !  gives the buoyancy of the staircase body. Face pressure is the linear extrapolation of the two fluid
+  !  cells normal to the face (exact for hydrostatics); shear uses the cell-centre velocity at half a cell, or
+  !  the staircase wall model's log-law stress when ibm_wall_model_flag = 1.
   Subroutine vof_compute_ibm_forces(Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc)
 
     Real(Int64), Intent(Out) :: Fx_ibm, Fy_ibm, Fz_ibm, Fx_pres, Fy_pres, Fz_pres, Fx_visc, Fy_visc, Fz_visc
@@ -99,7 +102,8 @@ Contains
                    Else
                       area = dx*(y(j)-y(j-1));  hn = z(k)-z(k-1)
                    End If
-                   ! pressure at the face: linear extrapolation from this cell and the next fluid cell away from the body
+                   ! pressure at the face: linear extrapolation from this cell and the next fluid cell away
+                   ! from the body
                    i2 = i - de(1);  j2 = j - de(2);  k2 = k - de(3)
                    pF = Pp(i,j,k)
                    pface = pF
@@ -128,8 +132,9 @@ Contains
        End Do
     End Do
 
-    ! Method 1 (the IBM impulse) is not available: the pressure acts through the closed faces of the masked operator, so the
-    ! momentum the ghost-cell IBM gives to the fluid no longer carries the load. NaN in the CSV rather than a misleading zero.
+    ! Method 1 (the IBM impulse) is not available: the pressure acts through the closed faces of the masked
+    ! operator, so the momentum the ghost-cell IBM gives to the fluid no longer carries the load. NaN in the
+    ! CSV rather than a misleading zero.
     Fx_ibm = ieee_value(1d0, ieee_quiet_nan);  Fy_ibm = Fx_ibm;  Fz_ibm = Fx_ibm
     Call MPI_Allreduce(lpres(1), Fx_pres, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)
     Call MPI_Allreduce(lpres(2), Fy_pres, 1, MPI_real8, MPI_SUM, MPI_COMM_WORLD, ierr)

@@ -1,4 +1,5 @@
-!> 2decomp&fft pencil decomposition bookkeeping: the main (face-count) pencil grid, plus a dedicated Poisson pencil sized to the actual Fourier-transform grid
+!> 2decomp&fft pencil decomposition bookkeeping: the main (face-count) pencil grid, plus a dedicated Poisson
+!  pencil sized to the actual Fourier-transform grid
 Module decomp
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -13,29 +14,24 @@ Module decomp
   Use m_decomp_pool, Only : decomp_pool
   Use decomp_2d_constants, Only : complex_type
 
-  ! prevent implicit typing
   Implicit None
 
-  ! dedicated pencil grid for the pressure Poisson solve, sized to the
-  ! Fourier-transform grid (nxp_global x nym_global x nzp_global), which
-  ! differs from the main (face-count) pencil grid above
+  ! dedicated pencil grid for the pressure Poisson solve, sized to the Fourier-transform grid (nxp_global x
+  ! nym_global x nzp_global), which differs from the main (face-count) pencil grid above
   Type(decomp_info) :: decomp_poisson
   ! pencil grid of the *spectral* (complex) Poisson arrays: same as decomp_poisson except that GPU builds with
   ! periodic x use a real-to-complex x transform and keep only nxp/2+1 kx modes (halves the transposed data)
   Type(decomp_info) :: decomp_spec
 
-  ! Sub-communicator containing only the ranks on the x-outflow face (row==p_row-1, one
-  ! row of p_col ranks); built once by init_outflow_x_comm (x_bc_type==1 only) so
-  ! outflow_convection_velocity's Allreduce doesn't have to synchronise the whole
-  ! p_row*p_col process grid just to share one scalar. MPI_COMM_NULL (unused) elsewhere.
+  ! Sub-communicator of the ranks on the x-outflow face (row==p_row-1), built by init_outflow_x_comm
+  ! (x_bc_type==1 only) so outflow_convection_velocity's Allreduce does not synchronise the whole process
+  ! grid. MPI_COMM_NULL elsewhere.
   Integer(Int32) :: comm_outflow_x = MPI_COMM_NULL
 
 Contains
 
-  !> Build comm_outflow_x: collective over MPI_COMM_WORLD (every rank must call this
-  !> together), but only ranks on the outflow row get a real communicator back --
-  !> everyone else gets MPI_COMM_NULL and never uses it (outflow_convection_velocity
-  !> returns early on non-outflow ranks before touching comm_outflow_x).
+  !> Build comm_outflow_x: collective over MPI_COMM_WORLD; ranks off the outflow row get MPI_COMM_NULL
+  !  (outflow_convection_velocity returns early there)
   Subroutine init_outflow_x_comm
 
     Integer(Int32) :: row, color
@@ -46,19 +42,22 @@ Contains
 
   End Subroutine init_outflow_x_comm
 
-  !> Initialise the main 2decomp&fft pencil grid; nx/ny/nz here are face-point counts, matching this code's existing (not cell-count) convention
+  !> Initialise the main 2decomp&fft pencil grid; nx/ny/nz here are face-point counts, matching this code's
+  !  existing (not cell-count) convention
   Subroutine decomp_init_pencil
 
     If ( p_row == 0 .And. p_col == 0 ) Call decomp_auto_factorize(p_row, p_col)
 
-    ! complex_pool=.true.: the Poisson solve's transpose_* calls move complex
-    ! data, and need the shared 2decomp&fft memory pool to have a complex-type
-    ! shape registered (real-only by default) or they abort at run time.
+    ! complex_pool=.true.: the Poisson solve's transpose_* calls move complex data, and need the shared
+    ! 2decomp&fft memory pool to have a complex-type shape registered (real-only by default) or they abort at
+    ! run time.
     Call decomp_2d_init(nx_global, ny_global, nz_global, p_row, p_col, complex_pool=.true.)
 
   End Subroutine decomp_init_pencil
 
-  !> Auto-pick p_row/p_col when both are left 0: prefer pure z-split (p_row=1) since it skips x-transpose communication entirely; only fall back to a true 2D split if z-only can't give every rank >=2 interior z-cells, then pick the nprocs factor pair closest to the grid's x:z aspect ratio among pairs leaving >=2 interior cells per rank in both directions
+  !> Auto-pick p_row/p_col when both are 0: prefer a pure z-split (p_row=1, no x-transpose); use a 2D split
+  !  only if z-only leaves a rank <2 interior z-cells, then the factor pair closest to the x:z aspect ratio
+  !  with >=2 interior cells per rank in both directions
   Subroutine decomp_auto_factorize(p_row_out, p_col_out)
 
     Integer(Int32), Intent(Out) :: p_row_out, p_col_out
@@ -77,7 +76,8 @@ Contains
 
     nxm_g = nx_global - 1
     nzm_g = nz_global - 1
-    ! 2decomp&fft's other pencil views (x-pencil, z-pencil) also split y, so p_row<=min(nx,ny) and p_col<=min(ny,nz) is a hard library requirement, not just this code's own >=2-interior-cell floor
+    ! 2decomp&fft's other pencil views (x-pencil, z-pencil) also split y, so p_row<=min(nx,ny) and
+    ! p_col<=min(ny,nz) is a hard library requirement, not just this code's own >=2-interior-cell floor
     row_cap = Min(nx_global, ny_global)
     col_cap = Min(ny_global, nz_global)
 
@@ -114,7 +114,8 @@ Contains
 
   End Subroutine decomp_auto_factorize
 
-  !> Register the Poisson-solve pencil grid (nxp_g x nyp_g x nzp_g: the Fourier-transform grid, not the face-point grid above)
+  !> Register the Poisson-solve pencil grid (nxp_g x nyp_g x nzp_g: the Fourier-transform grid, not the
+  !  face-point grid above)
   Subroutine decomp_init_poisson_pencil(nxp_g, nyp_g, nzp_g)
 
     Integer(Int32), Intent(In) :: nxp_g, nyp_g, nzp_g
@@ -133,8 +134,9 @@ Contains
 
   End Subroutine decomp_init_poisson_pencil
 
-  !> Build flat-rank (0:nprocs-1) x/z ownership arrays (i1/i2/ig1/ig2_global via p_row, k1/k2/kg1/kg2_global via p_col). Assumes
-  !> MPI_CART_CREATE's row-major rank order (rank = row*p_col + col, reorder=.false.), self-checked against decomp_main.
+  !> Build flat-rank (0:nprocs-1) x/z ownership arrays (i1/i2/ig1/ig2_global via p_row, k1/k2/kg1/kg2_global
+  !  via p_col). Assumes MPI_CART_CREATE's row-major rank order (rank = row*p_col + col, reorder=.false.),
+  !  self-checked against decomp_main.
   Subroutine decomp_build_xz_ranges
 
     Integer(Int32) :: r, row, col
@@ -142,19 +144,15 @@ Contains
     Integer(Int32), Allocatable :: xst_chk(:), xen_chk(:)
     Integer(Int32) :: chk_i1, chk_i2, chk_j1, chk_j2, chk_k1, chk_k2
 
-    ! Self-check the row-major rank<->(row,col) mapping assumption against
-    ! this rank's own decomp_main partition (same algorithm, same nx_global
-    ! input -- an apples-to-apples check of the mapping alone) before
-    ! trusting it to build every rank's x/z ownership below.
+    ! Self-check the row-major rank<->(row,col) mapping against this rank's own decomp_main partition (same
+    ! algorithm and nx_global) before trusting it for every rank's x/z ownership
     Allocate ( xst_chk(0:p_row-1), xen_chk(0:p_row-1) )
     Call distribute_1d( nx_global, p_row, xst_chk, xen_chk )
     Call y_pencil_local_range(chk_i1, chk_i2, chk_j1, chk_j2, chk_k1, chk_k2)
     row = myid / p_col
     If ( xst_chk(row) /= chk_i1 .Or. xen_chk(row) /= chk_i2 ) Then
-       ! this condition depends on 2decomp&fft's own (possibly row-dependent, e.g.
-       ! remainder-on-first-vs-last-rank) partitioning, so it can be true on some
-       ! ranks and false on others -- Mpi_Abort (not Stop) so a mismatch on a subset
-       ! of ranks can't leave the rest hanging in a later collective
+       ! depends on 2decomp&fft's possibly row-dependent partitioning, so it can differ between ranks:
+       ! Mpi_Abort (not Stop) so a subset of ranks cannot leave the rest in a collective
        Write(*,*) 'ERROR (rank ', myid, '): rank<->(row,col) mapping assumption wrong -- cannot safely build x/z ownership'
        Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
     End If
@@ -162,7 +160,10 @@ Contains
 
     Allocate ( xst(0:p_row-1), xen(0:p_row-1) )
     Allocate ( zst(0:p_col-1), zen(0:p_col-1) )
-    ! Distribute decomp_poisson's own (periodic-reduced) point count, not nx_global-1/nz_global-1, so the two independent "remainder on last ranks" splits can't disagree on a middle rank and silently truncate its rhs_p write-back; periodic (x_bc_type==0 / z_bc_type==0) drops the redundant duplicate point, non-periodic (inflow/outflow / wall) keeps the full count; the dropped point is restored on the true last rank/column below
+    ! Distribute decomp_poisson's periodic-reduced point count (not nx_global-1/nz_global-1), so the two
+    ! 'remainder on last ranks' splits cannot disagree on a middle rank and truncate its rhs_p write-back;
+    ! periodic drops the duplicate point, non-periodic keeps the full count; the dropped point is restored on
+    ! the last rank/column below
     If ( x_bc_type == 0 ) Then
        Call distribute_1d( nx_global-2, p_row, xst, xen )
        xen(p_row-1) = xen(p_row-1) + 1
@@ -202,7 +203,8 @@ Contains
 
   End Subroutine decomp_build_xz_ranges
 
-  !> z-halo neighbor ranks (same row, adjacent column); MPI_PROC_NULL at the row's column edges (interior halo exchange -- not periodic wraparound, see z_periodic_partner)
+  !> z-halo neighbor ranks (same row, adjacent column); MPI_PROC_NULL at the row's column edges (interior halo
+  !  exchange -- not periodic wraparound, see z_periodic_partner)
   Subroutine z_halo_neighbors(up, down)
 
     Integer(Int32), Intent(Out) :: up, down
@@ -282,7 +284,8 @@ Contains
 
   End Subroutine x_periodic_partner
 
-  !> Split n points across nprocs ranks as evenly as possible (remainder on the last ranks); replicates 2decomp&fft's own distribute() algorithm locally (no MPI/decomp_info needed), so callers aren't restricted to evenly-divisible sizes
+  !> Split n points across nprocs ranks as evenly as possible (remainder on the last ranks), replicating
+  !  2decomp&fft's distribute() locally so sizes need not divide evenly
   Subroutine distribute_1d(n, nprocs, st, en)
 
     Integer(Int32), Intent(In)  :: n, nprocs
@@ -307,7 +310,8 @@ Contains
 
   End Subroutine distribute_1d
 
-  !> Local face-point index range (1-based, inclusive) owned by this rank in the y-pencil, mirroring src/mpi.f90's k1_global/k2_global convention for z
+  !> Local face-point index range (1-based, inclusive) owned by this rank in the y-pencil, mirroring
+  !  src/mpi.f90's k1_global/k2_global convention for z
   Subroutine y_pencil_local_range(i1, i2, j1, j2, k1, k2)
 
     Integer(Int32), Intent(Out) :: i1, i2, j1, j2, k1, k2
