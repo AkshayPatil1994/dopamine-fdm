@@ -28,7 +28,7 @@ Module vof_twofluid
   Use profiler
   Use vof_curv, Only : vof_curvature
   Use mom_recon
-  Use halo_pad, Only : pad_field
+  Use halo_pad, Only : pad_field_dev_y
   Use ibm, Only : apply_ghost_cell_ibm, apply_ghost_cell_ibm_scalar, apply_ghost_cell_ibm_scalar_noflux
   Use scalar_transport, Only : compute_rhs_scalar_core, apply_scalar_bc, kf_on, kfield
   Use thermal_transport, Only : apply_temperature_bc
@@ -42,7 +42,7 @@ Module vof_twofluid
   ! volume-flux divergence
   Real(Int64), Allocatable, Dimension(:,:,:) :: qu, qv, qw, uqu, uqv, uqw, Md, rt, Dd
   ! pseudo-time RK3 of the momentum update: start-of-sweep momentum and the stage tendency
-  Real(Int64), Allocatable, Dimension(:,:,:) :: q0u, q0v, q0w, dqu, dqv, dqw, Fl
+  Real(Int64), Allocatable, Dimension(:,:,:) :: q0u, q0v, q0w, Fl
   ! padded copies (E=3 planes each side) of the transported velocity for the wide momentum-reconstruction
   ! stencils
   Integer(Int32), Parameter :: EP = 3
@@ -58,7 +58,7 @@ Module vof_twofluid
   Real(Int64), Allocatable, Dimension(:,:,:) :: ppre, dphi, fdiv, mu_c, mr_c, kap_c
   ! stage force workspace (predictor pressure gradient), padded-transport staging, transport-projection
   ! potential
-  Real(Int64), Allocatable, Dimension(:,:,:) :: Bu_, Bv_, Bw_, tmpU, tmpV, tmpW, phT
+  Real(Int64), Allocatable, Dimension(:,:,:) :: Bu_, Bv_, Bw_, phT
   Real(Int64), Allocatable, Dimension(:)     :: rhos, rsf, cw0, cw1
   ! flat-wall EQWM stress fluxes on the u and w faces of the bottom (3rd index 1) and top (2) wall, and where
   ! they replace the molecular flux
@@ -115,17 +115,16 @@ Contains
     Allocate( ppre(nxg,nyg,nzg), dphi(nxg,nyg,nzg), fdiv(nxg,nyg,nzg), mu_c(nxg,nyg,nzg), mr_c(nxg,nyg,nzg), kap_c(nxg,nyg,nzg) )
     kap_c = 0d0
     Allocate( Bu_(nx,nyg,nzg), Bv_(nxg,ny,nzg), Bw_(nxg,nyg,nz), phT(nxg,nyg,nzg) )
-    Allocate( tmpU(1-EP:nx+EP,nyg,1-EP:nzg+EP), tmpV(1-EP:nxg+EP,ny,1-EP:nzg+EP), tmpW(1-EP:nxg+EP,nyg,1-EP:nz+EP) )
     Allocate( rhos(nyg), rsf(ny), cw0(nyg), cw1(nyg) )
     Allocate( PadU(1-EP:nx+EP,1-EP:nyg+EP,1-EP:nzg+EP), PadV(1-EP:nxg+EP,1-EP:ny+EP,1-EP:nzg+EP), &
               PadW(1-EP:nxg+EP,1-EP:nyg+EP,1-EP:nz+EP) )
     PadU = 0d0;  PadV = 0d0;  PadW = 0d0
     Allocate( rou(nx,nyg,nzg), rov(nxg,ny,nzg), row(nxg,nyg,nz), rmu(nx,nyg,nzg), rmv(nxg,ny,nzg), rmw(nxg,nyg,nz) )
     rou = 1d0;  rov = 1d0;  row = 1d0;  rmu = 1d0;  rmv = 1d0;  rmw = 1d0
-    Allocate( q0u(nx,nyg,nzg), q0v(nxg,ny,nzg), q0w(nxg,nyg,nz), dqu(nx,nyg,nzg), dqv(nxg,ny,nzg), dqw(nxg,nyg,nz) )
+    Allocate( q0u(nx,nyg,nzg), q0v(nxg,ny,nzg), q0w(nxg,nyg,nz) )
     qu = 0d0;  qv = 0d0;  qw = 0d0;  Md = 0d0;  rt = 0d0;  Dd = 0d0
     Allocate( Fl(0:nxg+1,0:nyg+1,0:nzg+1) )
-    q0u = 0d0;  q0v = 0d0;  q0w = 0d0;  dqu = 0d0;  dqv = 0d0;  dqw = 0d0;  Fl = 0d0
+    q0u = 0d0;  q0v = 0d0;  q0w = 0d0;  Fl = 0d0
     ppre = 0d0;  dphi = 0d0
 
     ! cell-centre weights of the y-face quantities (v) of the stretched grid
@@ -206,8 +205,8 @@ Contains
     !$acc update device(nu)
 
     !$acc enter data copyin(qu,qv,qw,uqu,uqv,uqw,Md,rt,Dd,Ut,Vt,Wt,Utmp,Vtmp,Wtmp,Hu1,Hv1,Hw1,Hu2,Hv2,Hw2,Fu_,Fv_,Fw_,Gu_,Gv_,Gw_) &
-    !$acc& copyin(ppre,dphi,fdiv,mu_c,mr_c,kap_c,Bu_,Bv_,Bw_,phT,tmpU,tmpV,tmpW,rsf,cw0,cw1,wt_u,wt_w,wt_on_u,wt_on_w) &
-    !$acc& copyin(PadU,PadV,PadW,rou,rov,row,rmu,rmv,rmw,q0u,q0v,q0w,dqu,dqv,dqw,Fl)
+    !$acc& copyin(ppre,dphi,fdiv,mu_c,mr_c,kap_c,Bu_,Bv_,Bw_,phT,rsf,cw0,cw1,wt_u,wt_w,wt_on_u,wt_on_w) &
+    !$acc& copyin(PadU,PadV,PadW,rou,rov,row,rmu,rmv,rmw,q0u,q0v,q0w,Fl)
     If ( ibm_wm_on ) Then
        !$acc enter data copyin(nu_cw)
     End If
@@ -666,16 +665,10 @@ Contains
           Call profiler_start(PROF_MOM_PAD)
           Call pad_transported
           Call profiler_stop(PROF_MOM_PAD)
-          Call profiler_start(PROF_MOM_TENDENCY)
-          Call momentum_tendency(d)
-          Call profiler_stop(PROF_MOM_TENDENCY)
-          Call profiler_start(PROF_MOM_UPDATE)
           a0 = Merge(0d0, Merge(Merge(0.5d0, 0.75d0, vof_rk_mom == 2), 1d0/3d0, stage == 2), stage == 1);  a1 = 1d0 - a0
-          !$acc kernels present(qu,qv,qw,q0u,q0v,q0w,dqu,dqv,dqw)
-          qu = a0*q0u + a1*( qu + dqu/vof_rk_nth );  qv = a0*q0v + a1*( qv + dqv/vof_rk_nth )
-          qw = a0*q0w + a1*( qw + dqw/vof_rk_nth )
-          !$acc end kernels
-          Call profiler_stop(PROF_MOM_UPDATE)
+          Call profiler_start(PROF_MOM_TENDENCY)
+          Call momentum_tendency(d, a0, a1)
+          Call profiler_stop(PROF_MOM_TENDENCY)
        End Do
     End Do
 
@@ -684,27 +677,29 @@ Contains
 
   !> Flux of q through the faces of each staggered control volume (mass flux averaged onto the CV face, face
   !  value of the transported velocity uq) plus the rho-tilde * volume-flux-divergence correction, divided by
-  !  the control volume
-  Subroutine momentum_tendency(d)
+  !  the control volume; the stage update q = a0*q0 + a1*(q + tendency/vof_rk_nth) is applied in the same loop
+  Subroutine momentum_tendency(d, a0, a1)
 
     Integer(Int32), Intent(In) :: d
+    Real(Int64),    Intent(In) :: a0, a1
 
-    Call tend_comp(1, d, dqu, uqu, 2, nx-1,  2, nyg-1, 2, nzg-1)
-    Call tend_comp(2, d, dqv, uqv, 2, nxg-1, 2, ny-1,  2, nzg-1)
-    Call tend_comp(3, d, dqw, uqw, 2, nxg-1, 2, nyg-1, 2, nz-1)
+    Call tend_comp(1, d, qu, q0u, a0, a1, uqu, 2, nx-1,  2, nyg-1, 2, nzg-1)
+    Call tend_comp(2, d, qv, q0v, a0, a1, uqv, 2, nxg-1, 2, ny-1,  2, nzg-1)
+    Call tend_comp(3, d, qw, q0w, a0, a1, uqw, 2, nxg-1, 2, nyg-1, 2, nz-1)
 
   End Subroutine momentum_tendency
 
 
   !> Tendency of component c (1 u, 2 v, 3 w) for the sweep along d: each control-volume face flux is evaluated
   !  once and used by the two control volumes that share it
-  Subroutine tend_comp(c, d, dq, uc, i0, i1, j0, j1, k0, k1)
+  Subroutine tend_comp(c, d, q, q0, a0, a1, uc, i0, i1, j0, j1, k0, k1)
 
     Integer(Int32), Intent(In)    :: c, d, i0, i1, j0, j1, k0, k1
-    Real(Int64),    Intent(InOut) :: dq(:,:,:)
-    Real(Int64),    Intent(In)    :: uc(:,:,:)
+    Real(Int64),    Intent(InOut) :: q(:,:,:)
+    Real(Int64),    Intent(In)    :: q0(:,:,:), uc(:,:,:)
+    Real(Int64),    Intent(In)    :: a0, a1
     Integer(Int32) :: i, j, k, ec1, ec2, ec3, ed1, ed2, ed3
-    Real(Int64) :: corr, vcv
+    Real(Int64) :: corr, vcv, dq
 
     ec1 = Merge(1,0,c==1);  ec2 = Merge(1,0,c==2);  ec3 = Merge(1,0,c==3)
     ed1 = Merge(1,0,d==1);  ed2 = Merge(1,0,d==2);  ed3 = Merge(1,0,d==3)
@@ -716,13 +711,14 @@ Contains
     Case Default
        Call face_fluxes(c, d, i0, i1, j0, j1, k0, k1, PadW, rmw, weight_y_0, weight_y_1, 0)
     End Select
-    !$acc parallel loop collapse(3) private(vcv,corr) present(dq,uc,rt,Dd,Fl,hy,hz,yg,zg)
+    !$acc parallel loop collapse(3) private(vcv,corr,dq) present(q,q0,uc,rt,Dd,Fl,hy,hz,yg,zg)
     Do k = k0, k1
        Do j = j0, j1
           Do i = i0, i1
              vcv = dx*Merge(yg(j+1) - yg(j), hy(j), c==2)*Merge(zg(k+1) - zg(k), hz(k), c==3)
              corr = uc(i,j,k)*0.5d0*( rt(i,j,k)*Dd(i,j,k) + rt(i+ec1,j+ec2,k+ec3)*Dd(i+ec1,j+ec2,k+ec3) )
-             dq(i,j,k) = ( corr - ( Fl(i,j,k) - Fl(i-ed1,j-ed2,k-ed3) ) )/vcv
+             dq = ( corr - ( Fl(i,j,k) - Fl(i-ed1,j-ed2,k-ed3) ) )/vcv
+             q(i,j,k) = a0*q0(i,j,k) + a1*( q(i,j,k) + dq/vof_rk_nth )
           End Do
        End Do
     End Do
@@ -738,13 +734,14 @@ Contains
 
     Integer(Int32), Intent(In) :: c, d, i0, i1, j0, j1, k0, k1, wsh
     Real(Int64),    Intent(In) :: pad(1-EP:,1-EP:,1-EP:), rm(:,:,:), wy0(:), wy1(:)
-    Integer(Int32) :: i, j, k, m, ec1, ec2, ec3, ed1, ed2, ed3, ii, jj, kk
+    Integer(Int32) :: i, j, k, m, ec1, ec2, ec3, ed1, ed2, ed3, ii, jj, kk, ia, ib, n
     Real(Int64) :: ivcv, vcv, mfc, wa, wb, r1, r2, cm, up, t, rv, s(-2:3), icm, cm0, cm1
 
     ec1 = Merge(1,0,c==1);  ec2 = Merge(1,0,c==2);  ec3 = Merge(1,0,c==3)
     ed1 = Merge(1,0,d==1);  ed2 = Merge(1,0,d==2);  ed3 = Merge(1,0,d==3)
     cm0 = vof_mom_cm0;  cm1 = vof_mom_cm1;  icm = 1d0/(cm1 - cm0)
     If ( vof_mom_scheme == MOM_WENO5 ) Then
+#ifdef GPU_POISSON
        !$acc parallel loop collapse(3) private(ivcv) present(pad,rm,Md,Fl,hy,hz,yg,zg)
        Do k = k0-ed3, k1
           Do j = j0-ed2, j1
@@ -756,6 +753,19 @@ Contains
              End Do
           End Do
        End Do
+#else
+       ! a call per face is not inlined across the module boundary and blocks vectorization: unit-stride rows
+       ia = i0 - ed1;  ib = i1;  n = ib - ia + 1
+       Do k = k0-ed3, k1
+          Do j = j0-ed2, j1
+             ivcv = 1d0/( dx*Merge(yg(j+1) - yg(j), hy(j), c==2)*Merge(zg(k+1) - zg(k), hz(k), c==3) )
+             Call mom_flux_weno5z_row(n, pad(ia-2*ed1:ib-2*ed1, j-2*ed2, k-2*ed3), pad(ia-ed1:ib-ed1, j-ed2, k-ed3), &
+                  pad(ia:ib, j, k), pad(ia+ed1:ib+ed1, j+ed2, k+ed3), pad(ia+2*ed1:ib+2*ed1, j+2*ed2, k+2*ed3), &
+                  pad(ia+3*ed1:ib+3*ed1, j+3*ed2, k+3*ed3), Md(ia:ib, j, k), Md(ia+ec1:ib+ec1, j+ec2, k+ec3), &
+                  rm(ia:ib, j, k), rm(ia+ed1:ib+ed1, j+ed2, k+ed3), ivcv, cm0, cm1, Fl(ia:ib, j, k))
+          End Do
+       End Do
+#endif
     Else
        !$acc parallel loop collapse(3) private(s,mfc,wa,wb,r1,r2,cm,up,t,rv,vcv) &
        !$acc& present(pad,rm,Md,Fl,hy,hz,yg,zg,wy0,wy1)
@@ -798,13 +808,10 @@ Contains
     Integer(Int32) :: m
 
     s_lo = Merge(-1d0, 1d0, bc_face_ylo == 1);  s_hi = Merge(-1d0, 1d0, bc_face_yhi == 1)
-    Call pad_field_dev(uqu, tmpU, nx, nyg, nzg, .True., .False., EP)
-    Call pad_field_dev(uqv, tmpV, nxg, ny, nzg, .False., .False., EP)
-    Call pad_field_dev(uqw, tmpW, nxg, nyg, nz, .False., .True., EP)
-    !$acc kernels present(PadU,PadV,PadW,tmpU,tmpV,tmpW)
-    PadU(:,1:nyg,:) = tmpU
-    PadV(:,1:ny,:) = tmpV
-    PadW(:,1:nyg,:) = tmpW
+    Call pad_field_dev_y(uqu, PadU, nx, nyg, nzg, .True., .False., EP, EP)
+    Call pad_field_dev_y(uqv, PadV, nxg, ny, nzg, .False., .False., EP, EP)
+    Call pad_field_dev_y(uqw, PadW, nxg, nyg, nz, .False., .True., EP, EP)
+    !$acc kernels present(PadU,PadV,PadW)
     ! the wall ghost rows: the stored ones are the boundary-condition values of the start of the step, not the
     ! reflection of the rows just advected (alpha = 0 / large for no-slip / free-slip gives exactly -1 / +1)
     PadU(:,1,:) = s_lo*PadU(:,2,:);  PadU(:,nyg,:) = s_hi*PadU(:,nyg-1,:)

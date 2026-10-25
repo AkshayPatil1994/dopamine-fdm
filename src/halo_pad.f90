@@ -189,6 +189,19 @@ Contains
     Real   (Int64), Intent(InOut) :: Fe(1-E:n1+E, n2, 1-E:n3+E)
     Logical,        Intent(In)    :: xface, zface
 
+    Call pad_field_dev_y(F, Fe, n1, n2, n3, xface, zface, E, 0)
+
+  End Subroutine pad_field_dev
+
+
+  !> pad_field_dev into an Fe that also has ye rows beyond y = 1 and y = n2 (left untouched)
+  Subroutine pad_field_dev_y(F, Fe, n1, n2, n3, xface, zface, E, ye)
+
+    Integer(Int32), Intent(In)    :: n1, n2, n3, E, ye
+    Real   (Int64), Intent(In)    :: F(n1,n2,n3)
+    Real   (Int64), Intent(InOut) :: Fe(1-E:n1+E, 1-ye:n2+ye, 1-E:n3+E)
+    Logical,        Intent(In)    :: xface, zface
+
     Logical        :: is_first, is_last, per
     Integer(Int32) :: up, down, partner, dst_dn, dst_up, src_dn, src_up, sdn, sup, m, i, j, k, cnt
 
@@ -387,6 +400,6 @@ Contains
        !$acc end parallel loop
     End If
 
-  End Subroutine pad_field_dev
+  End Subroutine pad_field_dev_y
 
 End Module halo_pad
