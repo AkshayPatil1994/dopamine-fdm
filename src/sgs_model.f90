@@ -114,7 +114,8 @@ Contains
 
     ! Pass 1: standard stencil, unconditional so it stays GPU-offloadable without phi; Pass 2 / solid-cell
     ! zeroing discards it where IBM applies
-    !$acc parallel loop collapse(2) present(U_,V_,W_,nu_t_,y,yg,z,zg,xg)
+    ! x runs over the vector lanes: (k,j) alone is too few threads to fill the GPU
+    !$acc parallel loop gang collapse(2) present(U_,V_,W_,nu_t_,y,yg,z,zg,xg)
     Do k = 2, nzg-1
        Do j = 2, nyg-1
 
@@ -130,6 +131,7 @@ Contains
           inv_yg_jp = 1d0 / ( yg(j+1) - yg(j  ) )
           inv_dy_j  = 1d0 / dy_c
 
+          !$acc loop vector
           Do i = 2, nxg-1
 
              ! ------ velocity gradient tensor (standard stencils) -------
