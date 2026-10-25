@@ -105,7 +105,8 @@ Contains
   !   Output summary of initial parameters
   Subroutine summary
 
-    Real(Int64)   :: u_tau_est, Re_tau_est, h_ref, visc_cfl, t_end_s, dy_max
+    Real(Int64)   :: u_tau_est, Re_tau_est, h_ref, visc_cfl, t_end_s, dy_max, dx_plus
+    Real(Int64), Parameter :: ADV_DXP_FINE = 150d0, ADV_DXP_COARSE = 200d0   ! provisional thresholds of the SGS advisory
     Character(40) :: str_sgs, str_ibm, str_ibmwm, str_wm, str_bc_top
 
     If ( myid==0 ) Then
@@ -248,6 +249,22 @@ Contains
        Else
           Write(*,'(A,A)') '    y-direction BC     :  ', Trim(str_bc_top)
        End If
+       ! SGS selection advisory from the validation runs (docs Numerics 5, "Choosing the SGS model"); it never changes the run
+       If ( flat_wall_model_flag > 0 .And. y_bc_type == 1 .And. vof_flow < 1 .And. u_tau_est > 0d0 ) Then
+          dx_plus = dxmin * u_tau_est / nu
+          If ( sgs_model == 2 .And. dx_plus < ADV_DXP_FINE ) Write(*,'(A,F7.1,A)') &
+               '    ADVISORY: AMD with fine streamwise resolution (dx+ =', dx_plus, '); Vreman (sgs_model=1) had the smaller ' // &
+               'bulk-velocity error for dx+ <~ 130 in the validated channels'
+          If ( sgs_model == 1 .And. dx_plus > ADV_DXP_COARSE ) Write(*,'(A,F7.1,A)') &
+               '    ADVISORY: coarse streamwise resolution (dx+ =', dx_plus, '); AMD (sgs_model=2) was closer to the DNS ' // &
+               'for dx+ >~ 200 in the validated channels'
+       End If
+       If ( sgs_model == 2 .And. boussinesq_flag >= 1 .And. Abs(beta_T*grav) > 0d0 ) Write(*,'(A)') &
+            '    ADVISORY: stratified AMD: the buoyancy term was inactive in the validated stratified channel; ' // &
+            'Vreman was closer there (dx+ = 116)'
+       If ( sgs_model == 2 .And. ( ( flat_wall_model_flag == 0 .And. y_bc_type == 1 ) .Or. &
+                                   ibm_input_mode >= 1 .Or. vof_flow >= 1 ) ) &
+          Write(*,'(A)')'    ADVISORY: AMD is not validated for wall-resolved, IBM or two-phase flows (parity tests only)'
        If ( sediment_flag >= 1 ) Then
           Write(*,'(A)') '  --------------------------------------------------------------------'
           Write(*,'(A)') '  SEDIMENT'

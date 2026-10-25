@@ -919,6 +919,10 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME wm_thermal
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/wm_thermal/check_wm_thermal.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
+    # Start-up SGS advisory lines (fine/coarse dx+, stratified AMD, wall-resolved AMD) appear exactly where the flow case warrants them
+    add_test(NAME sgs_advisory
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/sgs_advisory/check_advisory.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Wall-modelled bed (smooth log law) under a uniform stream: wall stress rho u_tau^2, density independent, same on 1 and 4 ranks
     add_test(NAME vof_wm_stream
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wm_stream/check_wm_stream.py
