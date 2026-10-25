@@ -180,9 +180,21 @@ filter sidecars `<snapshot>.wmf`, time-average files (`*_tavg.*`), particle file
 
 Chunked snapshots (`chunked_snapshot=.true.`, `&IO`) are read with `FieldSnapshot.from_box(path)` (a `FieldSnapshot` on the box's cell centres, staggered velocities averaged to the centres) or `read_box_snapshot(path)`, which returns the box
 coordinates and every field with its stagger flags, and exported with `write_box_xmf(case_dir)` (CLI:
-`dopamine_post fields box-xmf --case-dir <case>`), writing `paraview/box.xmf` for all `<fileout>Block.<step>` files. Fields
+`dopamine-post fields box-xmf --case-dir <case>`), writing `paraview/box.xmf` for all `<fileout>Block.<step>` files. Fields
 are shown on the box's cell centres; staggered velocities take the lower face of each cell. Examples:
-`postProcessing/examples/fields_example.py` and `particles_example.py` (the latter also writes `particles.xmf`).
+`write_field_xmf` also writes the VOF liquid fraction `vof` and the other optional blocks per `input_parameters`.
+
+Reference scripts in `postProcessing/examples/` (index and decision table in its `README.md`; each takes the case directory as `argv[1]`):
+
+| Your data | Script | CLI |
+|---|---|---|
+| one snapshot, any case type, flags auto-read or explicit | `fields_single_snapshot.py` | `dopamine-post fields profile` |
+| many snapshots, time averages, `_tavg` files | `fields_multiple_snapshots.py` | `dopamine-post fields stats` |
+| ParaView, single-phase / Boussinesq / sediment | `xmf_single_phase.py` | `dopamine-post fields xmf` |
+| ParaView, two-fluid VOF (`vof` attribute) | `xmf_vof.py` | `dopamine-post fields xmf` |
+| ParaView, particles with the flow field | `xmf_particles.py` | `dopamine-post particles xmf` |
+| ParaView, chunked `<fileout>Block.<step>` boxes | `xmf_box.py` | `dopamine-post fields box-xmf` |
+| slice probes, IBM surface, SDF, UAV, ... | `probes_example.py`, `ibm_surface_example.py`, ... | `dopamine-post probes slice-xmf`, ... |
 
 ### Interactive plotting (Jupyter / scripts)
 
