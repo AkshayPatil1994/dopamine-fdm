@@ -419,15 +419,24 @@ Contains
     Integer(Int32) :: j, m
     Real(Int64) :: q, ys, u, v, hs, dys, ua, cf
     Integer(Int32) :: jj
+    Real(Int64) :: eraw, cj(SF_MAX_N), sj(SF_MAX_N), th
 
     eta = wave_eta(x, t)
     hs = wv_d + eta
+    ! stream function: the harmonics in x do not depend on the height, evaluate them once per station
+    If ( wave_type == 2 ) Then
+       eraw = wave_eta_raw(x, t)
+       th = sf_k*x - 2d0*4d0*Atan(1d0)*t/wave_period + wave_phase
+       Do j = 1, sf_n
+          cj(j) = Cos(Real(j,Int64)*th);  sj(j) = Sin(Real(j,Int64)*th)
+       End Do
+    End If
     ! water volume flux per unit span, trapezoid in y
     q = 0d0
     dys = hs/nq
     Do m = 0, nq
        ys = m*dys
-       Call wave_vel(x, ys, t, u, v)
+       Call vel_at(ys)
        q = q + Merge(0.5d0, 1d0, m == 0 .Or. m == nq)*u*dys
     End Do
     ua = -q/Max(Ly_i - hs, 1d-12)
@@ -437,17 +446,45 @@ Contains
     Do j = 1, nyg
        jj = Min(Max(j, 2), nyg-1)
        cf = Min(1d0, Max(0d0, (hs - y(jj-1))/(y(jj) - y(jj-1))))
-       Call wave_vel(x, Max(Min(yg(jj), hs), 0d0), t, u, v)
+       Call vel_at(Max(Min(yg(jj), hs), 0d0))
        uc(j) = cf*( u + current_vel(yg(jj), t) ) + (1d0 - cf)*ua
     End Do
     Do j = 1, ny
        If ( y(j) <= hs ) Then
-          Call wave_vel(x, Max(y(j), 0d0), t, u, v)
+          Call vel_at(Max(y(j), 0d0))
           vf(j) = v
        Else
           vf(j) = 0d0
        End If
     End Do
+
+  Contains
+
+    !> wave_vel at height yy; the stream-function exponentials are powers of one exponential per height
+    !  (equal to the direct evaluation to round-off)
+    Subroutine vel_at(yy)
+
+      Real(Int64), Intent(In) :: yy
+      Integer(Int32) :: m2
+      Real(Int64) :: ye, pe, qe, re, pj, qj, rj, w
+
+      If ( wave_type /= 2 ) Then
+         Call wave_vel(x, yy, t, u, v)
+         Return
+      End If
+      ye = Min(yy, wv_d + eraw)
+      pe = Exp(sf_k*(ye - wv_d));  qe = Exp(-sf_k*(ye + wv_d));  re = Exp(-2d0*sf_k*wv_d)
+      pj = 1d0;  qj = 1d0;  rj = 1d0
+      u = sf_c + sf_b(0);  v = 0d0
+      Do m2 = 1, sf_n
+         pj = pj*pe;  qj = qj*qe;  rj = rj*re
+         w = Real(m2,Int64)*sf_k*sf_b(m2)/( 1d0 + rj )
+         u = u + w*(pj + qj)*cj(m2)
+         v = v + w*(pj - qj)*sj(m2)
+      End Do
+      u = wave_ramp(t)*u;  v = wave_ramp(t)*v
+
+    End Subroutine vel_at
 
   End Subroutine wave_profile_at
 
