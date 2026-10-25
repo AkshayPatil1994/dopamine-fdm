@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The snapshot pressure of a 1-rank run and of a 2x2 run must agree everywhere, seam planes included (a stale ghost plane of the
-pressure array used to overwrite the neighbour's last real plane in the file, leaving whole zero planes at the rank seams)."""
+pressure array must not overwrite the neighbour's last real plane in the file, which would leave whole zero planes at the rank seams)."""
 import argparse, glob, os, re, shutil, struct, subprocess, sys, tempfile
 import numpy as np
 

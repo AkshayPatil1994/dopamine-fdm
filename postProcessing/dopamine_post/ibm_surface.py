@@ -1,42 +1,11 @@
-"""
-ibm_surface.py -- fdm-dopamine immersed-boundary surface samples.
+"""ibm_surface.py -- fdm-dopamine immersed-boundary surface samples.
 
-Each `ibm_surface/surface.<step>.bin` file is written by sample_ibm_surface
-(src/ibm.f90): a point cloud over the immersed body surface (phi=0), one
-point per cell-centre interface cell.
-
-Binary layout (big-endian, Fortran stream, no record markers)
----------------------------------------------------------------
-    Int32    n            number of surface points
-    float64  t            simulation time
-    float64  x[n]         boundary-point coordinates
-    float64  y[n]
-    float64  z[n]
-    float64  nx[n]        outward unit normal
-    float64  ny[n]
-    float64  nz[n]
-    float64  p[n]         surface pressure
-    float64  fp_x[n]      pressure force per point  (-p n dA)
-    float64  fp_y[n]
-    float64  fp_z[n]
-    float64  fv_x[n]      viscous force per point   ((nu+nu_t) dU/dn dA)
-    float64  fv_y[n]
-    float64  fv_z[n]
-
-Summing fp_* / fv_* over all points reproduces the Method-2 pressure/viscous
-drag reported in ibm_forces.csv.
-
-Library use
------------
-    from dopamine_post.ibm_surface import IBMSurface
-
-    surf = IBMSurface.read("ibm_surface/surface.00010000.bin")
-    print(surf.t, surf.xyz.shape, surf.p.mean())
-
-    surf.to_vtp("surface.00010000.vtp")                       # one snapshot
-    IBMSurface.to_pvd("ibm_surface/surface.*.bin", "ibm_surface/surface.pvd")  # whole series
-
-Requires `pyvista` (pip install pyvista) for `.to_vtp`/`.to_pvd`.
+Each `ibm_surface/surface.<step>.bin` is written by sample_ibm_surface (src/ibm.f90): one point per cell-centre interface cell
+of the body surface (phi=0). Layout (big-endian, Fortran stream, no record markers): Int32 n; float64 t; then float64[n]
+arrays in the order x, y, z (boundary point), nx, ny, nz (outward unit normal), p (surface pressure), fp_x, fp_y, fp_z
+(pressure force per point, -p n dA), fv_x, fv_y, fv_z (viscous force per point, (nu+nu_t) dU/dn dA). Summing fp_* / fv_* over
+the points reproduces the Method-2 drag of ibm_forces.csv.
+IBMSurface.read(path) loads a file; .to_vtp(out) and IBMSurface.to_pvd(glob, out) write ParaView files (need pyvista).
 """
 import glob
 import struct

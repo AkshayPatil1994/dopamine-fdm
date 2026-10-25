@@ -1,52 +1,14 @@
-"""
-uav.py -- UAV actuator-disk path and drone geometry for fdm-dopamine cases.
+"""uav.py -- UAV actuator-disk path and drone geometry for fdm-dopamine cases.
 
-Reads a `uav_path_file` (rows: t x y z, see src/uav_actuator.f90 / docs/
-Input-Parameters.md's &UAV group) and renders it two ways for ParaView:
-
-  UAVPath.disk_animation(...)   a moving flat disc (.vtp + .pvd), one per
-                                 requested time -- what generate_UAVpath.py
-                                 used to produce.
-  UAVPath.drone_animation(...)  a single scaled quadcopter-body mesh (.stl,
-                                 written once) plus a per-time rigid-body
-                                 transform table (.npz/.csv) and a ParaView
-                                 "Programmable Source" script that re-poses
-                                 it in memory -- what generate_UAVdrone.py
-                                 used to produce.
-
-Both interpolate the path with `_core.hermite_eval` (cubic Hermite,
-Catmull-Rom tangents, clamped outside the waypoint file's time range),
-bit-for-bit the same construction as uav_actuator.f90's uav_current_center,
-so the rendered disk/body sits exactly where the solver's own actuator-disk
-force was applied -- not merely close to it. `drone_animation`'s optional
-auto-tilt orientation additionally replays uav_disk_state's recursive
-low-pass filter (uav_actuator.f90) using `_core.hermite_accel`'s second
-derivative of the same Hermite segments; per that function's own module
-docstring, the solver calls this filter once per RK sub-stage rather than
-once per dt, so the replay is a close but not bit-exact reproduction of the
-in-run tilt -- good enough to visualize, not to re-derive the applied force.
-
-Library use
------------
-    from dopamine_post.uav import UAVPath
-
-    path = UAVPath.read("uav_path_file.dat")
-    path.disk_animation(input_parameters="input_parameters",
-                         times_from="slices/y015_times.bin",
-                         out_dir="uav_path", pvd_out="uav_path.pvd")
-    path.drone_animation(input_parameters="input_parameters", tilt=True,
-                          nframes=100)
-
-Conventions
------------
-x streamwise, y wall-normal ("up"), z spanwise -- same as the rest of
-dopamine_post. Phase 1/2 scope note (see docs/UAV_ActuatorDisk_Design.md):
-the solver's disk stays horizontal (normal = +y) unless uav_tilt_active=1;
-`disk_animation` always draws a flat, horizontal disk (it has no tilt
-model of its own -- only `drone_animation` optionally tilts, for the body).
-
-Requires: numpy; `pyvista` for disk_animation; `trimesh` (optional
-`manifold3d` for a proper boolean union) for drone_animation.
+Reads a `uav_path_file` (rows: t x y z; see src/uav_actuator.f90 and the &UAV group of docs/Input-Parameters.md) and renders
+it for ParaView: UAVPath.disk_animation (moving flat disc, .vtp + .pvd) and UAVPath.drone_animation (scaled quadcopter body,
+.stl once, plus a per-time rigid-body transform table and a Programmable Source script). The path is interpolated with
+`_core.hermite_eval` (cubic Hermite, Catmull-Rom tangents, clamped), the same construction as uav_actuator.f90's
+uav_current_center, so the disk sits where the actuator-disk force was applied. The optional auto-tilt of drone_animation
+replays uav_disk_state's low-pass filter from the second derivative of the Hermite segments; the solver applies that filter
+per RK sub-stage, so the replay is close but not bit-exact (for visualisation only).
+Axes: x streamwise, y wall-normal (up), z spanwise. disk_animation always draws a horizontal disk.
+Requires numpy; pyvista (disk_animation); trimesh, optionally manifold3d (drone_animation).
 """
 import sys
 from pathlib import Path
@@ -428,9 +390,8 @@ class UAVPath:
         input_parameters  case namelist to pull uav_disk_radius/uav_n_theta from
         out_dir, pvd_out  where the per-frame .vtp files and the .pvd collection go
 
-        Phase 1/2 scope: the disk stays horizontal (normal=+y) for the whole
-        path -- matches the solver's flat actuator-disk model (see module
-        docstring). Requires pyvista.
+        The disk stays horizontal (normal=+y) for the whole path, as the solver's
+        flat actuator-disk model does without uav_tilt_active. Requires pyvista.
         """
         import pyvista as pv
 
@@ -453,7 +414,7 @@ class UAVPath:
         entries = []
         for i, (t, c) in enumerate(zip(times, centers)):
             x, y, z = c
-            # Phase 1/2: disk stays horizontal, normal=+y (see module docstring)
+            # disk stays horizontal, normal=+y (see module docstring)
             disc = pv.Disc(center=(x, y, z), inner=0.0, outer=radius,
                             normal=(0.0, 1.0, 0.0), r_res=1, c_res=n_theta)
             disc.field_data['time'] = np.array([t])

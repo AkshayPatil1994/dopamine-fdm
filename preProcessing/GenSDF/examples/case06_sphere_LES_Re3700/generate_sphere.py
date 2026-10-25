@@ -84,7 +84,7 @@ def build_triangles():
 
 def write_stl_binary(tris: list, path: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    hdr = b'Binary STL sphere — generate_sphere.py (dopamine IBM example)'
+    hdr = b'Binary STL sphere - generate_sphere.py (dopamine IBM example)'
     hdr = hdr[:80].ljust(80, b'\x00')
     with open(path, 'wb') as f:
         f.write(hdr)

@@ -4,8 +4,8 @@
   Fig. 4  wave crest, trough and mean water level along the flume   (vof_gauges.dat; optionally the free surface of the snapshots)
   Fig. 5  time-mean horizontal velocity (undertow) u/sqrt(g h) vs (z - zeta_mean)/h at the 8 LDA stations
   Fig. 6  time-mean rms horizontal turbulent velocity sqrt(u'^2)/sqrt(g h) at the same stations
-  Fig. 8  phase-averaged surface elevation (zeta - zeta_mean)/h vs t/T at station 8 from the wave gauge there (phase aligned on the bore front)
   Fig. 7  turbulent kinetic energy (k/gh)^(1/2), k = (1.33/2)(u'^2 + w'^2) as estimated in the paper, at stations 4-8 (needs the W component of the line probes)
+  Fig. 8  phase-averaged surface elevation (zeta - zeta_mean)/h vs t/T at station 8 from the wave gauge there (phase aligned on the bore front)
 
 Data: stations.dat, vof_gauges.dat and probes/line_N.bin written by a case of make_case.py.  Definitions as in the paper (sect. 2):
 the phase average is taken at fixed phase t/T over whole periods after the spin-up (--t0), u' = u - phase average, the velocity is set

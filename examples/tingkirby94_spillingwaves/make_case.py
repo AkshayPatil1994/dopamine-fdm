@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Ting & Kirby (1994) spilling-breaker case for the two-fluid (VOF) solver: input files and bed geometry.
 
-Experiment (Ting & Kirby 1994, Coastal Eng. 24, 51-80; Sect. 2, Fig. 1, Table 1): 40 m x 0.6 m x 1.0 m wave tank, piston (bulkhead) wavemaker driven
-with a cnoidal signal (Goring 1978); still-water depth 0.40 m over the flat part, then a plywood false bottom with slope 1:35. Spilling case: T = 2.0 s,
-H = 0.125 m in the horizontal region (H0 = 0.127 m in deep water, Table 1), breaking at x_b = 6.40 m where d_b = 0.196 m.
+Experiment (Ting & Kirby 1994, Coastal Eng. 24, 51-80; Sect. 2, Fig. 1, Table 1): 40 m x 0.6 m x 1.0 m wave
+tank, piston (bulkhead) wavemaker driven with a cnoidal signal (Goring 1978); still-water depth 0.40 m over
+the flat part, then a plywood false bottom with slope 1:35. Spilling case: T = 2.0 s, H = 0.125 m in the
+horizontal region (H0 = 0.127 m in deep water, Table 1), breaking at x_b = 6.40 m where d_b = 0.196 m.
 
-Coordinates: x_TK is measured shoreward from the origin drawn in Fig. 1, where the still depth is 0.38 m (NOT at the 0.40 m toe: the slope starts
-0.02 m x 35 = 0.7 m upstream of the origin). The still depths d of Table 1 (7 values for x_TK >= 5.9) fit a 1:35 plane with the slope starting at
-x_TK = -0.79 m (max. deviation 0.3 cm; a free fit gives slope 1:35.1, d = 0 at x_TK = 13.2 m). That fit is NOT the default any more: the default
-X_TOE_TK is 0 (slope starts at the origin, as the paper's text says: x measured from the toe), because this bed reproduces the measured breaking point
-and wave-height evolution (coarse_shifted A/B test) while the -0.79 bed breaks ~1 m too early (--toe-tk -0.79 selects it). The still-water shoreline
-is then at x_TK = 14 m.
+Coordinates: x_TK is measured shoreward from the origin drawn in Fig. 1, where the still depth is 0.38 m
+(not at the 0.40 m toe: the slope starts 0.02 m x 35 = 0.7 m upstream of the origin). The still depths d of
+Table 1 (7 values for x_TK >= 5.9) fit a 1:35 plane with the slope starting at x_TK = -0.79 m (max.
+deviation 0.3 cm; a free fit gives slope 1:35.1, d = 0 at x_TK = 13.2 m). The default X_TOE_TK is 0 (the
+slope starts at the origin, as the paper's text says: x measured from the toe); this bed reproduces the
+measured breaking point and wave-height evolution, whereas the -0.79 bed breaks ~1 m too early (--toe-tk
+-0.79 or the coarse_exact_slope preset select it). The still-water shoreline is then at x_TK = 14 m.
 
 Numerical flume (solver coordinate x = x_TK + X0, x = 0 at the wavemaker side of the domain, y vertical from the flat bed, z spanwise periodic):
 
@@ -31,7 +33,7 @@ Outputs for the comparison with Figs. 4-6 of the paper (spilling breaker, post-p
     velocity profiles, normalised with sqrt(g h) as in the paper (the gauge records give the local mean level / trough for masking).
   --gauges X1 X2 ... (x_TK) replaces the gauge list.
 
-Usage:   python3 make_case.py CASE [--dx ... --dy ... --dz ... --gauges ...]      CASE = coarse | medium | fine | test (PRESETS)
+Usage:   python3 make_case.py CASE [--dx ... --dy ... --dz ... --gauges ...]      CASE = coarse | coarse_exact_slope | medium | fine | test (PRESETS)
 Writes in ./CASE/: input_parameters, bed.stl, gensdf_parameters.in, stations.dat. setup.sh then builds SDF_in with GenSDF.
 """
 import argparse, math, os, struct
@@ -60,7 +62,7 @@ PRESETS = {   # cell sizes [m], end time [s], snapshot interval [s], line-probe 
     'coarse': dict(dx=0.02,   dy=0.01,   dz=0.015,  t_end=80.0, tsave=0.2, line_freq=5),    # coarse mesh
     'medium': dict(dx=0.01,   dy=0.005,  dz=0.01,  t_end=80.0, tsave=0.2, line_freq=10),    # medium mesh
     'fine':   dict(dx=0.008,  dy=0.004, dz=0.008,  t_end=80.0, tsave=0.2, line_freq=20),    # fine mesh
-    # same grid as 'coarse' with the slope at the old Table 1 fit (x_TK = -0.79), kept for the bed A/B test (README); the default toe is now x_TK = 0
+    # same grid as 'coarse' with the slope at the Table 1 fit (x_TK = -0.79), for the bed A/B test (README); the default toe is x_TK = 0
     'coarse_exact_slope': dict(dx=0.02, dy=0.01, dz=0.015, t_end=80.0, tsave=0.2, line_freq=5, toe_tk=-0.79),
     'test':   dict(dx=0.04,   dy=0.02,   dz=0.04,  t_end=30.0, tsave=0.2, line_freq=2),     # set-up check only
 }
@@ -109,7 +111,7 @@ def main():
                     'compare_simulation.py corrects the probe times after each restart (nstep_init in the logs)')
     ap.add_argument('--restart-time', type=float, help='simulation time of the restart file [s]')
     ap.add_argument('--out')
-    ap.add_argument('--toe-tk', type=float, default=None, help='x_TK of the start of the slope (default 0 = origin at the toe; -0.79 = fit of the Table 1 depths, used by the coarse_fit079 preset)')
+    ap.add_argument('--toe-tk', type=float, default=None, help='x_TK of the start of the slope (default 0 = origin at the toe; -0.79 = fit of the Table 1 depths, used by the coarse_exact_slope preset)')
     a = ap.parse_args()
     if a.lz: LZ = a.lz
     p = dict(PRESETS[a.case]); p.setdefault('p_row', 0); p.setdefault('p_col', 0)

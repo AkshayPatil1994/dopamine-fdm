@@ -1,10 +1,10 @@
 #!/bin/bash
-# usage: [FORCE=1] [MAKE_OPTS='--toe-tk ... --lz 0.6 ...'] ./setup.sh CASE [NP]    CASE = coarse | coarse_fit079 | medium | fine | test (resolution presets of make_case.py; extra make_case.py options via MAKE_OPTS); builds CASE/SDF_in for the solver's grid with GenSDF.
+# usage: [FORCE=1] [MAKE_OPTS='--toe-tk ... --lz 0.6 ...'] ./setup.sh CASE [NP]    CASE = coarse | coarse_exact_slope | medium | fine | test (resolution presets of make_case.py; extra make_case.py options via MAKE_OPTS); builds CASE/SDF_in for the solver's grid with GenSDF.
 # 1) make_case.py writes input_parameters, bed.stl, gensdf_parameters.in
 # 2) a solver start without SDF_in writes fields/geometry.out and fields/grid.out (and aborts at the missing SDF: expected)
 # 3) GenSDF turns bed.stl into the cell-centre SDF (positive in the fluid) -> SDF_in
 set -e
-case=${1:?coarse|coarse_fit079|medium|fine|test}; np=${2:-8}
+case=${1:?coarse|coarse_exact_slope|medium|fine|test}; np=${2:-8}
 here=$(cd "$(dirname "$0")" && pwd)
 repo=${DOPAMINE_REPO:-/home/Username/fdm-dopamine}
 exe=${DOPAMINE_EXE:-$repo/build/dopamine}

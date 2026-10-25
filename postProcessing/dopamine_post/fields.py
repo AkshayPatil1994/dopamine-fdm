@@ -1,57 +1,15 @@
-"""
-fields.py -- post-processing of fdm-dopamine binary field (U,V,W,P,...) snapshots.
+"""fields.py -- post-processing of fdm-dopamine binary field snapshots (U,V,W,P,...).
 
-One module, three layers (use the library from your own scripts, or the future CLI):
+  FieldSnapshot / FieldSeries   one snapshot / a case's fields/ directory; arrays are cell-centred, ghosts stripped,
+                                shape (nxm, nym, nzm), axes 0 = x, 1 = y (wall-normal), 2 = z.
+  FieldSeries.time_average, .profile_vs_dns, plot_profile, plot_stats, plot_profile_vs_dns, animate_velocity_slice,
+  write_field_xmf / FieldSeries.write_xmf   statistics, DNS comparison, figures, ParaView XDMF.
 
-  1. DATA      FieldSnapshot   one snapshot's U,V,W,P,(C,nu_t,T) + grid, cell-centred,
-                                ghost layers stripped.
-               FieldSeries     a case's fields/ directory: list + iterate snapshots.
-  2. ANALYSIS  FieldSeries.time_average     time- and (x,z)-plane averaged channel
-                                            statistics with centreline symmetry folding
-                                            (compute_stats.py).
-               FieldSeries.profile_vs_dns   spanwise+snapshot-averaged profiles at one
-                                            or more x-stations, with an optional DNS
-                                            overlay (analyse_channel.py).
-  3. FIGURES   plot_profile, plot_stats, plot_profile_vs_dns, animate_velocity_slice
-               write_field_xmf / FieldSeries.write_xmf   (generateXMF.py)
-
-Binary layout (big-endian float64, Fortran stream, no record markers) -- see
-_core.BinaryReader.read_field for the low-level block reader:
-
-  Grid header -- 6 blocks of (Int32 count, float64[count] coordinates):
-      nx  face points in x  ->  x        nxm cell centres in x -> xm
-      ny  face points in y  ->  y        nym cell centres in y -> ym
-      nz  face points in z  ->  z        nzm cell centres in z -> zm
-
-  Field blocks -- each: (3 x Int32 shape), (float64[n1*n2*n3] data, Fortran order):
-      U    (nx,  nyg, nzg)   x-face velocity         -- always present
-      V    (nxg, ny,  nzg)   y-face velocity         -- always present
-      W    (nxg, nyg, nz )   z-face velocity         -- always present
-      P    (nxg, nyg, nzg)   cell-centre pressure    -- always present
-      C    (nxg, nyg, nzg)   scalar concentration    -- only if sediment_flag >= 1
-      nu_t (nxg, nyg, nzg)   SGS turbulent viscosity -- only if sgs_model != 0
-      T    (nxg, nyg, nzg)   Boussinesq temperature  -- only if boussinesq_flag >= 1
-  (block order C, nu_t, T after P matches input_output.f90's snapshot writer exactly.)
-
-  Ghost-cell convention: nxg = nxm+2, nyg = nym+2, nzg = nzm+2.  ny and nz in the V
-  and W headers are face-point counts (no ghost cells on the staggered direction),
-  so ny = nym+1, nz = nzm+1.  Returned arrays are cell-centred with every ghost layer
-  removed: shape (nxm, nym, nzm).  Axis convention: 0 = x (streamwise),
-  1 = y (wall-normal), 2 = z (spanwise).
-
-Library use
------------
-    from dopamine_post.fields import FieldSnapshot, FieldSeries, plot_profile
-
-    series = FieldSeries(".")
-    snap = series.latest()
-    ym, U = snap.profile("U")                       # x-z averaged mean profile
-    stats = series.time_average((100000, 150000), 500)
-    stats.save("stats")
-    result = series.profile_vs_dns("dns_ref", x_stations=[2, 4, 6, 8])
-    series.write_xmf()
-
-Requires: numpy, matplotlib (figures/movies); ffmpeg for animate_velocity_slice.
+Binary layout (big-endian float64, Fortran stream, no record markers): 6 grid blocks (Int32 count, float64[count]):
+x (nx face points), xm (nxm centres), y, ym, z, zm; then field blocks, each (3 x Int32 shape, float64 data, Fortran order):
+U (nx,nyg,nzg), V (nxg,ny,nzg), W (nxg,nyg,nz), P (nxg,nyg,nzg) always; then C (sediment_flag >= 1), nu_t (sgs_model != 0),
+T (boussinesq_flag >= 1), as written by input_output.f90. nxg = nxm+2 etc.; ny = nym+1, nz = nzm+1.
+Usage: docs/Tools.md. Requires numpy, matplotlib (figures); ffmpeg for animate_velocity_slice.
 """
 import os
 import re

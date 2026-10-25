@@ -4,7 +4,7 @@
 ! no IBM needed, the ground is already grid-conforming).
 !
 ! Companion case: ../far_ground (h/R = 8, "out of ground effect").
-! Validation criterion (see docs/UAV_ActuatorDisk_Design.md Phase 1):
+! Validation criterion:
 ! the vertical-velocity line probe through the disk centre should show
 ! a peak-then-decay-to-zero profile between the disk and the ground in
 ! this case (wall-jet/stagnation behaviour), unlike the far-ground case

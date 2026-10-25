@@ -19,11 +19,13 @@ module utils_io
     real(dp), allocatable, dimension(:) :: xp, yp, zp, xf, yf, zf
     real(dp) :: lx, ly, lz, dx, dy, dx_inverse, dy_inverse
     real(dp), allocatable, dimension(:) :: dz, dz_inverse
-    ! per-cell width along GenSDF's internal y (= solver z when vertical_axis==2); uniform unless data/grid_z.out is present
+    ! per-cell width along GenSDF's internal y (= solver z when vertical_axis==2); uniform unless
+    !   data/grid_z.out is present
     real(dp), allocatable, dimension(:) :: dyv
     logical :: y_stretched = .false.
     ! Per-solid flag set from a trailing `ground` keyword in the .list manifest: the solid is an open surface
-    ! (terrain/bathymetry) and everything below it along the vertical axis is solid. Sized by load_multi_object_geometry.
+    ! (terrain/bathymetry) and everything below it along the vertical axis is solid. Sized by
+    !   load_multi_object_geometry.
     logical, allocatable :: solid_is_ground(:)
 
     !  SDF / algorithm control 
@@ -37,12 +39,15 @@ module utils_io
     ! Default .false. — only sdfp is written.
     logical,  protected :: compute_face_sdf = .false.
     ! Solid/fluid classification of the grid points (optional last line of parameters.in):
-    !   0 = legacy 3-axis ray-parity majority vote (needs a watertight shell)
-    !   1 = robust (default): orientation-signed ray crossings with per-line integrity checks, undecided points
-    !       resolved by the generalized winding number (tolerates holes, cracks, flipped/duplicated/overlapping triangles)
+    !   0 = 3-axis ray-parity majority vote (needs a watertight shell)
+    !   1 = default: orientation-signed ray crossings with per-line integrity checks, undecided
+    !       points
+    !       resolved by the generalized winding number (tolerates holes, cracks,
+    !         flipped/duplicated/overlapping triangles)
     !   2 = winding number at every point (slow reference; also prints how often the ray tier disagrees)
     integer,  protected :: sign_method = 1
-    ! Close simple, nearly planar boundary loops of non-ground solids with a triangulated lid before classifying (1 = yes).
+    ! Close simple, nearly planar boundary loops of non-ground solids with a triangulated lid before
+    !   classifying (1 = yes).
     ! Optional second trailing line of parameters.in.
     integer,  protected :: cap_holes = 1
 
@@ -79,7 +84,7 @@ contains
             call skip_and_read(iunit, dummyline, ierr); read(dummyline,*) narrow_band_width
             call skip_and_read(iunit, dummyline, ierr); read(dummyline,*) vertical_axis
             call skip_and_read(iunit, dummyline, ierr); read(dummyline,*) compute_face_sdf
-            ! Optional trailing line: sign_method (absent in older parameter files => robust default)
+            ! Optional trailing line: sign_method (absent => default 1)
             call skip_and_read(iunit, dummyline, ierr)
             if (ierr == 0) read(dummyline,*,iostat=ierr) sign_method
             if (sign_method < 0 .or. sign_method > 2) then
@@ -131,7 +136,8 @@ contains
     end subroutine read_inputfile
 
     ! CaNS grid still default as it is easy and common 
-    ! Read CaNS-style grid files: geometry.out (grid dimensions and lengths) and optionally grid.out (non-uniform z).
+    ! Read CaNS-style grid files: geometry.out (grid dimensions and lengths) and optionally grid.out
+    !   (non-uniform z).
     subroutine read_cans_grid(procid, loc, iprecision, npoints, origin, non_uni_grid, &
                                xin_p, yin_p, zin_p, xin_f, yin_f, zin_f, dzin, &
                                inputlx, inputly, inputlz)
@@ -233,7 +239,8 @@ contains
             end if
         end if
 
-        ! Optional stretched spanwise grid (solver z, GenSDF's internal y when vertical_axis==2): same 5-column
+        ! Optional stretched spanwise grid (solver z, GenSDF's internal y when vertical_axis==2): same
+        !   5-column
         ! format as grid.out, written by the solver's genGridandIC when alpha_grid_z>0; absent => uniform y.
         if (vertical_axis == 2) then
             grdfile = trim(loc) // "grid_z.out"
@@ -287,8 +294,10 @@ contains
         if (procid == 0) print *, "*** Successfully set up grid spacing ***"
     end subroutine setup_grid_spacing
 
-    ! Read OBJ file (ASCII). Polygons are fan-triangulated (a quad exported as 'f 1 2 3 4' must not silently lose half its
-    ! area: that opens a hole in the shell). Face tokens may be v, v/vt, v//vn or v/vt/vn, with negative (relative) indices.
+    ! Read OBJ file (ASCII). Polygons are fan-triangulated (a quad exported as 'f 1 2 3 4' must not silently
+    !   lose half its
+    ! area: that opens a hole in the shell). Face tokens may be v, v/vt, v//vn or v/vt/vn, with negative
+    !   (relative) indices.
     ! Per-face geometric normals are synthesized when the file carries no (or incomplete) vertex normals.
     subroutine read_obj(procid, filename, vertices, normals, faces, face_normals, &
                         num_vertices, num_normals, num_faces)
@@ -372,7 +381,8 @@ contains
             if (minval(face_normals) < 1 .or. maxval(face_normals) > num_normals) have_all_normals = .false.
         end if
         if (.not. have_all_normals) then
-            ! Winding-derived per-face normals (the SDF sign is decided by the ray/winding classifier, not by these)
+            ! Winding-derived per-face normals (the SDF sign is decided by the ray/winding classifier, not by
+            !   these)
             deallocate(normals); allocate(normals(3, max(num_faces,1)))
             call synthesize_face_normals(vertices, faces, num_faces, normals, face_normals)
             num_normals = num_faces
@@ -414,7 +424,8 @@ contains
         end do
     end subroutine split_tokens
 
-    ! One OBJ face token: v, v/vt, v//vn or v/vt/vn. Negative indices count back from the last element read so far.
+    ! One OBJ face token: v, v/vt, v//vn or v/vt/vn. Negative indices count back from the last element read so
+    !   far.
     ! vn_idx = 0 when the token carries no normal.
     subroutine parse_face_token(tok, v_count, vn_count, v_idx, vn_idx)
         implicit none
@@ -481,13 +492,15 @@ contains
         deallocate(tmp_irow)
     end subroutine permute_geometry_axes
 
-    ! Read STL file: binary (size-checked) or ASCII ('solid ... facet normal ... vertex ...'), detected from the file itself.
+    ! Read STL file: binary (size-checked) or ASCII ('solid ... facet normal ... vertex ...'), detected from
+    !   the file itself.
     subroutine read_stl_binary(procid, filename, vertices, normals, faces, face_normals, &
                                num_vertices, num_normals, num_faces)
         !
         ! Binary layout (little-endian): 80-byte header, uint32 triangle count, then per triangle 12 float32
         ! (normal, 3 vertices) and 2 attribute bytes. Output arrays:
-        !   vertices(3, 3*nf)  — 3 vertices per triangle (no sharing), normals(3, nf) — per-face, faces packed sequentially.
+        !   vertices(3, 3*nf) — 3 vertices per triangle (no sharing), normals(3, nf) — per-face, faces packed
+        !     sequentially.
         !
         use iso_fortran_env, only : int32, int64
         implicit none
@@ -625,8 +638,10 @@ contains
     ! Load geometry for one or more solids, tagging every face with its owning solid ID.
     subroutine load_multi_object_geometry(procid, filename, vertices, normals, faces, face_normals, &
                                           face_solid_id, num_vertices, num_normals, num_faces, num_solids)
-        ! `filename` is a single .stl/.obj file (solid ID 1) or a `.list` manifest (one path per line, 1-based order is the solid ID).
-        ! A manifest line ending in ` ground` marks that solid as an open ground surface (see solid_is_ground).
+        ! `filename` is a single .stl/.obj file (solid ID 1) or a `.list` manifest (one path per line, 1-based
+        !   order is the solid ID).
+        ! A manifest line ending in ` ground` marks that solid as an open ground surface (see
+        !   solid_is_ground).
         implicit none
         integer,  intent(in)  :: procid
         character(len=*), intent(in) :: filename
@@ -813,8 +828,10 @@ contains
     end subroutine check_object_resolution
 
     ! Tag grid points inside bounding box (with buffer) for focused SDF computation.
-    ! The buffer is `sdfresolution` cells. With a stretched grid pass the per-cell widths (dy_cell/dz_cell) so the buffer
-    ! is that many *local* cells rather than that many cells of the smallest spacing (which can be a small fraction of a
+    ! The buffer is `sdfresolution` cells. With a stretched grid pass the per-cell widths (dy_cell/dz_cell) so
+    !   the buffer
+    ! is that many *local* cells rather than that many cells of the smallest spacing (which can be a small
+    !   fraction of a
     ! cell where the grid is coarse, leaving the near-surface band outside the tagged box).
     subroutine tagminmax(procid, xin, yin, zin, bbox_min, bbox_max, &
                           nx_in, ny_in, nz_in, dx_in, dy_in, dz_in, sdfresolution, &
@@ -916,7 +933,8 @@ contains
         deallocate(sendbuf, recvcounts, displs)
     end subroutine gather_array
 
-    ! Write SDF to file, with ghost padding in x and wall-normal directions as expected by the solver's IBM reader.
+    ! Write SDF to file, with ghost padding in x and wall-normal directions as expected by the solver's IBM
+    !   reader.
     subroutine write_sdf_padded(outputfilename, interior)
         !
         ! Write SDF ghost-padded in x and the wall-normal direction, matching

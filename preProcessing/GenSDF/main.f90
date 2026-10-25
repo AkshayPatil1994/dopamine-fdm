@@ -62,7 +62,7 @@ program generatesdf
     allocate(decomp_x_start(0:nprocs-1), decomp_x_end(0:nprocs-1), decomp_size(0:nprocs-1))
 
 #ifdef GPU_SDF
-    ! One GPU per rank (node-local rank mod GPU count) — see docs/external-lib-guidance/GenSDF_GPU_porting.md.
+    ! One GPU per rank (node-local rank mod GPU count).
     call MPI_COMM_SPLIT_TYPE(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, node_comm, ierror)
     call MPI_COMM_RANK(node_comm, node_rank, ierror)
     num_gpus = acc_get_num_devices(acc_device_nvidia)
@@ -86,13 +86,15 @@ program generatesdf
     call read_cans_grid(myid, 'data/', dp, ng, r0, non_uniform_grid, xp, yp, zp, xf, yf, zf, dz, lx, ly, lz)
     allocate(dz_inverse(ng(3)))
     call setup_grid_spacing(myid, xf, yf, zf, ng(3), dx, dy, dz, dx_inverse, dy_inverse, dz_inverse)
-    ! dy above is the uniform-grid spacing; with a stretched spanwise grid keep the smallest cell width as the scalar dy
+    ! dy above is the uniform-grid spacing; with a stretched spanwise grid keep the smallest cell width as the
+    !   scalar dy
     if (y_stretched) then
         dy = minval(dyv)
         dy_inverse = 1.0_dp / dy
     end if
 #ifdef GPU_SDF
-    ! dz is allocated via dummy-argument aliasing in read_cans_grid, so declare create's automatic on-allocate hook never fires for it.
+    ! dz is allocated via dummy-argument aliasing in read_cans_grid, so declare create's automatic on-allocate
+    !   hook never fires for it.
     !$acc enter data create(dz)
     !$acc enter data create(dyv)
     !$acc update device(dx, dy, dz, dyv)
@@ -111,7 +113,8 @@ program generatesdf
 
     call check_object_resolution(myid, vertices, faces, face_solid_id, nfaces, nsolids)
 
-    ! Mesh health: weld, drop duplicates, locate holes, repair triangle orientation, lid planar holes. Every rank runs
+    ! Mesh health: weld, drop duplicates, locate holes, repair triangle orientation, lid planar holes. Every
+    !   rank runs
     ! the same deterministic analysis (only rank 0 reports), so no communication is needed.
     weld_tol = max(1.0e-3_dp * min(dx, dy, minval(dz)), 1.0e-9_dp * (maxval(vertices) - minval(vertices)))
     allocate(mesh_open(nsolids))
@@ -132,16 +135,11 @@ program generatesdf
     call tagminmax(myid, xf, yp, zp, bbox_min, bbox_max, nx, ny, nz, dx, dy, dz(2), buffer_points, &
                    sx, ex, sy, ey, sz, ez, dyv, dz)
 
-    !  domain decomposition (x-slab over the FULL domain, not just the AABB).
-    !  Restricting the slabs to [sx,ex] used to make fast_sweep_3d structurally
-    !  unable to reach x-cells outside the AABB+buffer box, leaving them stuck
-    !  at the raw sentinel scalarvalue forever (even with use_fast_sweep=.true.)
-    !  while the y/z directions — already using the full 1:ny/1:nz range below —
-    !  got a smooth Eikonal-propagated field all the way to the domain edges.
-    !  That asymmetry produced a hard scalarvalue-magnitude cliff in x right at
-    !  the AABB boundary. Decomposing over [1,nx] and only restricting the
-    !  actual near-surface computation (via cx_lo/cx_hi below) keeps that work
-    !  scoped to the AABB while letting the FSM pass fill the rest smoothly.
+    !  domain decomposition: x-slabs over the FULL domain, not just the AABB, so fast_sweep_3d can reach
+    !    x-cells outside the
+    !  AABB+buffer box (otherwise they stay at the sentinel value and the field has a cliff at the AABB
+    !    boundary). Only the
+    !  near-surface computation is restricted to the AABB (cx_lo/cx_hi below).
     mpi_dx = ceiling(real(nx, dp) / real(nprocs, dp))
     decomp_x_start(0) = 1
     decomp_x_end(0)   = min(mpi_dx, nx)
@@ -189,7 +187,8 @@ program generatesdf
     ! source) relies on it too, not just the fast-sweep narrow-band path.
     call build_hash(vertices, faces, nfaces, bbox_min, bbox_max, dx, dy, minval(dz))
 
-    ! Per-rank slab of the field (and of the solid-object ID); the assembled global array exists on rank 0 only.
+    ! Per-rank slab of the field (and of the solid-object ID); the assembled global array exists on rank 0
+    !   only.
     allocate(sdf(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
     allocate(objid(decomp_x_start(myid):decomp_x_end(myid), ny, nz))
     if (myid == 0) then
@@ -216,7 +215,8 @@ program generatesdf
     call MPI_FINALIZE(ierror)
 contains
 
-    ! Append the hole lids made by prepare_mesh to the geometry arrays (already wound consistently with their neighbours,
+    ! Append the hole lids made by prepare_mesh to the geometry arrays (already wound consistently with their
+    !   neighbours,
     ! so they carry no flip; per-face geometric normals keep the narrow-band normal bookkeeping valid).
     subroutine append_lids()
         real(dp), allocatable :: new_normals(:,:)
@@ -255,7 +255,8 @@ contains
     end subroutine append_lids
 
     ! One staggering of the field: unsigned near-surface distance per rank slab -> sign from the solid/fluid
-    ! classification (each rank classifies its own slab) -> optional fast-sweep fill -> gather on rank 0 and write.
+    ! classification (each rank classifies its own slab) -> optional fast-sweep fill -> gather on rank 0 and
+    !   write.
     subroutine compute_field(xs, ys, zs, fname, label, write_objid)
         implicit none
         real(dp), intent(in) :: xs(:), ys(:), zs(:)
@@ -279,13 +280,15 @@ contains
         end if
         call MPI_BARRIER(MPI_COMM_WORLD, ierror)
 
-        ! Collective: ranks whose slab misses the box pass an empty range but still take part in the reductions.
+        ! Collective: ranks whose slab misses the box pass an empty range but still take part in the
+        !   reductions.
         call raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
                                      xs, ys, zs, sx, ex, sy, ey, sz, ez, cx_lo, cx_hi, scalarvalue, &
                                      sdf(cx_lo:cx_hi,:,:), objid(cx_lo:cx_hi,:,:), myid, nprocs, MPI_COMM_WORLD)
 
         if (use_fast_sweep) then
-            ! objid is not touched by the fast-sweep propagation — it only needs to be correct in the narrow-band
+            ! objid is not touched by the fast-sweep propagation — it only needs to be correct in the
+            !   narrow-band
             ! interface cells where ghost points actually live.
             call fast_sweep_3d(sdf, decomp_x_start(myid), decomp_x_end(myid), 1, ny, 1, nz, &
                                xs, ys, zs, myid, left_rank, right_rank)

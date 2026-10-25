@@ -2,9 +2,8 @@
 """Run the tgv_small regression case at two rank/device counts and compare
 output_monitor's per-step diagnostics (src/monitor.f90:61) within tolerance.
 
-Used both as the CPU-vs-CPU MPI rank-count parity check (Phase 1) and,
-unchanged, as the CPU-vs-GPU and single-GPU-vs-multi-GPU parity check later
-(Phase 3+) -- just point --exe-a/--exe-b/--np-a/--np-b/--env-a/--env-b at the
+Used for the CPU-vs-CPU rank-count parity check and, unchanged, for CPU-vs-GPU and
+single-GPU-vs-multi-GPU parity: point --exe-a/--exe-b/--np-a/--np-b/--env-a/--env-b at the
 GPU build and a CUDA_VISIBLE_DEVICES-restricted rank.
 
 Exit code 0 = all monitored columns agree within tolerance at every step

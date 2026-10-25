@@ -22,9 +22,7 @@ Library use
     slc = SliceProbe.read("case/slice_meta.txt")
     slc.write_xmf(snap_path="case/fields/grid.out")
 
-Both share `_core.read_meta`/`_core.comp_names` for the identical meta.txt
-key=value parsing that generate_slice_xmf.py and load_line_probes.py used to
-each carry a private (verbatim-duplicate) copy of.
+Both share `_core.read_meta`/`_core.comp_names` for the meta.txt key=value parsing.
 """
 import os
 import warnings

@@ -1,45 +1,13 @@
-"""
-particles.py -- post-processing of the fdm-dopamine Lagrangian point particles.
+"""particles.py -- post-processing of the fdm-dopamine Lagrangian point particles.
 
-One module, three layers (use the library from your own scripts, or the CLI):
-
-  1. DATA      ParticleData   all snapshots '<prefix>_particles.<step>' as id-indexed
-                              arrays (Nt, Np); NaN where a particle is absent.
-  2. ANALYSIS  ParticleData   pdf / pdf2d / moments / msd / track / pick_ids / mask
-  3. FIGURES   Geometry       dune wall (analytic) or sdf = 0 iso-surface (any solid)
-               plot_pdfs, plot_tracks, animate_tracks, animate_cloud
-
-Library use
------------
-    from dopamine_post.particles import ParticleData, Geometry, plot_tracks, animate_tracks
-
-    pdat = ParticleData.from_case(".")                   # times=... if dt is adaptive
-    x, p = pdat.pdf("y", frames=slice(-20, None), bins=80)            # location PDF
-    x, p = pdat.pdf("ax", bins=100, log=True)                         # accel. PDF
-    ids  = pdat.pick_ids(6, seed=1, where={"y": (0.1, 0.3)})
-    geo  = Geometry.from_sdf(".", "SDF_in", grid_file="fields/grid.out")
-    animate_tracks(pdat, ids, "tracks3d.gif", frames=slice(-40, None), geometry=geo, view="3d")
-
-Command line  (python3 -m dopamine_post particles <command> -h for the options)
-------------
-    dopamine-post particles pdf y u v --last 20 --bins 80 --out pdf.png
-    dopamine-post particles tracks   --last 20 --n 8 --out tracks.png
-    dopamine-post particles animate  --last 40 --n 10 --view 3d --sdf-file SDF_in \\
-                                  --grid-file ../waveWall/fields/grid.out --out tracks3d.gif
-    dopamine-post particles cloud    --last 40 --color speed --out cloud.gif
-
-Conventions
------------
-x streamwise, y wall-normal (drawn vertical in 3-D), z spanwise.  "last N" always
-means the last N *snapshots* (not solver steps).  Quantities for pdf/get():
-x y z  u v w  speed  ax ay az  amag  age.  ax/ay/az are the solver-computed
-per-step acceleration (src/particles.f90) for snapshots written after that
-feature was added (10-column binary layout); for older 7-column snapshots they
-fall back to a finite difference of the stored velocity between snapshots,
-only as good as the snapshot spacing (see ParticleData.acc).
-
-Requires: numpy, matplotlib, ffmpeg (movies); scikit-image only for --sdf-file
-(via dopamine_post.sdf.Geometry.from_sdf).
+ParticleData loads all snapshots '<prefix>_particles.<step>' as id-indexed arrays (Nt, Np), NaN where a particle is absent;
+analysis: pdf / pdf2d / moments / msd / track / pick_ids / mask. Geometry draws the dune wall (analytic) or an sdf = 0
+iso-surface; figures: plot_pdfs, plot_tracks, animate_tracks, animate_cloud; ParticleData.write_xmf for ParaView.
+Snapshot layout: 10 columns x,y,z,u,v,w,ax,ay,az,age (big-endian); 7-column snapshots (no ax,ay,az) fall back to a finite
+difference of the stored velocity, only as good as the snapshot spacing (see ParticleData.acc).
+Axes: x streamwise, y wall-normal, z spanwise. "last N" means the last N snapshots. Quantities for pdf/get(): x y z u v w
+speed ax ay az amag age. Command line: dopamine-post particles {pdf,tracks,animate,cloud} -h; usage in docs/Tools.md.
+Requires numpy, matplotlib, ffmpeg (movies); scikit-image only for --sdf-file.
 """
 import os
 import re
@@ -64,8 +32,8 @@ SAND = (0.85, 0.74, 0.54)
 # ════════════════════════════════════════════════════════════════════════════
 def read_snapshot(path):
     """One snapshot -> (id[n], data[n,10]); columns x,y,z,u,v,w,ax,ay,az,age
-    (big-endian). Detects legacy 7-column snapshots (x,y,z,u,v,w,age, written
-    before src/particles.f90 stored per-step acceleration) from the record
+    (big-endian). Detects 7-column snapshots (x,y,z,u,v,w,age, without the
+    solver's per-step acceleration) from the record
     size and pads their ax/ay/az columns with NaN -- ParticleData.acc then
     falls back to a finite-difference reconstruction for those snapshots only.
     """
@@ -175,7 +143,7 @@ class ParticleData:
     def acc(self):
         """Acceleration (Nt,Np,3): the solver-stored value (src/particles.f90) when
         present, else a finite difference of the stored velocity on the snapshot
-        times (only as good as the snapshot spacing) for legacy 7-column snapshots."""
+        times (only as good as the snapshot spacing) for 7-column snapshots."""
         if self._acc is None:
             grad = np.gradient(self.vel, self.t, axis=0)
             self._acc = np.where(np.isnan(self._acc_raw), grad, self._acc_raw)
@@ -318,7 +286,7 @@ def write_particles_xmf(case_dir=".", prefix=None, out=None):
     sized to that snapshot's own particle count. Time Value is the step number
     (matching dopamine_post.fields.write_field_xmf's own convention), so
     ParaView's shared time toolbar scrubs fields and particles together.
-    Handles both the legacy 7-column (x,y,z,u,v,w,age) and current 10-column
+    Handles both the 7-column (x,y,z,u,v,w,age) and the 10-column
     (x,y,z,u,v,w,ax,ay,az,age) snapshot layouts, file by file.
     """
     case = Path(case_dir)

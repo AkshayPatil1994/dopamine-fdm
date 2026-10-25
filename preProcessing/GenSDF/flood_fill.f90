@@ -35,19 +35,10 @@ contains
         allocate(stack(3, stack_size))
         flag = 0
 
-        ! 
-        ! Pass 1: BFS from domain boundary through sentinel cells -> EXTERIOR
-        !
-        ! Only seed exterior from AABB faces that lie strictly inside the physical
-        ! domain (the buffer zone).  When an AABB face coincides with the physical
-        ! domain boundary (sx==1, ey==iny, etc.) the geometry may be cut there:
-        ! the solid's clipped face is outside the AABB so those cells never get a
-        ! narrowband value and remain at +scalarvalue.  Seeding them as exterior
-        ! would cause the BFS to leak through the open cut face and incorrectly
-        ! classify the entire interior of the cut solid as exterior.
-        ! Truly exterior cells on those clamped faces are reached by BFS propagation
-        ! from the buffer-zone seeds on the other faces.
-        ! 
+        ! Pass 1: BFS from the domain boundary through sentinel cells -> EXTERIOR. Seeds only on AABB faces
+        ! strictly inside the physical domain: where an AABB face coincides with the domain boundary the
+        ! geometry may be cut, those cells have no narrow-band value, and seeding them would let the BFS leak
+        ! through the cut face. Such faces are reached by propagation from the other faces.
         top = 0
         do kk = sz, ez; do jj = sy, ey; do ii = sx, ex
             if ((ii==sx .and. sx>1)  .or. (ii==ex .and. ex<inx) .or. &
@@ -96,7 +87,7 @@ contains
         ! Pass 2: topology-based interior classification.
         ! Any sentinel cell not reached by the exterior BFS (flag still 0) is
         ! enclosed by the narrowband surface and is therefore interior.  This
-        ! does NOT use the sign of narrowband values, so it is robust to
+        ! does NOT use the sign of narrowband values, so it also works for
         ! geometries whose surface normals are inverted or inconsistent.
         ! 
         do kk = sz, ez; do jj = sy, ey; do ii = sx, ex

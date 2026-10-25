@@ -2,25 +2,32 @@ module raycast_mod
     !
     ! raycast_mod — point-in-solid classification of grid points against a triangle surface mesh.
     !
-    ! sign_method = 1 (default, robust):
-    !   Tier 1  From every grid point six half-line rays are cast (+-x, +-y, +-z). Along a ray the ORIENTATION-SIGNED
-    !           crossings of the solid's triangles are summed (+1 where the surface normal points along the ray, -1
-    !           against it); that sum is the point's winding number (0 outside, 1 inside, 2 where two shells overlap
-    !           or a patch is doubled) -- provided the ray does not meet a defect. A ray that is clean gives the right
-    !           answer even if the mesh is open elsewhere (a missing top face does not matter to a ray going down),
-    !           so each ray is an independent witness. On an open shell a ray that escapes without meeting any
-    !           triangle abstains (it may simply have left through a hole). A point is decided here when at least three
-    !           rays vote and they are unanimous. (Plain crossing parity cannot do this: after a missed crossing it is
-    !           silently wrong for the rest of the line, and doubled or overlapping shells cancel it.)
-    !   Tier 2  Every other point (rays that disagree or that all abstain) gets the generalized winding number of the
-    !           solid evaluated with a BVH, thresholded at 1/2; see winding_mod. This degrades gracefully with holes
-    !           (w stays above 1/2 until the hole subtends more than half the sphere) and needs no closed shell.
+    ! sign_method = 1 (default):
+    !   Tier 1  From every grid point six half-line rays are cast (+-x, +-y, +-z). Along a ray the
+    !           ORIENTATION-SIGNED crossings of the solid's triangles are summed (+1 where the surface normal
+    !           points along the ray, -1 against it); that sum is the point's winding number (0 outside, 1
+    !           inside, 2 where two shells overlap or a patch is doubled) -- provided the ray does not meet a
+    !           defect. A clean ray gives the right answer even if the mesh is open elsewhere (a missing top
+    !             face
+    !           does not matter to a ray going down), so each ray is an independent witness. On an open shell
+    !             a
+    !           ray that escapes without meeting any triangle abstains (it may simply have left through a
+    !             hole).
+    !           A point is decided here when at least three rays vote and they are unanimous. (Plain crossing
+    !           parity cannot do this: after a missed crossing it is silently wrong for the rest of the line,
+    !           and doubled or overlapping shells cancel it.)
+    !   Tier 2  Every other point (rays that disagree or that all abstain) gets the generalized winding number
+    !           of the solid evaluated with a BVH, thresholded at 1/2; see winding_mod. This degrades
+    !           gracefully with holes (w stays above 1/2 until the hole subtends more than half the sphere)
+    !           and needs no closed shell.
     !   Orientation, duplicate triangles, degenerate slivers and (planar) hole lids come from meshprep_mod.
     ! sign_method = 0 : the original unsigned 3-axis parity majority vote (needs a watertight shell).
-    ! sign_method = 2 : winding number at every point, plus a count of how often tier 1 disagrees (validation).
+    ! sign_method = 2 : winding number at every point, plus a count of how often tier 1 disagrees
+    !   (validation).
     ! A solid flagged `ground` in the manifest is an open sheet classified as "below its topmost surface".
     !
-    ! The work is split across MPI ranks: tier-1 lines round-robin over ranks (their votes are combined with one
+    ! The work is split across MPI ranks: tier-1 lines round-robin over ranks (their votes are combined with
+    !   one
     ! all-reduce per solid), tier 2 and the final write-back on each rank's own x-slab.
     !
     use mpi
@@ -104,8 +111,10 @@ contains
     end subroutine grow_int
 
     ! -----------------------------------------------------------------------
-    ! Build the repaired mesh view for the robust classifier: faces with flipped triangles re-wound, the active mask,
-    ! and one winding-number hierarchy per (non-ground) solid. Call once, on every rank, after meshprep's analysis.
+    ! Build the repaired mesh view for the robust classifier: faces with flipped triangles re-wound, the
+    !   active mask,
+    ! and one winding-number hierarchy per (non-ground) solid. Call once, on every rank, after meshprep's
+    !   analysis.
     subroutine raycast_set_mesh(vertices, faces, face_solid_id, nfaces, nsolids, flip, active, is_open)
         implicit none
         real(dp), intent(in) :: vertices(:,:)
@@ -156,7 +165,8 @@ contains
         end do
     end subroutine raycast_set_mesh
 
-    ! Hash column through (coord_b, coord_c): the triangles whose bounding box contains the line. Exact — a crossing
+    ! Hash column through (coord_b, coord_c): the triangles whose bounding box contains the line. Exact — a
+    !   crossing
     ! implies the point lies inside the triangle's projected box, hence in the same hash column.
     subroutine query_hash_column(axis, coord_b, coord_c, candidate_tris, n_candidates)
         implicit none
@@ -188,7 +198,8 @@ contains
     ! the two perpendicular axes. Winding-independent unless `sgn` is requested: uses only vertex
     ! positions, never the stored/averaged triangle normal. Returns whether
     ! the infinite line crosses the triangle and, if so, the coordinate along
-    ! `axis` at the crossing. `sgn` is the sign of the triangle normal's component along the ray (the normal of
+    ! `axis` at the crossing. `sgn` is the sign of the triangle normal's component along the ray (the normal
+    !   of
     ! the vertex order v0,v1,v2), which is what the signed winding count needs.
     pure subroutine ray_triangle_crossing(axis, coord_b, coord_c, v0, v1, v2, hit, coord_a, sgn)
         implicit none
@@ -236,9 +247,12 @@ contains
     end subroutine ray_triangle_crossing
 
     ! -----------------------------------------------------------------------
-    ! sign_method = 0 (legacy): classify every point (xin(xlo:xhi), yin(sy:ey), zin(sz:ez)) as inside or outside
-    ! solid `sid` via a 3-axis ray-crossing-PARITY majority vote. Parity ignores orientation, but it is flipped for the
-    ! rest of any ray through a hole, and cancelled by doubled or overlapping shells. (sx:ex) only fixes the jitter
+    ! sign_method = 0: classify every point (xin(xlo:xhi), yin(sy:ey), zin(sz:ez)) as inside or
+    !   outside
+    ! solid `sid` via a 3-axis ray-crossing-PARITY majority vote. Parity ignores orientation, but it is
+    !   flipped for the
+    ! rest of any ray through a hole, and cancelled by doubled or overlapping shells. (sx:ex) only fixes the
+    !   jitter
     ! scale so every rank perturbs the rays identically; xlo:xhi is this rank's slab.
     subroutine classify_solid(vertices, faces, face_solid_id, nfaces, sid, &
                                xin, yin, zin, sx, ex, sy, ey, sz, ez, xlo, xhi, inside)
@@ -266,14 +280,18 @@ contains
         allocate(cands(256))
 
         ! build_hash bins a triangle into every hash cell its AABB overlaps. A crossing-parity count is not
-        ! idempotent under that duplication, so each triangle is tagged with the query that last processed it and
-        ! every candidate list is deduplicated in O(1) per candidate, without an O(nfaces) reset between columns.
+        ! idempotent under that duplication, so each triangle is tagged with the query that last processed it
+        !   and
+        ! every candidate list is deduplicated in O(1) per candidate, without an O(nfaces) reset between
+        !   columns.
         allocate(last_seen(nfaces))
         last_seen = 0
         query_gen = 0
 
-        ! Deterministic per-axis jitter: a query point that lands exactly on the shared edge between two triangles
-        ! (the diagonal of a quad face split into 2 triangles, common whenever a grid point coincides with a face's
+        ! Deterministic per-axis jitter: a query point that lands exactly on the shared edge between two
+        !   triangles
+        ! (the diagonal of a quad face split into 2 triangles, common whenever a grid point coincides with a
+        !   face's
         ! own centre) would register as a crossing of BOTH triangles, doubling the count and flipping parity.
         scale = max(abs(xin(ex)-xin(sx)), abs(yin(ey)-yin(sy)), abs(zin(ez)-zin(sz)), 1.0_dp)
         eps_x = scale * 7.5307258e-8_dp
@@ -453,10 +471,13 @@ contains
     end subroutine vote_along
 
     ! -----------------------------------------------------------------------
-    ! Tier 1 of the robust classifier for one grid line: signed crossings of solid `sid` along `axis` through (cb,cc).
-    ! For each point line(i) two half-line rays are evaluated (towards -axis and +axis); each contributes to lcode(i)
+    ! Tier 1 of the robust classifier for one grid line: signed crossings of solid `sid` along `axis` through
+    !   (cb,cc).
+    ! For each point line(i) two half-line rays are evaluated (towards -axis and +axis); each contributes to
+    !   lcode(i)
     !   1  if its winding number is non-zero (inside),   8  if it is zero (outside),   0  if the ray abstains.
-    ! A ray with no crossing at all is a clean "outside" for a closed shell; for an open shell it abstains while the
+    ! A ray with no crossing at all is a clean "outside" for a closed shell; for an open shell it abstains
+    !   while the
     ! point is inside the solid's bounding box (it may have left through a hole).
     subroutine line_codes(axis, cb, cc, line, lo, hi, vertices, sid, face_solid_id, nfaces, &
                           cands, cross_c, cross_s, last_seen, query_gen, lcode)
@@ -644,13 +665,19 @@ contains
     end subroutine allreduce_i1
 
     ! -----------------------------------------------------------------------
-    ! Top-level entry point: classify every point of this rank's x-slab xlo:xhi (intersected with the tagged box
-    ! sx:ex, sy:ey, sz:ez; for `ground` solids the box reaches down to the domain floor) as solid or fluid, one
-    ! solid at a time (first solid to claim a point wins), and write the result into `grid`/`objid_grid`, which hold
+    ! Top-level entry point: classify every point of this rank's x-slab xlo:xhi (intersected with the tagged
+    !   box
+    ! sx:ex, sy:ey, sz:ez; for `ground` solids the box reaches down to the domain floor) as solid or fluid,
+    !   one
+    ! solid at a time (first solid to claim a point wins), and write the result into `grid`/`objid_grid`,
+    !   which hold
     ! this slab (xlo:xhi, 1:ny, 1:nz). Cells that already carry a real near-surface distance (from
-    ! compute_narrowband_sdf / compute_scalar_distance_face) keep their magnitude, with the sign forced to match the
-    ! classification; cells still at the sentinel value keep the sentinel magnitude (fast_sweep_3d fills those in
-    ! afterwards). Collective over comm: every rank must call it, including ranks whose slab is empty (xlo > xhi).
+    ! compute_narrowband_sdf / compute_scalar_distance_face) keep their magnitude, with the sign forced to
+    !   match the
+    ! classification; cells still at the sentinel value keep the sentinel magnitude (fast_sweep_3d fills those
+    !   in
+    ! afterwards). Collective over comm: every rank must call it, including ranks whose slab is empty (xlo >
+    !   xhi).
     subroutine raycast_classify_domain(vertices, faces, face_solid_id, nfaces, nsolids, &
                                         xin, yin, zin, sx, ex, sy, ey, sz, ez, xlo, xhi, &
                                         scalarvalue_in, grid, objid_grid, myid, nproc, comm)
@@ -749,8 +776,10 @@ contains
         end do
     end subroutine sort_real
 
-    ! Sort crossing coordinates ascending, carrying the crossing sign along (median-of-3 quicksort, insertion for small
-    ! ranges; crossing counts per line are tiny for typical solids but reach thousands for finely tessellated terrain).
+    ! Sort crossing coordinates ascending, carrying the crossing sign along (median-of-3 quicksort, insertion
+    !   for small
+    ! ranges; crossing counts per line are tiny for typical solids but reach thousands for finely tessellated
+    !   terrain).
     recursive subroutine sort_pairs(c, s, n)
         real(dp), intent(inout) :: c(:)
         integer,  intent(inout) :: s(:)

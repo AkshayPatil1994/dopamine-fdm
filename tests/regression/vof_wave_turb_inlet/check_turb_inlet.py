@@ -4,8 +4,8 @@ over the whole depth (the air included) is added to the wave + current inlet. Th
 closes (1e-4). On the inlet face of the last snapshot, against the run without wave_turb at the same time: the injected u' = U_on - U_off has zero z-mean
 (the donor mean is subtracted) and the rms and pattern of the donor slice in the water cells, the target w' = (W_ghost + W_first)/2 is the donor w' (peak
 = amplitude) and both are exactly zero in the air above the free surface. The ghost mirror 2 w' - W_first has max|W_ghost| in (amp, 2 amp), with 0 < W_first < amp because the synthetic slice is not divergence free and w'
-decays within a few cells; the monitor max|W| (interior) is then W_first, in [max|W_first| of the snapshot, amp). (With the old FFT-preconditioned
-PCG, which does not converge at the density ratio 1000, the unprojected velocity left max|W| = 0.07 and a divergence of 2.8; the converged value is 0.027.)"""
+decays within a few cells; the monitor max|W| (interior) is then W_first, in [max|W_first| of the snapshot, amp). (An unconverged
+projection leaves max|W| = 0.07 and a divergence of 2.8; the converged value is 0.027.)"""
 import argparse, os, re, shutil, subprocess, sys, tempfile
 import numpy as np
 
