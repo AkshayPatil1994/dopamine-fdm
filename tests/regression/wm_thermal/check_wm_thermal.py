@@ -14,6 +14,7 @@ a = ap.parse_args()
 src = os.path.dirname(os.path.abspath(__file__))
 tmp = tempfile.mkdtemp(prefix='wmthermal_')
 KAPPA, G, TREF, Z0, Z0H, NY, LY, DT, NSTEPS = 0.41, 9.81, 300.0, 1e-3, 1e-4, 33, 1.0, 2e-3, 40
+BETA = 1.0/300.0                                       # beta_T of the input; the Obukhov length uses beta_T*grav, T_ref is only an offset
 
 
 def psi(zeta):
@@ -30,7 +31,7 @@ def most(u, dtheta, y):
         pm, ph = psi(y/math.copysign(max(abs(L), 1e-3), L))
         ut = KAPPA*u/max(math.log(max(y, 2*Z0)/Z0) - pm, 1e-3)
         tt = KAPPA*dtheta/max(math.log(max(y, 2*Z0H)/Z0H) - ph, 1e-3)
-        Ln = ut**2*TREF/(KAPPA*G*tt) if abs(tt) > 1e-12 else math.copysign(1e10, L)
+        Ln = ut**2/(KAPPA*G*BETA*tt) if abs(tt) > 1e-12 else math.copysign(1e10, L)
         Ln = math.copysign(max(abs(Ln), 1e-3), Ln)
         done = abs(Ln - L) < 1e-9*abs(Ln)
         L = Ln
@@ -113,4 +114,10 @@ try:
     print('PASSED')
 finally:
     import shutil
+    # T_ref is only an offset: the same physical case with every temperature shifted by -T_ref must give the same flow and T - 300
+    Uo, To = run('offset', 1, [(r'T_ref = 300.0', 'T_ref = 0.0'), (r'T_wall_bot = 301.0', 'T_wall_bot = 1.0'),
+                               (r'T_wall_top = 300.0', 'T_wall_top = 0.0')])
+    dU, dTo = np.abs(U1 - Uo).max(), np.abs(T1 - TREF - To).max()
+    print('T_ref offset invariance: max|dU| %.2e  max|dT| %.2e' % (dU, dTo))
+    bad |= not (dU < 1e-9 and dTo < 1e-9)
     shutil.rmtree(tmp, ignore_errors=True)

@@ -19,6 +19,6 @@
   filein = 'restart/x', fileout = 'x',
 /
 &BOUSSINESQ
-  boussinesq_flag = 1, beta_T = 0.0, T_ref = 300.0, grav = 9.81, Pr = 0.7, Pr_t = 0.85,
+  boussinesq_flag = 1, beta_T = 3.3333333333e-3, T_ref = 300.0, grav = 9.81, Pr = 0.7, Pr_t = 0.85,
   T_bc_bot = 2, T_bc_top = 0, T_wall_bot = 301.0, T_wall_top = 300.0, T_ic_type = 0,
 /

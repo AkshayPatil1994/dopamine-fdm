@@ -156,7 +156,7 @@ Contains
   !> Coupled MOST solve for (u_tau, theta_tau) and the Obukhov length L by fixed-point iteration of the Businger-Dyer log laws:
   !    u_tau     = kappa*u_ref  / [ln(y_ref/z0 ) - psi_m(y_ref/L)]
   !    theta_tau = kappa*dtheta / [ln(y_ref/z0h) - psi_h(y_ref/L)]
-  !    L         = u_tau^2 * T_ref / (kappa*grav*theta_tau)
+  !    L         = u_tau^2 / (kappa*beta_T*grav*theta_tau)   (neutral when beta_T*grav = 0; T_ref is only an offset)
   !  L is seeded from the caller's persisted value (typically 1-2 passes once quasi-steady) and updated in place. Reduces to
   !  solve_u_tau_rough/solve_theta_tau_rough when neutral (psi_m=psi_h=0).
   Subroutine solve_most(u_ref, dtheta, y_ref, z0, z0h, u_tau, theta_tau, L)
@@ -179,10 +179,10 @@ Contains
        u_tau     = kappa_wm * u_ref  / Max(log_m, 1d-3)
        theta_tau = kappa_wm * dtheta / Max(log_h, 1d-3)
 
-       If ( Abs(theta_tau) > 1d-12 ) Then
-          L_new = u_tau**2 * T_ref / (kappa_wm * grav * theta_tau)
+       If ( Abs(theta_tau) > 1d-12 .And. Abs(beta_T*grav) > 0d0 ) Then
+          L_new = u_tau**2 / (kappa_wm * beta_T * grav * theta_tau)
        Else
-          L_new = Sign(1d10, L)   ! no flux -> neutral, huge |L|
+          L_new = Sign(1d10, L)   ! no flux or no buoyancy -> neutral, huge |L|
        End If
        L_new = Sign( Max(Abs(L_new), 1d-3), L_new )
 
