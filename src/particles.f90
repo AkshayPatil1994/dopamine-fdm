@@ -83,6 +83,7 @@ Contains
   Subroutine setup_particles
 
     Logical :: loaded
+    Integer(Int32) :: n_tot, n_min, n_max
 
     If ( particles_active < 1 ) Return
 
@@ -120,7 +121,18 @@ Contains
     If ( restart == 1 .And. particle_restart_load == 1 ) Call read_particle_restart(loaded)
     If ( .Not. loaded ) Call seed_particles_fresh
 
-    If ( myid == 0 ) Write(*,'(A,I8,A)') ' particles: ', n_particles_init, ' seed particles configured (tracer, one-way)'
+    Call Mpi_reduce(n_particles_local, n_tot, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+    Call Mpi_reduce(n_particles_local, n_min, 1, MPI_INTEGER, MPI_MIN, 0, MPI_COMM_WORLD, ierr)
+    Call Mpi_reduce(n_particles_local, n_max, 1, MPI_INTEGER, MPI_MAX, 0, MPI_COMM_WORLD, ierr)
+    If ( myid == 0 ) Write(*,'(A,I8,A,I8,A,I8,A)') &
+       ' particles: ', n_tot, ' on the ranks (min ', n_min, ', max ', n_max, ' per rank)'
+    If ( .Not. loaded ) Then
+       Call Mpi_bcast(n_tot, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+       If ( n_tot /= n_particles_init ) Then
+          If ( myid == 0 ) Write(*,'(A,I0,A,I0)') ' ERROR: seeded ', n_tot, ' particles, expected ', n_particles_init
+          Call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+       End If
+    End If
 
   End Subroutine setup_particles
 
@@ -1005,6 +1017,21 @@ Contains
 
   End Subroutine record_exit_id
 
+  !> 31-bit integer avalanche hash (xorshift-multiply), Int64 arithmetic without overflow
+  Elemental Function mix31(h0) Result(h)
+
+    Integer(Int64), Intent(In) :: h0
+    Integer(Int64) :: h
+    Integer(Int64), Parameter :: m31 = 2147483647_Int64, c = 73244475_Int64
+
+    h = Ieor(h0, Ishft(h0, -16))
+    h = Iand(h*c, m31)
+    h = Ieor(h, Ishft(h, -16))
+    h = Iand(h*c, m31)
+    h = Ieor(h, Ishft(h, -16))
+
+  End Function mix31
+
   !> Uniform (0,1) draws that depend only on (id, salt): Park-Miller minimal standard generator seeded from a
   !  mix of the two, in Int64 arithmetic without overflow, so a seeded or reinjected particle's position is
   !  the same for every rank layout and every compiler (Fortran's Random_Number is not: gfortran and nvfortran
@@ -1018,7 +1045,9 @@ Contains
     Integer(Int64) :: st
     Integer(Int32) :: k
 
-    st = Mod( (Int(id,Int64)+1_Int64)*40503_Int64 + Int(salt,Int64)*9973_Int64 + 12345_Int64, m )
+    ! the hash makes the start state nonlinear in (id, salt); a linear start would make every draw a rank-1 lattice in id
+    ! and a different salt only a translation of it
+    st = Mod( mix31( Ieor( mix31( Iand(Int(salt,Int64), m) ), Iand(Int(id,Int64)+1_Int64, m) ) ), m )
     If ( st <= 0_Int64 ) st = st + m - 1_Int64
     Do k = 1, 6                                   ! warm up: neighbouring IDs give unrelated first draws
        st = Mod( 48271_Int64*st, m )

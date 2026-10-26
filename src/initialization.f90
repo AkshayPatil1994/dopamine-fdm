@@ -305,10 +305,6 @@ Contains
     ! UAV actuator disk marker setup (no-op unless uav_active>=1)
     If ( uav_active >= 1 ) Call setup_uav
 
-    ! Point-particle seeding/restart (no-op unless particles_active>=1); needs the grid and the x/z
-    ! periodic-partner topology
-    Call setup_particles
-
     ! Boundary conditions
     ! local pressure z-plane
     Allocate ( buffer_p(2:nxg-1,2:nyg-1) )
@@ -346,6 +342,9 @@ Contains
        Lzp        = Lz
        nzp_global = nzm_global
     End If
+
+    ! needs the grid, the x/z periodic-partner topology and Lxp/Lzp (the periodic seeding extent)
+    Call setup_particles
 
     ! global indices for fourier modes starting from 0
     mx_global = nxp_global - 1
