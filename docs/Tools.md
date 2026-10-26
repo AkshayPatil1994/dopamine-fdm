@@ -188,6 +188,7 @@ Reference scripts in `postProcessing/examples/` (index and decision table in its
 | ParaView, single-phase / Boussinesq / sediment | `xmf_single_phase.py` | `dopamine-post fields xmf` |
 | ParaView, two-fluid VOF (`vof` attribute) | `xmf_vof.py` | `dopamine-post fields xmf` |
 | ParaView, particles with the flow field | `xmf_particles.py` | `dopamine-post particles xmf` |
+| ParaView, fields + particles with physical time (restart-safe, standalone) | `xmf_time_synced.py` | - |
 | ParaView, chunked `<fileout>Block.<step>` boxes | `xmf_box.py` | `dopamine-post fields box-xmf` |
 | slice probes, IBM surface, SDF, UAV, ... | `probes_example.py`, `ibm_surface_example.py`, ... | `dopamine-post probes slice-xmf`, ... |
 

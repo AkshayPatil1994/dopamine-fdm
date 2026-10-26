@@ -11,6 +11,7 @@ first: the snapshots are written by the solver (`nsave > 0`, `fileout = '<prefix
 | + `boussinesq_flag`, `sediment_flag`, `sgs_model` | same scripts; the extra fields `T`, `C`, `nu_t` appear automatically | same script |
 | two-fluid VOF (`vof_active = 1`) | same scripts; field `vof` | `xmf_vof.py` |
 | particles (`particles_active = 1`, `<prefix>_particles.<step>`) | `particles_example.py` | `xmf_particles.py` (fields + particles) |
+| fields + particles on one physical-time axis, restart-safe (standalone, numpy only) | `particles_example.py` | `xmf_time_synced.py` (`<prefix>.xmf` + `<prefix>_particles.xmf`) |
 | `chunked_snapshot = .true.` (`<prefix>Block.<step>`) | `FieldSnapshot.from_box`, see `fields_single_snapshot.py` | `xmf_box.py` |
 | slice / line probes | `probes_example.py` | `SliceProbe.write_xmf` (same script) |
 | IBM surface, SDF, UAV path, RSB, SEM inflow, run log, Q-criterion | `ibm_surface_example.py`, `sdf_example.py`, `uav_example.py`, `rsb_example.py`, `inflow_example.py`, `runlog_example.py`, `vortex_example.py` | `ibm_surface_example.py` writes `.vtp/.pvd` |
