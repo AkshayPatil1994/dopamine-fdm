@@ -37,7 +37,7 @@ Contains
                        adv_band, &
                        rotation_active, Omega_x
 
-    Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, &
+    Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, chunk_nsave, chunk_tsave, &
                         cfl_adaptive, cfl_target, cfl_safety, dt_min, dt_max, pcg_precond, mg_cycle, mg_smooth_deg
 
     Namelist /BOUNDARY_CONDITIONS/ bc_face_ylo, bc_face_yhi, x_bc_type, y_bc_type, z_bc_type, outflow_backflow_beta
@@ -265,6 +265,8 @@ Contains
           Call abort_input( 'ERROR: &STATISTICS slice_freq<0 requires slice_interval > 0' )
        If ( n_lines > 0 .And. line_freq < 0 .And. line_interval <= 0d0 ) &
           Call abort_input( 'ERROR: &STATISTICS line_freq<0 requires line_interval > 0' )
+       If ( chunk_nsave < 0 .And. chunk_tsave <= 0d0 ) &
+          Call abort_input( 'ERROR: &NUMERICS chunk_nsave<0 requires chunk_tsave > 0' )
        If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
        If ( nmonitor <= 0 ) Call abort_input( 'ERROR: &NUMERICS nmonitor must be set to a positive step interval' )
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
@@ -395,6 +397,11 @@ Contains
           Write(*,'(A,E12.4)') '   tsave (nsave<0)             = ', tsave
        Else
           Write(*,'(A,I10)')   '   nsave                       = ', nsave
+       End If
+       If ( chunked_snapshot .And. chunk_nsave < 0 ) Then
+          Write(*,'(A,E12.4)') '   chunk_tsave (chunk_nsave<0) = ', chunk_tsave
+       Else If ( chunked_snapshot .And. chunk_nsave > 0 ) Then
+          Write(*,'(A,I10)')   '   chunk_nsave                 = ', chunk_nsave
        End If
        Write(*,'(A,L2,A,L2,A,I2)') '   full_snapshot, chunked, location = ', full_snapshot, ',', chunked_snapshot, ',', &
             snapshot_location
@@ -634,6 +641,8 @@ Contains
     Call Mpi_bcast ( y_end,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z_end,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( chunk_nsave,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( chunk_tsave,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nmonitor,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( sim_end_time,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( tsave,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
@@ -1056,7 +1065,7 @@ Contains
     End If
     If ( vof_flow >= 1 .And. restart == 1 .And. t_start < 0d0 .And. cfl_adaptive == 1 ) Then
        ! without t_start the restart clock is nstep_init*dt, which is wrong under adaptive dt
-       If ( wave_type > 0 .Or. nsave < 0 .Or. nsteps < 0 ) &
+       If ( wave_type > 0 .Or. nsave < 0 .Or. chunk_nsave < 0 .Or. nsteps < 0 ) &
             Call abort_input( 'ERROR: restart with adaptive dt needs t_start (the physical time of the snapshot): the clock ' // &
             'nstep_init*dt would reset the wave phase, ramp and output cadence' )
        Write(*,'(A)') ' WARNING: restart with adaptive dt and no t_start: t = nstep_init*dt is not the physical time'
@@ -1702,18 +1711,15 @@ Contains
     Character(8)     :: ext, pext
     Integer  (Int64) :: fsize
     Logical          :: dirExists
-    Logical          :: save_now
+    Logical          :: save_full, save_chunk, save_now
 
     ! nsave>0: step cadence; nsave<0: physical-time cadence, fires once t reaches tsave_next (kept on tsave
-    ! multiples by dt snapping in compute_time_step_RK3)
-    If ( nsave > 0 ) Then
-       save_now = ( Mod(istep,nsave) == 0 )
-    Else
-       ! tolerance: after dt-snapping t can land one ULP short of tsave_next, which would stall tsave_next
-       ! forever
-       save_now = ( t >= tsave_next - 1d-10 )
-       If ( save_now ) tsave_next = tsave_next + tsave
-    End If
+    ! multiples by dt snapping in compute_time_step_RK3); chunk_nsave likewise for the chunk box, 0 = with the
+    ! full snapshot
+    save_full  = save_due(nsave, tsave_next, tsave)
+    save_chunk = chunked_snapshot .And. save_full .And. chunk_nsave == 0
+    If ( chunked_snapshot .And. chunk_nsave /= 0 ) save_chunk = save_due(chunk_nsave, chunk_tsave_next, chunk_tsave)
+    save_now   = save_full .Or. save_chunk
 
     If ( save_now ) then
 
@@ -1721,6 +1727,25 @@ Contains
        If ( sediment_flag >= 1 ) Then
           !$acc update host(Cscal)
        End If
+  !> Whether a write cadence is due this step: n>0 every n steps, n<0 when t reaches tnext (then advanced by
+  !  tint)
+  Logical Function save_due(n, tnext, tint)
+
+    Integer(Int32), Intent(In)    :: n
+    Real   (Int64), Intent(InOut) :: tnext
+    Real   (Int64), Intent(In)    :: tint
+
+    If ( n > 0 ) Then
+       save_due = ( Mod(istep,n) == 0 )
+    Else
+       ! tolerance: after dt-snapping t can land one ULP short of tnext, which would stall tnext forever
+       save_due = ( t >= tnext - 1d-10 )
+       If ( save_due ) tnext = tnext + tint
+    End If
+
+  End Function save_due
+
+
        If ( boussinesq_flag >= 1 ) Then
           !$acc update host(Tscal)
        End If
@@ -1740,19 +1765,19 @@ Contains
 
        ! only the staggered full snapshot is the restart format; the centred full snapshot reuses the box
        ! writer on the whole domain
-       If ( full_snapshot .And. snapshot_location == 1 ) Then
+       If ( save_full .And. full_snapshot .And. snapshot_location == 1 ) Then
           fname = 'fields/'//Trim(Adjustl(fileout))//'.'//Trim(Adjustl(ext))
           Call write_box_snapshot(fname, [1, 1, 1], [nx_global, ny_global, nz_global])
        End If
 
        ! with both snapshots on, the chunk gets the Block suffix so it cannot clobber the full file
-       If ( chunked_snapshot ) Then
+       If ( save_chunk ) Then
           fname = 'fields/'//Trim(Adjustl(fileout))//'.'//Trim(Adjustl(ext))
           If ( full_snapshot ) fname = 'fields/'//Trim(Adjustl(fileout))//'Block.'//Trim(Adjustl(ext))
           Call write_box_snapshot(fname, chunk_f1, chunk_f2)
        End If
 
-       If ( full_snapshot .And. snapshot_location == 0 ) Then
+       If ( save_full .And. full_snapshot .And. snapshot_location == 0 ) Then
 
        If ( myid==0 ) Then
 
@@ -1812,14 +1837,14 @@ Contains
        ! Particle state (src/particles.f90): latest-state restart file plus a timestamped snapshot for
        ! ParaView (postProcessing/generate_particles_xmf.py); write_particle_snapshot is collective, so all
        ! ranks must agree on the filename.
-       If ( particles_active >= 1 ) Then
+       If ( save_full .And. particles_active >= 1 ) Then
           Call write_particle_restart
           Write(pext,'(I8)') istep + nstep_init
           pfname = 'fields/'//Trim(Adjustl(fileout))//'_particles.'//Trim(Adjustl(pext))
           Call write_particle_snapshot(pfname)
        End If
 
-       Call write_tavg(istep + nstep_init)
+       Call write_tavg(istep + nstep_init, save_full, save_chunk)
 
     End If
 

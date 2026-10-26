@@ -146,7 +146,7 @@ available:
   step that lands is never shorter than `dt/2`: a step of rounding size (for example
   `1e-9 s`) would change `dt` by orders of magnitude from one step to the next, which the
   incremental pressure of `ibm_pressure = 2` amplifies (§6.4). The same rule applies to
-  `slice_freq < 0`, `line_freq < 0` and `sim_end_time`.
+  `chunk_nsave < 0` (the `chunk_tsave` write times of the chunk box), `slice_freq < 0`, `line_freq < 0` and `sim_end_time`.
 
 These two switches are independent: `nsteps` and `nsave` can each be positive or
 negative in any combination. Configured via `&NUMERICS` — see

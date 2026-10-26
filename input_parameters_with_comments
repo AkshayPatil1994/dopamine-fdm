@@ -83,6 +83,8 @@
   tsave        = 1.0e30,
   cfl_adaptive = 0,       ! 1: adapt dt to cfl_target
   cfl_target   = 0.5,
+  ! chunk_nsave = 0,             ! chunk-box cadence: 0 = with the full snapshot | >0: every chunk_nsave steps | <0: every chunk_tsave time units
+  ! chunk_tsave = 1.0e30,
   cfl_safety   = 0.9,
   dt_min       = 1.0e-10,
   dt_max       = 1.0e10,

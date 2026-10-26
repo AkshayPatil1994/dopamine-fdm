@@ -166,19 +166,26 @@ Contains
   End Subroutine accumulate_scalar
 
 
-  !> Collective: write the averages as of now to fields/<fileout>_tavg.<step> (full domain) and/or, with
-  !  chunked_snapshot, the chunk box to fields/<fileout>_tavgBlock.<step> (plain _tavg when full_snapshot is
-  !  off); with tavg_reset = 1 the sums restart
-  Subroutine write_tavg(step)
+  !> Collective: write the averages as of now: the full domain to fields/<fileout>_tavg.<step> when do_full and,
+  !  with chunked_snapshot, the chunk box to fields/<fileout>_tavgBlock.<step> when do_chunk (plain _tavg when
+  !  full_snapshot is off). With tavg_reset = 1 the sums restart after the primary file (the full one, else the
+  !  chunk one), so a chunk-only write cannot drop the average the next restart file needs
+  Subroutine write_tavg(step, do_full, do_chunk)
 
     Integer(Int32), Intent(In) :: step
+    Logical,        Intent(In) :: do_full, do_chunk
+
+    Logical :: reset
 
     If ( tavg_active /= 1 ) Return
     If ( t_acc <= 0d0 ) Return
 
-    !$acc update host(acc)
-    If ( full_snapshot .Or. .Not. chunked_snapshot ) Call write_tavg_file(tavg_path(step), .False.)
-    If ( chunked_snapshot ) Then
+    If ( do_full .And. ( full_snapshot .Or. .Not. chunked_snapshot ) ) Then
+       !$acc update host(acc)
+       Call write_tavg_file(tavg_path(step), .False.)
+    End If
+    If ( do_chunk ) Then
+       !$acc update host(acc)
        If ( full_snapshot ) Then
           Call write_tavg_file(tavg_path(step, 'Block'), .True.)
        Else
@@ -186,7 +193,8 @@ Contains
        End If
     End If
 
-    If ( tavg_reset == 1 ) Then
+    reset = ( do_full .And. full_snapshot ) .Or. ( do_chunk .And. .Not. full_snapshot )
+    If ( tavg_reset == 1 .And. reset ) Then
        t_acc = 0d0
        !$acc kernels present(acc)
        acc = 0d0

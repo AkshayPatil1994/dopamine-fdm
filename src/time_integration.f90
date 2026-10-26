@@ -595,6 +595,8 @@ Contains
          ( Mod(istep, nmonitor) == 0 ) .Or. &
          ( nsave > 0 .And. Mod(istep, nsave) == 0 ) .Or. &
          ( nsave < 0 .And. t >= tsave_next - 1d-10 ) .Or. &
+         ( chunked_snapshot .And. chunk_nsave > 0 .And. Mod(istep, Max(chunk_nsave,1)) == 0 ) .Or. &
+         ( chunked_snapshot .And. chunk_nsave < 0 .And. t >= chunk_tsave_next - 1d-10 ) .Or. &
          ( n_slices > 0 .And. slice_freq > 0 .And. Mod(istep, slice_freq) == 0 ) .Or. &
          ( n_slices > 0 .And. slice_freq < 0 .And. t >= slice_tnext - 1d-10 ) .Or. &
          ( n_lines  > 0 .And. line_freq  > 0 .And. Mod(istep, line_freq)  == 0 ) .Or. &

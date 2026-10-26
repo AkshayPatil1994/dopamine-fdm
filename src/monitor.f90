@@ -434,6 +434,7 @@ Contains
     If ( cfl_adaptive == 1 .And. cfl_now > 0d0 ) dt = Max(dt_min, Min(dt_max, dt*cfl_target/cfl_now*cfl_safety))
     dt_presnap = dt
     If ( nsave < 0 ) dt = landing_dt(dt, tsave_next - t)
+    If ( chunked_snapshot .And. chunk_nsave < 0 ) dt = landing_dt(dt, chunk_tsave_next - t)
     If ( n_slices > 0 .And. slice_freq < 0 ) dt = landing_dt(dt, slice_tnext - t)
     If ( n_lines  > 0 .And. line_freq  < 0 ) dt = landing_dt(dt, line_tnext - t)
     If ( nsteps < 0 ) dt = landing_dt(dt, sim_end_time - t)

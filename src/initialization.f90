@@ -115,6 +115,7 @@ Contains
     ! time-based save cadence (nsave < 0 only): the first snapshot is due one tsave interval after the start
     ! time
     If ( nsave < 0 ) tsave_next = t + tsave
+    If ( chunk_nsave < 0 ) chunk_tsave_next = t + chunk_tsave
 
     ! sim_end_time is absolute and the time-based intervals are relative to this start time: an end time at or
     ! before it would give a negative dt

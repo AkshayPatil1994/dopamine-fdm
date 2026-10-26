@@ -50,6 +50,11 @@ Module global
   Real   (Int64) :: tsave        = 1d30
   Real   (Int64) :: tsave_next   = 0d0
 
+  ! chunk-box write cadence, same convention as nsave/tsave; chunk_nsave = 0 follows nsave/tsave
+  Integer(Int32) :: chunk_nsave      = 0
+  Real   (Int64) :: chunk_tsave      = 1d30
+  Real   (Int64) :: chunk_tsave_next = 0d0
+
   ! viscosity
   Real(Int64) :: nu
   !$acc declare create(nu)
