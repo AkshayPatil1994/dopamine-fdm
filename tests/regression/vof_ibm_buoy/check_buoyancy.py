@@ -15,7 +15,8 @@ a = ap.parse_args()
 src = os.path.dirname(os.path.abspath(__file__))
 text = re.sub(r'!.*', '', open(os.path.join(src, 'input_parameters')).read())
 rho_l = float(re.search(r'vof_rho_l\s*=\s*([\d.eE+-]+)', text).group(1))
-g = float(re.search(r'vof_grav\s*=\s*([\d.eE+-]+)', text).group(1))
+m = re.search(r'(?<![A-Za-z_])grav\s*=\s*([\d.eE+-]+)', text)
+g = float(m.group(1)) if m else 9.81
 R = 0.8
 expected = rho_l*g*4.0/3.0*np.pi*R**3
 tmp = tempfile.mkdtemp(prefix='vofbuoy_')

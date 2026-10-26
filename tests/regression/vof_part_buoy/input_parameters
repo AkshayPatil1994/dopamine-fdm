@@ -5,6 +5,7 @@
   grid_type = 1, alpha_grid = 1.0, alpha_grid_z = 0.0, p_row = 0, p_col = 0,
 /
 &PHYSICS
+  grav = 9.81,
   nu = 1.0e-6, sgs_model = 0,
 /
 &NUMERICS
@@ -21,7 +22,7 @@
 /
 &VOF
   vof_active = 1, vof_flow = 1, vof_ic_type = 4, vof_level = 0.5, vof_wave_amp = 0.0, vof_wave_lambda = 1.0,
-  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 9.81,
+  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5,
 /
 
 &PARTICLES
@@ -31,5 +32,5 @@
   bc_particle_x = 2, bc_particle_y = 2, bc_particle_z = 0, particle_mode = 1, particle_diam = 1.0e-3, particle_rho = 1.0, particle_rho_f = 1000.0,
 /
 &SEDIMENT
-  sediment_flag = 0, grav = 9.81,
+  sediment_flag = 0,
 /

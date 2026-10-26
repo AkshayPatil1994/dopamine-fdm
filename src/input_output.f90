@@ -22,7 +22,6 @@ Contains
     Character(*), Intent(In), Optional :: input_file
     Character(:), Allocatable :: fname
     Integer(Int32) :: ios, unit_in
-    Real(Int64)    :: grav_sediment
     Integer(Int32) :: nx, ny, nz, nks
     Real   (Int64) :: Lx, Ly, Lz, alpha_grid
     Real   (Int64) :: T_wave_x, T_wave_z
@@ -35,7 +34,7 @@ Contains
                        z0_ylo, z0_yhi, z0h_ylo, z0h_yhi, wm_filter_mode, wm_filter_Tf_fac, &
                        flow_forcing_mode, Ub_target, advection_scheme, adv_wall_layers, adv_order, adv_beta0, adv_beta_ibm, &
                        adv_band, &
-                       rotation_active, Omega_x
+                       rotation_active, Omega_x, grav
 
     Namelist /NUMERICS/ dt, nsteps, nsave, nmonitor, sim_end_time, tsave, chunk_nsave, chunk_tsave, &
                         cfl_adaptive, cfl_target, cfl_safety, dt_min, dt_max, pcg_precond, mg_cycle, mg_smooth_deg
@@ -61,10 +60,10 @@ Contains
     Namelist /IO/ filein, fileout, full_snapshot, chunked_snapshot, snapshot_location, &
                   x_start, x_end, y_start, y_end, z_start, z_end
 
-    Namelist /SEDIMENT/ sediment_flag, d_s, rho_s, rho_f, grav, Sc, Sc_t, C_ref, sed_bc_bot, &
+    Namelist /SEDIMENT/ sediment_flag, d_s, rho_s, rho_f, Sc, Sc_t, C_ref, sed_bc_bot, &
                          C_ic_type, C_ic_height
 
-    Namelist /BOUSSINESQ/ boussinesq_flag, beta_T, T_ref, grav, Pr, Pr_t, &
+    Namelist /BOUSSINESQ/ boussinesq_flag, beta_T, T_ref, Pr, Pr_t, &
                            T_bc_bot, T_bc_top, T_wall_bot, T_wall_top, &
                            T_ic_type, T_ic_grad
 
@@ -77,7 +76,7 @@ Contains
     Namelist /UAV/ uav_active, uav_xc, uav_yc, uav_zc, uav_disk_radius, &
                    uav_n_r, uav_n_theta, uav_hover_thrust, uav_kernel_ncell, &
                    uav_path_active, uav_path_file, uav_thrust_active, uav_thrust_file, &
-                   uav_load_profile, uav_tilt_active, uav_tilt_tau, uav_grav, uav_swirl_frac
+                   uav_load_profile, uav_tilt_active, uav_tilt_tau, uav_swirl_frac
 
     Namelist /PARTICLES/ particles_active, n_particles_init, &
                          particle_seed_xmin, particle_seed_xmax, particle_seed_ymin, particle_seed_ymax, &
@@ -97,7 +96,7 @@ Contains
 
     Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, vof_method, vof_beta, &
                    vof_geo_density, vof_inertia, &
-                   vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_grav, vof_sigma, &
+                   vof_flow, vof_rho_l, vof_rho_g, vof_nu_l, vof_nu_g, vof_sigma, &
                    vof_pcg_iters, vof_pcg_tol, vof_mom_scheme, vof_mom_cm0, vof_mom_cm1, &
                    vof_rk_mom, vof_rk_nth, vof_co_sub, vof_nsub, vof_freeze_ut, vof_adv_iters, vof_adv_tol, &
                    vof_tr_floor, &
@@ -193,19 +192,17 @@ Contains
        If ( namelist_group_present(unit_in, 'SEDIMENT') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=SEDIMENT,            iostat=ios)
-          If (ios /= 0) Call abort_input( 'ERROR: &SEDIMENT present but failed to parse (check variable names)' )
+          If (ios /= 0) Call abort_input( 'ERROR: &SEDIMENT present but failed to parse (check variable names; gravity is the ' // &
+               'single grav in &PHYSICS)' )
        Else
           Write(*,'(A)') ' INFO: no &SEDIMENT found, scalar transport disabled'
        End If
-       grav_sediment = grav
 
        If ( namelist_group_present(unit_in, 'BOUSSINESQ') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=BOUSSINESQ,          iostat=ios)
-          If (ios /= 0) Call abort_input( 'ERROR: &BOUSSINESQ present but failed to parse (check variable names)' )
-          If ( sediment_flag >= 1 .And. grav /= grav_sediment ) Then
-             Write(*,'(A)') ' WARNING: &SEDIMENT and &BOUSSINESQ specify different grav, using &BOUSSINESQ value'
-          End If
+          If (ios /= 0) Call abort_input( 'ERROR: &BOUSSINESQ present but failed to parse (check variable names; gravity is ' // &
+               'the single grav in &PHYSICS)' )
        Else
           Write(*,'(A)') ' INFO: no &BOUSSINESQ found, thermal stratification disabled'
        End If
@@ -221,7 +218,8 @@ Contains
        If ( namelist_group_present(unit_in, 'UAV') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=UAV,                 iostat=ios)
-          If (ios /= 0) Call abort_input( 'ERROR: &UAV present but failed to parse (check variable names)' )
+          If (ios /= 0) Call abort_input( 'ERROR: &UAV present but failed to parse (check variable names; gravity is the ' // &
+               'single grav in &PHYSICS)' )
        Else
           Write(*,'(A)') ' INFO: no &UAV found, UAV actuator disk disabled'
        End If
@@ -253,7 +251,8 @@ Contains
        If ( namelist_group_present(unit_in, 'VOF') ) Then
           Rewind(unit_in)
           Read(unit_in, nml=VOF,                 iostat=ios)
-          If (ios /= 0) Call abort_input( 'ERROR: &VOF present but failed to parse (check variable names)' )
+          If (ios /= 0) Call abort_input( 'ERROR: &VOF present but failed to parse (check variable names; gravity is the ' // &
+               'single grav in &PHYSICS)' )
        Else
           Write(*,'(A)') ' INFO: no &VOF found, free-surface VOF disabled'
        End If
@@ -265,9 +264,9 @@ Contains
           Call abort_input( 'ERROR: &STATISTICS slice_freq<0 requires slice_interval > 0' )
        If ( n_lines > 0 .And. line_freq < 0 .And. line_interval <= 0d0 ) &
           Call abort_input( 'ERROR: &STATISTICS line_freq<0 requires line_interval > 0' )
+       If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
        If ( chunk_nsave < 0 .And. chunk_tsave <= 0d0 ) &
           Call abort_input( 'ERROR: &NUMERICS chunk_nsave<0 requires chunk_tsave > 0' )
-       If ( nsave == 0 ) Call abort_input( 'ERROR: &NUMERICS nsave must be set (>0 every nsave steps, <0 every tsave time units)' )
        If ( nmonitor <= 0 ) Call abort_input( 'ERROR: &NUMERICS nmonitor must be set to a positive step interval' )
        nx_global  = nx;  ny_global  = ny;  nz_global  = nz
        Lx_i       = Lx;  Ly_i       = Ly;  Lz_i       = Lz
@@ -361,6 +360,7 @@ Contains
        Else
           Write(*,'(A,E12.4)')  '   nu                          = ', nu
        End If
+       Write(*,'(A,E12.4)')  '   grav                        = ', grav
        Write(*,'(A,I2)')     '   advection_scheme (0=skew-symmetric,1=pure central,2=skew+upwind) = ', advection_scheme
        If ( adv_wall_layers > 0 ) Write(*,'(A,I3)') '   adv_wall_layers             = ', adv_wall_layers
        If ( advection_scheme == 2 ) Write(*,'(A,I2,A,F6.3,A,F6.3,A,I2)') '   adv_order ', adv_order, '  adv_beta0 ', adv_beta0, &
@@ -510,7 +510,6 @@ Contains
           Write(*,'(A,I2)')    '   boussinesq_flag              = ', boussinesq_flag
           Write(*,'(A,E12.4)') '   beta_T                       = ', beta_T
           Write(*,'(A,E12.4)') '   T_ref                        = ', T_ref
-          Write(*,'(A,E12.4)') '   grav                         = ', grav
           Write(*,'(A,F6.3)')  '   Pr                           = ', Pr
           Write(*,'(A,F6.3)')  '   Pr_t                         = ', Pr_t
           Write(*,'(A,2I3)')   '   T_bc (bot/top, 0=adiabatic,1=isothermal) = ', T_bc_bot, T_bc_top
@@ -518,7 +517,6 @@ Contains
        If ( sediment_flag >= 1 ) Then
           Write(*,'(A,I2)')    '   sediment_flag                = ', sediment_flag
           Write(*,'(A,2E12.4)') '   d_s, rho_s                   = ', d_s, rho_s
-          Write(*,'(A,E12.4)') '   grav                         = ', grav
           Write(*,'(A,2F6.3)') '   Sc, Sc_t                     = ', Sc, Sc_t
        End If
        If ( uav_active >= 1 ) Write(*,'(A,I2)') '   uav_active                   = ', uav_active
@@ -563,7 +561,6 @@ Contains
           If ( vof_flow >= 1 ) Then
              Write(*,'(A,2E12.4)') '   vof_rho_l, vof_rho_g        = ', vof_rho_l, vof_rho_g
              Write(*,'(A,2E12.4)') '   vof_nu_l,  vof_nu_g         = ', vof_nu_l, vof_nu_g
-             Write(*,'(A,E12.4)')  '   vof_grav                    = ', vof_grav
              Write(*,'(A,I3)')     '   vof_pcg_iters               = ', vof_pcg_iters
              Write(*,'(A,I2)')     '   vof_mom_scheme (0 central,1 upwind,2 Koren,4 QUICK,6 WENO5-Z) = ', vof_mom_scheme
           End If
@@ -641,11 +638,11 @@ Contains
     Call Mpi_bcast ( y_end,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z_start,              1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( z_end,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( chunk_nsave,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( chunk_tsave,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nmonitor,             1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( sim_end_time,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( tsave,                1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( chunk_nsave,          1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( chunk_tsave,          1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( nsampling,            1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( ibm_surface_nsampling,1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( cfl_adaptive,         1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -728,7 +725,6 @@ Contains
     Call Mpi_bcast ( uav_load_profile,     1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_tilt_active,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_tilt_tau,         1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( uav_grav,             1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( uav_swirl_frac,       1, MPI_real8,     0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( boussinesq_flag,      1, MPI_integer,   0, MPI_COMM_WORLD, ierr )
@@ -844,7 +840,6 @@ Contains
     Call Mpi_bcast ( vof_rho_g,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_nu_l,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_nu_g,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
-    Call Mpi_bcast ( vof_grav,              1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_pcg_iters,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_pcg_tol,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( vof_mom_scheme,        1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
@@ -883,6 +878,7 @@ Contains
     Call check_numerics
     Call check_snapshot_inputs
     Call check_physics_and_bc
+    Call check_particle_inputs
     Call check_combination_warnings
 
   End Subroutine check_run_inputs
@@ -998,6 +994,40 @@ Contains
   End Subroutine check_combination_warnings
 
 
+  !> Particle options that contradict the rest of the run abort; switches set while particles are off or
+  !  the IBM is absent are only reported
+  Subroutine check_particle_inputs
+
+    Character(300) :: ignored
+
+    ignored = ''
+    If ( particles_active < 1 ) Then
+       If ( particle_mode /= 0 )              ignored = Trim(ignored)//' particle_mode'
+       If ( particle_added_mass /= 0 )        ignored = Trim(ignored)//' particle_added_mass'
+       If ( particle_brownian /= 0 )          ignored = Trim(ignored)//' particle_brownian'
+       If ( sgs_particle_model /= 0 )         ignored = Trim(ignored)//' sgs_particle_model'
+       If ( particle_boussinesq_coupling /= 0 ) ignored = Trim(ignored)//' particle_boussinesq_coupling'
+       If ( Len_trim(ignored) > 0 ) Write(*,'(A)') ' WARNING: &PARTICLES particles_active = 0, ignored:'//Trim(ignored)
+       Return
+    End If
+
+    If ( particle_mode < 0 .Or. particle_mode > 1 ) Call abort_input( 'ERROR: &PARTICLES particle_mode must be 0 or 1' )
+    If ( sgs_particle_model < 0 .Or. sgs_particle_model > 1 ) &
+         Call abort_input( 'ERROR: &PARTICLES sgs_particle_model must be 0 or 1' )
+    If ( particle_mode >= 1 .And. ( particle_diam <= 0d0 .Or. particle_rho <= 0d0 .Or. particle_rho_f <= 0d0 ) ) &
+         Call abort_input( 'ERROR: &PARTICLES inertial particles need particle_diam, particle_rho, particle_rho_f > 0' )
+    If ( particle_mode == 0 .And. ( particle_added_mass /= 0 .Or. particle_brownian /= 0 ) ) &
+         Call abort_input( 'ERROR: &PARTICLES particle_added_mass/particle_brownian need particle_mode=1' )
+    If ( sgs_particle_model == 1 .And. sgs_model == 0 ) &
+         Call abort_input( 'ERROR: &PARTICLES sgs_particle_model=1 needs an LES eddy viscosity (sgs_model /= 0)' )
+    If ( particle_boussinesq_coupling /= 0 .And. boussinesq_flag < 1 ) &
+         Call abort_input( 'ERROR: &PARTICLES particle_boussinesq_coupling=1 needs boussinesq_flag >= 1' )
+    If ( ibm_input_mode < 1 .And. Any( particle_ibm_bc /= 2 ) ) &
+         Write(*,'(A)') ' WARNING: &PARTICLES particle_ibm_bc is set but there is no IBM (ibm_input_mode < 1): ignored'
+
+  End Subroutine check_particle_inputs
+
+
   !> Reject feature combinations the free-surface solver does not support (rank 0, right after the namelists
   !  are read). UAV is excluded in both VOF modes; vof_flow>=1 additionally excludes the features below.
   Subroutine check_vof_inputs
@@ -1074,10 +1104,6 @@ Contains
        If ( rotation_active >= 1 ) Call abort_input( 'ERROR: vof_flow=1 does not support rotation' )
        If ( particles_active >= 1 .And. Abs(particle_rho_f - vof_rho_l) > 1d-12*vof_rho_l ) &
             Call abort_input( 'ERROR: vof_flow=1 particles move in the liquid: particle_rho_f must equal vof_rho_l' )
-       If ( particles_active >= 1 .And. particle_mode >= 1 .And. Abs(grav - vof_grav) > 1d-12*Max(1d0, Abs(vof_grav)) ) &
-            Call abort_input( 'ERROR: vof_flow=1 inertial particles need grav (&SEDIMENT/&BOUSSINESQ) equal to vof_grav (&VOF)' )
-       If ( boussinesq_flag >= 1 .And. Abs(grav - vof_grav) > 1d-12*Max(1d0, Abs(vof_grav)) ) &
-            Call abort_input( 'ERROR: vof_flow=1 with Boussinesq needs grav (&BOUSSINESQ) equal to vof_grav (&VOF)' )
        If ( boussinesq_flag >= 1 .And. vof_hsplit /= 0 ) &
             Call abort_input( 'ERROR: vof_flow=1 Boussinesq buoyancy needs vof_hsplit = 0' )
        If ( dPdx /= 0d0 .Or. dPdz /= 0d0 .Or. flow_forcing_mode /= 0 ) &
@@ -1704,6 +1730,25 @@ Contains
   End Subroutine write_box_snapshot
 
 
+  !> Whether a write cadence is due this step: n>0 every n steps, n<0 when t reaches tnext (then advanced by
+  !  tint)
+  Logical Function save_due(n, tnext, tint)
+
+    Integer(Int32), Intent(In)    :: n
+    Real   (Int64), Intent(InOut) :: tnext
+    Real   (Int64), Intent(In)    :: tint
+
+    If ( n > 0 ) Then
+       save_due = ( Mod(istep,n) == 0 )
+    Else
+       ! tolerance: after dt-snapping t can land one ULP short of tnext, which would stall tnext forever
+       save_due = ( t >= tnext - 1d-10 )
+       If ( save_due ) tnext = tnext + tint
+    End If
+
+  End Function save_due
+
+
   ! Input: U,V,W,x,y,z,xm,ym,zm; output: fileout
   Subroutine output_data
 
@@ -1727,25 +1772,6 @@ Contains
        If ( sediment_flag >= 1 ) Then
           !$acc update host(Cscal)
        End If
-  !> Whether a write cadence is due this step: n>0 every n steps, n<0 when t reaches tnext (then advanced by
-  !  tint)
-  Logical Function save_due(n, tnext, tint)
-
-    Integer(Int32), Intent(In)    :: n
-    Real   (Int64), Intent(InOut) :: tnext
-    Real   (Int64), Intent(In)    :: tint
-
-    If ( n > 0 ) Then
-       save_due = ( Mod(istep,n) == 0 )
-    Else
-       ! tolerance: after dt-snapping t can land one ULP short of tnext, which would stall tnext forever
-       save_due = ( t >= tnext - 1d-10 )
-       If ( save_due ) tnext = tnext + tint
-    End If
-
-  End Function save_due
-
-
        If ( boussinesq_flag >= 1 ) Then
           !$acc update host(Tscal)
        End If

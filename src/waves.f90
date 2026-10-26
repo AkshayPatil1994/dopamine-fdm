@@ -9,7 +9,7 @@
 Module waves
 
   Use iso_fortran_env, Only : Int32, Int64
-  Use global, Only : nyg, ny, y, yg, Ly_i, vof_level, vof_grav, wave_type, wave_height, wave_period, wave_phase, wave_sf_n, &
+  Use global, Only : nyg, ny, y, yg, Ly_i, vof_level, grav, wave_type, wave_height, wave_period, wave_phase, wave_sf_n, &
                      wave_current_mode, wave_Hs, wave_Tp, wave_gamma, wave_nfreq, wave_seed, wave_ramp_time, &
                      current_type, current_U, current_z0, current_n
 
@@ -61,7 +61,7 @@ Contains
 
     pi_ = 4d0*Atan(1d0)
     wv_d = vof_level
-    wv_g = vof_grav
+    wv_g = grav
     Allocate( wv_in_u(nyg), wv_in_v(ny), wv_in_m(nyg), wv_in_mv(ny) )
     wv_in_u = 0d0;  wv_in_v = 0d0;  wv_in_m = 0d0;  wv_in_mv = 0d0
     !$acc enter data copyin(wv_in_u,wv_in_v,wv_in_m,wv_in_mv)

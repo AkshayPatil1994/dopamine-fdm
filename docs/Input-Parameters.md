@@ -30,6 +30,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
 | `nu` | required | Kinematic viscosity [m²/s]. With `vof_flow=1` it is not used (the echo says so): the two-fluid viscosities `vof_nu_l/g` apply, and the larger of them enters the viscous CFL limit. |
+| `grav` | `9.81` | Gravity [m/s²] along −y. The **only** gravity input: sediment settling, Boussinesq buoyancy, inertial `&PARTICLES` (`particle_mode=1`), the two-fluid VOF solver and waves, and the UAV tilt model all read it. Set `grav = 0` for a case without gravity. It exists only in `&PHYSICS`: `grav` inside `&SEDIMENT`/`&BOUSSINESQ` and the former `vof_grav`/`uav_grav` are removed and fail the namelist read. `uav_tilt_active=1` needs `grav > 0`. |
 | `dPdx, dPdz` | `0.0` | Mean streamwise / spanwise pressure gradient (kinematic, m/s²) that drives the flow. `dPdx` is ignored if `flow_forcing_mode=1`; `dPdx` also sets `u_tau` for `ic_type` 1 and 4. |
 | `flow_forcing_mode` | `0` | `0` drive with `dPdx`/`dPdz`; `1` constant mass flux: a uniform shift of U each step holds the bulk velocity at `Ub_target` (needs `x_bc_type=0`, no `T_wave_x`; aborts otherwise). |
 | `Ub_target` | `0.0` | Target bulk streamwise velocity [m/s] for `flow_forcing_mode=1`. |
@@ -64,9 +65,9 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `nmonitor` | required | Print a monitor line every `nmonitor` steps (must be `>0`). With a flat-wall model (`flat_wall_model_flag > 0`, y walls, single phase) the same cadence appends the plane-averaged wall-model state to `wall_diag.dat`: `step t u_tau_lo u_tau_hi` and, with the MOST thermal wall model (`T_bc_*=2`), `qT_lo qT_hi invL_lo invL_hi` (wall heat flux and 1/L per wall). A fresh run truncates the file, a restart appends. z walls and IBM walls are not covered. |
 | `sim_end_time` | `1e30` | End time; used only when `nsteps<0`. |
 | `tsave` | `1e30` | Save interval; used only when `nsave<0`. |
-| `cfl_adaptive` | `0` | `1` adapts `dt` to `cfl_target`. |
 | `chunk_nsave` | `0` | Write cadence of the `chunked_snapshot` box, same convention as `nsave`: `0` writes it with the full snapshot, `>0` every `chunk_nsave` steps, `<0` every `chunk_tsave` time units (the steps are shortened to land on them). Independent of `nsave`, so the box can be written more or less often than the restart file. |
 | `chunk_tsave` | `1e30` | Chunk write interval; used only when `chunk_nsave<0`. |
+| `cfl_adaptive` | `0` | `1` adapts `dt` to `cfl_target`. |
 | `cfl_target` | `0.5` | Target CFL (adaptive). |
 | `cfl_safety` | `0.9` | Safety factor on the `dt` update (adaptive). |
 | `dt_min, dt_max` | `1e-10`, `1e10` | Bounds on `dt` (adaptive). |
@@ -173,7 +174,6 @@ Suspended-sediment passive scalar with Soulsby (1997) settling. Omit to disable.
 | `sediment_flag` | `0` | `1` enable. |
 | `d_s` | `1e-4` | Particle diameter [m]. |
 | `rho_s, rho_f` | `2650`, `1000` | Particle and fluid density [kg/m³]. |
-| `grav` | `0.0` | Gravity [m/s²], shared with `&BOUSSINESQ` and inertial `&PARTICLES` (warning if the groups disagree; `&BOUSSINESQ` wins). Set it for any of them. |
 | `Sc, Sc_t` | `1.0`, `0.7` | Molecular / turbulent Schmidt numbers. `Sc_t` is used with `sgs_model = 1` (Vreman) and `0`; with `sgs_model = 2` (AMD) the turbulent diffusivity comes from the AMD scalar closure and `Sc_t` is ignored (Numerics §5). |
 | `sed_bc_bot` | `0` | Bottom BC: `0` zero flux, `1` fixed `C_ref`. |
 | `C_ref` | `0.0` | Near-bed reference concentration (also the inflow value for `x_bc_type=1`). |
@@ -189,7 +189,6 @@ Temperature transport with buoyancy in the y-momentum equation (gravity along �
 | `boussinesq_flag` | `0` | `1` enable. |
 | `beta_T` | `0.0` | Thermal expansion coefficient [1/K]; the buoyancy force is $\beta_T\,g\,(T-T_\mathrm{ref})$ and the Obukhov length of the MOST wall model uses $\beta_T\,g$ (neutral when `beta_T*grav = 0`). |
 | `T_ref` | `0.0` | Reference temperature [K] for buoyancy and the uniform IC: only an offset (shifting `T_ref` and all temperatures together changes nothing), not an absolute temperature. |
-| `grav` | `0.0` | Gravity [m/s²] (see `&SEDIMENT`). |
 | `Pr, Pr_t` | `0.7`, `0.85` | Molecular / turbulent Prandtl numbers. `Pr_t` is used with `sgs_model = 1` (Vreman) and `0`; with `sgs_model = 2` (AMD) the AMD scalar closure supplies the turbulent diffusivity and `Pr_t` is ignored; the buoyancy production term of the AMD eddy viscosity needs `boussinesq_flag >= 1` (it runs on CPU and GPU builds; Numerics §5). |
 | `T_bc_bot, T_bc_top` | `0, 0` | Wall BC: `0` adiabatic, `1` isothermal at `T_wall_*`, `2` rough-EQWM flux with Monin–Obukhov stability coupling (needs `flat_wall_model_flag=2` and `z0h_*>0`; the momentum stress uses the previous step's Obukhov length). |
 | `T_wall_bot, T_wall_top` | `0.0` | Wall temperature [K] for BC types 1 and 2. |
@@ -247,16 +246,15 @@ Actuator disk whose thrust is spread as a reaction force over `rhs_u/v/w`. Omit 
 | `uav_path_active` | `0` | `1` follow `uav_path_file`: rows `t x y z` sorted by strictly increasing t; Catmull-Rom cubic-Hermite interpolation, clamped outside the range (can under/overshoot a few % at a flat-hold→steep-change transition). |
 | `uav_thrust_active` | `0` | `1` follow `uav_thrust_file` (rows `t T`, same interpolation) instead of the constant thrust, e.g. takeoff surge or landing flare. |
 | `uav_load_profile` | `0` | `0` uniform loading; `1` parabolic tip taper (weight 1−(r/R)², renormalised). |
-| `uav_tilt_active` | `0` | `1` tilt the disk normal along `(ax, uav_grav+ay, az)` from the path acceleration (needs `uav_path_active=1`). Direction only: the thrust magnitude is not trimmed. |
+| `uav_tilt_active` | `0` | `1` tilt the disk normal along `(ax, grav+ay, az)` from the path acceleration (needs `uav_path_active=1`). Direction only: the thrust magnitude is not trimmed. |
 | `uav_tilt_tau` | `0.2` | Low-pass time constant [s] of the tilt (smooths the path's knot-to-knot acceleration jumps). |
-| `uav_grav` | `9.81` | Gravity used only by the tilt model. |
 | `uav_swirl_frac` | `0.0` | In-plane tangential reaction force as a fraction of each marker's thrust (rotor-torque reaction; net torque only, rotation sense arbitrary). |
 
 All ranks read the path and thrust files independently (`#` and blank lines skipped).
 
 ## PARTICLES
 
-Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disable. With `vof_flow=1` the particles are liquid-only: they must be seeded below the free surface and are reflected when a step would take them into the gas.
+Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disable. Inertial particles take gravity from `grav` and the viscosity from `nu` (`&PHYSICS`); `sgs_particle_model=1` needs `sgs_model /= 0` and `particle_boussinesq_coupling=1` needs `boussinesq_flag >= 1` (both abort otherwise); `particle_added_mass` and `particle_brownian` need `particle_mode=1`. `particle_diam/rho/rho_f` are independent of the `&SEDIMENT` `d_s/rho_s/rho_f`. Particle switches set while `particles_active=0` are listed in a warning. With `vof_flow=1` the particles are liquid-only: they must be seeded below the free surface and are reflected when a step would take them into the gas.
 
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
@@ -270,7 +268,7 @@ Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disa
 | `particle_max_age` | `1e30` | Maximum particle age [s]. |
 | `particle_restart_file` | `'particles_restart'` | Particle restart file. |
 | `particle_restart_load` | `1` | With `restart=1`: `1` read particles, `0` seed fresh. |
-| `particle_mode` | `0` | `0` tracer; `1` inertial (Schiller–Naumann drag + gravity from `grav`). |
+| `particle_mode` | `0` | `0` tracer; `1` inertial (Schiller–Naumann drag + gravity from `grav` in `&PHYSICS`). |
 | `particle_diam, particle_rho, particle_rho_f` | `1e-4`, `2650`, `1000` | Diameter [m], particle and fluid density [kg/m³] (inertial). |
 | `particle_added_mass` | `0` | `1` local added-mass approximation. |
 | `particle_brownian` | `0` | `1` Stokes–Einstein Brownian kick. |
@@ -302,7 +300,6 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_beta` | `2.0` | THINC steepness. |
 | `vof_rho_l, vof_rho_g` | `1000`, `1` | Liquid / gas density. |
 | `vof_nu_l, vof_nu_g` | `1e-6`, `1.5e-5` | Liquid / gas kinematic viscosity. |
-| `vof_grav` | `9.81` | Gravity magnitude along −y. |
 | `vof_sigma` | `0.0` | Surface tension; `>0` adds balanced-force `σκ∇C` and the capillary dt limit. |
 | `vof_u0` | `0.0` | Uniform streamwise velocity at a fresh start (amplitude for `vof_tgv`). |
 | `vof_mom_scheme` | `6` | Momentum face value: `0` central, `1` upwind, `2` Koren, `4` QUICK, `5` central 4th order, `6` WENO5-Z. |
@@ -324,7 +321,7 @@ Geometric PLIC volume-of-fluid and the two-fluid solver. Method, validation, lim
 | `vof_debug` | `0` | `1` write `vof_dev/prof/front/vmax.dat`. |
 | `vof_snap_dt` | `0.0` | With `vof_debug=1`: interval of mid-plane slices `vof_snap_NNNN.dat` of C, u, v. |
 
-Not supported with `vof_flow=1` (aborts): UAV, rotation, `inflow_type` 1 and 2 (SEM, recycled precursor; the wave inlet of `wave_turb=1` has its own recycle file and is supported). Sediment, Boussinesq temperature and particles are supported (see [Two-Phase-VOF](Two-Phase-VOF.md) 1.8; `grav` must equal `vof_grav` with Boussinesq or inertial particles, `particle_rho_f` must equal `vof_rho_l`); on the GPU the scalars run on the device, and the particles on the host with a per-step copy of U, V, W and the liquid fraction. `dPdx` / `Ub_target` forcing is not applied; only periodic z. The ghost-cell IBM (`ibm_input_mode=1`) is supported.
+Not supported with `vof_flow=1` (aborts): UAV, rotation, `inflow_type` 1 and 2 (SEM, recycled precursor; the wave inlet of `wave_turb=1` has its own recycle file and is supported). Sediment, Boussinesq temperature and particles are supported (see [Two-Phase-VOF](Two-Phase-VOF.md) 1.8; gravity is the common `grav` of `&PHYSICS`, `particle_rho_f` must equal `vof_rho_l`); on the GPU the scalars run on the device, and the particles on the host with a per-step copy of U, V, W and the liquid fraction. `dPdx` / `Ub_target` forcing is not applied; only periodic z. The ghost-cell IBM (`ibm_input_mode=1`) is supported.
 
 ## WAVES
 
@@ -358,7 +355,7 @@ Numerical wave flume: Dirichlet wave inlet plus relaxation zones. Needs `vof_flo
 | Urban / rough-terrain LES | `&IBM` as above with `ibm_pressure=2`; `sgs_model=2`; optionally `advection_scheme=2, adv_order=5, adv_beta0=0.05, adv_beta_ibm=1, adv_band=2` |
 | Restart | `restart=1`, `filein`, `nstep_init` (and `t_start` if adaptive dt) |
 | Inflow/outflow | `x_bc_type=1`, `&INFLOW inflow_type`, `Utarget` |
-| Sediment / thermal | `sediment_flag=1` + `grav`, or `boussinesq_flag=1` + `beta_T`, `T_ref`, `grav` |
+| Sediment / thermal | `grav` (`&PHYSICS`) with `sediment_flag=1`, or `boussinesq_flag=1` + `beta_T`, `T_ref` |
 | Two-phase wave flume | `&VOF vof_active=1, vof_flow=1, vof_ic_type=1, vof_level, vof_sigma`; `&WAVES wave_type, wave_height, wave_period, wave_gen_len, wave_abs_len`; `x_bc_type=1`, `inflow_type=3` |
 | Profiles and budgets | `&STATISTICS tavg_active=1` / `rsb_active=1` / `n_slices` / `n_lines` |
 

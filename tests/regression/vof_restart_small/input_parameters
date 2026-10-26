@@ -4,6 +4,7 @@
   nx = 34, ny = 33, nz = 18, Lx = 1.03125, Ly = 1.0, Lz = 0.53125, grid_type = 1, alpha_grid = 1.0, alpha_grid_z = 0.0, p_row = 0, p_col = 0,
 /
 &PHYSICS
+  grav = 0.0,
   nu = 1.0e-3, sgs_model = 0,
 /
 &NUMERICS
@@ -21,5 +22,5 @@
 /
 &VOF
   vof_active = 1, vof_flow = 1, vof_ic_type = 6, vof_center = 0.5, 0.5, 0.0, vof_radius = 0.25,
-  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-3, vof_nu_g = 1.0e-3, vof_grav = 0.0, vof_sigma = 1.0,
+  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-3, vof_nu_g = 1.0e-3, vof_sigma = 1.0,
 /

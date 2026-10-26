@@ -4,6 +4,7 @@
   nx = 18, ny = 33, nz = 18, Lx = 1.0, Ly = 1.0, Lz = 1.0, grid_type = 1, alpha_grid = 1.0, p_row = 1, p_col = 1,
 /
 &PHYSICS
+  grav = 9.81,
   nu = 1.0e-5, sgs_model = 1, Cs_vreman = 0.1, flat_wall_model_flag = 2, z0_ylo = 1e-3, z0_yhi = 1e-3, z0h_ylo = 1e-4, z0h_yhi = 1e-4,
 /
 &NUMERICS
@@ -19,6 +20,6 @@
   filein = 'restart/x', fileout = 'x',
 /
 &BOUSSINESQ
-  boussinesq_flag = 1, beta_T = 3.3333333333e-3, T_ref = 300.0, grav = 9.81, Pr = 0.7, Pr_t = 0.85,
+  boussinesq_flag = 1, beta_T = 3.3333333333e-3, T_ref = 300.0, Pr = 0.7, Pr_t = 0.85,
   T_bc_bot = 2, T_bc_top = 0, T_wall_bot = 301.0, T_wall_top = 300.0, T_ic_type = 0,
 /

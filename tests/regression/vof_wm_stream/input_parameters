@@ -4,6 +4,7 @@
   nx = 18, ny = 33, nz = 18, Lx = 1.0, Ly = 1.0, Lz = 1.0, grid_type = 1, alpha_grid = 1.0, p_row = 0, p_col = 0,
 /
 &PHYSICS
+  grav = 0.0,
   nu = 1.0e-6, sgs_model = 1, Cs_vreman = 0.1, flat_wall_model_flag = 1,
 /
 &NUMERICS
@@ -20,5 +21,5 @@
 /
 &VOF
   vof_active = 1, vof_flow = 1, vof_ic_type = 1, vof_level = 1.0,
-  vof_rho_l = 1000.0, vof_rho_g = 1.2, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 0.0, vof_pcg_tol = 1e-10, vof_pcg_iters = 400,
+  vof_rho_l = 1000.0, vof_rho_g = 1.2, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_pcg_tol = 1e-10, vof_pcg_iters = 400,
 /

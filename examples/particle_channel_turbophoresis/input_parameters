@@ -45,6 +45,7 @@
 /
 
 &PHYSICS
+  grav = 0.0,   ! no gravity on the particles
   nu                   = 0.002531645569620253,      ! Re_tau = 395, H = 1.0, u_tau = 1.0, nu = 1/Re_tau
   dPdx                 = 1.0,
   dPdz                 = 0.0,

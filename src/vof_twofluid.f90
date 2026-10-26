@@ -5,8 +5,7 @@
 !> variable-viscosity stress, gravity without the still-water hydrostatic part, pressure as an explicit
 !> predictor plus a PCG increment (vof_pressure). Input checks (check_vof_inputs): no UAV, rotation,
 !> dPdx/dPdz/mass-flux forcing, Reynolds-stress budget or tavg; y walls and periodic z only; x inlet only
-!> inflow_type 0 or 3; with particles particle_rho_f = vof_rho_l; with Boussinesq or inertial particles
-!> grav = vof_grav.
+!> inflow_type 0 or 3; with particles particle_rho_f = vof_rho_l.
 Module vof_twofluid
 
   Use iso_fortran_env, Only : Int32, Int64
@@ -158,7 +157,7 @@ Contains
        W = 0d0
     Else If ( restart == 0 .And. vof_wave_stokes == 1 ) Then
        kt(1) = 8d0*Atan(1d0)/vof_wave_lambda
-       om = Sqrt(vof_grav*kt(1))
+       om = Sqrt(grav*kt(1))
        V = 0d0;  W = 0d0
        Do k = 1, nzg
           Do j = 1, nyg
@@ -242,7 +241,7 @@ Contains
     Do k = 1, nzg
        Do j = 1, ny
           Do i = 1, nxg
-             gz(i,j,k) = -vof_grav*( vp_rfv(i,j,k) - rsf(j) )/vp_riv(i,j,k)
+             gz(i,j,k) = -grav*( vp_rfv(i,j,k) - rsf(j) )/vp_riv(i,j,k)
           End Do
        End Do
     End Do
@@ -1240,7 +1239,7 @@ Contains
           Do k = 2, nzg-1
              Do j = 2, ny-1
                 Do i = 2, nxg-1
-                   Fv_(i,j,k) = Fv_(i,j,k) - vof_grav*( vp_rfv(i,j,k) - rsf(j) )/vp_riv(i,j,k)
+                   Fv_(i,j,k) = Fv_(i,j,k) - grav*( vp_rfv(i,j,k) - rsf(j) )/vp_riv(i,j,k)
                 End Do
              End Do
           End Do
@@ -1249,7 +1248,7 @@ Contains
           Do k = 2, nzg-1
              Do j = 2, nyg-1
                 Do i = 2, nx-1
-                   Fu_(i,j,k) = Fu_(i,j,k) + vof_grav*( yg(j) - vof_level )*( vp_rho(i+1,j,k) - vp_rho(i,j,k) )/( dx*vp_riu(i,j,k) )
+                   Fu_(i,j,k) = Fu_(i,j,k) + grav*( yg(j) - vof_level )*( vp_rho(i+1,j,k) - vp_rho(i,j,k) )/( dx*vp_riu(i,j,k) )
                 End Do
              End Do
           End Do
@@ -1257,7 +1256,7 @@ Contains
           Do k = 2, nzg-1
              Do j = 2, ny-1
                 Do i = 2, nxg-1
-                   Fv_(i,j,k) = Fv_(i,j,k) + vof_grav*( y(j) - vof_level )*( vp_rho(i,j+1,k) - vp_rho(i,j,k) ) &
+                   Fv_(i,j,k) = Fv_(i,j,k) + grav*( y(j) - vof_level )*( vp_rho(i,j+1,k) - vp_rho(i,j,k) ) &
                                 /( ( yg(j+1) - yg(j) )*vp_riv(i,j,k) )
                 End Do
              End Do
@@ -1266,7 +1265,7 @@ Contains
           Do k = 2, nz-1
              Do j = 2, nyg-1
                 Do i = 2, nxg-1
-                   Fw_(i,j,k) = Fw_(i,j,k) + vof_grav*( yg(j) - vof_level )*( vp_rho(i,j,k+1) - vp_rho(i,j,k) ) &
+                   Fw_(i,j,k) = Fw_(i,j,k) + grav*( yg(j) - vof_level )*( vp_rho(i,j,k+1) - vp_rho(i,j,k) ) &
                                 /( ( zg(k+1) - zg(k) )*vp_riw(i,j,k) )
                 End Do
              End Do
@@ -1280,7 +1279,7 @@ Contains
           Do k = 2, nzg-1
              Do j = 2, ny-1
                 Do i = 2, nxg-1
-                   Fv_(i,j,k) = Fv_(i,j,k) + vof_grav*beta_T*vof_rho_l &
+                   Fv_(i,j,k) = Fv_(i,j,k) + grav*beta_T*vof_rho_l &
                         *( weight_y_0(j)*(Tscal(i,j,k) - T_ref) + weight_y_1(j)*(Tscal(i,j+1,k) - T_ref) ) &
                         *0.5d0*( Min(1d0, Max(0d0, Cv(i,j,k))) + Min(1d0, Max(0d0, Cv(i,j+1,k))) )/vp_riv(i,j,k)
                 End Do
@@ -1629,9 +1628,9 @@ Contains
     ! stays below (pi/2)/omega, the form of Brackbill's capillary limit sqrt((rho_l + rho_g) h^3/(4 pi
     ! sigma)) that this reduces to for g = 0. Without it the step grows with the (small) flow velocities of a
     ! nearly still free surface until the explicit interface coupling goes unstable.
-    If ( vof_sigma > 0d0 .Or. vof_grav > 0d0 ) Then
+    If ( vof_sigma > 0d0 .Or. grav > 0d0 ) Then
        hmin_w = Min(dx, dymin, dzmin)
-       om2 = vof_grav*4d0*Atan(1d0)/hmin_w + vof_sigma*(4d0*Atan(1d0))**3/((vof_rho_l + vof_rho_g)*hmin_w**3)
+       om2 = grav*4d0*Atan(1d0)/hmin_w + vof_sigma*(4d0*Atan(1d0))**3/((vof_rho_l + vof_rho_g)*hmin_w**3)
        cfl_accel = Max(cfl_accel, dt*Sqrt(om2)/(2d0*Atan(1d0)))
        cfl_accel_last = cfl_accel
     End If

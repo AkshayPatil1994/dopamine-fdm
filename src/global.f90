@@ -488,8 +488,9 @@ Module global
   Real   (Int64) :: d_s           = 1d-4    ! particle diameter [m]
   Real   (Int64) :: rho_s         = 2650d0  ! particle density [kg/m^3]
   Real   (Int64) :: rho_f         = 1000d0  ! fluid density [kg/m^3]
-  ! gravitational acceleration [m/s^2]; 0 unless set via &SEDIMENT or &BOUSSINESQ
-  Real   (Int64) :: grav          = 0d0
+  ! gravitational acceleration [m/s^2] along -y, the only gravity input (&PHYSICS): sediment settling, Boussinesq,
+  ! particles, two-fluid VOF, waves, UAV tilt
+  Real   (Int64) :: grav          = 9.81d0
   Real   (Int64) :: Sc            = 1d0     ! molecular Schmidt number
   Real   (Int64) :: Sc_t          = 0.7d0   ! turbulent Schmidt number
   Real   (Int64) :: ws            = 0d0     ! settling velocity (computed at init)
@@ -553,9 +554,6 @@ Module global
   Integer(Int32) :: uav_load_profile  = 0
   Integer(Int32) :: uav_tilt_active   = 0
   Real   (Int64) :: uav_tilt_tau      = 0.2d0
-  ! gravity [m/s^2] in the tilt normal n = normalize(a, g+a_y); independent of `grav`, which is 0 unless other
-  ! models set it (with g=0 a hovering disk has no defined normal)
-  Real   (Int64) :: uav_grav          = 9.81d0
   Real   (Int64) :: uav_swirl_frac    = 0d0
   !$acc declare create(T_bc_bot,T_bc_top,T_wall_bot,T_wall_top)
 
@@ -667,7 +665,6 @@ Module global
   Real   (Int64) :: vof_rho_g         = 1d0
   Real   (Int64) :: vof_nu_l          = 1d-6
   Real   (Int64) :: vof_nu_g          = 1.5d-5
-  Real   (Int64) :: vof_grav          = 9.81d0
   Real   (Int64) :: vof_sigma         = 0d0
   Real   (Int64) :: vof_u0            = 0d0   ! uniform streamwise velocity at start-up (fresh start only)
   ! vof_mom_scheme 0 central, 1 upwind, 2 Koren, 4 QUICK, 5 central 4th order, 6 WENO5-Z; the face value

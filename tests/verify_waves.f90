@@ -3,7 +3,7 @@
 Program verify_waves
 
   Use iso_fortran_env, Only : Int32, Int64
-  Use global, Only : nyg, ny, vof_level, vof_grav, wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, &
+  Use global, Only : nyg, ny, vof_level, grav, wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, &
                      wave_Hs, wave_Tp, wave_gamma, wave_nfreq, wave_seed, &
                      current_type, current_U, current_z0, current_n
   Use waves
@@ -18,8 +18,8 @@ Program verify_waves
 
   nfail = 0
   nyg = 1;  ny = 1
-  vof_level = 0.5d0;  vof_grav = 9.81d0
-  d = vof_level;  g = vof_grav
+  vof_level = 0.5d0;  grav = 9.81d0
+  d = vof_level;  g = grav
 
   ! ---- linear wave
   wave_type = 1;  wave_height = 0.05d0;  wave_period = 1.5d0;  wave_phase = 0d0

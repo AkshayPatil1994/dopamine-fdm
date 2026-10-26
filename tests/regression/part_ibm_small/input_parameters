@@ -16,6 +16,7 @@
 /
 
 &PHYSICS
+  grav = 0.0,   ! no gravity on the particles
   nu                   = 0.002531645569620253,
   dPdx                 = 1.0,
   dPdz                 = 0.0,

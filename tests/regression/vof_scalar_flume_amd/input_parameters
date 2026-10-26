@@ -7,6 +7,7 @@
   grid_type = 1, alpha_grid = 1.0, alpha_grid_z = 0.0, p_row = 0, p_col = 0,
 /
 &PHYSICS
+  grav = 9.81,
   nu = 1.0e-6, sgs_model = 2,
 /
 &NUMERICS
@@ -31,13 +32,13 @@
 /
 &VOF
   vof_active = 1, vof_flow = 1, vof_ic_type = 1, vof_level = 0.5,
-  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 9.81, vof_pcg_tol = 1e-12, vof_pcg_iters = 400, vof_adv_iters = 60, vof_adv_tol = 1d-12,
+  vof_rho_l = 1000.0, vof_rho_g = 1.0, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_pcg_tol = 1e-12, vof_pcg_iters = 400, vof_adv_iters = 60, vof_adv_tol = 1d-12,
 /
 
 &SEDIMENT
   sediment_flag = 1, d_s = 1.0e-4, rho_s = 2650.0, rho_f = 1000.0, Sc = 1.0, Sc_t = 1.0, C_ref = 1.0, sed_bc_bot = 1, C_ic_type = 3, C_ic_height = 0.5,
 /
 &BOUSSINESQ
-  boussinesq_flag = 1, beta_T = 2.0e-4, T_ref = 20.0, grav = 9.81, Pr = 7.0, Pr_t = 0.85, T_ic_type = 1, T_ic_grad = 5.0,
+  boussinesq_flag = 1, beta_T = 2.0e-4, T_ref = 20.0, Pr = 7.0, Pr_t = 0.85, T_ic_type = 1, T_ic_grad = 5.0,
   T_bc_bot = 1, T_wall_bot = 22.0, T_bc_top = 1, T_wall_top = 18.0,
 /

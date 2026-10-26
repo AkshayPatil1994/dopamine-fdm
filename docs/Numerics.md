@@ -637,7 +637,7 @@ after the standard advection/viscous terms:
 $$f_y^\text{buoy} = \beta_T\, g\, (T_\text{face} - T_\text{ref})$$
 
 where $\beta_T$ is the thermal expansion coefficient, $g$ is gravitational acceleration
-(shared with `&SEDIMENT`'s `grav` — the solver warns if the two namelists disagree),
+(the single `grav` of `&PHYSICS`, shared with sediment, particles and the VOF solver),
 $T_\text{ref}$ is the reference temperature, and $T_\text{face}$ is $T$ interpolated from
 cell centres to the $v$-face using the same stretched-grid weights used for $\nu_t$
 elsewhere in the momentum solve. Gravity is assumed to act along $-y$.

@@ -10,7 +10,7 @@ a = ap.parse_args()
 src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'chan_les_amd_small', 'input_parameters')
 text0 = open(src).read()
 BOUSS = """&BOUSSINESQ
-  boussinesq_flag = 1, beta_T = 3.0e-3, T_ref = 0.0, grav = 9.81, Pr = 0.7, Pr_t = 0.85,
+  boussinesq_flag = 1, beta_T = 3.0e-3, T_ref = 0.0, Pr = 0.7, Pr_t = 0.85,
   T_bc_bot = 1, T_bc_top = 1, T_wall_bot = 1.0, T_wall_top = 0.0, T_ic_type = 1, T_ic_grad = -0.5,
 /
 """

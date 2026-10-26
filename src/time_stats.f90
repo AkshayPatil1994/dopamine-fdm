@@ -1,5 +1,5 @@
 !> On-the-fly time-averaged velocity statistics (mean, Reynolds stresses) and optional scalar statistics
-!  (mean, variance, flux), accumulated on the device each step and written, little-endian, next to every field
+!  (mean, variance, flux), accumulated on the device each step and written, little-endian, next to every full field
 !  snapshot as fields/<fileout>_tavg.<step>. File layout: Int32 nxm,nym,nzm,nf; Real64 t_acc; nf x
 !  Character(8) names; then nf blocks of Real64 (nxm,nym,nzm), Fortran order. With chunked_snapshot the same
 !  layout holds for the chunk box (sizes of the box) plus a trailer: Int32 f1(3), f2(3); Real64 xm, ym, zm of

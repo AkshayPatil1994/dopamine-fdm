@@ -181,7 +181,7 @@ def main():
 &VOF
   vof_active = 1, vof_flow = 1, vof_ic_type = 1, vof_level = {DEPTH}, vof_inertia = 1,
   vof_pcg_iters = 800, vof_adv_iters = 100, vof_div_tol = 1.0e-8,
-  vof_rho_l = 1000.0, vof_rho_g = 1.2, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_grav = 9.81, vof_sigma = 0.072,
+  vof_rho_l = 1000.0, vof_rho_g = 1.2, vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5, vof_sigma = 0.072,
   vof_rk_mom = 2, vof_tr_floor = 1e-12,
 /
 &WAVES

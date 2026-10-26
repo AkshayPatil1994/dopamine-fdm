@@ -46,6 +46,8 @@
 ! nu is not used with vof_flow=1 (the viscosities vof_nu_l/vof_nu_g apply).
 &PHYSICS
   nu                   = 1.0e-6,
+  grav                 = 9.81,    ! gravity [m/s^2] along -y (default 9.81; 0 = no gravity). The only gravity input: sediment,
+                                  ! Boussinesq, inertial particles, two-fluid VOF, waves and the UAV tilt all use it
   dPdx                 = 1.225e-4,
   dPdz                 = 0.0,
   Ub_x                 = 0.0,
@@ -81,10 +83,10 @@
   nmonitor     = 1,
   sim_end_time = 1.0e30,
   tsave        = 1.0e30,
-  cfl_adaptive = 0,       ! 1: adapt dt to cfl_target
-  cfl_target   = 0.5,
   ! chunk_nsave = 0,             ! chunk-box cadence: 0 = with the full snapshot | >0: every chunk_nsave steps | <0: every chunk_tsave time units
   ! chunk_tsave = 1.0e30,
+  cfl_adaptive = 0,       ! 1: adapt dt to cfl_target
+  cfl_target   = 0.5,
   cfl_safety   = 0.9,
   dt_min       = 1.0e-10,
   dt_max       = 1.0e10,
@@ -226,7 +228,6 @@
 !  uav_load_profile  = 0,     ! 0 uniform | 1 parabolic tip taper
 !  uav_tilt_active   = 0,
 !  uav_tilt_tau      = 0.2,
-!  uav_grav          = 9.81,
 !  uav_swirl_frac    = 0.0,
 !/
 
@@ -260,13 +261,11 @@
 
 ! Suspended sediment (Soulsby settling velocity). sed_bc_bot: 0 zero flux | 1 C=C_ref.
 ! C_ic_type: 0 uniform C_ref | 1 Rouse | 2 linear ramp | 3 slab below C_ic_height.
-! grav is shared with &BOUSSINESQ and inertial &PARTICLES.
 &SEDIMENT
   sediment_flag = 0,
   d_s           = 1.0e-4,
   rho_s         = 2650.0,
   rho_f         = 1000.0,
-  grav          = 9.81,
   Sc            = 1.0,
   Sc_t          = 0.7,   ! used with sgs_model=0/1; ignored with sgs_model=2 (AMD scalar closure)
   C_ref         = 0.0,
@@ -283,7 +282,6 @@
   boussinesq_flag = 0,
   beta_T          = 0.0,
   T_ref           = 0.0,
-  grav            = 9.81,
   Pr              = 0.7,
   Pr_t            = 0.85,   ! used with sgs_model=0/1; ignored with sgs_model=2 (AMD scalar closure)
   T_bc_bot        = 0,
@@ -352,7 +350,7 @@
 ! vof_method: 1 PLIC | 2 THINC (vof_beta). vof_mom_scheme: 0 central | 1 upwind |
 !   2 Koren | 4 QUICK | 5 central 4th | 6 WENO5-Z. vof_sigma>0 enables surface tension.
 ! vof_prescribed (vof_flow=0): 1 LeVeque vortex | 2 Enright deformation | 3 rigid rotation.
-! vof_flow=1 needs dPdx=dPdz=0 and no mass-flux forcing; &SEDIMENT, &BOUSSINESQ (grav = vof_grav)
+! vof_flow=1 needs dPdx=dPdz=0 and no mass-flux forcing; &SEDIMENT, &BOUSSINESQ (same grav)
 ! and &PARTICLES work with it, on CPU and GPU builds. The solver parameters below
 ! are the defaults; most cases only need the first lines.
 !&VOF
@@ -364,7 +362,6 @@
 !  vof_radius = 0.0,
 !  vof_rho_l = 1000.0, vof_rho_g = 1.0,
 !  vof_nu_l = 1.0e-6, vof_nu_g = 1.5e-5,
-!  vof_grav = 9.81,
 !  vof_sigma = 0.0,
 !  vof_u0 = 0.0,
 !  vof_wave_amp = 0.0, vof_wave_lambda = 0.0, vof_wave_stokes = 0, vof_smooth_w = 0.0,

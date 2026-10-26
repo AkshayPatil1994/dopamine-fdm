@@ -15,6 +15,11 @@ CASES = [
     ('x_bc_type range', r'x_bc_type\s*=\s*0', 'x_bc_type = 3', 'x_bc_type must be'),
     ('ibm_pressure range', r'&PHYSICS', '&IBM\n  ibm_pressure = 5,\n/\n&PHYSICS', 'ibm_pressure must be'),
     ('ibm_pressure without body', r'&PHYSICS', '&IBM\n  ibm_pressure = 1,\n/\n&PHYSICS', 'needs an immersed body'),
+    ('grav in &SEDIMENT', r'&PHYSICS', '&SEDIMENT\n  sediment_flag = 0, grav = 1.0,\n/\n&PHYSICS', 'single grav in &PHYSICS'),
+    ('uav tilt without gravity', r'&PHYSICS', '&UAV\n  uav_active = 1, uav_tilt_active = 1,\n/\n&PHYSICS\n  grav = 0.0,', 'needs grav > 0'),
+    ('sgs_particle_model with DNS', r'&PHYSICS', '&PARTICLES\n  particles_active = 1, n_particles_init = 1, sgs_particle_model = 1,\n/\n&PHYSICS', 'sgs_particle_model=1 needs'),
+    ('boussinesq coupling without Boussinesq', r'&PHYSICS', '&PARTICLES\n  particles_active = 1, n_particles_init = 1, particle_boussinesq_coupling = 1,\n/\n&PHYSICS', 'particle_boussinesq_coupling=1 needs'),
+    ('brownian with tracers', r'&PHYSICS', '&PARTICLES\n  particles_active = 1, n_particles_init = 1, particle_brownian = 1,\n/\n&PHYSICS', 'need particle_mode=1'),
     ('removed ibm_projection', r'&PHYSICS', '&IBM\n  ibm_projection = 1,\n/\n&PHYSICS', None),
 ]
 

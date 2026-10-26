@@ -31,7 +31,7 @@ Contains
     If ( vof_hsplit /= 0 ) Return
     acc = 0d0
     Do j = nyg-1, 2, -1
-       ps(j) = vof_grav*( acc + 0.5d0*vof_rho_ref(j)*hy(j) )
+       ps(j) = grav*( acc + 0.5d0*vof_rho_ref(j)*hy(j) )
        acc = acc + vof_rho_ref(j)*hy(j)
     End Do
     ps(1) = ps(2);  ps(nyg) = 0d0

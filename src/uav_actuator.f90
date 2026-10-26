@@ -3,7 +3,7 @@
 !  ring of Lagrangian markers carries the kinematic thrust, spread with a normalised Gaussian kernel so force
 !  density times cell volume over the support reproduces each share for any grid or MPI split: ranks deposit
 !  into their own cells but normalise against the marker's full kernel-box sum (from the uniform x/z spacing).
-!  Tilt: n = normalize(ax, uav_grav+ay, az), independent of mass; the Catmull-Rom path is only C1, so n is
+!  Tilt: n = normalize(ax, grav+ay, az), independent of mass; the Catmull-Rom path is only C1, so n is
 !  low-pass filtered (uav_tilt_tau). uav_tilt_active=0 gives n=(0,1,0). Limits: the swirl direction is
 !  arbitrary; the kernel is not wrapped across periodic x/z edges (keep the disk uav_kernel_ncell*max(dx,dz)
 !  away); no OpenACC here: apply_uav_forcing_u/v/w run on the host, equations.f90 syncs rhs_u/v/w.
@@ -91,6 +91,7 @@ Contains
     frac_sum = Sum(uav_mk_frac)
     uav_mk_frac = uav_mk_frac / frac_sum   ! exact no-op when uniform; restores sum=1 under tip-tapering
 
+    If ( uav_tilt_active >= 1 .And. grav <= 0d0 ) Call uav_abort( 'ERROR: uav_tilt_active=1 needs grav > 0 (&PHYSICS)' )
     If ( uav_path_active >= 1 ) Then
        If ( Len_Trim(uav_path_file) == 0 ) Call uav_abort( 'ERROR: uav_path_active=1 but uav_path_file is empty' )
        Call read_uav_path
@@ -101,7 +102,7 @@ Contains
     ! orientation jump across a restart.
     If ( uav_tilt_active >= 1 .And. uav_path_active >= 1 ) Then
        uav_tilt_smooth(1) = hermite_accel(t, path_t, path_x, n_path)
-       uav_tilt_smooth(2) = uav_grav + hermite_accel(t, path_t, path_y, n_path)
+       uav_tilt_smooth(2) = grav + hermite_accel(t, path_t, path_y, n_path)
        uav_tilt_smooth(3) = hermite_accel(t, path_t, path_z, n_path)
        If ( Sqrt( Sum(uav_tilt_smooth**2) ) > 1d-30 ) &
           uav_tilt_smooth = uav_tilt_smooth / Sqrt( Sum(uav_tilt_smooth**2) )
@@ -405,7 +406,7 @@ Contains
           ay = hermite_accel(tt, path_t, path_y, n_path)
           az = hermite_accel(tt, path_t, path_z, n_path)
 
-          n_raw(1) = ax;  n_raw(2) = uav_grav + ay;  n_raw(3) = az
+          n_raw(1) = ax;  n_raw(2) = grav + ay;  n_raw(3) = az
           norm_raw = Sqrt( n_raw(1)**2 + n_raw(2)**2 + n_raw(3)**2 )
           If ( norm_raw > 1d-30 ) n_raw = n_raw / norm_raw
 
