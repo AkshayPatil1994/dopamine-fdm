@@ -171,12 +171,15 @@ There is no capillary or Weber-number barrier, so a light particle that reaches 
 /
 ```
 
-Checks. In a flat tank (`particle_rho = 500`, d = 5 mm) the particles rise at a constant speed, leave with 0.29 m/s, the velocity in the air falls at exactly `-grav` (fitted 9.81 m/s2) and the apex is 4.3 mm above the surface, equal to `v^2/(2 grav)`; the particles end at the surface. In a standing wave of amplitude 0.05 they follow the surface at the wave period. `vof_part_jump` (heavy particles seeded in the gas must fall into the water and sink) is in the regression suite.
+**Checks**
 
-The animation below is the harshest case run: a standing wave of amplitude 0.12 (wavelength 1.0078 m, depth 0.5 m, 129 x 128 cells, `dt = 1e-3`, serial) with 12 particles of `particle_rho = 200`, d = 5 mm, 3 s. The crests throw particles up to about 0.47 m above the local surface; they fall back freely, are caught by the liquid and are thrown again by the next crest, and all 12 end within 1 cm of the surface. About 40 % of the samples are in the air. This is a robustness test of the particle logic under violent surface motion on a coarse grid (the free surface is not resolved to convergence), not a validation of the wave itself.
+- Flat tank (`particle_rho = 500`, d = 5 mm): the particles rise at a constant speed and leave with 0.29 m/s. The velocity in the air falls at exactly `-grav` (fitted 9.81 m/s2) and the apex is 4.3 mm above the surface, equal to `v^2/(2 grav)`. The particles end at the surface.
+- Standing wave of amplitude 0.05: the particles follow the surface at the wave period.
+- `vof_part_jump` (heavy particles seeded in the gas must fall into the water and sink) is in the regression suite.
+
+**Steep standing wave.** The animation below is the harshest case run: a standing wave of amplitude 0.12 (wavelength 1.0078 m, depth 0.5 m, 129 x 128 cells, `dt = 1e-3`, serial) with 12 particles of `particle_rho = 200`, d = 5 mm, 3 s. The crests throw particles up to about 0.47 m above the local surface; they fall back freely, are caught by the liquid and are thrown again by the next crest, and all 12 end within 1 cm of the surface. About 40 % of the samples are in the air. This is a robustness test of the particle logic under violent surface motion on a coarse grid (the free surface is not resolved to convergence), not a validation of the wave itself.
 
 ![Buoyant particles leaving and re-entering a steep standing wave](animations/particle_free_surface.gif)
-
 
 ## 2. Running and output
 
