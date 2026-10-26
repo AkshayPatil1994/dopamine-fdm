@@ -628,6 +628,8 @@ Module global
   ! boussinesq_flag>=1 only: 0 keeps particle_rho_f; 1 uses the local rho_f*(1-beta_T*(T-T_ref)) in the
   ! buoyancy term only. One-way: particles never feed back into Tscal or the momentum.
   Integer(Int32) :: particle_boussinesq_coupling = 0
+  ! vof_flow=1 inertial particles: 0 reflect at the free surface, 1 leave the liquid and fall back ballistically
+  Integer(Int32) :: particle_free_surface = 0
   ! Deposition diagnostic (absorb and deposit_resuspend): streamwise deposition rate written to
   ! particle_deposit_file every particle_deposit_freq monitor reports.
   Character(200) :: particle_deposit_file = 'particle_deposit_x.csv'

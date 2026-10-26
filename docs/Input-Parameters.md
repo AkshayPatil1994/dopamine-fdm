@@ -254,7 +254,7 @@ All ranks read the path and thrust files independently (`#` and blank lines skip
 
 ## PARTICLES
 
-Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disable. Inertial particles take gravity from `grav` and the viscosity from `nu` (`&PHYSICS`); `sgs_particle_model=1` needs `sgs_model /= 0` and `particle_boussinesq_coupling=1` needs `boussinesq_flag >= 1` (both abort otherwise); `particle_added_mass` and `particle_brownian` need `particle_mode=1`. `particle_diam/rho/rho_f` are independent of the `&SEDIMENT` `d_s/rho_s/rho_f`. Particle switches set while `particles_active=0` are listed in a warning. With `vof_flow=1` the particles are liquid-only: they must be seeded below the free surface and are reflected when a step would take them into the gas.
+Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disable. Inertial particles take gravity from `grav` and the viscosity from `nu` (`&PHYSICS`); `sgs_particle_model=1` needs `sgs_model /= 0` and `particle_boussinesq_coupling=1` needs `boussinesq_flag >= 1` (both abort otherwise); `particle_added_mass` and `particle_brownian` need `particle_mode=1`. `particle_diam/rho/rho_f` are independent of the `&SEDIMENT` `d_s/rho_s/rho_f`. Particle switches set while `particles_active=0` are listed in a warning. With `vof_flow=1` the particles are liquid-only by default: they must be seeded below the free surface and are reflected when a step would take them into the gas. `particle_free_surface=1` (inertial particles only) lets buoyant particles leave the liquid, fly through the gas under gravity alone (no drag, gas velocity or SGS velocity) and re-enter it; see [Two-Phase-VOF.md](Two-Phase-VOF.md) section 1.8.
 
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
@@ -277,6 +277,7 @@ Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disa
 | `particle_ibm_tau_crit` | `1e-3` | Response-time scale of the restitution. |
 | `particle_resuspend_ucrit` | `1e30` | Resuspension speed threshold [m/s] (the default always deposits). |
 | `particle_boussinesq_coupling` | `0` | `1` buoyancy with the local Boussinesq density (one-way). |
+| `particle_free_surface` | `0` | `vof_flow=1`, `particle_mode=1`: `0` reflect at the free surface; `1` leave the liquid and fly ballistically in the gas (gravity only, no drag, no gas velocity, no SGS), re-entering the liquid when `C >= 0.5`; the seed box may then include the gas. Needs `particle_mode=1` and `vof_flow=1` (abort otherwise). |
 | `particle_deposit_file`, `particle_deposit_freq` | `'particle_deposit_x.csv'`, `10` | Deposition-rate CSV and its write interval in monitor reports. |
 | `sgs_particle_model` | `0` | `1` simplified isotropic Langevin SGS dispersion for LES. |
 | `particle_langevin_C0` | `2.1` | Kolmogorov constant of that model. |

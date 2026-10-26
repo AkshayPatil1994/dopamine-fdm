@@ -750,6 +750,9 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME vof_part_buoy_surface_np${_np}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_buoy/check_part.py
                     --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
+        add_test(NAME vof_part_jump_free_surface_np${_np}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_part_jump/check_part.py
+                    --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN} --np ${_np})
     endforeach()
     if(NOT ENABLE_GPU)
         add_test(NAME vof_part_slosh_np1_vs_np4_4x1

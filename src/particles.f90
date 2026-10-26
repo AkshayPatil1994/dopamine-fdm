@@ -301,15 +301,18 @@ Contains
   !  frozen at the step start the ODE is linear, so the exponential solution is exact with no sub-cycling even
   !  for tau_eff << dt. Optional Brownian motion (particle_brownian==1) is added as an independent random
   !  walk. Saffman-Mei lift is not implemented.
-  Subroutine advance_particle_inertial(i)
+  Subroutine advance_particle_inertial(i, dt_s)
 
     Integer(Int32), Intent(In) :: i
+    Real(Int64), Intent(In), Optional :: dt_s
 
     Real(Int64) :: uf, vf, wf, uf_o, vf_o, wf_o
     Real(Int64) :: urel, Re_p, f_drag, tau_eff
     Real(Int64) :: ax, ay, az, rho_f_local
-    Real(Int64) :: ex, ey, ez, dv, dsig
+    Real(Int64) :: ex, ey, ez, dv, dsig, dts
 
+    dts = dt
+    If ( Present(dt_s) ) dts = dt_s
     Call interpolate_velocity(p_x(i), p_y(i), p_z(i), uf, vf, wf)
     If ( sgs_particle_model == 1 ) Then
        uf = uf + p_sgs_u(i);  vf = vf + p_sgs_v(i);  wf = wf + p_sgs_w(i)
@@ -347,15 +350,15 @@ Contains
     p_ay(i) = (vf-p_v(i))/tau_eff + ay
     p_az(i) = (wf-p_w(i))/tau_eff + az
 
-    Call exp_integrate(p_x(i), p_u(i), uf, ax, tau_eff, dt)
-    Call exp_integrate(p_y(i), p_v(i), vf, ay, tau_eff, dt)
-    Call exp_integrate(p_z(i), p_w(i), wf, az, tau_eff, dt)
+    Call exp_integrate(p_x(i), p_u(i), uf, ax, tau_eff, dts)
+    Call exp_integrate(p_y(i), p_v(i), vf, ay, tau_eff, dts)
+    Call exp_integrate(p_z(i), p_w(i), wf, az, tau_eff, dts)
 
     If ( particle_brownian == 1 ) Then
        ! Isotropic Stokes-Einstein Brownian kick: D = kB*T/(3*pi*mu_f*d_p), displacement
        ! std dev = sqrt(2*D*dt) per axis (independent Box-Muller draws)
        dsig = Sqrt( 2d0 * (1.380649d-23*particle_temp_abs) / &
-            (3d0*pi*particle_rho_f*p_nu_f*particle_diam) * dt )
+            (3d0*pi*particle_rho_f*p_nu_f*particle_diam) * dts )
        Call gaussian_pair(ex, ey);  Call gaussian_pair(ez, dv)
        p_x(i) = p_x(i) + dsig*ex
        p_y(i) = p_y(i) + dsig*ey
@@ -712,6 +715,7 @@ Contains
 
     Integer(Int32) :: i, n_bad, n_bad_all
 
+    If ( particle_free_surface == 1 ) Return
     n_bad = 0
     Do i = 1, n_particles_local
        ! a seed inside a solid body is pushed out by the IBM collision on the first step
@@ -729,6 +733,50 @@ Contains
     End If
 
   End Subroutine particles_check_gas_seeds
+
+  !> Gas-phase flight (particle_free_surface==1): free fall under gravity only, no drag and no gas velocity
+  Subroutine advance_particle_ballistic(i, dts)
+
+    Integer(Int32), Intent(In) :: i
+    Real(Int64),    Intent(In) :: dts
+
+    p_x(i) = p_x(i) + p_u(i)*dts
+    p_y(i) = p_y(i) + p_v(i)*dts - 0.5d0*grav*dts*dts
+    p_z(i) = p_z(i) + p_w(i)*dts
+    p_v(i) = p_v(i) - grav*dts
+    p_ax(i) = 0d0;  p_ay(i) = -grav;  p_az(i) = 0d0
+
+  End Subroutine advance_particle_ballistic
+
+  !> Liquid step of an inertial particle (particle_free_surface==1). When it ends in the gas the step is redone
+  !  as a liquid sub-step up to the C=0.5 crossing (bisected on the straight start-end segment) followed by
+  !  gas flight for the rest of dt
+  Subroutine advance_particle_free_surface(i)
+
+    Integer(Int32), Intent(In) :: i
+
+    Integer(Int32) :: it
+    Real(Int64) :: x0, y0, z0, u0, v0, w0, xe, ye, ze, s_lo, s_hi, s
+
+    x0 = p_x(i);  y0 = p_y(i);  z0 = p_z(i);  u0 = p_u(i);  v0 = p_v(i);  w0 = p_w(i)
+    Call advance_particle_inertial(i)
+    If ( liquid_fraction_at(p_x(i), p_y(i), p_z(i)) >= 0.5d0 ) Return
+
+    xe = p_x(i);  ye = p_y(i);  ze = p_z(i)
+    s_lo = 0d0;  s_hi = 1d0
+    Do it = 1, 20
+       s = 0.5d0*(s_lo + s_hi)
+       If ( liquid_fraction_at(x0+s*(xe-x0), y0+s*(ye-y0), z0+s*(ze-z0)) >= 0.5d0 ) Then
+          s_lo = s
+       Else
+          s_hi = s
+       End If
+    End Do
+    p_x(i) = x0;  p_y(i) = y0;  p_z(i) = z0;  p_u(i) = u0;  p_v(i) = v0;  p_w(i) = w0
+    Call advance_particle_inertial(i, s_lo*dt)
+    Call advance_particle_ballistic(i, (1d0 - s_lo)*dt)
+
+  End Subroutine advance_particle_free_surface
 
   !> A particle that ended the step in the gas goes back to where it started and its velocity is mirrored
   !  about the surface normal n = -grad(Cv)/|grad(Cv)| (pointing into the gas) taken at the start position;
@@ -765,7 +813,7 @@ Contains
     Integer(Int32) :: i
     Real(Int64) :: x0, y0, z0, xs, ys, zs
     Real(Int64) :: k1u, k1v, k1w, k2u, k2v, k2w, k3u, k3v, k3w
-    Logical :: do_remove
+    Logical :: do_remove, in_gas
 
     If ( particles_active < 1 ) Return
 
@@ -780,10 +828,16 @@ Contains
     i = 1
     Do While ( i <= n_particles_local )
 
-       If ( sgs_particle_model == 1 ) Call advance_sgs_velocity(i)
+       in_gas = particle_free_surface == 1 .And. surf_on
+       If ( in_gas ) in_gas = liquid_fraction_at(p_x(i), p_y(i), p_z(i)) < 0.5d0
+       If ( sgs_particle_model == 1 .And. .Not. in_gas ) Call advance_sgs_velocity(i)
        xs = p_x(i);  ys = p_y(i);  zs = p_z(i)
 
-       If ( particle_mode == 1 ) Then
+       If ( in_gas ) Then
+          Call advance_particle_ballistic(i, dt)
+       Else If ( particle_mode == 1 .And. particle_free_surface == 1 .And. surf_on ) Then
+          Call advance_particle_free_surface(i)
+       Else If ( particle_mode == 1 ) Then
           Call advance_particle_inertial(i)
        Else
           x0 = p_x(i);  y0 = p_y(i);  z0 = p_z(i)
@@ -814,7 +868,7 @@ Contains
        do_remove = .False.
        If ( ibm_input_mode >= 1 ) do_remove = apply_ibm_collision(i)
        If ( .Not. do_remove .And. apply_particle_bc(i) ) do_remove = .True.
-       If ( .Not. do_remove .And. surf_on ) Call reflect_at_surface(i, xs, ys, zs)
+       If ( .Not. do_remove .And. surf_on .And. particle_free_surface == 0 ) Call reflect_at_surface(i, xs, ys, zs)
 
        If ( do_remove ) Then
           Call remove_particle(i)   ! swaps the last particle into slot i; re-check the same slot

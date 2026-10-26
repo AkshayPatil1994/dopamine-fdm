@@ -87,7 +87,7 @@ Contains
                          particle_mode, particle_diam, particle_rho, particle_rho_f, &
                          particle_added_mass, particle_brownian, particle_temp_abs, &
                          particle_ibm_bc, particle_ibm_tau_crit, particle_resuspend_ucrit, &
-                         particle_boussinesq_coupling, particle_deposit_file, particle_deposit_freq, &
+                         particle_boussinesq_coupling, particle_free_surface, particle_deposit_file, particle_deposit_freq, &
                          sgs_particle_model, particle_langevin_C0
 
     Namelist /WAVES/ wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, wave_Hs, wave_Tp, &
@@ -550,6 +550,7 @@ Contains
              Write(*,'(A,E12.4)') '   particle_rho_f               = ', particle_rho_f
              Write(*,'(A,I2)')    '   particle_added_mass          = ', particle_added_mass
              Write(*,'(A,I2)')    '   particle_brownian            = ', particle_brownian
+             Write(*,'(A,I2)')    '   particle_free_surface        = ', particle_free_surface
           End If
        End If
        If ( vof_active >= 1 ) Then
@@ -799,6 +800,7 @@ Contains
     Call Mpi_bcast ( particle_ibm_tau_crit,    1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_resuspend_ucrit, 1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_boussinesq_coupling, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_free_surface, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_deposit_file, Len(particle_deposit_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_deposit_freq, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( sgs_particle_model,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
@@ -1007,6 +1009,7 @@ Contains
        If ( particle_brownian /= 0 )          ignored = Trim(ignored)//' particle_brownian'
        If ( sgs_particle_model /= 0 )         ignored = Trim(ignored)//' sgs_particle_model'
        If ( particle_boussinesq_coupling /= 0 ) ignored = Trim(ignored)//' particle_boussinesq_coupling'
+       If ( particle_free_surface /= 0 )      ignored = Trim(ignored)//' particle_free_surface'
        If ( Len_trim(ignored) > 0 ) Write(*,'(A)') ' WARNING: &PARTICLES particles_active = 0, ignored:'//Trim(ignored)
        Return
     End If
@@ -1022,6 +1025,8 @@ Contains
          Call abort_input( 'ERROR: &PARTICLES sgs_particle_model=1 needs an LES eddy viscosity (sgs_model /= 0)' )
     If ( particle_boussinesq_coupling /= 0 .And. boussinesq_flag < 1 ) &
          Call abort_input( 'ERROR: &PARTICLES particle_boussinesq_coupling=1 needs boussinesq_flag >= 1' )
+    If ( particle_free_surface /= 0 .And. ( particle_mode /= 1 .Or. vof_flow < 1 ) ) &
+         Call abort_input( 'ERROR: &PARTICLES particle_free_surface=1 needs particle_mode=1 and vof_flow=1' )
     If ( ibm_input_mode < 1 .And. Any( particle_ibm_bc /= 2 ) ) &
          Write(*,'(A)') ' WARNING: &PARTICLES particle_ibm_bc is set but there is no IBM (ibm_input_mode < 1): ignored'
 
