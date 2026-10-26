@@ -148,7 +148,35 @@ Sediment concentration (`sediment_flag`) and Boussinesq temperature (`boussinesq
 
 Boussinesq buoyancy enters as an extra liquid-only acceleration `grav beta_T (T - T_ref) rho_l C_face / rho_face` on the v faces; the sweeps and the pressure operator keep the unperturbed phase densities, so uniform `T = T_ref` is a bit-identical no-op and a stratified tank at rest stays at rest (the pressure balances it). `vof_hsplit` must be 0.
 
-By default particles are liquid-only (`particle_rho_f = vof_rho_l`, viscosity `vof_nu_l`) and the seed box must lie in the liquid. After each step a particle whose new position has liquid fraction below 0.5 returns to its old position and its outward normal velocity is mirrored about `n = -grad(C)/|grad(C)|`. With `particle_free_surface = 1` (inertial particles) they instead leave the liquid: a step ending at `C < 0.5` is redone as a liquid sub-step up to the bisected `C = 0.5` crossing plus gas flight for the rest, and a particle in the gas falls freely under `grav` (no drag, no gas velocity, no SGS velocity) until it re-enters the liquid; the seed box may then include the gas. The IBM wall collision still runs first. A light particle has no capillary barrier, so it hops by about its rise speed squared over `2 grav` at the surface. Tested by `vof_part_jump`, `vof_scalar_slosh`, `vof_bouss_still` / `vof_bouss_strat`, `vof_restart_scalar`, `vof_restart_particles` (particle state by ID after a hot start), `vof_part_slosh`, `vof_part_buoy` and the feature matrix `vof_combo`.
+By default particles are liquid-only (`particle_rho_f = vof_rho_l`, viscosity `vof_nu_l`) and the seed box must lie in the liquid. After each step a particle whose new position has liquid fraction below 0.5 returns to its old position and its outward normal velocity is mirrored about `n = -grad(C)/|grad(C)|`. With `particle_free_surface = 1` they can instead leave the liquid, see the next subsection. Tested by `vof_part_jump`, `vof_scalar_slosh`, `vof_bouss_still` / `vof_bouss_strat`, `vof_restart_scalar`, `vof_restart_particles` (particle state by ID after a hot start), `vof_part_slosh`, `vof_part_buoy` and the feature matrix `vof_combo`.
+
+#### Particles at the free surface (`particle_free_surface`)
+
+By default (`particle_free_surface = 0`) a particle that would end a step in the gas is put back and reflected, so it never leaves the liquid. With `particle_free_surface = 1` (needs `particle_mode = 1` and `vof_flow = 1`) a positively buoyant particle can leave the liquid, fly through the gas and fall back in:
+
+1. The phase at the particle is the liquid fraction `C` interpolated to its position: `C >= 0.5` is liquid, `C < 0.5` is gas.
+2. In the liquid the usual inertial model applies (drag, buoyancy, optional added mass, SGS velocity).
+3. A liquid step that ends in the gas is redone: the `C = 0.5` crossing is bisected on the start-to-end segment, the liquid model advances the particle to the crossing and the rest of `dt` is gas flight.
+4. In the gas the particle is in free fall under `grav` (`dv/dt = -grav`, exact position update). There is no drag, no gas velocity, no SGS velocity and no Brownian motion, by design: the gas phase is only a ballistic arc back to the liquid.
+5. When `C >= 0.5` again at the start of a step the liquid model resumes. There is no phase flag, so nothing is added to the MPI payload or the restart file.
+6. The IBM wall collision, the domain boundary conditions and the rest of the particle pipeline are unchanged and run before the interface logic. The free-surface reflection of the default mode is skipped.
+
+There is no capillary or Weber-number barrier, so a light particle that reaches the surface leaves with its rise speed and hops by about the rise speed squared over `2 grav`. The hops shrink as it re-enters from ever shallower depth, and the particle ends up bobbing at the surface. Seeds may lie in the gas in this mode.
+
+```fortran
+&PARTICLES
+  particles_active = 1, n_particles_init = 12,
+  particle_mode = 1, particle_diam = 5.0e-3, particle_rho = 200.0, particle_rho_f = 1000.0,
+  particle_free_surface = 1, bc_particle_y = 2,
+/
+```
+
+Checks. In a flat tank (`particle_rho = 500`, d = 5 mm) the particles rise at a constant speed, leave with 0.29 m/s, the velocity in the air falls at exactly `-grav` (fitted 9.81 m/s2) and the apex is 4.3 mm above the surface, equal to `v^2/(2 grav)`; the particles end at the surface. In a standing wave of amplitude 0.05 they follow the surface at the wave period. `vof_part_jump` (heavy particles seeded in the gas must fall into the water and sink) is in the regression suite.
+
+The animation below is the harshest case run: a standing wave of amplitude 0.12 (wavelength 1.0078 m, depth 0.5 m, 129 x 128 cells, `dt = 1e-3`, serial) with 12 particles of `particle_rho = 200`, d = 5 mm, 3 s. The crests throw particles up to about 0.47 m above the local surface; they fall back freely, are caught by the liquid and are thrown again by the next crest, and all 12 end within 1 cm of the surface. About 40 % of the samples are in the air. This is a robustness test of the particle logic under violent surface motion on a coarse grid (the free surface is not resolved to convergence), not a validation of the wave itself.
+
+![Buoyant particles leaving and re-entering a steep standing wave](animations/particle_free_surface.gif)
+
 
 ## 2. Running and output
 
