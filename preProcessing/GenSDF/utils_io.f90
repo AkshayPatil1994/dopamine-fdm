@@ -294,9 +294,113 @@ contains
         if (procid == 0) print *, "*** Successfully set up grid spacing ***"
     end subroutine setup_grid_spacing
 
-    ! Read OBJ file (ASCII). Polygons are fan-triangulated (a quad exported as 'f 1 2 3 4' must not silently
-    !   lose half its
-    ! area: that opens a hole in the shell). Face tokens may be v, v/vt, v//vn or v/vt/vn, with negative
+    ! Newell normal (loop orientation), centroid, rms radius and max out-of-plane deviation of a closed polyline
+    subroutine plane_fit(p, n, ctr, nrm, rms, dev, ok)
+        real(dp), intent(in)  :: p(:,:)
+        integer,  intent(in)  :: n
+        real(dp), intent(out) :: ctr(3), nrm(3), rms, dev
+        logical,  intent(out) :: ok
+        integer :: i, j
+        real(dp) :: q(3), r(3), m
+        ctr = sum(p(:,1:n), dim=2) / real(n, dp)
+        nrm = 0.0_dp
+        do i = 1, n
+            j = mod(i, n) + 1
+            q = p(:,i) - ctr; r = p(:,j) - ctr
+            nrm = nrm + [q(2)*r(3)-q(3)*r(2), q(3)*r(1)-q(1)*r(3), q(1)*r(2)-q(2)*r(1)]
+        end do
+        m = sqrt(dot_product(nrm, nrm))
+        ok = (m > 0.0_dp)
+        rms = 0.0_dp; dev = 0.0_dp
+        if (.not. ok) return
+        nrm = nrm / m
+        do i = 1, n
+            q = p(:,i) - ctr
+            rms = rms + dot_product(q, q)
+            dev = max(dev, abs(dot_product(q, nrm)))
+        end do
+        rms = sqrt(rms / real(n, dp))
+    end subroutine plane_fit
+
+    ! Ear-clipping triangulation of a planar polygon given in counter-clockwise order about nrm. tri holds local vertex
+    ! indices; the triangles inherit the polygon's orientation. For very long loops (> ear_max) a fan from vertex 1 is used.
+    subroutine triangulate_polygon(p, n, ctr, nrm, ear_max, tri, ntri)
+        real(dp), intent(in)  :: p(:,:), ctr(3), nrm(3)
+        integer,  intent(in)  :: n, ear_max
+        integer,  intent(out) :: tri(:,:), ntri
+        real(dp), allocatable :: x(:), y(:)
+        integer,  allocatable :: prv(:), nxt(:)
+        real(dp) :: u(3), v(3), a(3), eps, best, cr
+        integer :: i, j, t, nrem, ia, ib, ic, start, pick, axis
+        logical :: found, blocked
+
+        ntri = 0
+        if (n < 3) return
+        if (n > ear_max) then
+            do i = 2, n - 1
+                ntri = ntri + 1; tri(:,ntri) = [1, i, i+1]
+            end do
+            return
+        end if
+        axis = minloc(abs(nrm), dim=1)
+        a = 0.0_dp; a(axis) = 1.0_dp
+        u = [nrm(2)*a(3)-nrm(3)*a(2), nrm(3)*a(1)-nrm(1)*a(3), nrm(1)*a(2)-nrm(2)*a(1)]
+        u = u / sqrt(dot_product(u,u))
+        v = [nrm(2)*u(3)-nrm(3)*u(2), nrm(3)*u(1)-nrm(1)*u(3), nrm(1)*u(2)-nrm(2)*u(1)]
+        allocate(x(n), y(n), prv(n), nxt(n))
+        do i = 1, n
+            x(i) = dot_product(p(:,i) - ctr, u); y(i) = dot_product(p(:,i) - ctr, v)
+            prv(i) = mod(i + n - 2, n) + 1; nxt(i) = mod(i, n) + 1
+        end do
+        eps = 1.0e-12_dp * max(maxval(x*x + y*y), tiny(1.0_dp))
+        nrem = n; start = 1
+        do while (nrem > 3)
+            found = .false.; best = -huge(1.0_dp); pick = start
+            i = start
+            do t = 1, nrem
+                ia = prv(i); ib = i; ic = nxt(i)
+                cr = (x(ib)-x(ia))*(y(ic)-y(ia)) - (y(ib)-y(ia))*(x(ic)-x(ia))
+                if (cr > best) then; best = cr; pick = i; end if
+                if (cr > eps) then
+                    blocked = .false.
+                    j = nxt(ic)
+                    do while (j /= ia)
+                        if (in_triangle(x(j), y(j), x(ia), y(ia), x(ib), y(ib), x(ic), y(ic))) then
+                            blocked = .true.; exit
+                        end if
+                        j = nxt(j)
+                    end do
+                    if (.not. blocked) then; found = .true.; pick = i; exit; end if
+                end if
+                i = nxt(i)
+            end do
+            ia = prv(pick); ib = pick; ic = nxt(pick)
+            cr = (x(ib)-x(ia))*(y(ic)-y(ia)) - (y(ib)-y(ia))*(x(ic)-x(ia))
+            if (found .or. cr > eps) then
+                ntri = ntri + 1; tri(:,ntri) = [ia, ib, ic]
+            end if
+            nxt(ia) = ic; prv(ic) = ia
+            start = ic
+            nrem = nrem - 1
+        end do
+        ia = start; ib = nxt(ia); ic = nxt(ib)
+        ntri = ntri + 1; tri(:,ntri) = [ia, ib, ic]
+        deallocate(x, y, prv, nxt)
+    end subroutine triangulate_polygon
+
+    ! point inside or on the boundary of the counter-clockwise triangle (a,b,c)
+    pure logical function in_triangle(px, py, ax, ay, bx, by, cx, cy)
+        real(dp), intent(in) :: px, py, ax, ay, bx, by, cx, cy
+        real(dp) :: d1, d2, d3
+        d1 = (bx-ax)*(py-ay) - (by-ay)*(px-ax)
+        d2 = (cx-bx)*(py-by) - (cy-by)*(px-bx)
+        d3 = (ax-cx)*(py-cy) - (ay-cy)*(px-cx)
+        in_triangle = (d1 >= 0.0_dp .and. d2 >= 0.0_dp .and. d3 >= 0.0_dp)
+    end function in_triangle
+
+    ! Read OBJ file (ASCII). Polygons are ear-clipped (a quad exported as 'f 1 2 3 4' must not silently lose half
+    !   its area, and a concave n-gon, e.g. a stair-step face of a castellated mesh, must not be fanned across its
+    !   notch: either opens or overfills the shell). Face tokens may be v, v/vt, v//vn or v/vt/vn, with negative
     !   (relative) indices.
     ! Per-face geometric normals are synthesized when the file carries no (or incomplete) vertex normals.
     subroutine read_obj(procid, filename, vertices, normals, faces, face_normals, &
@@ -312,8 +416,9 @@ contains
         integer :: idx_v(max_tok), idx_n(max_tok)
         character(len=2048) :: line
         character(len=64)   :: tok(max_tok)
-        real(dp) :: p(3)
-        logical  :: have_all_normals
+        real(dp) :: p(3), pts(3,max_tok), ctr(3), nrm(3), rms, dev
+        integer  :: tri(3,max_tok), ntri, k
+        logical  :: have_all_normals, planar
 
         open(newunit=unit, file=filename, status='old', action='read', iostat=ios)
         if (ios /= 0) then
@@ -324,6 +429,7 @@ contains
         do
             read(unit,'(A)',iostat=ios) line
             if (ios /= 0) exit
+            call blank_ctrl(line)
             line = adjustl(line)
             if (line(1:2) == 'v ') then
                 v_count = v_count + 1
@@ -345,6 +451,7 @@ contains
         do
             read(unit,'(A)',iostat=ios) line
             if (ios /= 0) exit
+            call blank_ctrl(line)
             line = adjustl(line)
             if (line(1:2) == 'v ') then
                 read(line(3:),*) p
@@ -361,14 +468,29 @@ contains
                     call parse_face_token(tok(itok), v_count, vn_count, idx_v(itok), idx_n(itok))
                     if (idx_n(itok) == 0) have_all_normals = .false.
                 end do
-                do itok = 2, ntok - 1
+                ntri = 0
+                if (ntok > 3 .and. minval(idx_v(1:ntok)) >= 1 .and. maxval(idx_v(1:ntok)) <= v_count) then
+                    pts(:,1:ntok) = vertices(:, idx_v(1:ntok))
+                    call plane_fit(pts, ntok, ctr, nrm, rms, dev, planar)
+                    if (planar) call triangulate_polygon(pts, ntok, ctr, nrm, max_tok, tri, ntri)
+                end if
+                if (ntri == 0) then
+                    do itok = 2, ntok - 1
+                        tri(:, itok-1) = [1, itok, itok+1]
+                    end do
+                    ntri = ntok - 2
+                end if
+                do k = 1, ntri
                     f_count = f_count + 1
-                    faces(:, f_count)        = [idx_v(1), idx_v(itok), idx_v(itok+1)]
-                    face_normals(:, f_count) = [idx_n(1), idx_n(itok), idx_n(itok+1)]
+                    faces(:, f_count)        = idx_v(tri(:,k))
+                    face_normals(:, f_count) = idx_n(tri(:,k))
                 end do
             end if
         end do
         close(unit)
+        if (f_count < num_faces) then
+            faces = faces(:,1:f_count); face_normals = face_normals(:,1:f_count); num_faces = f_count
+        end if
 
         if (num_faces > 0) then
             if (minval(faces) < 1 .or. maxval(faces) > num_vertices) then
@@ -396,6 +518,16 @@ contains
             print *, 'Vertices: ', num_vertices, '  Normals: ', num_normals, '  Triangles: ', num_faces
         end if
     end subroutine read_obj
+
+    ! Tabs and carriage returns count as blanks
+    subroutine blank_ctrl(line)
+        implicit none
+        character(len=*), intent(inout) :: line
+        integer :: i
+        do i = 1, len_trim(line)
+            if (line(i:i) == char(9) .or. line(i:i) == char(13)) line(i:i) = ' '
+        end do
+    end subroutine blank_ctrl
 
     ! Split a text line into blank-separated tokens (tabs count as blanks); tokens past max_tok are dropped.
     subroutine split_tokens(str, tok, ntok, max_tok)
@@ -593,6 +725,7 @@ contains
         do
             read(unit,'(A)',iostat=ios) line
             if (ios /= 0) exit
+            call blank_ctrl(line)
             line = adjustl(line)
             if (line(1:5) == 'facet' .or. line(1:5) == 'FACET') num_faces = num_faces + 1
         end do
@@ -608,6 +741,7 @@ contains
         do
             read(unit,'(A)',iostat=ios) line
             if (ios /= 0) exit
+            call blank_ctrl(line)
             line = adjustl(line)
             if (line(1:5) == 'facet' .or. line(1:5) == 'FACET') then
                 fi = fi + 1; nvert_in_facet = 0
@@ -635,13 +769,207 @@ contains
         end if
     end subroutine read_stl_ascii
 
+    ! Number of corner nodes of a Gmsh surface element type (3 triangle, 4 quad; higher-order types list their corners
+    !   first), 0 for every other type.
+    pure integer function gmsh_corners(etype)
+        integer, intent(in) :: etype
+        select case (etype)
+        case (2, 9, 20, 21, 22, 23, 24, 25); gmsh_corners = 3
+        case (3, 10, 16);                    gmsh_corners = 4
+        case default;                        gmsh_corners = 0
+        end select
+    end function gmsh_corners
+
+    ! Gmsh .msh (ASCII, format 2.x or 4.1): the surface elements of physical group `phys` (0 = all) become the
+    !   geometry. Nodes are keyed by tag (any positive 64-bit tag), only nodes a kept element uses are returned, quads
+    !   are split along the shorter diagonal.
+    subroutine read_gmsh(procid, filename, phys, vertices, normals, faces, face_normals, &
+                         num_vertices, num_normals, num_faces)
+        implicit none
+        integer,  intent(in)  :: procid, phys
+        character(len=*), intent(in) :: filename
+        real(dp), allocatable, intent(out) :: vertices(:,:), normals(:,:)
+        integer,  allocatable, intent(out) :: faces(:,:), face_normals(:,:)
+        integer,  intent(out) :: num_vertices, num_normals, num_faces
+        integer, parameter :: i8 = selected_int_kind(18)
+        character(len=4096) :: line
+        character(len=32)   :: sec
+        real(dp) :: ver, pn(3), dd(6)
+        integer  :: unit, ios, ftype, dsize, vmaj, nn, nelem, nblk, ib, i, j, etype, nc, ntg, edim, ent
+        integer  :: np, nph, ephys, k, nbe, nent(4)
+        integer(i8) :: tag, maxtag, ph(64), tgs(64), nd(4)
+        integer(i8), allocatable :: ntags(:), surf_tag(:)
+        integer, allocatable :: nmap(:), surf_phys(:), tmp(:,:), newid(:)
+        real(dp), allocatable :: xyz(:,:)
+        open(newunit=unit, file=filename, status='old', action='read', iostat=ios)
+        if (ios /= 0) then
+            print *, 'Error opening file: ', trim(filename); error stop
+        end if
+        vmaj = 0; nn = 0; num_faces = 0
+        allocate(faces(3,0), surf_tag(0), surf_phys(0))
+        do
+            read(unit,'(A)',iostat=ios) line
+            if (ios /= 0) exit
+            line = adjustl(line)
+            if (line(1:1) /= '$' .or. line(1:4) == '$End') cycle
+            sec = trim(line)
+            if (sec == '$MeshFormat') then
+                read(unit,*) ver, ftype, dsize
+                if (ftype /= 0) then
+                    print *, 'FATAL: binary .msh not supported, save it as ASCII (Mesh.Binary = 0): ', trim(filename)
+                    error stop
+                end if
+                vmaj = nint(10.0_dp * ver)
+                if (.not. (vmaj < 30 .or. vmaj == 41)) then
+                    print *, 'FATAL: unsupported .msh format ', ver, ' (use 2.2 or 4.1): ', trim(filename); error stop
+                end if
+            else if (sec == '$Entities' .and. vmaj == 41) then
+                read(unit,*) nent
+                do i = 1, nent(1) + nent(2)
+                    read(unit,'(A)') line
+                end do
+                deallocate(surf_tag, surf_phys)
+                allocate(surf_tag(nent(3)), surf_phys(nent(3)))
+                do i = 1, nent(3)
+                    read(unit,'(A)') line
+                    read(line,*) surf_tag(i), dd, nph
+                    surf_phys(i) = 0
+                    if (nph > 0) then
+                        read(line,*) tag, dd, nph, ph(1:min(nph,64))
+                        surf_phys(i) = int(ph(1))
+                    end if
+                end do
+            else if (sec == '$Nodes') then
+                if (vmaj < 30) then
+                    read(unit,*) nn
+                    allocate(ntags(nn), xyz(3,nn))
+                    do i = 1, nn
+                        read(unit,*) ntags(i), xyz(:,i)
+                    end do
+                else
+                    read(unit,*) nblk, nn
+                    allocate(ntags(nn), xyz(3,nn))
+                    k = 0
+                    do ib = 1, nblk
+                        read(unit,*) edim, ent, np, nbe
+                        do i = 1, nbe
+                            read(unit,*) ntags(k+i)
+                        end do
+                        do i = 1, nbe
+                            read(unit,*) xyz(:,k+i)
+                        end do
+                        k = k + nbe
+                    end do
+                end if
+                maxtag = maxval(ntags)
+                if (minval(ntags) < 0 .or. maxtag > 8_i8 * nn + 10000000_i8) then
+                    print *, 'FATAL: .msh node tags are negative or too sparse to index: ', trim(filename); error stop
+                end if
+                allocate(nmap(0:maxtag)); nmap = 0
+                do i = 1, nn
+                    nmap(ntags(i)) = i
+                end do
+            else if (sec == '$Elements') then
+                if (nn == 0) then
+                    print *, 'FATAL: .msh $Elements before $Nodes: ', trim(filename); error stop
+                end if
+                if (vmaj < 30) then
+                    read(unit,*) nelem; nblk = nelem
+                else
+                    read(unit,*) nblk, nelem
+                end if
+                deallocate(faces); allocate(faces(3,2*nelem))
+                ib = 0; nbe = 0
+                do i = 1, nelem
+                    if (vmaj < 30) then
+                        read(unit,'(A)') line
+                        read(line,*) tag, etype, ntg
+                        nc = gmsh_corners(etype)
+                        if (ntg > 64) then
+                            print *, 'FATAL: .msh element with too many tags: ', trim(filename); error stop
+                        end if
+                        ephys = 0
+                        if (nc > 0) then
+                            read(line,*) tag, etype, ntg, tgs(1:ntg), nd(1:nc)
+                            if (ntg > 0) ephys = int(tgs(1))
+                        end if
+                    else
+                        do while (nbe == 0)     ! next entity block
+                            read(unit,*) edim, ent, etype, nbe
+                            nc = gmsh_corners(etype); ephys = 0
+                            do j = 1, size(surf_tag)
+                                if (surf_tag(j) == ent .and. edim == 2) ephys = surf_phys(j)
+                            end do
+                        end do
+                        nbe = nbe - 1
+                        if (nc > 0) then
+                            read(unit,*) tag, nd(1:nc)
+                        else
+                            read(unit,'(A)') line
+                        end if
+                    end if
+                    if (nc == 0) cycle
+                    if (phys /= 0 .and. ephys /= phys) cycle
+                    if (minval(nd(1:nc)) < 0 .or. maxval(nd(1:nc)) > maxtag) then
+                        print *, 'FATAL: .msh element references an unknown node: ', trim(filename); error stop
+                    end if
+                    if (minval(nmap(nd(1:nc))) == 0) then
+                        print *, 'FATAL: .msh element references an unknown node: ', trim(filename); error stop
+                    end if
+                    if (nc == 4) then
+                        if (sum((xyz(:,nmap(nd(1)))-xyz(:,nmap(nd(3))))**2) &
+                            <= sum((xyz(:,nmap(nd(2)))-xyz(:,nmap(nd(4))))**2)) then
+                            faces(:,num_faces+1) = nmap(nd([1,2,3])); faces(:,num_faces+2) = nmap(nd([1,3,4]))
+                        else
+                            faces(:,num_faces+1) = nmap(nd([1,2,4])); faces(:,num_faces+2) = nmap(nd([2,3,4]))
+                        end if
+                        num_faces = num_faces + 2
+                    else
+                        num_faces = num_faces + 1; faces(:,num_faces) = nmap(nd(1:3))
+                    end if
+                end do
+            end if
+        end do
+        close(unit)
+        if (num_faces == 0) then
+            allocate(vertices(3,0), normals(3,0), face_normals(3,0)); num_vertices = 0; num_normals = 0
+            return
+        end if
+
+        allocate(tmp(3,num_faces), newid(nn)); tmp = faces(:,1:num_faces)
+        call move_alloc(tmp, faces)
+        newid = 0
+        do i = 1, num_faces
+            newid(faces(:,i)) = 1
+        end do
+        num_vertices = sum(newid)
+        allocate(vertices(3,num_vertices))
+        k = 0
+        do i = 1, nn
+            if (newid(i) == 1) then
+                k = k + 1; newid(i) = k; vertices(:,k) = xyz(:,i)
+            end if
+        end do
+        do i = 1, num_faces
+            faces(:,i) = newid(faces(:,i))
+        end do
+        allocate(normals(3,num_faces), face_normals(3,num_faces))
+        call synthesize_face_normals(vertices, faces, num_faces, normals, face_normals)
+        num_normals = num_faces
+        call permute_geometry_axes(vertices, normals, faces, face_normals, num_vertices, num_normals, num_faces)
+        if (procid == 0) then
+            print *, 'Successfully read Gmsh: ', trim(filename)
+            print *, 'Vertices: ', num_vertices, '  Triangles: ', num_faces
+        end if
+    end subroutine read_gmsh
+
     ! Load geometry for one or more solids, tagging every face with its owning solid ID.
     subroutine load_multi_object_geometry(procid, filename, vertices, normals, faces, face_normals, &
                                           face_solid_id, num_vertices, num_normals, num_faces, num_solids)
         ! `filename` is a single .stl/.obj file (solid ID 1) or a `.list` manifest (one path per line, 1-based
         !   order is the solid ID).
         ! A manifest line ending in ` ground` marks that solid as an open ground surface (see
-        !   solid_is_ground).
+        !   solid_is_ground); a ` phys=N` suffix (any order) selects Gmsh physical group N of a .msh file.
         implicit none
         integer,  intent(in)  :: procid
         character(len=*), intent(in) :: filename
@@ -658,6 +986,8 @@ contains
         character(len=512) :: line, aline
         character(len=4)   :: ext
         integer :: ii, pos, vbase, nbase, fbase
+        integer, allocatable :: phys_sel(:)
+        logical :: more
 
         ii = len_trim(filename)
         ext = filename(max(1,ii-3):ii)
@@ -698,14 +1028,21 @@ contains
         num_solids   = size(manifest)
         allocate(solid_is_ground(num_solids))
         solid_is_ground = .false.
+        allocate(phys_sel(num_solids)); phys_sel = 0
         do solid = 1, num_solids
-            ii = len_trim(manifest(solid))
-            if (ii > 7) then
-                if (manifest(solid)(ii-6:ii) == ' ground') then
-                    solid_is_ground(solid) = .true.
-                    manifest(solid) = manifest(solid)(1:ii-7)
+            more = .true.
+            do while (more)
+                ii = len_trim(manifest(solid))
+                pos = index(manifest(solid)(1:ii), ' ', back=.true.)
+                more = .false.
+                if (pos == 0) cycle
+                if (manifest(solid)(pos+1:ii) == 'ground') then
+                    solid_is_ground(solid) = .true.; more = .true.
+                else if (manifest(solid)(pos+1:min(ii,pos+5)) == 'phys=') then
+                    read(manifest(solid)(pos+6:ii), *) phys_sel(solid); more = .true.
                 end if
-            end if
+                if (more) manifest(solid) = manifest(solid)(1:pos-1)
+            end do
         end do
         num_vertices = 0; num_normals = 0; num_faces = 0
         allocate(vertices(3,0), normals(3,0), faces(3,0), face_normals(3,0), face_solid_id(0))
@@ -713,10 +1050,24 @@ contains
         do solid = 1, num_solids
             ii = len_trim(manifest(solid))
             ext = manifest(solid)(max(1,ii-3):ii)
-            if (ext == '.stl' .or. ext == '.STL') then
+            do pos = 1, 4
+                if (ext(pos:pos) >= 'A' .and. ext(pos:pos) <= 'Z') ext(pos:pos) = achar(iachar(ext(pos:pos)) + 32)
+            end do
+            if (ext == '.stl') then
                 call read_stl_binary(procid, trim(manifest(solid)), v_i, n_i, f_i, fn_i, nv_i, nn_i, nf_i)
-            else
+            else if (ext == '.obj') then
                 call read_obj(procid, trim(manifest(solid)), v_i, n_i, f_i, fn_i, nv_i, nn_i, nf_i)
+            else if (ext == '.msh') then
+                call read_gmsh(procid, trim(manifest(solid)), phys_sel(solid), v_i, n_i, f_i, fn_i, nv_i, nn_i, nf_i)
+            else
+                print *, 'FATAL: unknown geometry format (need .stl, .obj or .msh): ', trim(manifest(solid)); error stop
+            end if
+            if (nf_i == 0) then
+                print *, 'FATAL: no triangles read (empty file or no matching Gmsh physical group): ', &
+                    trim(manifest(solid)); error stop
+            end if
+            if (any(v_i /= v_i) .or. any(abs(v_i) > huge(1.0_dp))) then
+                print *, 'FATAL: non-finite vertex coordinate (nan/inf) in ', trim(manifest(solid)); error stop
             end if
 
             vbase = num_vertices; nbase = num_normals; fbase = num_faces

@@ -19,7 +19,7 @@ module meshprep_mod
     !
     ! Output per triangle: active (kept) and flip (swap vertices 2 and 3). The geometry arrays are not modified.
     !
-    use utils_io, only : dp, vertical_axis
+    use utils_io, only : dp, vertical_axis, plane_fit, triangulate_polygon
     implicit none
     private
     public :: prepare_mesh
@@ -831,110 +831,6 @@ contains
         end do
         hi = a - 1
     end subroutine edges_from
-
-    ! Newell normal (loop orientation), centroid, rms radius and max out-of-plane deviation of a closed polyline
-    subroutine plane_fit(p, n, ctr, nrm, rms, dev, ok)
-        real(dp), intent(in)  :: p(:,:)
-        integer,  intent(in)  :: n
-        real(dp), intent(out) :: ctr(3), nrm(3), rms, dev
-        logical,  intent(out) :: ok
-        integer :: i, j
-        real(dp) :: q(3), r(3), m
-        ctr = sum(p(:,1:n), dim=2) / real(n, dp)
-        nrm = 0.0_dp
-        do i = 1, n
-            j = mod(i, n) + 1
-            q = p(:,i) - ctr; r = p(:,j) - ctr
-            nrm = nrm + [q(2)*r(3)-q(3)*r(2), q(3)*r(1)-q(1)*r(3), q(1)*r(2)-q(2)*r(1)]
-        end do
-        m = sqrt(dot_product(nrm, nrm))
-        ok = (m > 0.0_dp)
-        rms = 0.0_dp; dev = 0.0_dp
-        if (.not. ok) return
-        nrm = nrm / m
-        do i = 1, n
-            q = p(:,i) - ctr
-            rms = rms + dot_product(q, q)
-            dev = max(dev, abs(dot_product(q, nrm)))
-        end do
-        rms = sqrt(rms / real(n, dp))
-    end subroutine plane_fit
-
-    ! Ear-clipping triangulation of a planar polygon given in counter-clockwise order about nrm. tri holds local vertex
-    ! indices; the triangles inherit the polygon's orientation. For very long loops (> ear_max) a fan from vertex 1 is used.
-    subroutine triangulate_polygon(p, n, ctr, nrm, ear_max, tri, ntri)
-        real(dp), intent(in)  :: p(:,:), ctr(3), nrm(3)
-        integer,  intent(in)  :: n, ear_max
-        integer,  intent(out) :: tri(:,:), ntri
-        real(dp), allocatable :: x(:), y(:)
-        integer,  allocatable :: prv(:), nxt(:)
-        real(dp) :: u(3), v(3), a(3), eps, best, cr
-        integer :: i, j, t, nrem, ia, ib, ic, start, pick, axis
-        logical :: found, blocked
-
-        ntri = 0
-        if (n < 3) return
-        if (n > ear_max) then
-            do i = 2, n - 1
-                ntri = ntri + 1; tri(:,ntri) = [1, i, i+1]
-            end do
-            return
-        end if
-        axis = minloc(abs(nrm), dim=1)
-        a = 0.0_dp; a(axis) = 1.0_dp
-        u = [nrm(2)*a(3)-nrm(3)*a(2), nrm(3)*a(1)-nrm(1)*a(3), nrm(1)*a(2)-nrm(2)*a(1)]
-        u = u / sqrt(dot_product(u,u))
-        v = [nrm(2)*u(3)-nrm(3)*u(2), nrm(3)*u(1)-nrm(1)*u(3), nrm(1)*u(2)-nrm(2)*u(1)]
-        allocate(x(n), y(n), prv(n), nxt(n))
-        do i = 1, n
-            x(i) = dot_product(p(:,i) - ctr, u); y(i) = dot_product(p(:,i) - ctr, v)
-            prv(i) = mod(i + n - 2, n) + 1; nxt(i) = mod(i, n) + 1
-        end do
-        eps = 1.0e-12_dp * max(maxval(x*x + y*y), tiny(1.0_dp))
-        nrem = n; start = 1
-        do while (nrem > 3)
-            found = .false.; best = -huge(1.0_dp); pick = start
-            i = start
-            do t = 1, nrem
-                ia = prv(i); ib = i; ic = nxt(i)
-                cr = (x(ib)-x(ia))*(y(ic)-y(ia)) - (y(ib)-y(ia))*(x(ic)-x(ia))
-                if (cr > best) then; best = cr; pick = i; end if
-                if (cr > eps) then
-                    blocked = .false.
-                    j = nxt(ic)
-                    do while (j /= ia)
-                        if (in_triangle(x(j), y(j), x(ia), y(ia), x(ib), y(ib), x(ic), y(ic))) then
-                            blocked = .true.; exit
-                        end if
-                        j = nxt(j)
-                    end do
-                    if (.not. blocked) then; found = .true.; pick = i; exit; end if
-                end if
-                i = nxt(i)
-            end do
-            ia = prv(pick); ib = pick; ic = nxt(pick)
-            cr = (x(ib)-x(ia))*(y(ic)-y(ia)) - (y(ib)-y(ia))*(x(ic)-x(ia))
-            if (found .or. cr > eps) then
-                ntri = ntri + 1; tri(:,ntri) = [ia, ib, ic]
-            end if
-            nxt(ia) = ic; prv(ic) = ia
-            start = ic
-            nrem = nrem - 1
-        end do
-        ia = start; ib = nxt(ia); ic = nxt(ib)
-        ntri = ntri + 1; tri(:,ntri) = [ia, ib, ic]
-        deallocate(x, y, prv, nxt)
-    end subroutine triangulate_polygon
-
-    ! point inside or on the boundary of the counter-clockwise triangle (a,b,c)
-    pure logical function in_triangle(px, py, ax, ay, bx, by, cx, cy)
-        real(dp), intent(in) :: px, py, ax, ay, bx, by, cx, cy
-        real(dp) :: d1, d2, d3
-        d1 = (bx-ax)*(py-ay) - (by-ay)*(px-ax)
-        d2 = (cx-bx)*(py-by) - (cy-by)*(px-bx)
-        d3 = (ax-cx)*(py-cy) - (ay-cy)*(px-cx)
-        in_triangle = (d1 >= 0.0_dp .and. d2 >= 0.0_dp .and. d3 >= 0.0_dp)
-    end function in_triangle
 
     ! ------------------------------------------------------------------------------------------------------------------
     ! Bottom-up merge sort of int64 keys carrying an integer payload.

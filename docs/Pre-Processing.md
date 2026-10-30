@@ -65,8 +65,10 @@ case/
 or the grid-only mode), copy them into `data/`, and make sure the geometry is in the **same coordinates and
 units as the solver domain** (the grid origin is the `r0` line of `parameters.in`).
 
-**Geometry input.** A single binary or ASCII `.stl`, a Wavefront `.obj` (any polygon is fan-triangulated; vertex
-normals are optional), or a `.list` manifest with one path per line (`#` comments and blank lines skipped). The
+**Geometry input.** A single binary or ASCII `.stl`, a Wavefront `.obj` (polygons, also concave ones, are
+ear-clipped; vertex normals are optional), an ASCII Gmsh `.msh` (format 2.x or 4.1; triangles and quads, higher-order
+elements through their corner nodes; other element types are ignored; binary `.msh` is rejected, save with
+`Mesh.Binary = 0`), or a `.list` manifest with one path per line (`#` comments and blank lines skipped). The
 order of the lines is the solid ID, used for per-object boundary conditions (at most 15 solids). Append ` ground`
 to a line for an *open* surface — terrain, bathymetry, or a building shell without a floor: everything below its
 topmost surface along the vertical axis is then solid, down to the domain floor.
@@ -76,6 +78,12 @@ data/building_a.stl
 data/building_b.stl
 data/terrain.stl ground
 ```
+
+Append ` phys=N` to a `.msh` line to take only Gmsh physical group `N` (default: every surface element in the file,
+so tag the building walls and leave the domain box untagged). Any other extension, an empty file, or a non-finite
+coordinate stops GenSDF with a message instead of producing an all-fluid field. OpenFOAM `snappyHexMesh` cases are
+read through their surface export, e.g. `surfaceMeshTriangulate -patches '(buildings)' buildings.stl` (or
+`foamToSurface`, which writes OBJ with `g` patch groups); the polyMesh itself is not read.
 
 ## 3. `parameters.in`
 

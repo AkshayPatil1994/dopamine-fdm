@@ -278,6 +278,103 @@ def test_formats_and_axis(exe, work, np_):
     print('  vertical_axis = 2, all four staggerings: wrong %s  %s' % (res, 'ok' if not any(res.values()) else 'FAIL')); bad += any(res.values())
     return bad
 
+
+# ------------------------------------------------------------------------------------------------ Gmsh / n-gon / bad input
+def weld(tri):
+    q = np.round(tri.reshape(-1, 3) / 1e-9).astype(np.int64)
+    _, first, inv = np.unique(q, axis=0, return_index=True, return_inverse=True)
+    return tri.reshape(-1, 3)[first], inv.reshape(-1, 3)
+
+def write_msh2(path, tri, quads=(), tag0=1, extras=True):       # tri: (n,3,3); quads: [(pts(4,3), phys)]; tri phys = 7
+    P, T = weld(tri); nq = len(quads)
+    qp = [np.arange(4) + len(P) + 4 * i for i in range(nq)]
+    if nq: P = np.concatenate([P] + [q[0] for q in quads])
+    with open(path, 'w') as f:
+        f.write('$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n%d\n' % (len(P) + 2 * extras))
+        for i, p in enumerate(P): f.write('%d %.12e %.12e %.12e\n' % (tag0 + 3 * i, *p))
+        if extras: f.write('%d 9 9 9\n%d 9 9 8\n' % (tag0 + 3 * len(P), tag0 + 3 * len(P) + 3))      # unused nodes (volume interior)
+        f.write('$EndNodes\n$Elements\n%d\n' % (len(T) + nq + 2 * extras)); k = 1
+        if extras: f.write('1 1 2 5 5 %d %d\n' % (tag0, tag0 + 3)); k += 1                         # a line: ignored
+        for t in T: f.write('%d 2 2 7 1 %d %d %d\n' % (k, *(tag0 + 3 * t))); k += 1
+        for i, (q, ph) in enumerate(quads): f.write('%d 3 2 %d 1 %d %d %d %d\n' % (k, ph, *(tag0 + 3 * qp[i]))); k += 1
+        if extras: f.write('%d 4 2 7 1 %d %d %d %d\n' % (k, tag0, tag0 + 3, tag0 + 6, tag0 + 9))   # a tet: ignored
+        f.write('$EndElements\n')
+
+def write_msh4(path, tri, tag0=10**5):                             # two surfaces (halves, physical 7) + decoy surface (physical 9)
+    P, T = weld(tri); cz = P[T].mean(axis=1)[:, 2]; halves = [T[cz >= C[2]], T[cz < C[2]]]
+    decoy = np.array([[0.05, 0.05, 0.95], [0.2, 0.05, 0.95], [0.2, 0.2, 0.95]]); P = np.concatenate([P, decoy]); T9 = np.array([[len(P) - 3, len(P) - 2, len(P) - 1]])
+    blocks = [(2, 1, halves[0], 7), (2, 2, halves[1], 7), (2, 3, T9, 9)]
+    with open(path, 'w') as f:
+        f.write('$MeshFormat\n4.1 0 8\n$EndMeshFormat\n$Entities\n1 1 3 0\n1 0 0 0 0\n1 0 0 0 1 1 1 0 2 1 1\n')
+        for tg, ph in ((1, 7), (2, 7), (3, 9)): f.write('%d 0 0 0 1 1 1 1 %d 1 1\n' % (tg, ph))
+        f.write('$EndEntities\n$Nodes\n%d %d %d %d\n' % (len(blocks), len(P), tag0, tag0 + len(P) - 1))
+        used = set()
+        for dim, tg, tt, _ in blocks:
+            ids = sorted(set(tt.ravel()) - used); used |= set(ids)
+            f.write('%d %d 0 %d\n' % (dim, tg, len(ids)))
+            for i in ids: f.write('%d\n' % (tag0 + i))
+            for i in ids: f.write('%.12e %.12e %.12e\n' % tuple(P[i]))
+        f.write('$EndNodes\n$Elements\n%d %d 1 %d\n' % (len(blocks) + 1, sum(len(b[2]) for b in blocks) + 1, sum(len(b[2]) for b in blocks) + 1))
+        f.write('1 9 1 1\n1 %d %d\n' % (tag0, tag0 + 1)); k = 2                                   # a line block: ignored
+        for dim, tg, tt, _ in blocks:
+            f.write('%d %d 2 %d\n' % (dim, tg, len(tt)))
+            for t in tt: f.write('%d %d %d %d\n' % (k, *(tag0 + t))); k += 1
+        f.write('$EndElements\n')
+
+def write_lprism_obj(path, start=1):                              # concave L-shaped cap polygons whose fan from vertex 1 leaves the L
+    P = [(0.2, 0.2), (0.8, 0.2), (0.8, 0.5), (0.5, 0.5), (0.5, 0.8), (0.2, 0.8)]; P = P[start:] + P[:start]; n = 6
+    with open(path, 'w') as f:
+        for z in (0.3, 0.7):
+            for x, y in P: f.write('v %f %f %f\n' % (x, y, z))
+        f.write('f ' + ' '.join(str(n - i) for i in range(n)) + '\nf ' + ' '.join(str(n + i + 1) for i in range(n)) + '\n')
+        for i in range(n): j = (i + 1) % n; f.write('f %d %d %d %d\n' % (i + 1, j + 1, n + j + 1, n + i + 1))
+
+def lprism_tri():
+    P = [(0.2, 0.2), (0.8, 0.2), (0.8, 0.5), (0.5, 0.5), (0.5, 0.8), (0.2, 0.8)]; tri = []
+    for z, rev in ((0.3, True), (0.7, False)):
+        for a, b in ((0, 1), (1, 2), (4, 5), (5, 0)):
+            t = [(*P[3], z), (*P[a], z), (*P[b], z)]; tri.append(t[::-1] if rev else t)
+    for i in range(6):
+        j = (i + 1) % 6; a, b, c, d = (*P[i], .3), (*P[j], .3), (*P[j], .7), (*P[i], .7); tri += [[a, b, c], [a, c, d]]
+    return np.array(tri, float)
+
+def expect_fail(exe, work, name, geom, msg):
+    cd = os.path.join(work, name); setup(cd, [geom])
+    r = subprocess.run(['mpirun', '--oversubscribe', '-np', '1', os.path.abspath(exe)], cwd=cd, capture_output=True, text=True)
+    ok = r.returncode != 0 and msg in r.stdout + r.stderr
+    print('  %-34s %s' % (name + ' -> fatal:', 'ok' if ok else 'FAIL')); return int(not ok)
+
+def test_mesh_formats(exe, work, np_):
+    bad = 0
+    # concave n-gon faces must not be fanned across the notch: identical field to the pre-triangulated solid
+    cd = os.path.join(work, 'lref'); setup(cd, [('l.stl', lprism_tri())]); run(exe, cd, np_); ref = read(cd)
+    cd = os.path.join(work, 'lobj'); setup(cd, [('l.obj', write_lprism_obj)]); run(exe, cd, np_)
+    d = float(np.abs(read(cd) - ref).max()); print('  concave L-shaped OBJ polygons: max field difference %.1e  %s' % (d, 'ok' if d < 1e-6 else 'FAIL')); bad += d >= 1e-6
+    sph = SPH()
+    for nm, wr, geom in (('Gmsh 2.2 triangles + ignored line/tet/unused nodes, sparse tags', lambda p: write_msh2(p, sph, tag0=500000), 'm.msh'),
+                         ('Gmsh 4.1, entity blocks, physical group 7 of 7+9', lambda p: write_msh4(p, sph), 'm.MSH')):
+        cd = os.path.join(work, 'gmsh'); shutil.rmtree(cd, ignore_errors=True); setup(cd, [(geom, wr)])
+        if '4.1' in nm: open(os.path.join(cd, 'data', 'objects.list'), 'w').write('data/%s phys=7\n' % geom)
+        run(exe, cd, np_); w = wrong(read(cd), sphere_truth()); print('  %s: wrong %d  %s' % (nm, w, 'ok' if w == 0 else 'FAIL')); bad += (w != 0)
+    lo, hi = (0.3,) * 3, (0.7,) * 3
+    cd = os.path.join(work, 'gmshquad'); setup(cd, [('q.msh', lambda p: write_msh2(p, np.zeros((0, 3, 3)), quads=[(np.array([[x, y, z] for z in (lo[2], hi[2]) for y in (lo[1], hi[1]) for x in (lo[0], hi[0])])[list(q)], 7) for q in
+                                                                    [(0, 2, 3, 1), (4, 5, 7, 6), (0, 1, 5, 4), (2, 6, 7, 3), (0, 4, 6, 2), (1, 3, 7, 5)]], extras=False))]); run(exe, cd, np_)
+    s = read(cd)
+    Xg, Yg, Zg = grid(); ins = (Xg > .3) & (Xg < .7) & (Yg > .3) & (Yg < .7) & (Zg > .3) & (Zg < .7)
+    band = np.minimum.reduce([np.abs(Xg-.3), np.abs(Xg-.7), np.abs(Yg-.3), np.abs(Yg-.7), np.abs(Zg-.3), np.abs(Zg-.7)]) < .6*DX
+    w = int((((s < 0) != ins) & ~band).sum()); print('  Gmsh quads: wrong %d  %s' % (w, 'ok' if w == 0 else 'FAIL')); bad += (w != 0)
+    def junk(txt): return lambda p: open(p, 'w').write(txt)
+    cube = lambda p: write_quad_obj_cube(p)
+    bad += expect_fail(exe, work, 'empty OBJ', ('e.obj', junk('# nothing\n')), 'no triangles')
+    bad += expect_fail(exe, work, 'unknown extension', ('g.ply', junk('ply\n')), 'unknown geometry format')
+    bad += expect_fail(exe, work, 'NaN vertex', ('n.obj', lambda p: (cube(p), open(p, 'a').write('v nan 0 0\nf 1 2 9\n'))), 'non-finite')
+    bad += expect_fail(exe, work, 'binary .msh', ('b.msh', junk('$MeshFormat\n2.2 1 8\n')), 'binary .msh')
+    bad += expect_fail(exe, work, 'Gmsh 4.0', ('v.msh', junk('$MeshFormat\n4.0 0 8\n$EndMeshFormat\n')), 'unsupported .msh')
+    cd = os.path.join(work, 'nophys'); setup(cd, [('p.msh', lambda p: write_msh4(p, sph))]); open(os.path.join(cd, 'data', 'objects.list'), 'w').write('data/p.msh phys=5\n')
+    r = subprocess.run(['mpirun', '--oversubscribe', '-np', '1', os.path.abspath(exe)], cwd=cd, capture_output=True, text=True)
+    ok = r.returncode != 0 and 'no triangles' in r.stdout + r.stderr; print('  %-34s %s' % ('missing physical group -> fatal:', 'ok' if ok else 'FAIL')); bad += int(not ok)
+    return bad
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--exe', default=os.path.join(os.path.dirname(__file__), '..', 'gensdf'))
@@ -295,6 +392,7 @@ def main():
         print('rank independence:'); bad += test_rank_independence(a.exe, work, a.np if len(a.np) > 1 else [1, 3])
         print('ground / multi-solid:'); bad += test_ground_and_multisolid(a.exe, work, a.np[0])
         print('readers / vertical axis:'); bad += test_formats_and_axis(a.exe, work, a.np[0])
+        print('mesh formats (n-gons, Gmsh, bad input):'); bad += test_mesh_formats(a.exe, work, a.np[0])
     finally:
         if a.keep: print('work directory kept:', work)
         else: shutil.rmtree(work, ignore_errors=True)
