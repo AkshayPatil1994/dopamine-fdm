@@ -282,6 +282,7 @@ Contains
   !  wave_height
   Subroutine stream_function_solve
 
+    Use mpi
     Integer(Int32) :: n, nu, it, ih, nh, i, info
     Real(Int64), Allocatable :: z(:), res(:), res2(:), jac(:,:), dz(:)
     Integer(Int32), Allocatable :: piv(:)
@@ -324,7 +325,12 @@ Contains
     End Do
     Call sf_residual(z, n, wave_height, res)
     If ( Maxval(Abs(res)) > 1d-8*Max(1d0, wv_g*wv_d) ) Then
-       Write(*,'(A,ES10.2)') ' WARNING: stream-function solve did not converge, residual ', Maxval(Abs(res))
+       Write(*,'(A,ES10.2)') ' ERROR: stream-function solve did not converge, residual ', Maxval(Abs(res))
+       Write(*,'(A,F7.4,A,F7.4,A)') ' ERROR: wave steepness H/L = ', wave_height*k0/(2d0*pi_), &
+            ' vs breaking limit ~', 0.142d0*Tanh(k0*wv_d), ' (0.142 tanh(kd), linear k)'
+       Write(*,'(A)') ' ERROR: the requested wave (wave_height, wave_period, vof_level) is at or beyond the breaking limit, '// &
+            'so no periodic stream-function wave exists. Reduce wave_height, increase wave_period or increase vof_level.'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, i)
     End If
 
     sf_n = n
