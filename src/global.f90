@@ -598,6 +598,15 @@ Module global
   Real   (Int64) :: particle_seed_ymin = 0d0, particle_seed_ymax = -1d0
   Real   (Int64) :: particle_seed_zmin = 0d0, particle_seed_zmax = -1d0
   Integer(Int32) :: particle_seed_seed     = 987654
+  ! particle_nboxes>0: seed particle_box_n(k) particles in box k (sloping when particle_box_slope(k)/=0: the y range
+  ! shifts by slope*(x-xmin)) instead of the single particle_seed_* box; n_particles_init is then the sum
+  Integer(Int32), Parameter :: MAX_SEED_BOXES = 8
+  Integer(Int32) :: particle_nboxes = 0
+  Integer(Int32) :: particle_box_n(MAX_SEED_BOXES) = 0
+  Real   (Int64) :: particle_box_xmin(MAX_SEED_BOXES) = 0d0, particle_box_xmax(MAX_SEED_BOXES) = -1d0
+  Real   (Int64) :: particle_box_ymin(MAX_SEED_BOXES) = 0d0, particle_box_ymax(MAX_SEED_BOXES) = -1d0
+  Real   (Int64) :: particle_box_zmin(MAX_SEED_BOXES) = 0d0, particle_box_zmax(MAX_SEED_BOXES) = -1d0
+  Real   (Int64) :: particle_box_slope(MAX_SEED_BOXES) = 0d0
   Integer(Int32) :: bc_particle_x = -1, bc_particle_y = -1, bc_particle_z = -1
   Integer(Int32) :: particle_reinit_on_exit = 0
   Real   (Int64) :: particle_max_age       = 1d30

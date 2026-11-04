@@ -263,6 +263,11 @@ Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disa
 | `particle_seed_xmin, particle_seed_ymin, particle_seed_zmin` | `0.0` | Lower bound of the seeding box [m]. |
 | `particle_seed_xmax, particle_seed_ymax, particle_seed_zmax` | `-1` | Upper bound; `<0` = full domain. |
 | `particle_seed_seed` | `987654` | RNG seed. |
+| `particle_nboxes` | `0` | Number of seed boxes (max 8). `0` = the single `particle_seed_*` box. With `>0`, `n_particles_init` is set to the sum of `particle_box_n`, so no `n_particles_init` is needed, and `particle_seed_*` is ignored for the initial seeding. Use it with IBM terrain: place a sloping box over the beach and a flat box elsewhere so no particle starts in the solid. After seeding, rank 0 warns how many particles have `phi<0`. Inflow re-injection still uses `particle_seed_ymin/ymax`. |
+| `particle_box_n` | `0` | Array: particles seeded in each box. |
+| `particle_box_xmin, particle_box_ymin, particle_box_zmin` | `0.0` | Arrays: lower bound of each box [m]. |
+| `particle_box_xmax, particle_box_ymax, particle_box_zmax` | `-1` | Arrays: upper bound of each box; `<0` = full domain. Every box needs `min < max` (abort otherwise). |
+| `particle_box_slope` | `0.0` | Array: dy/dx of the box. The y range of box k is `[ymin + s*(x-xmin), ymax + s*(x-xmin)]`, so the box keeps a fixed thickness above a plane bed of slope `s`. |
 | `bc_particle_x, bc_particle_y, bc_particle_z` | `-1` | Per-direction BC: `-1` auto (periodic where the fluid BC is periodic, else exit in x / reflect in y,z); `0` periodic, `1` exit, `2` reflect, `3` absorb. |
 | `particle_reinit_on_exit` | `0` | `1` replace a particle leaving the outflow by a new one at the inflow plane; `0` population decays. |
 | `particle_max_age` | `1e30` | Maximum particle age [s]. |

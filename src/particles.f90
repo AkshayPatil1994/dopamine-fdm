@@ -142,20 +142,36 @@ Contains
   !  particle's ID.
   Subroutine seed_particles_fresh
 
-    Integer(Int32) :: i
-    Real   (Int64) :: xp, yp, zp, rx, ry, rz, xmax_s, zmax_s
+    Integer(Int32) :: i, ib, n_in_box, n_solid, n_solid_all
+    Real   (Int64) :: xp, yp, zp, rx, ry, rz, xmin_s, xmax_s, ymin_s, ymax_s, zmin_s, zmax_s, slope_s
 
-    ! a periodic direction has period Lxp = Lx - dx: seeding into the duplicate last cell would double its
-    ! weight
-    xmax_s = particle_seed_xmax;  zmax_s = particle_seed_zmax
-    If ( bcx_resolved == 0 ) xmax_s = Min( xmax_s, x_global(1) + Lxp )
-    If ( bcz_resolved == 0 ) zmax_s = Min( zmax_s, z_global(1) + Lzp )
-
+    ! particle_nboxes==0: the single particle_seed_* box; else candidate i falls in box ib by cumulative count
+    ib = 1;  n_in_box = 0
+    n_solid = 0
     Do i = 1, n_particles_init
+       If ( particle_nboxes > 0 ) Then
+          Do While ( i - 1 - n_in_box >= particle_box_n(ib) )
+             n_in_box = n_in_box + particle_box_n(ib)
+             ib = ib + 1
+          End Do
+          xmin_s = particle_box_xmin(ib);  xmax_s = particle_box_xmax(ib)
+          ymin_s = particle_box_ymin(ib);  ymax_s = particle_box_ymax(ib)
+          zmin_s = particle_box_zmin(ib);  zmax_s = particle_box_zmax(ib)
+          slope_s = particle_box_slope(ib)
+       Else
+          xmin_s = particle_seed_xmin;  xmax_s = particle_seed_xmax
+          ymin_s = particle_seed_ymin;  ymax_s = particle_seed_ymax
+          zmin_s = particle_seed_zmin;  zmax_s = particle_seed_zmax
+          slope_s = 0d0
+       End If
+       ! a periodic direction has period Lxp = Lx - dx: seeding into the duplicate last cell would double its
+       ! weight
+       If ( bcx_resolved == 0 ) xmax_s = Min( xmax_s, x_global(1) + Lxp )
+       If ( bcz_resolved == 0 ) zmax_s = Min( zmax_s, z_global(1) + Lzp )
        Call id_uniform(i - 1, particle_seed_seed, rx, ry, rz)
-       xp = particle_seed_xmin + rx*(xmax_s - particle_seed_xmin)
-       yp = particle_seed_ymin + ry*(particle_seed_ymax - particle_seed_ymin)
-       zp = particle_seed_zmin + rz*(zmax_s - particle_seed_zmin)
+       xp = xmin_s + rx*(xmax_s - xmin_s)
+       yp = ymin_s + ry*(ymax_s - ymin_s) + slope_s*(xp - xmin_s)
+       zp = zmin_s + rz*(zmax_s - zmin_s)
        If ( owns_particle(xp, zp) ) Then
           Call ensure_capacity(n_particles_local + 1)
           n_particles_local = n_particles_local + 1
@@ -175,8 +191,17 @@ Contains
              p_sgs_v(n_particles_local) = 0d0
              p_sgs_w(n_particles_local) = 0d0
           End If
+          If ( ibm_input_mode >= 1 ) Then
+             If ( interp3(phipad, xpad_c, nxg+2, yg, nyg, zpad_c, nzg+2, xp, yp, zp) < 0d0 ) n_solid = n_solid + 1
+          End If
        End If
     End Do
+
+    If ( ibm_input_mode >= 1 ) Then
+       Call Mpi_reduce(n_solid, n_solid_all, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+       If ( myid == 0 .And. n_solid_all > 0 ) Write(*,'(A,I0,A)') ' WARNING: ', n_solid_all, &
+            ' particle(s) seeded inside the solid (phi<0); adjust the seed boxes'
+    End If
 
   End Subroutine seed_particles_fresh
 

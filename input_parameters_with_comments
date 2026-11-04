@@ -304,6 +304,12 @@
 !  particle_seed_ymin = 0.0, particle_seed_ymax = -1.0,
 !  particle_seed_zmin = 0.0, particle_seed_zmax = -1.0,
 !  particle_seed_seed = 987654,
+!  ! several seed boxes (replace n_particles_init and particle_seed_*); a box with slope s has its y range shifted by s*(x-xmin)
+!  particle_nboxes = 2, particle_box_n = 400, 200,
+!  particle_box_xmin = 1.0, 6.0, particle_box_xmax = 6.0, 8.0,
+!  particle_box_ymin = 0.0, 0.0, particle_box_ymax = 0.01, 0.01,
+!  particle_box_zmin = 0.1, 0.1, particle_box_zmax = 0.4, 0.4,
+!  particle_box_slope = 0.1, 0.0,
 !  bc_particle_x = -1, bc_particle_y = -1, bc_particle_z = -1,
 !  particle_reinit_on_exit = 0,
 !  particle_max_age = 1.0e30,

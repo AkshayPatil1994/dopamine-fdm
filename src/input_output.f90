@@ -21,7 +21,7 @@ Contains
 
     Character(*), Intent(In), Optional :: input_file
     Character(:), Allocatable :: fname
-    Integer(Int32) :: ios, unit_in
+    Integer(Int32) :: ios, unit_in, ib
     Integer(Int32) :: nx, ny, nz, nks
     Real   (Int64) :: Lx, Ly, Lz, alpha_grid
     Real   (Int64) :: T_wave_x, T_wave_z
@@ -81,6 +81,8 @@ Contains
     Namelist /PARTICLES/ particles_active, n_particles_init, &
                          particle_seed_xmin, particle_seed_xmax, particle_seed_ymin, particle_seed_ymax, &
                          particle_seed_zmin, particle_seed_zmax, particle_seed_seed, &
+                         particle_nboxes, particle_box_n, particle_box_xmin, particle_box_xmax, &
+                         particle_box_ymin, particle_box_ymax, particle_box_zmin, particle_box_zmax, particle_box_slope, &
                          bc_particle_x, bc_particle_y, bc_particle_z, &
                          particle_reinit_on_exit, particle_max_age, particle_restart_file, &
                          particle_restart_load, &
@@ -232,6 +234,19 @@ Contains
           If ( particle_seed_xmax < 0d0 ) particle_seed_xmax = Lx
           If ( particle_seed_ymax < 0d0 ) particle_seed_ymax = Ly
           If ( particle_seed_zmax < 0d0 ) particle_seed_zmax = Lz
+          If ( particle_nboxes < 0 .Or. particle_nboxes > MAX_SEED_BOXES ) &
+               Call abort_input( 'ERROR: &PARTICLES particle_nboxes must be 0..8' )
+          If ( particle_nboxes > 0 ) Then
+             Where ( particle_box_xmax < 0d0 ) particle_box_xmax = Lx
+             Where ( particle_box_ymax < 0d0 ) particle_box_ymax = Ly
+             Where ( particle_box_zmax < 0d0 ) particle_box_zmax = Lz
+             Do ib = 1, particle_nboxes
+                If ( particle_box_n(ib) < 0 .Or. particle_box_xmax(ib) <= particle_box_xmin(ib) .Or. &
+                     particle_box_ymax(ib) <= particle_box_ymin(ib) .Or. particle_box_zmax(ib) <= particle_box_zmin(ib) ) &
+                     Call abort_input( 'ERROR: &PARTICLES particle_box_* needs n>=0 and min<max in every box' )
+             End Do
+             n_particles_init = Sum( particle_box_n(1:particle_nboxes) )
+          End If
           If ( bc_particle_x < 0 ) bc_particle_x = Merge(0, 1, x_bc_type == 0)
           If ( bc_particle_y < 0 ) bc_particle_y = Merge(0, 2, y_bc_type == 0)
           If ( bc_particle_z < 0 ) bc_particle_z = Merge(0, 2, z_bc_type == 0)
@@ -782,6 +797,15 @@ Contains
     Call Mpi_bcast ( particle_seed_zmin,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_seed_zmax,    1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_seed_seed,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_nboxes,       1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_box_n,        MAX_SEED_BOXES, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_box_xmin,     MAX_SEED_BOXES, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_box_xmax,     MAX_SEED_BOXES, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_box_ymin,     MAX_SEED_BOXES, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_box_ymax,     MAX_SEED_BOXES, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_box_zmin,     MAX_SEED_BOXES, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_box_zmax,     MAX_SEED_BOXES, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_box_slope,    MAX_SEED_BOXES, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( bc_particle_x,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( bc_particle_y,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( bc_particle_z,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
