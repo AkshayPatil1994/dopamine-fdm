@@ -80,7 +80,7 @@ $\epsilon=-\mathrm{d}E_k/\mathrm{d}t$ over $0.5\le t\,U_0/L\le20$, normalised by
 
 ![Taylor–Green vortex](assets/validation/tgv/tgv_validation.png)
 
-*Figure 1. Taylor–Green vortex, Re = 1600. (a) kinetic energy, (b) dissipation rate $-\mathrm{d}E_k/\mathrm{d}t$, (c) difference from the DNS dissipation normalised by the DNS peak. Black line: DNS; markers: DOPAMINE, every second output.*
+**Figure 1.** Taylor–Green vortex, Re = 1600. (a) kinetic energy, (b) dissipation rate $-\mathrm{d}E_k/\mathrm{d}t$, (c) difference from the DNS dissipation normalised by the DNS peak. Black line: DNS; markers: DOPAMINE, every second output.
 
 | Grid | $\epsilon_\mathrm{max}\times10^3$ | peak error | $t$ of peak | L2 error of $\epsilon$ | L2 error of $E_k$ |
 |---|---|---|---|---|---|
@@ -91,7 +91,7 @@ $\epsilon=-\mathrm{d}E_k/\mathrm{d}t$ over $0.5\le t\,U_0/L\le20$, normalised by
 
 <img src="assets/validation/tgv/tgv_vorticity.gif" alt="Vorticity magnitude, Taylor-Green vortex" width="420">
 
-*Animation. Vorticity magnitude on the plane $z=0.2L_z$, $256^3$.*
+**Animation.** Vorticity magnitude on the plane $z=0.2L_z$, $256^3$.
 
 Reproduce:
 
@@ -108,7 +108,7 @@ Channel flow, periodic in $x$ and $z$, $66\times65\times66$ cells, Vreman SGS mo
 
 ![Channel Re_tau 395](assets/validation/channel/channel395_validation.png)
 
-*Figure 2. Wall-modelled LES of channel flow at $Re_\tau=395$. (a) mean velocity (dashed grey: $U^+=\kappa^{-1}\ln y^++5.2$, $\kappa=0.41$), (b) rms velocity fluctuations, (c) Reynolds shear stress. Lines: MKM DNS; markers: DOPAMINE.*
+**Figure 2.** Wall-modelled LES of channel flow at $Re_\tau=395$. (a) mean velocity (dashed grey: $U^+=\kappa^{-1}\ln y^++5.2$, $\kappa=0.41$), (b) rms velocity fluctuations, (c) Reynolds shear stress. Lines: MKM DNS; markers: DOPAMINE.
 
 | $y^+$ | 50 | 100 | 200 | 395 |
 |---|---|---|---|---|
@@ -119,7 +119,7 @@ The bulk velocity is 16.53 against 17.06 for the DNS (−3.2 %).
 
 <img src="assets/validation/channel/channel395_streaks.gif" alt="Streaks at y+ = 40" width="420">
 
-*Animation. Streamwise velocity fluctuation $u'/u_\tau$ on the plane $y^+\approx40$.*
+**Animation.** Streamwise velocity fluctuation $u'/u_\tau$ on the plane $y^+\approx40$.
 
 Reproduce:
 
@@ -137,7 +137,7 @@ windows are 27.9 (AMD, 2000), 23.2 (Vreman, 5200) and 27.0 (AMD, 5200) time unit
 
 ![AMD at Re_tau 2000 and 5200](assets/validation/channel/wallmodel_re2000_5200.png)
 
-*Figure 3. Wall-modelled LES at $Re_\tau=2000$ (left) and 5200 (right). (a) mean velocity, (b) difference from the DNS profile, (c) mean eddy viscosity. Black: Lee and Moser DNS; blue squares: AMD; orange circles: Vreman.*
+**Figure 3.** Wall-modelled LES at $Re_\tau=2000$ (left) and 5200 (right). (a) mean velocity, (b) difference from the DNS profile, (c) mean eddy viscosity. Black: Lee and Moser DNS; blue squares: AMD; orange circles: Vreman.
 
 | $Re_\tau$ | first cell $y^+$ | SGS model | bulk velocity | error |
 |---|---|---|---|---|
@@ -155,7 +155,7 @@ the stresses by their maximum in the DNS profile.
 
 ![Wavy wall](assets/validation/wavywall/wavywall_validation.png)
 
-*Figure 4. Flow over a wavy wall at four stations $x_1/\lambda$. Columns: (a) streamwise velocity, (b) vertical velocity, (c) Reynolds stresses ($\overline{u'u'}$, $\overline{w'w'}$, $\overline{v'v'}$, $-\overline{u'w'}$). Circles: DNS of Maaß and Schumann; lines: DOPAMINE.*
+**Figure 4.** Flow over a wavy wall at four stations $x_1/\lambda$. Columns: (a) streamwise velocity, (b) vertical velocity, (c) Reynolds stresses ($\overline{u'u'}$, $\overline{w'w'}$, $\overline{v'v'}$, $-\overline{u'w'}$). Circles: DNS of Maaß and Schumann; lines: DOPAMINE.
 
 | $x_1/\lambda$ | L2($U$)/$U_b$ | L2($V$)/$U_b$ | $\overline{u'u'}$ | $\overline{w'w'}$ | $\overline{v'v'}$ | $-\overline{u'w'}$ |
 |---|---|---|---|---|---|---|
@@ -166,7 +166,7 @@ the stresses by their maximum in the DNS profile.
 
 <img src="assets/validation/wavywall/wavywall_velocity.gif" alt="Streamwise velocity over the wavy wall" width="520">
 
-*Animation. Streamwise velocity on the mid-span plane.*
+**Animation.** Streamwise velocity on the mid-span plane.
 
 Reproduce:
 
@@ -182,14 +182,14 @@ plane and over 150 snapshots (75 time units). The reference is the mean temperat
 
 ![Rayleigh–Bénard](assets/validation/rb/rb_validation.png)
 
-*Figure 5. Mean temperature in Rayleigh–Bénard convection. (a) profile, (b) difference from the reference. Dashed line: Kunnen, Geurts and Clercx (2009); markers: DOPAMINE.*
+**Figure 5.** Mean temperature in Rayleigh–Bénard convection. (a) profile, (b) difference from the reference. Dashed line: Kunnen, Geurts and Clercx (2009); markers: DOPAMINE.
 
 The L2 difference over the 47 reference points is 0.0063 and the largest difference 0.021 (at $z/H=0.023$). The mid-height temperature is 0.5001
 against 0.5025 in the reference.
 
 <img src="assets/validation/rb/rb_convection.gif" alt="Temperature in Rayleigh-Benard convection" width="360">
 
-*Animation. Temperature on the mid-span vertical slice and on the plan view at $y/H=0.08$, showing plumes rising from the hot plate and the sheet-like convection cells.*
+**Animation.** Temperature on the mid-span vertical slice and on the plan view at $y/H=0.08$, showing plumes rising from the hot plate and the sheet-like convection cells.
 
 Reproduce:
 
@@ -212,7 +212,7 @@ and trough, and the mean and rms velocity at four LDA stations.
 
 ![Ting and Kirby spilling breaker](assets/validation/tk94/tk94_validation.png)
 
-*Figure 6. Spilling breaker. (a) crest and trough elevation about the mean and mean level against the streamwise position $x_\mathrm{TK}$; (b) mean velocity and (c) rms of the velocity fluctuation at four LDA stations, with $h$ the local mean depth. Blue lines: DOPAMINE; grey band: 95 % confidence interval of the phase-averaged DOPAMINE statistics over the 19 periods (Student-$t$, $t_{0.975,18}\,\sigma/\sqrt{19}$); circles: Ting and Kirby (1994).*
+**Figure 6.** Spilling breaker. (a) crest and trough elevation about the mean and mean level against the streamwise position $x_\mathrm{TK}$; (b) mean velocity and (c) rms of the velocity fluctuation at four LDA stations, with $h$ the local mean depth. Blue lines: DOPAMINE; grey band: 95 % confidence interval of the phase-averaged DOPAMINE statistics over the 19 periods (Student-$t$, $t_{0.975,18}\,\sigma/\sqrt{19}$); circles: Ting and Kirby (1994).
 
 | Quantity | DOPAMINE | Experiment |
 |---|---|---|
@@ -230,7 +230,7 @@ and trough, and the mean and rms velocity at four LDA stations.
 
 <img src="assets/validation/tk94/tk94_breaking.gif" alt="Spilling breaker" width="560">
 
-*Animation. Velocity magnitude of the water, $\alpha|\mathbf{u}|$, on the centre plane through the surf zone (vertical scale ×4).*
+**Animation.** Velocity magnitude of the water, $\alpha|\mathbf{u}|$, on the centre plane through the surf zone (vertical scale ×4).
 
 Reproduce:
 
@@ -248,7 +248,7 @@ $-V/v_h = 1+s/\sqrt{s^2+R^2}$, with $s$ the axial distance from the disk, positi
 
 ![Actuator disk](assets/validation/adm/adm_validation.png)
 
-*Figure 7. Actuator disk in hover. (a) axial velocity along the axis for three resolutions, (b) enlargement of $|s/R|\le3$. Black line: vortex-cylinder theory; markers: DOPAMINE.*
+**Figure 7.** Actuator disk in hover. (a) axial velocity along the axis for three resolutions, (b) enlargement of $|s/R|\le3$. Black line: vortex-cylinder theory; markers: DOPAMINE.
 
 | $R/\Delta y$ | RMSE, $\lvert s/R\rvert\le3$ | RMSE, $\lvert s/R\rvert\le0.5$ | far wake $-V/v_h$ ($3\le s/R\le6$) |
 |---|---|---|---|
@@ -273,7 +273,7 @@ The fluid statistics are from the last six snapshots of the particle-free flow, 
 
 ![Particles](assets/validation/particles/particles_validation.png)
 
-*Figure 8. Inertial particles in channel flow. (a) fluid mean velocity and (b) fluid rms velocity (solid: DOPAMINE; dashed: MKM $Re_\tau=180$); rows (c) $St^+=1$ and (d) $St^+=5$: concentration $C/C_0$, mean streamwise particle velocity, streamwise and wall-normal particle rms, against the benchmark group envelope (grey).*
+**Figure 8.** Inertial particles in channel flow. (a) fluid mean velocity and (b) fluid rms velocity (solid: DOPAMINE; dashed: MKM $Re_\tau=180$); rows (c) $St^+=1$ and (d) $St^+=5$: concentration $C/C_0$, mean streamwise particle velocity, streamwise and wall-normal particle rms, against the benchmark group envelope (grey).
 
 The score is the share of slabs with $1\le z^+\le150$ inside the benchmark envelope, widened by 30 % for the concentration, 5 % for the mean velocity and 10 % for the rms,
 and the rms difference from the envelope centre line.
@@ -290,7 +290,7 @@ concentration is still increasing at the end of the run and lies above the envel
 
 <img src="assets/validation/particles/particles_3d.gif" alt="Vortices and inertial particles in channel flow" width="520">
 
-*Animation. Vortical structures (isosurface $Q^+=0.016$ below $y^+=90$, coloured by the streamwise velocity $u/u_\tau$) and 20 $St^+=5$ particles with fading tracks, $t^+\approx14\,100$ to 14 260. Orange: 10 particles in the buffer layer ($y^+<15$); pink: 10 particles at $15<y^+<45$. The animation comes from a short restart of the $St^+=5$ run with a snapshot every 5 $t^+$.*
+**Animation.** Vortical structures (isosurface $Q^+=0.016$ below $y^+=90$, coloured by the streamwise velocity $u/u_\tau$) and 20 $St^+=5$ particles with fading tracks, $t^+\approx14\,100$ to 14 260. Orange: 10 particles in the buffer layer ($y^+<15$); pink: 10 particles at $15<y^+<45$. The animation comes from a short restart of the $St^+=5$ run with a snapshot every 5 $t^+$.
 
 Reproduce:
 
@@ -318,15 +318,15 @@ with the sample size reduced by the autocorrelation of the signal.
 
 ![Michel-Stadt mean velocity](assets/validation/michelstadt/michelstadt_mean_profiles.png)
 
-*Figure 9. Mean streamwise velocity $\bar u/U_\mathrm{ref}$ against $z/H$ at seven stations along the street axis (x/H measured from the first building). Black line: SOD2D; circles: wind tunnel; orange dashed: Vreman, $\Delta x=2.5$ m; blue: AMD, 2.5 m; green: AMD, 1.25 m; bands: 95 % confidence intervals; dotted line: $z/H=2$.*
+**Figure 9.** Mean streamwise velocity $\bar u/U_\mathrm{ref}$ against $z/H$ at seven stations along the street axis (x/H measured from the first building). Black line: SOD2D; circles: wind tunnel; orange dashed: Vreman, $\Delta x=2.5$ m; blue: AMD, 2.5 m; green: AMD, 1.25 m; bands: 95 % confidence intervals; dotted line: $z/H=2$.
 
 ![Michel-Stadt rms velocity](assets/validation/michelstadt/michelstadt_rms_profiles.png)
 
-*Figure 10. Streamwise rms velocity $u'_\mathrm{rms}/U_\mathrm{ref}$ at the same stations, with the same symbols.*
+**Figure 10.** Streamwise rms velocity $u'_\mathrm{rms}/U_\mathrm{ref}$ at the same stations, with the same symbols.
 
 ![Michel-Stadt differences](assets/validation/michelstadt/michelstadt_convergence.png)
 
-*Figure 11. Rms difference from the SOD2D profiles, normalised by $U_\mathrm{ref}$, for (a) mean $u$, (b) mean $v$ and (c) $u_\mathrm{rms}$, separately for $z/H\le2$ and $z/H\gt2$ (hatched).*
+**Figure 11.** Rms difference from the SOD2D profiles, normalised by $U_\mathrm{ref}$, for (a) mean $u$, (b) mean $v$ and (c) $u_\mathrm{rms}$, separately for $z/H\le2$ and $z/H\gt2$ (hatched).
 
 | Rms difference from SOD2D / $U_\mathrm{ref}$ | band | Vreman 2.5 m | AMD 2.5 m | AMD 1.25 m |
 |---|---|---|---|---|
@@ -348,7 +348,7 @@ the difference above $z/H\gt2$ comes from it, not from the flow through the city
 
 <img src="assets/validation/michelstadt/michelstadt_flow.gif" alt="Pedestrian-level flow in Michel-Stadt" width="460">
 
-*Animation. Velocity magnitude $|\mathbf{u}|/U_\mathrm{ref}$ at $y=1.9$ m, coarse AMD run, from $t\approx1000$ s. Grey: solid cells of the staircase IBM at that height (from the signed-distance field), so the open courtyards inside the building blocks show the flow.*
+**Animation.** Velocity magnitude $|\mathbf{u}|/U_\mathrm{ref}$ at $y=1.9$ m, coarse AMD run, from $t\approx1000$ s. Grey: solid cells of the staircase IBM at that height (from the signed-distance field), so the open courtyards inside the building blocks show the flow.
 
 Reproduce:
 
