@@ -38,6 +38,7 @@ ctest --test-dir build               # optional: regression suite
 | [Input Parameters](docs/Input-Parameters.md) | every namelist variable with default and usage |
 | [Numerics](docs/Numerics.md) | governing equations, discretisation, solvers, models, validation |
 | [Two-Phase VOF](docs/Two-Phase-VOF.md) | the air–water solver: method, waves, validation, limits |
+| [Validation](docs/Validation.md) | numerical-correctness evidence and validation against DNS and experiment, per pathway |
 | [Examples](docs/Examples.md) | bundled example cases |
 | [Pre-Processing](docs/Pre-Processing.md) | GenSDF input format and usage |
 | [Tools](docs/Tools.md) | GenSDF, `dopamine_post`, dopamine-ESEM, and the scripts behind the animations above |

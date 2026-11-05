@@ -15,6 +15,7 @@ A parallel finite-difference solver for the 3-D incompressible Navier–Stokes e
 | set up a case | [Input Parameters](Input-Parameters.md) and the [bundled Examples](Examples.md) |
 | understand the equations and discretisation | [Numerics](Numerics.md) |
 | simulate waves or an air–water interface | [Two-Phase VOF](Two-Phase-VOF.md) |
+| see what is verified and validated, and against which data | [Validation](Validation.md) |
 | make a signed-distance field for an immersed body | [Pre-Processing](Pre-Processing.md) |
 | post-process, animate, or use the ESEM inflow generator | [Tools](Tools.md) |
 | modify the code or run the consistency checks | [Development](Development.md) |

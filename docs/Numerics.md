@@ -658,7 +658,9 @@ budget module (§9) additionally reports the buoyancy production term $\beta_T g
 
 The Boussinesq implementation is validated against a standard turbulent Rayleigh–Bénard convection case corresponding to the work by Kunnen, Geurts, and Clercx, (2009). 
 
-![test](Temperature_validation.png)
+![Mean temperature in Rayleigh–Bénard convection against Kunnen et al. (2009)](Temperature_validation.png)
+
+See [Validation](Validation.md#b5-rayleigh-bénard-convection) for the error measures.
 
 ## 9. Reynolds stress budget
 
