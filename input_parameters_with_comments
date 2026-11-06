@@ -334,7 +334,7 @@
 
 ! Target waves for the numerical wave flume (vof_flow=1, x_bc_type=1, inflow_type=3).
 ! wave_height/wave_Hs with wave_type=0 prints a warning (no waves are generated).
-! wave_type: 0 off | 1 linear | 2 stream function | 3 JONSWAP.
+! wave_type: 0 off | 1 linear | 2 stream function | 3 JONSWAP | 4 elevation series (wave_series_file 't eta', wave_series_pad/taper/fmin/fmax).
 ! current_type: 0 none | 1 uniform | 2 log law | 3 power law (needs wave_type>0).
 ! wave_turb=1 adds precursor turbulence from inflow_recycle_file.
 !&WAVES
@@ -345,6 +345,9 @@
 !  wave_Hs = 0.0, wave_Tp = 1.0, wave_gamma = 3.3, wave_nfreq = 200, wave_seed = 12345,
 !  wave_gen_len = 2.0, wave_abs_len = 3.0, wave_relax_rate = 20.0,
 !  wave_ramp_time = 2.0,
+!  wave_series_file = 'series.txt',  ! wave_type=4: columns 't eta' (mean removed, finite-depth linear components)
+!  wave_series_pad = 1.0, wave_series_taper = 0.0,   ! zero padding (x record length), Tukey taper fraction per end
+!  wave_series_fmin = 0.0, wave_series_fmax = 0.0,   ! band [Hz]; fmax 0 = wavelength >= 20 cells
 !  current_type = 0, current_U = 0.0, current_z0 = 1.0e-3, current_n = 7.0,
 !  wave_turb = 0,
 !  wave_gauge_x(1) = 5.0,

@@ -951,6 +951,10 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME vof_current_flume
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_current_flume/check_current.py
                 --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
+    # Elevation-record wave inlet (wave_type 4): FFT reconstruction error, packet arrival and amplitude at the gauges
+    add_test(NAME vof_wave_series
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_wave_series/check_series.py
+                --exe $<TARGET_FILE:dopamine> --mpirun ${TEST_MPIRUN})
     # Mirror symmetry of the wall padding of the momentum stencils (free-slip Taylor-Green vortex, ratio 1)
     add_test(NAME vof_tgv_mirror_symmetry
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_tgv_mirror/check_mirror.py

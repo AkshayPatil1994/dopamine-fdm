@@ -13,6 +13,7 @@ CASES = [
     ('Boussinesq with vof_hsplit', r'&VOF', '&BOUSSINESQ\n  boussinesq_flag = 1,\n/\n&VOF\n  vof_hsplit = 1,', 'vof_hsplit = 0'),
     ('particles rho_f mismatch', r'&VOF', '&PARTICLES\n  particles_active = 1, particle_rho_f = 500.0,\n/\n&VOF', 'particle_rho_f must equal vof_rho_l'),
     ('particles seeded in gas', r'&VOF', '&PARTICLES\n  particles_active = 1, n_particles_init = 50, particle_rho_f = 1000.0,\n/\n&VOF', 'seeded in the gas|not ported to the GPU'),
+    ('wave_type out of range', r'&VOF', '&WAVES\n  wave_type = 5,\n/\n&VOF', 'wave_type must be 0..4'),
     ('inflow_type out of range', r'&VOF', '&INFLOW\n  inflow_type = 7,\n/\n&VOF', 'inflow_type must be 0..3'),
     ('y periodic', r'y_bc_type\s*=\s*1', 'y_bc_type = 0', 'wall-bounded y only'),
     ('IBM surface dump', r'&VOF', '&IBM\n  ibm_input_mode = 1, ibm_sdf_file = \'none\', ibm_surface_nsampling = 10,\n/\n&VOF', 'IBM surface field dump'),

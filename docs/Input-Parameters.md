@@ -335,12 +335,15 @@ Numerical wave flume: Dirichlet wave inlet plus relaxation zones. Needs `vof_flo
 
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
-| `wave_type` | `0` | `0` off; `1` linear; `2` Rienecker–Fenton stream function; `3` JONSWAP. |
+| `wave_type` | `0` | `0` off; `1` linear; `2` Rienecker–Fenton stream function; `3` JONSWAP; `4` elevation time series (`wave_series_file`). |
 | `wave_height, wave_period, wave_phase` | `0`, `1`, `0` | Types 1–2. A warning is printed if `wave_height` (or `wave_Hs`) is set with `wave_type=0`. |
 | `wave_sf_n` | `16` | Fourier order (type 2). |
 | `wave_current_mode` | `1` | `1` zero mean volume flux (closed flume); `2` zero mean Eulerian velocity. |
 | `wave_Hs, wave_Tp, wave_gamma` | `0`, `1`, `3.3` | JONSWAP significant height, peak period, peak enhancement. |
 | `wave_nfreq, wave_seed` | `200`, `12345` | JONSWAP components and phase seed. |
+| `wave_series_file` | `''` | Type 4: text file, columns `t eta` (`#` and blank lines skipped, `t` strictly increasing): the surface elevation at the inlet at simulation time `t`. The mean is removed; components use finite-depth dispersion in `vof_level`. |
+| `wave_series_pad, wave_series_taper` | `1`, `0` | Type 4: zero padding as a multiple of the record length (the decomposition is periodic, so the record repeats after the padded length), and Tukey taper fraction at each end (`[0, 0.5)`; 0 reproduces the record exactly, a sharp start or end leaks high frequencies). |
+| `wave_series_fmin, wave_series_fmax` | `0`, `0` | Type 4 band [Hz]; `fmax = 0` keeps wavelengths of at least 20 cells. |
 | `wave_gen_len, wave_abs_len` | `0` | Generation (inlet) and absorption (outlet) zone lengths [m]. |
 | `wave_relax_rate` | `20` | Relaxation rate [1/s] at full strength. |
 | `wave_ramp_time` | `0` | Start-up ramp [s]. |

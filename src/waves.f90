@@ -2,15 +2,18 @@
 !  in +x over the still-water depth d = vof_level (bed at y = 0), for the Dirichlet inlet and the relaxation
 !  zones. wave_type 1 linear (Airy), 2 Rienecker-Fenton stream function, 3 JONSWAP (wave_Hs, wave_Tp,
 !  wave_gamma) as wave_nfreq linear components with seeded random phases, finite-depth dispersion and Wheeler
-!  stretching. A mean current (current_type) adds to the water velocity. Above the surface the water velocity
-!  is undefined; the air carries the uniform return flow that zeroes the inlet flux (closed flume): u_air =
-!  -Q/(Ly - d - eta), Q the water column's volume flux. Setup runs on every rank from the same inputs and
+!  stretching; 4 an elevation record eta(t) (wave_series_file) FFT-decomposed into linear components
+!  with finite-depth dispersion and Wheeler stretching, the record time being the simulation time. A mean
+!  current (current_type) adds to the water velocity. Above the surface the water velocity is undefined;
+!  the air carries the uniform return flow that zeroes the inlet flux (closed flume): u_air = -Q/(Ly - d - eta), Q
+!  the water column's volume flux. Setup runs on every rank from the same inputs and
 !  seed, so no communication is needed.
 Module waves
 
   Use iso_fortran_env, Only : Int32, Int64
   Use global, Only : nyg, ny, y, yg, Ly_i, vof_level, grav, wave_type, wave_height, wave_period, wave_phase, wave_sf_n, &
-                     wave_current_mode, wave_Hs, wave_Tp, wave_gamma, wave_nfreq, wave_seed, wave_ramp_time, &
+                     wave_current_mode, wave_Hs, wave_Tp, wave_gamma, wave_nfreq, wave_seed, wave_ramp_time, dx, &
+                     wave_series_file, wave_series_pad, wave_series_taper, wave_series_fmin, wave_series_fmax, &
                      current_type, current_U, current_z0, current_n
 
   Implicit None
@@ -105,11 +108,244 @@ Contains
           wv_a(i) = Sqrt(2d0*alpha_j*sp(i)*df)
        End Do
        Deallocate( sp, seed )
+    Case(4)
+       Call wave_series_init
     Case Default
        wv_n = 0
     End Select
 
   End Subroutine wave_init
+
+
+  !> In-place radix-2 FFT (forward, e^{-i...}) of z(0:m-1), m a power of two
+  Subroutine wave_fft(z, m)
+
+    Integer(Int32), Intent(In) :: m
+    Complex(Int64), Intent(InOut) :: z(0:m-1)
+    Integer(Int32) :: i, j, l, bit, len
+    Complex(Int64) :: w, wl, a, c
+    Real(Int64) :: ang
+
+    j = 0
+    Do i = 1, m-1
+       bit = m/2
+       Do While ( IAnd(j, bit) /= 0 )
+          j = IEor(j, bit);  bit = bit/2
+       End Do
+       j = IEor(j, bit)
+       If ( i < j ) Then
+          a = z(i);  z(i) = z(j);  z(j) = a
+       End If
+    End Do
+    len = 2
+    Do While ( len <= m )
+       ang = -8d0*Atan(1d0)/len
+       wl = Cmplx(Cos(ang), Sin(ang), Int64)
+       Do i = 0, m-1, len
+          w = (1d0, 0d0)
+          Do l = 0, len/2-1
+             a = z(i+l);  c = w*z(i+l+len/2)
+             z(i+l) = a + c;  z(i+l+len/2) = a - c
+             w = w*wl
+          End Do
+       End Do
+       len = 2*len
+    End Do
+
+  End Subroutine wave_fft
+
+
+  !> wave_type 4: decompose the elevation record eta(t) at x=0 by FFT into linear components
+  !  (w = 2 pi f, k from the finite-depth dispersion relation, a cos(k x - w t + ph)), record time =
+  !  simulation time; then write fields/wave_series_check.out comparing the
+  !  production wave_eta_raw(0,t) with the input record. The mean of the record is removed.
+  Subroutine wave_series_init
+
+    Use mpi, Only : myid, MPI_COMM_WORLD
+
+    Integer(Int32) :: n, ns, m, i, j, ios, nt, nk, iu, ipk
+    Real(Int64) :: pi_, kg, t0, dts, rl, fr, mean, var_in, fmx, amax, lo, hi, thr, tot2, e, rms_e, rms_i, max_e, max_i, slope
+    Real(Int64), Allocatable :: tr(:), er(:), xs(:), amp(:), phs(:)
+    Complex(Int64), Allocatable :: z(:)
+    Character(300) :: line
+    Real(Int64) :: col(2)
+
+    pi_ = 4d0*Atan(1d0)
+    Open(newunit=iu, file=Trim(wave_series_file), status='old', action='read', iostat=ios)
+    If ( ios /= 0 ) Call series_abort( 'cannot open wave_series_file' )
+    n = 0
+    Do
+       Read(iu,'(A)',iostat=ios) line
+       If ( ios /= 0 ) Exit
+       line = Adjustl(line)
+       If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
+       n = n + 1
+    End Do
+    If ( n < 8 ) Call series_abort( 'wave_series_file needs at least 8 data rows' )
+    Allocate( tr(n), er(n) )
+    Rewind(iu)
+    i = 0
+    Do
+       Read(iu,'(A)',iostat=ios) line
+       If ( ios /= 0 ) Exit
+       line = Adjustl(line)
+       If ( Len_trim(line) == 0 .Or. line(1:1) == '#' ) Cycle
+       Read(line,*,iostat=ios) col
+       If ( ios /= 0 ) Call series_abort( 'wave_series_file: a data row does not parse as two columns (t eta)' )
+       i = i + 1
+       tr(i) = col(1);  er(i) = col(2)
+    End Do
+    Close(iu)
+    If ( Any(Abs(tr) > Huge(1d0)) .Or. Any(tr /= tr) .Or. Any(Abs(er) > Huge(1d0)) .Or. Any(er /= er) ) &
+         Call series_abort( 'wave_series_file: non-finite time or elevation' )
+    If ( Any(tr(2:n) <= tr(1:n-1)) ) Call series_abort( 'wave_series_file: t must be strictly increasing' )
+
+    ! uniform resampling at the finest input step
+    t0 = tr(1)
+    rl = tr(n) - t0
+    ns = Min( Nint(rl/Minval(tr(2:n) - tr(1:n-1))) + 1, 2**22 )
+    dts = rl/(ns - 1)
+    Allocate( xs(ns) )
+    j = 1
+    Do i = 1, ns
+       Do While ( j < n-1 .And. tr(j+1) < t0 + (i-1)*dts )
+          j = j + 1
+       End Do
+       fr = Min(1d0, Max(0d0, (t0 + (i-1)*dts - tr(j))/(tr(j+1) - tr(j))))
+       xs(i) = er(j) + fr*(er(j+1) - er(j))
+    End Do
+    mean = Sum(xs)/ns
+    xs = xs - mean
+    var_in = Sum(xs**2)/ns
+    nt = Nint(wave_series_taper*ns)
+    Do i = 1, nt
+       fr = 0.5d0*(1d0 - Cos(pi_*(i - 1)/nt))
+       xs(i) = fr*xs(i);  xs(ns+1-i) = fr*xs(ns+1-i)
+    End Do
+
+    If ( ns*(1d0 + wave_series_pad) > 2d0**26 ) Call series_abort( 'wave_series_pad makes the padded record exceed 2^26 samples' )
+    m = 1
+    Do While ( m < ns*(1d0 + wave_series_pad) )
+       m = 2*m
+    End Do
+    Allocate( z(0:m-1) )
+    z = (0d0, 0d0)
+    z(0:ns-1) = xs
+    Call wave_fft(z, m)
+
+    ! bins k = 1..m/2-1 at f = k/(m dts); band, amplitude floor (1e-3 of the peak) and component cap
+    Allocate( amp(m/2-1), phs(m/2-1) )
+    amp = 2d0*Abs(z(1:m/2-1))/m
+    phs = [( Atan2(Aimag(z(i)), Real(z(i))), i = 1, m/2-1 )]
+    tot2 = Sum(amp**2)
+    fmx = wave_series_fmax
+    If ( fmx <= 0d0 ) Then
+       ! shortest wavelength of 20 cells, finite-depth dispersion (same relation as the components)
+       kg = 2d0*pi_/(20d0*Max(dx, 1d-300))
+       fmx = Merge( Sqrt(wv_g*kg*Tanh(kg*wv_d))/(2d0*pi_), Huge(1d0), dx > 0d0 )
+    End If
+    Do i = 1, m/2-1
+       fr = i/(m*dts)
+       If ( fr < wave_series_fmin .Or. fr > fmx ) amp(i) = 0d0
+    End Do
+    ipk = Maxloc(amp, 1)
+    amax = Maxval(amp)
+    If ( amax <= 0d0 ) Call series_abort( 'no spectral content inside [wave_series_fmin, wave_series_fmax]' )
+    lo = 1d-3*amax;  hi = amax
+    If ( Count(amp >= lo) > WAVE_MAX_COMP ) Then
+       Do i = 1, 60
+          thr = 0.5d0*(lo + hi)
+          If ( Count(amp >= thr) > WAVE_MAX_COMP ) Then
+             lo = thr
+          Else
+             hi = thr
+          End If
+       End Do
+       lo = hi
+    End If
+    nk = Count(amp >= lo)
+    wv_n = nk
+    Allocate( wv_a(nk), wv_k(nk), wv_w(nk), wv_ph(nk) )
+    j = 0
+    Do i = 1, m/2-1
+       If ( amp(i) < lo ) Cycle
+       j = j + 1
+       wv_w(j)  = 2d0*pi_*i/(m*dts)
+       wv_k(j)  = wave_number(wv_w(j), wv_d, wv_g)
+       wv_a(j)  = amp(i)
+       wv_ph(j) = wv_w(j)*t0 - phs(i)
+    End Do
+
+    ! largest surface slope |d eta/dx| of the linear sum over the record, which no wave of this form survives beyond ~1
+    slope = 0d0
+    Do i = 1, n
+       slope = Max(slope, Abs(Sum( wv_a*wv_k*Sin(wv_ph - wv_w*tr(i)) )))
+    End Do
+    If ( slope >= 1d0 ) Then
+       Write(*,'(A,F6.2)') ' ERROR: wave_series max surface slope = ', slope
+       Write(*,'(A)') ' ERROR: the record is steeper than a linear sum of waves can represent (slope >= 1), breaking at the inlet.'
+       Write(*,'(A)') ' ERROR: a sharp record start/end leaks high frequencies: use wave_series_taper or limit the band.'
+       Write(*,'(A)') ' ERROR: reduce the amplitudes or restrict the band (wave_series_fmax).'
+       Call MPI_Abort(MPI_COMM_WORLD, 1, ios)
+    End If
+    If ( vof_level + Maxval(er) - mean >= Ly_i .Or. vof_level + Minval(er) - mean <= 0d0 ) &
+         Call series_abort( 'the record leaves the domain: vof_level + eta must stay inside (0, Ly)' )
+    Deallocate( xs, z, amp, phs )
+    If ( myid /= 0 ) Then
+       Deallocate( tr, er )
+       Return
+    End If
+    If ( nk > 1000 ) Write(*,'(A)') ' WARNING: wave_series has > 1000 components: the relaxation zones cost O(components) per cell'
+
+    Write(*,'(A,I7,A,I7,A,ES10.3,A,F9.3,A)') ' wave_series: ', n, ' samples -> ', nk, ' components, dt =', dts, &
+         ', record ', rl, ' s'
+    Write(*,'(A,F8.4,A,F8.4,A,F6.2,A)') '   peak f =', ipk/(m*dts), ' Hz, band up to', Min(fmx, 1d6), ' Hz, max slope =', slope, ''
+    Write(*,'(A,F6.3)') '   variance fraction kept in components = ', Sum(wv_a**2)/tot2
+    Write(*,'(A,F6.3)') '   variance fraction with k*vof_level < pi (shallower than deep water) = ', &
+         Sum( Merge(wv_a**2, 0d0, wv_k*wv_d < pi_) )/Sum(wv_a**2)
+    If ( slope > 0.5d0 ) Write(*,'(A)') ' WARNING: wave_series is steep (max slope > 0.5); linear superposition is poor'
+    If ( wave_ramp_time <= 0d0 .And. Abs(er(1) - mean) > 0.05d0*Maxval(Abs(er - mean)) ) &
+         Write(*,'(A)') ' WARNING: wave_series starts away from rest and wave_ramp_time = 0: an abrupt start-up'
+
+    Call execute_command_line('mkdir -p fields')
+    Open(newunit=iu, file='fields/wave_series_check.out', status='replace')
+    rms_e = 0d0;  rms_i = 0d0;  max_e = 0d0;  max_i = 0d0
+    Do i = 1, n
+       e = wave_eta_raw(0d0, tr(i)) - (er(i) - mean)
+       rms_e = rms_e + e*e;  rms_i = rms_i + (er(i) - mean)**2
+       max_e = Max(max_e, Abs(e));  max_i = Max(max_i, Abs(er(i) - mean))
+    End Do
+    rms_e = Sqrt(rms_e/n);  rms_i = Sqrt(rms_i/n)
+    Write(iu,'(A)') '# wave_type 4: input record vs the linear components imposed at the inlet (x=0, no start-up ramp)'
+    Write(iu,'(A,I8,A,ES12.4,A,ES12.4,A,I6,A,ES12.4)') '# samples', n, '  dt_resampled', dts, '  padded length', m*dts, &
+         '  components', nk, '  fmax', Min(fmx, 1d6)
+    Write(iu,'(A,ES12.4,A,ES12.4)') '# Hm0 input (4 sigma)', 4d0*Sqrt(var_in), '  Hm0 reconstruction', &
+         4d0*Sqrt(0.5d0*Sum(wv_a**2)*m/ns)
+    Write(iu,'(A,ES12.4,A,ES12.4)') '# rms error / rms input', rms_e/rms_i, '  max error / max input', max_e/max_i
+    Write(iu,'(A)') '# columns: t  eta_input_minus_mean  eta_reconstructed  error'
+    Do i = 1, n
+       e = wave_eta_raw(0d0, tr(i))
+       Write(iu,'(4ES16.8)') tr(i), er(i) - mean, e, e - (er(i) - mean)
+    End Do
+    Close(iu)
+    Write(*,'(A,ES10.3,A,ES10.3,A)') '   reconstruction error: rms/rms_in =', rms_e/rms_i, ', max/max_in =', max_e/max_i, &
+         '  (fields/wave_series_check.out)'
+    If ( rms_e/rms_i > 0.05d0 ) Write(*,'(A)') ' WARNING: wave_series reconstruction error > 5%: band, component cap or taper '// &
+         'removes content (see fields/wave_series_check.out)'
+    Deallocate( tr, er )
+
+  Contains
+
+    Subroutine series_abort(msg)
+
+      Character(*), Intent(In) :: msg
+
+      Write(*,'(A,A)') ' ERROR: &WAVES ', msg
+      Call MPI_Abort(MPI_COMM_WORLD, 1, ios)
+
+    End Subroutine series_abort
+
+  End Subroutine wave_series_init
 
 
   !> Start-up amplitude ramp 0 -> 1 over wave_ramp_time (raised cosine)
@@ -194,16 +430,16 @@ Contains
     Do i = 1, wv_n
        th = wv_k(i)*x - wv_w(i)*t + wv_ph(i)
        ye = y
-       If ( wave_type == 3 ) Then
+       If ( wave_type >= 3 ) Then
           ! Wheeler stretching: map [0, d+eta] onto [0, d]; above the surface keep the surface value
           ye = Min(y, wv_d + eta)*wv_d/(wv_d + eta)
        Else
           ye = Min(y, wv_d)
        End If
        kd = wv_k(i)*wv_d
-       ! ratios written in exponentials-safe form
-       ch = Cosh(wv_k(i)*ye)/Sinh(kd)
-       sh = Sinh(wv_k(i)*ye)/Sinh(kd)
+       ! cosh(k ye)/sinh(kd) and sinh(k ye)/sinh(kd) without overflow for large kd
+       ch = ratio_cosh(wv_k(i)*ye, kd)/Tanh(kd)
+       sh = ratio_sinh(wv_k(i)*ye, kd)/Tanh(kd)
        u = u + wv_a(i)*wv_w(i)*ch*Cos(th)
        v = v + wv_a(i)*wv_w(i)*sh*Sin(th)
     End Do

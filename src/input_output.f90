@@ -94,7 +94,8 @@ Contains
 
     Namelist /WAVES/ wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, wave_Hs, wave_Tp, &
                      wave_gamma, wave_nfreq, wave_seed, wave_gen_len, wave_abs_len, wave_relax_rate, wave_gauge_x, wave_ramp_time, &
-                     current_type, current_U, current_z0, current_n, wave_turb
+                     current_type, current_U, current_z0, current_n, wave_turb, &
+                     wave_series_file, wave_series_pad, wave_series_taper, wave_series_fmin, wave_series_fmax
 
     Namelist /VOF/ vof_active, vof_ic_type, vof_level, vof_center, vof_radius, vof_normal_scheme, vof_method, vof_beta, &
                    vof_geo_density, vof_inertia, &
@@ -536,7 +537,7 @@ Contains
        End If
        If ( uav_active >= 1 ) Write(*,'(A,I2)') '   uav_active                   = ', uav_active
        If ( wave_type > 0 ) Then
-          Write(*,'(A,I2)')    '   wave_type (1 Airy,2 stream function,3 JONSWAP) = ', wave_type
+          Write(*,'(A,I2)')    '   wave_type (1 Airy,2 stream function,3 JONSWAP,4 series) = ', wave_type
           Write(*,'(A,2E12.4)') '   wave_gen_len, wave_abs_len   = ', wave_gen_len, wave_abs_len
           If ( current_type > 0 ) Write(*,'(A,I2)') '   current_type                 = ', current_type
           If ( wave_turb == 1 ) Write(*,'(A)') '   wave_turb=1 (precursor fluctuation on the wave inlet)'
@@ -848,6 +849,11 @@ Contains
     Call Mpi_bcast ( wave_ramp_time,    1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_type,      1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_turb,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_series_file,  Len(wave_series_file), MPI_character, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_series_pad,   1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_series_taper, 1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_series_fmin,  1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( wave_series_fmax,  1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_U,         1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_z0,        1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( current_n,         1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
@@ -1073,6 +1079,7 @@ Contains
     If ( wave_turb /= 0 .And. wave_turb /= 1 ) Call abort_input( 'ERROR: &WAVES wave_turb must be 0 or 1' )
     If ( wave_turb == 1 .And. ( wave_type <= 0 .Or. Len_trim(inflow_recycle_file) == 0 ) ) &
          Call abort_input( 'ERROR: &WAVES wave_turb=1 needs wave_type>0 and inflow_recycle_file (the precursor slice)' )
+    If ( wave_type < 0 .Or. wave_type > 4 ) Call abort_input( 'ERROR: &WAVES wave_type must be 0..4' )
     If ( wave_type > 0 ) Then
        If ( vof_active < 1 .Or. vof_flow < 1 ) &
             Call abort_input( 'ERROR: &WAVES wave_type>0 requires vof_active=1 and vof_flow=1' )
@@ -1107,7 +1114,13 @@ Contains
              If ( wave_gauge_x(ig) >= Lx_i ) Call abort_input( 'ERROR: &WAVES wave_gauge_x lies outside the domain (x >= Lx)' )
           End Do
        End Block
-       If ( wave_type <= 2 ) Then
+       If ( wave_type == 4 ) Then
+          If ( Len_trim(wave_series_file) == 0 ) Call abort_input( 'ERROR: &WAVES wave_type 4 needs wave_series_file' )
+          If ( wave_series_pad < 0d0 .Or. wave_series_taper < 0d0 .Or. wave_series_taper >= 0.5d0 ) &
+               Call abort_input( 'ERROR: &WAVES wave_series_pad must be >= 0 and wave_series_taper in [0, 0.5)' )
+          If ( wave_series_fmax > 0d0 .And. wave_series_fmax <= wave_series_fmin ) &
+               Call abort_input( 'ERROR: &WAVES wave_series_fmax must exceed wave_series_fmin' )
+       Else If ( wave_type <= 2 ) Then
           If ( wave_period <= 0d0 .Or. wave_height <= 0d0 ) &
                Call abort_input( 'ERROR: &WAVES wave_type 1/2 need wave_period > 0 and wave_height > 0' )
        Else

@@ -730,7 +730,7 @@ Module global
   Procedure(), Pointer :: vof_sync_io_hook => Null()
   ! C without the second ghost layer, for snapshots and restart
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cvof_io
-  ! Waves (src/waves.f90): wave_type 0=off, 1=linear, 2=stream function, 3=JONSWAP; the inlet needs
+  ! Waves (src/waves.f90): wave_type 0=off, 1=linear, 2=stream function, 3=JONSWAP, 4=elevation time series; the inlet needs
   ! inflow_type=3. wave_current_mode: 1 zero mean volume flux (closed flume), 2 zero mean Eulerian velocity.
   ! Relaxation zones (waves2Foam weights): generation length from the inlet, absorption length at the outlet,
   ! relaxation rate [1/s] at full strength.
@@ -749,6 +749,14 @@ Module global
   Real   (Int64) :: wave_abs_len      = 0d0
   Real   (Int64) :: wave_relax_rate   = 20d0
   Real   (Int64) :: wave_ramp_time    = 0d0    ! smooth start-up ramp of the wave amplitude [s] (0 = none)
+  ! wave_type 4: elevation record eta(t) at the inlet (text file, columns t eta), decomposed by FFT into finite-depth
+  ! linear components; zero-padded by wave_series_pad x the record length, Tukey-tapered at both ends (fraction),
+  ! band-limited to [wave_series_fmin, wave_series_fmax] Hz (fmax 0 = shortest wavelength of 20 cells)
+  Character(200) :: wave_series_file  = ''
+  Real   (Int64) :: wave_series_pad   = 1d0
+  Real   (Int64) :: wave_series_taper = 0d0
+  Real   (Int64) :: wave_series_fmin  = 0d0
+  Real   (Int64) :: wave_series_fmax  = 0d0
   ! mean current (throughflow) added to the wave in the water at the inlet and to the absorption target:
   ! current_type 0 none, 1 uniform, 2 log law (roughness current_z0), 3 power law (exponent 1/current_n);
   ! current_U is the depth mean; air carries only the return flow; ramped with wave_ramp_time. wave_turb = 1:

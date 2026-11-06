@@ -132,7 +132,14 @@ extrapolated to the face. The load faces are the faces closed in the solver. The
 For a numerical wave flume use `x_bc_type = 1` (inlet at x = 0, convective outlet), `inflow_type = 3` and the [`&WAVES`](Input-Parameters.md#waves)
 namelist. `waves.f90` provides the target elevation and velocity of a long-crested wave travelling in +x over the still-water depth
 `vof_level`: `wave_type = 1` linear (Airy), `2` Rienecker–Fenton stream function (`wave_sf_n` Fourier terms), `3` JONSWAP sum of
-`wave_nfreq` linear components with seeded random phases, finite-depth dispersion and Wheeler stretching. The inlet is a Dirichlet
+`wave_nfreq` linear components with seeded random phases, finite-depth dispersion and Wheeler stretching, `4` an elevation record
+`η(t)` at the inlet (`wave_series_file`). Type 4 FFTs the record (zero-padded, mean removed) into linear components
+(`ω = 2πf`, `k` from the finite-depth relation `ω² = g k tanh(kd)`, the same velocity as type 3 with Wheeler stretching, so `v = 0` at the bed), keeping the bins in `[wave_series_fmin, wave_series_fmax]` above 0.1 % of
+the peak amplitude (at most 4096). The inlet therefore reproduces the record at x = 0 and the components propagate dispersively into the
+relaxation zones. At start-up `fields/wave_series_check.out` lists the input against the production reconstruction `wave_eta_raw(0,t)` with the rms
+and maximum errors (also printed, with a warning above 5 %); it also prints the variance fraction at `k·d < π` (components that are not deep water, for which the linear superposition is less accurate). The solver aborts if the
+largest surface slope of the sum is ≥ 1 or if the record leaves the domain. The sum is linear: no bound or locked harmonics, so steep or shallow
+records are not reproduced nonlinearly. The record time is the simulation time (a record starting at `t = 5` first acts at `t = 5`; use `wave_ramp_time` for a smooth start). Beyond the padded length the record repeats. The inlet is a Dirichlet
 condition for `C` and the velocity; above the surface the air carries the uniform return flow `−Q/(L_y − d − η)` that makes the
 volume flux through the inlet zero (closed flume, `wave_current_mode = 1`).
 
