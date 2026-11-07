@@ -20,7 +20,7 @@ plotstyle.apply()
 import matplotlib.pyplot as plt  # noqa: E402
 
 G = 9.81
-STATIONS = (1, 3, 5, 7)      # 0-based indices of the LDA stations shown in (b), (c): x_TK = 5.945, 7.275, 8.495, 9.725 m
+STATIONS = (1, 3, 4, 5, 6, 7)   # 0-based indices of the LDA stations shown in (b)-(d): x_TK = 5.945, 7.275, 7.885, 8.495, 9.110, 9.725 m
 GREY_BAND = dict(color="0.6", alpha=0.45, lw=0, zorder=0)
 EXP_KW = dict(marker="o", ls="none", color="k", mfc="none", ms=3.2, mew=0.7)
 
@@ -70,9 +70,10 @@ def main():
     e4 = np.loadtxt(os.path.join(a.case, "exp", "tk94_fig4_spilling.dat"))
     e5 = np.loadtxt(os.path.join(a.case, "exp", "tk94_fig5_undertow_spilling.dat"))
     e6 = np.loadtxt(os.path.join(a.case, "exp", "tk94_fig6_rms_spilling.dat"))
+    e7 = np.loadtxt(os.path.join(a.case, "exp", "tk94_fig7_tke_spilling.dat"))
 
-    fig = plt.figure(figsize=(7.2, 6.6), constrained_layout=True)
-    gsp = fig.add_gridspec(3, len(STATIONS), height_ratios=[1.1, 1, 1])
+    fig = plt.figure(figsize=(7.2, 8.4), constrained_layout=True)
+    gsp = fig.add_gridspec(4, len(STATIONS), height_ratios=[1.1, 1, 1, 1])
     ax = fig.add_subplot(gsp[0, :])
     nper = float(prof[0]["nper"])
     for c0, sd in ((crest - mean, gs[:, 5]), (trough - mean, gs[:, 6]), (mean, gs[:, 4])):
@@ -126,7 +127,7 @@ def main():
             q.set_xlim(*xlim)
             if key == "u":
                 q.axvline(0, color=plotstyle.GREY, lw=0.7, ls=":")
-                q.set_title(rf"$x_\mathrm{{TK}}={p['x']:.2f}$ m", fontsize=8.5, loc="right")
+                q.set_title(f"{p['x']:.2f} m", fontsize=7.5, loc="right")
             q.set_xlabel(xl)
             if col == 0:
                 q.set_ylabel(r"$(z-\bar\zeta)/h$")
@@ -136,6 +137,31 @@ def main():
             err, rms_e = profile_error(zz[fl], v[fl], ex, n)
             metrics["stations"].setdefault(str(n + 1), {"x_TK": float(p["x"])})[f"{key}_rms_err"] = err
             metrics["stations"][str(n + 1)][f"{key}_exp_rms"] = rms_e
+    for col, n in enumerate(STATIONS):               # (k/gh)^(1/2), k = (1.33/2)(u'^2 + w'^2) as estimated by TK94; measured at stations 4-8 only
+        p = prof[n]
+        q = fig.add_subplot(gsp[3, col])
+        zz = (p["y"] - p["depth"] - p["zeta"]) / p["h"]
+        fl = (zz > -1.0) & (zz < 0.0) & (p["y"] > p["ybed"] + (p["y"][1] - p["y"][0]))
+        v = np.sqrt(p["k"] / (G * p["h"]))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            hw = ci95(0.5 * v * p["k_std"] / p["k"], p["nper"])
+        q.fill_betweenx(zz[fl], (v - hw)[fl], (v + hw)[fl], **GREY_BAND)
+        q.plot(v[fl], zz[fl], color=plotstyle.BLUE, lw=1.4)
+        s7 = e7[e7[:, 0] == n + 1]
+        if len(s7):
+            q.plot(s7[:, 5], s7[:, 4], **EXP_KW)
+            err, rms_e = profile_error(zz[fl], v[fl], e7, n)
+            metrics["stations"][str(n + 1)].update(sqrtk_rms_err=err, sqrtk_exp_rms=rms_e)
+        else:
+            q.text(0.5, 0.5, "no data", transform=q.transAxes, ha="center", fontsize=7, color=plotstyle.GREY)
+        q.set_ylim(-1, 0)
+        q.set_xlim(0, 0.12)
+        q.set_xlabel(r"$\sqrt{k/(gh)}$")
+        if col == 0:
+            q.set_ylabel(r"$(z-\bar\zeta)/h$")
+        else:
+            q.set_yticklabels([])
+        plotstyle.panel_label(q, f"(d{col + 1})")
     plotstyle.save(fig, os.path.join(a.out, "tk94_validation.png"))
     with open(os.path.join(a.out, "tk94_validation.json"), "w") as fh:
         json.dump(metrics, fh, separators=(",", ":"))
