@@ -203,8 +203,8 @@ python3 postProcessing/validation/animate_validation.py rb --out docs/assets/val
 Regular waves ($T=2$ s, $H=0.125$ m, depth $h=0.40$ m) shoaling and breaking on a 1:35 plane beach. The two-fluid solver (PLIC-VOF, 1000:1) uses
 the Vreman SGS model, an immersed-boundary beach with the log-law wall model, a stream-function wave inlet with a generation zone and an absorbing
 beach at the outlet (`examples/tingkirby94_spillingwaves`). The medium grid is $2000\times161\times20$ cells. Statistics are phase averages over
-the last 19 whole wave periods after $t=40$ s. The reference is the digitised data of Ting and Kirby (1994, Figs. 4 to 6): wave crest, mean level
-and trough, and the mean and rms velocity at four LDA stations.
+the last 39 whole wave periods after $t=40$ s. The reference is the digitised data of Ting and Kirby (1994, Figs. 4 to 7): wave crest, mean level
+and trough, and the mean velocity, rms velocity and TKE at six LDA stations.
 
 > **Note on the expected level of agreement.** The spilling breaker has relatively low turbulence levels (the measured rms velocity stays below
 > about $0.06\sqrt{gh}$ in the stations shown). Resolved LES turbulence has little to represent, and the rms comparison is therefore
@@ -212,21 +212,23 @@ and trough, and the mean and rms velocity at four LDA stations.
 
 ![Ting and Kirby spilling breaker](assets/validation/tk94/tk94_validation.png)
 
-**Figure 6.** Spilling breaker. (a) crest and trough elevation about the mean and mean level against the streamwise position $x_\mathrm{TK}$; (b) mean velocity and (c) rms of the velocity fluctuation at four LDA stations, with $h$ the local mean depth. Blue lines: DOPAMINE; grey band: 95 % confidence interval of the phase-averaged DOPAMINE statistics over the 19 periods (Student-$t$, $t_{0.975,18}\,\sigma/\sqrt{19}$); circles: Ting and Kirby (1994).
+**Figure 6.** Spilling breaker. (a) crest and trough elevation about the mean and mean level against the streamwise position $x_\mathrm{TK}$; (b) mean velocity and (c) rms of the streamwise velocity fluctuation and (d) turbulent kinetic energy $\sqrt{k/(gh)}$, $k=\tfrac{1.33}{2}(\overline{u'^2}+\overline{w'^2})$, at six LDA stations (no TKE was measured at the first; the number above each column is $x_\mathrm{TK}$), with $h$ the local mean depth. Blue lines: DOPAMINE; grey band: 95 % confidence interval of the phase-averaged DOPAMINE statistics over the 39 periods (Student-$t$, $t_{0.975,38}\,\sigma/\sqrt{39}$); circles: Ting and Kirby (1994).
 
 | Quantity | DOPAMINE | Experiment |
 |---|---|---|
 | Maximum wave height | 17.8 cm at $x_\mathrm{TK}=6.40$ m | 16.5 cm at 5.99 m |
 | RMS difference, wave height (all stations) | 1.05 cm | |
-| RMS difference, mean level | 0.83 cm | |
-| Median 95 % CI half-width of the wave height (crest plus trough) | 0.14 cm | |
+| RMS difference, mean level | 0.84 cm | |
+| Median 95 % CI half-width of the wave height (crest plus trough) | 0.10 cm | |
 
-| Station $x_\mathrm{TK}$ [m] | 5.95 | 7.28 | 8.49 | 9.72 |
-|---|---|---|---|---|
-| RMS difference of the mean velocity / $\sqrt{gh}$ | 0.022 | 0.039 | 0.045 | 0.056 |
-| RMS of the experimental mean velocity / $\sqrt{gh}$ | 0.031 | 0.055 | 0.080 | 0.070 |
-| RMS difference of the rms fluctuation / $\sqrt{gh}$ | 0.0021 | 0.023 | 0.018 | 0.015 |
-| RMS of the experimental rms fluctuation / $\sqrt{gh}$ | 0.0074 | 0.035 | 0.053 | 0.061 |
+| Station $x_\mathrm{TK}$ [m] | 5.95 | 7.28 | 7.88 | 8.49 | 9.11 | 9.72 |
+|---|---|---|---|---|---|---|
+| RMS difference of the mean velocity / $\sqrt{gh}$ | 0.022 | 0.039 | 0.031 | 0.051 | 0.039 | 0.050 |
+| RMS of the experimental mean velocity / $\sqrt{gh}$ | 0.031 | 0.055 | 0.058 | 0.080 | 0.067 | 0.070 |
+| RMS difference of the rms fluctuation / $\sqrt{gh}$ | 0.0029 | 0.0226 | 0.0161 | 0.0222 | 0.0206 | 0.0127 |
+| RMS of the experimental rms fluctuation / $\sqrt{gh}$ | 0.0074 | 0.0352 | 0.0601 | 0.0526 | 0.0564 | 0.0610 |
+| RMS difference of $\sqrt{k/(gh)}$, $k=\tfrac{1.33}{2}(\overline{u'^2}+\overline{w'^2})$ | n/a | 0.0259 | 0.0039 | 0.0095 | 0.0094 | 0.0033 |
+| RMS of the experimental $\sqrt{k/(gh)}$ | n/a | 0.039 | 0.065 | 0.058 | 0.062 | 0.065 |
 
 <img src="assets/validation/tk94/tk94_breaking.gif" alt="Spilling breaker" width="560">
 
