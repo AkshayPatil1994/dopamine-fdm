@@ -304,6 +304,7 @@ Contains
        If ( pcg_precond < 0 ) Then
           pcg_precond = 0
           If ( y_bc_type /= 0 ) pcg_precond = 1
+          If ( nprocs >= 128 ) mg_cycle = 1
        End If
        If ( ibm_method < 0 .Or. ibm_method > 1 ) &
             Call abort_input( 'ERROR: ibm_method must be 0 (ghost-cell) or 1 (staircase)' )

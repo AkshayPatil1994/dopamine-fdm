@@ -72,7 +72,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `cfl_safety` | `0.9` | Safety factor on the `dt` update (adaptive). |
 | `dt_min, dt_max` | `1e-10`, `1e10` | Bounds on `dt` (adaptive). |
 | `pcg_precond` | `-1` | Preconditioner of the variable-density PCG of the two-fluid solver (`vof_flow≥1`): `0` fast Poisson solver, `1` mask-aware multigrid (needs y walls), `-1` automatic (1 with y walls, else 0). GPU: `vof_flow≥1` needs 1. |
-| `mg_cycle` | `-1` | Multigrid cycle of the `pcg_precond=1` preconditioner: `1` V-cycle, `2` W-cycle (the coarse level is visited twice; about 1.5× fewer PCG iterations for ~15 % more work per cycle), `3` three visits, `-1` automatic (W on CPU builds, V on GPU builds, where the two cost the same). |
+| `mg_cycle` | `-1` | Multigrid cycle of the `pcg_precond=1` preconditioner: `1` V-cycle, `2` W-cycle (the coarse level is visited twice; about 1.5× fewer PCG iterations for ~15 % more work per cycle), `3` three visits, `-1` automatic (W on CPU builds below 128 ranks, V from 128 ranks, where the coarse-level latency of the W-cycle dominates the step, and on GPU builds, where the two cost the same). |
 | `mg_smooth_deg` | `4` | Degree of the Chebyshev smoother of the multigrid on every level but the coarsest. |
 
 ## BOUNDARY_CONDITIONS
