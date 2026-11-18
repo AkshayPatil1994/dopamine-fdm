@@ -419,10 +419,10 @@ Contains
   !> Parse a recycled-inflow donor's _meta.txt: (1) dopamine-ESEM per-component grids with an 'n1_V' key (V's
   !  y-face count); (2) generic probe_output slice, V cell-centre interpolated onto the U/W grid, no 'n1_V'
   !  (n1_v = n1, v_native = .False.)
-  Subroutine read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native)
+  Subroutine read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native, has_P)
 
     Integer(Int32), Intent(Out) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC
-    Logical,        Intent(Out) :: v_native
+    Logical,        Intent(Out) :: v_native, has_P
 
     Integer(Int32) :: u_meta, ios, eqpos, ic
     Character(300) :: fname, line
@@ -478,6 +478,7 @@ Contains
     colU = Merge(1,0, Index(comps_str,'U') > 0)
     colV = Merge(1,0, Index(comps_str,'V') > 0)
     colW = Merge(1,0, Index(comps_str,'W') > 0)
+    has_P = Index(comps_str,'P') > 0
     colT = Merge(1,0, Index(comps_str,'T') > 0)
     colC = Merge(1,0, Index(comps_str,'C') > 0)
     If ( colU == 0 .Or. colV == 0 .Or. colW == 0 ) Call sem_abort(&
@@ -490,11 +491,11 @@ Contains
   Subroutine read_recycle_mean_profile
 
     Integer(Int32) :: ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, unit_in, ios, jy, n2_unique
-    Logical :: v_native
+    Logical :: v_native, has_P
     Real(Int64), Allocatable :: frame_U(:,:), frame_il(:,:,:)
     Character(300) :: fname
 
-    Call read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native)
+    Call read_recycle_meta(ncomp, n1, n1_v, n2, nsnaps, colU, colV, colW, colT, colC, v_native, has_P)
 
     If ( n1 /= nym_global ) Call sem_abort('ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global')
     If ( n2 /= nzm_global ) Call sem_abort('ERROR: inflow_recycle_file nz (n2) does not match this run''s nzm_global')
@@ -543,7 +544,7 @@ Contains
     Character(300) :: fname
     ! nvfortran 23.3 parser bug: an inline rec_* integer in Merge(...,rec_col_T==1) gives a bogus 'Syntax
     ! error at or near REC'; precompute the masks into plain Logicals
-    Logical :: has_T, has_C
+    Logical :: has_T, has_C, has_P
 
     rec_unit = -1
     rec_active = .False.
@@ -552,7 +553,7 @@ Contains
     If ( myid/p_col /= 0 ) Return
 
     Call read_recycle_meta(rec_ncomp, rec_n1, rec_n1_v, rec_n2_global, rec_nsnaps, &
-         rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_v_native)
+         rec_col_U, rec_col_V, rec_col_W, rec_col_T, rec_col_C, rec_v_native, has_P)
 
     If ( rec_n1 /= nym_global ) Call sem_abort('ERROR: inflow_recycle_file ny (n1) does not match this run''s nym_global')
     If ( rec_v_native ) Then
@@ -592,7 +593,9 @@ Contains
        ! probe_output.f90 slices are interleaved (ncomp,n1,n2): rec_off_* hold the 0-based component column,
        ! not a byte offset
        rec_off_U = 0_Int64;  rec_off_V = 1_Int64;  rec_off_W = 2_Int64
-       rec_off_T = 3_Int64;  rec_off_C = Merge(4_Int64, 3_Int64, has_T)
+       ! columns follow the fixed U,V,W,P,T,C order, so P (not used here) shifts T/C by one
+       rec_off_T = 3_Int64 + Merge(1_Int64, 0_Int64, has_P)
+       rec_off_C = rec_off_T + Merge(1_Int64, 0_Int64, has_T)
        rec_frame_bytes = 8_Int64*Int(rec_ncomp,Int64)*Int(rec_n1,Int64)*Int(rec_n2_global,Int64)
     End If
 

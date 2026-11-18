@@ -720,6 +720,11 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_slosh_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${TEST_MPIRUN} --freq 15:7.8290:0.01 --rowmax 16:0.4)
+    # donor slice with P: the interleaved T/C columns of an inflow_type=2 donor must be offset past P
+    add_test(NAME sem_recycle_p_check
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/recycle_p_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/sem_recycle_p --exe $<TARGET_FILE:dopamine>
+                --mpirun ${TEST_MPIRUN})
     # Passive scalar of the two-fluid solver: uniform stays uniform, a slab stays bounded and conserved, np1 and np4
     # (np4 variants are CPU builds only: four ranks oversubscribe the single GPU of the test machine)
     set(_sc_nps 1 4)
