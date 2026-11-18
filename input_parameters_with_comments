@@ -182,7 +182,8 @@
 ! ic_type: 1 log law + noise | 2 linear/tent + noise | 3 zero + noise |
 !   4 Reichardt channel profile + structured waves | 5 inverse-linear + noise |
 !   6 Taylor-Green vortex of amplitude Utarget (needs x_bc_type=0, y_bc_type=0) |
-!   7 two-mode perturbation on uniform Utarget.
+!   7 two-mode perturbation on uniform Utarget |
+!   8 random solenoidal HIT field, u_rms = Utarget (needs a fully periodic box and &HIT ic_kp/ic_seed).
 ! noise_percent: noise amplitude, % of Utarget.
 ! t_start: restart time [s]; -1 = nstep_init*dt (set it with cfl_adaptive=1).
 ! scalar_restart: 0 = re-initialise C even when restart=1.
@@ -260,6 +261,18 @@
   ! line_comps(1) = 'UVW',  line_fileout(1) = 'lines/centerline',
 /
 
+! Forced homogeneous isotropic turbulence (fully periodic box, n = N+2 faces per direction; see docs/Input-Parameters.md, HIT).
+! hit_forcing: 1 band-limited forcing of modes |n| <= hit_kf injecting hit_eps | hit_stats: 1 writes hit_stats.dat every nmonitor steps.
+! ic_kp, ic_seed: peak wavenumber and phase seed of the ic_type=8 initial field. advection_scheme=1 closes the energy budget best.
+!&HIT
+!  hit_forcing = 0,
+!  hit_eps     = 1.0,
+!  hit_kf      = 2.5,
+!  hit_stats   = 0,
+!  ic_kp       = 4.0,
+!  ic_seed     = 1,
+!/
+
 ! Suspended sediment (Soulsby settling velocity). sed_bc_bot: 0 zero flux | 1 C=C_ref.
 ! C_ic_type: 0 uniform C_ref | 1 Rouse | 2 linear ramp | 3 slab below C_ic_height.
 &SEDIMENT
@@ -320,7 +333,9 @@
 !  particle_diam = 1.0e-4,
 !  particle_rho = 2650.0,
 !  particle_rho_f = 1000.0,
-!  particle_added_mass = 0,
+!  particle_added_mass = 0,         ! 1: local added mass | 2: Maxey-Riley (no Basset/Faxen)
+!  particle_stokes_drag = 0,        ! 1: linear Stokes drag (no Schiller-Naumann correction)
+!  particle_init_fluid = 0,         ! 1: new particles start at the local fluid velocity
 !  particle_brownian = 0,
 !  particle_temp_abs = 293.0,
 !  particle_ibm_bc(0) = 2,
