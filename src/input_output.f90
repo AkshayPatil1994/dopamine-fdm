@@ -304,6 +304,7 @@ Contains
        ! on a GPU, latency-bound coarse levels from 128 ranks: V is 1.5x faster per step at 512 ranks, W 5 % at 8)
        If ( mg_cycle < 0 ) Then
           mg_cycle = 2
+          If ( nprocs >= 128 ) mg_cycle = 1
 #ifdef GPU_POISSON
           mg_cycle = 1
 #endif
@@ -312,7 +313,6 @@ Contains
        If ( pcg_precond < 0 ) Then
           pcg_precond = 0
           If ( y_bc_type /= 0 ) pcg_precond = 1
-          If ( nprocs >= 128 ) mg_cycle = 1
        End If
        If ( ibm_method < 0 .Or. ibm_method > 1 ) &
             Call abort_input( 'ERROR: ibm_method must be 0 (ghost-cell) or 1 (staircase)' )
