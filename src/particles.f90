@@ -83,7 +83,7 @@ Contains
   Subroutine setup_particles
 
     Logical :: loaded
-    Integer(Int32) :: n_tot, n_min, n_max
+    Integer(Int32) :: n_tot, n_min, n_max, i
 
     If ( particles_active < 1 ) Return
 
@@ -120,6 +120,12 @@ Contains
     loaded = .False.
     If ( restart == 1 .And. particle_restart_load == 1 ) Call read_particle_restart(loaded)
     If ( .Not. loaded ) Call seed_particles_fresh
+    If ( .Not. loaded .And. particle_init_fluid == 1 ) Then
+       Call build_velocity_pads
+       Do i = 1, n_particles_local
+          Call interpolate_velocity(p_x(i), p_y(i), p_z(i), p_u(i), p_v(i), p_w(i))
+       End Do
+    End If
 
     Call Mpi_reduce(n_particles_local, n_tot, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     Call Mpi_reduce(n_particles_local, n_min, 1, MPI_INTEGER, MPI_MIN, 0, MPI_COMM_WORLD, ierr)
@@ -168,6 +174,7 @@ Contains
        ! weight
        If ( bcx_resolved == 0 ) xmax_s = Min( xmax_s, x_global(1) + Lxp )
        If ( bcz_resolved == 0 ) zmax_s = Min( zmax_s, z_global(1) + Lzp )
+       If ( bcy_resolved == 0 ) ymax_s = Min( ymax_s, y_global(1) + Real(ny_global-2, Int64)*(y_global(2) - y_global(1)) )
        Call id_uniform(i - 1, particle_seed_seed, rx, ry, rz)
        xp = xmin_s + rx*(xmax_s - xmin_s)
        yp = ymin_s + ry*(ymax_s - ymin_s) + slope_s*(xp - xmin_s)
@@ -334,7 +341,7 @@ Contains
     Real(Int64) :: uf, vf, wf, uf_o, vf_o, wf_o
     Real(Int64) :: urel, Re_p, f_drag, tau_eff
     Real(Int64) :: ax, ay, az, rho_f_local
-    Real(Int64) :: ex, ey, ez, dv, dsig, dts
+    Real(Int64) :: ex, ey, ez, dv, dsig, dts, beta_mr, DuDt(3)
 
     dts = dt
     If ( Present(dt_s) ) dts = dt_s
@@ -346,7 +353,10 @@ Contains
     urel = Sqrt( (uf-p_u(i))**2 + (vf-p_v(i))**2 + (wf-p_w(i))**2 )
     Re_p = urel * particle_diam / p_nu_f
     f_drag = 1d0 + 0.15d0 * Re_p**0.687d0            ! Schiller-Naumann, valid Re_p ~< 1000
+    If ( particle_stokes_drag == 1 ) f_drag = 1d0
     tau_eff = tau_p_stokes / f_drag
+    ! Maxey-Riley: the added mass enters the inertia, (rho_p + rho_f/2) d^2/(18 mu)
+    If ( particle_added_mass == 2 ) tau_eff = tau_eff * (1d0 + 0.5d0*particle_rho_f/particle_rho)
 
     rho_f_local = particle_rho_f
     If ( particle_boussinesq_coupling == 1 .And. boussinesq_flag >= 1 ) Then
@@ -365,6 +375,13 @@ Contains
        ax = ax + 0.5d0*(particle_rho_f/particle_rho) * (uf-uf_o)/Max(dt,1d-14)
        ay = ay + 0.5d0*(particle_rho_f/particle_rho) * (vf-vf_o)/Max(dt,1d-14)
        az = az + 0.5d0*(particle_rho_f/particle_rho) * (wf-wf_o)/Max(dt,1d-14)
+    End If
+
+    If ( particle_added_mass == 2 ) Then
+       ! Maxey-Riley without Basset and Faxen: dv/dt = beta Du/Dt + (u-v)/tau + (1-beta) g, beta = 3 rho_f/(rho_f+2 rho_p)
+       beta_mr = 3d0*particle_rho_f/(particle_rho_f + 2d0*particle_rho)
+       Call fluid_material_accel(p_x(i), p_y(i), p_z(i), uf, vf, wf, DuDt)
+       ax = beta_mr*DuDt(1);  ay = -grav*(1d0 - beta_mr) + beta_mr*DuDt(2);  az = beta_mr*DuDt(3)
     End If
 
     ! Total instantaneous acceleration at the start of the step: drag, (uf-v0)/tau_eff, plus
@@ -391,6 +408,30 @@ Contains
     End If
 
   End Subroutine advance_particle_inertial
+
+  !> Material derivative of the fluid velocity at the particle, Du/Dt = du/dt (old-to-new field difference) + (u.grad)u
+  !  with the gradient by central differences of the interpolated field over one grid spacing
+  Subroutine fluid_material_accel(xp, yp, zp, uf, vf, wf, DuDt)
+
+    Real(Int64), Intent(In)  :: xp, yp, zp, uf, vf, wf
+    Real(Int64), Intent(Out) :: DuDt(3)
+
+    Real(Int64) :: uo, vo, wo, a(3), b(3), hx, hy, hz
+
+    Call interpolate_velocity_old(xp, yp, zp, uo, vo, wo)
+    DuDt = (/ uf-uo, vf-vo, wf-wo /) / Max(dt, 1d-14)
+    hx = dx;  hy = dymin;  hz = dzmin
+    Call interpolate_velocity(xp+hx, yp, zp, a(1), a(2), a(3))
+    Call interpolate_velocity(xp-hx, yp, zp, b(1), b(2), b(3))
+    DuDt = DuDt + uf*(a-b)/(2d0*hx)
+    Call interpolate_velocity(xp, yp+hy, zp, a(1), a(2), a(3))
+    Call interpolate_velocity(xp, yp-hy, zp, b(1), b(2), b(3))
+    DuDt = DuDt + vf*(a-b)/(2d0*hy)
+    Call interpolate_velocity(xp, yp, zp+hz, a(1), a(2), a(3))
+    Call interpolate_velocity(xp, yp, zp-hz, b(1), b(2), b(3))
+    DuDt = DuDt + wf*(a-b)/(2d0*hz)
+
+  End Subroutine fluid_material_accel
 
   !> Exact solution of dv/dt=(u-v)/tau+a (u,a frozen) over [0,dt], advancing both x and v in place.
   Subroutine exp_integrate(x, v, u, a, tau, dt_in)
@@ -562,9 +603,9 @@ Contains
 
   !> Per-particle boundary handling on the just-updated position, applied per direction (x,y,z independently);
   !  returns .True. if the particle should be removed (exit/absorb/ aged-out). Reflect mirrors the position
-  !  and flips the matching velocity component; periodic (case 0) does nothing here -- the true-global-edge
+  !  and flips the matching velocity component; periodic x and z (case 0) do nothing here -- the true-global-edge
   !  crossing is detected and handled (with wrap) by exchange_particles_1d, which alone knows the periodic
-  !  partner.
+  !  partner; periodic y is wrapped here (y is not decomposed).
   Logical Function apply_particle_bc(i) Result(do_remove)
 
     Integer(Int32), Intent(In) :: i
@@ -605,6 +646,9 @@ Contains
 
     ! y
     Select Case (bcy_resolved)
+    Case (0)
+       ! y is not decomposed, so the periodic wrap is local; the period is (ny-2)*dy (apply_periodic_bc_y repeats face 2 at face ny)
+       p_y(i) = y_global(1) + Modulo( p_y(i) - y_global(1), Real(ny_global-2, Int64)*(y_global(2) - y_global(1)) )
     Case (1)
        If ( p_y(i) < y_global(1) .Or. p_y(i) >= y_global(ny_global) ) Then
           do_remove = .True.

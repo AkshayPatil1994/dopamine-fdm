@@ -1,0 +1,66 @@
+! Tiny forced HIT box with Maxey-Riley particles (particle_added_mass=2, light rho_p/rho_f=0.5, gravity, particle_init_fluid=1): parity case
+! for np1 vs npN and CPU vs GPU of the fluid-acceleration term and the particle seeding at the fluid velocity.
+
+&DOMAIN
+  nx         = 18,
+  ny         = 17,
+  nz         = 18,
+  Lx         = 6.283185307179586,
+  Ly         = 6.283185307179586,
+  Lz         = 6.283185307179586,
+  grid_type  = 1,
+  p_row      = 0,
+  p_col      = 0,
+/
+
+&PHYSICS
+  nu                   = 0.02, grav = 2.0,
+  dPdx                 = 0.0,
+  dPdz                 = 0.0,
+  sgs_model            = 0,
+  flat_wall_model_flag = 0,
+/
+
+&NUMERICS
+  dt           = 0.005,
+  nsteps       = 20,
+  nsave        = 20,
+  nmonitor     = 1,
+  cfl_adaptive = 0,
+/
+
+&BOUNDARY_CONDITIONS
+  x_bc_type = 0,
+  y_bc_type = 0,
+  z_bc_type = 0,
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 1.0,
+  ic_type      = 8,
+  noise_percent  = 0.0,
+  nstep_init     = 0,
+  restart        = 0,
+/
+
+&HIT
+  hit_forcing = 1,
+  hit_eps     = 0.5,
+  hit_kf      = 2.0,
+  hit_stats   = 1,
+  ic_kp       = 2.0,
+  ic_seed     = 3,
+/
+
+&IO
+  filein  = 'restart/part_mr_small.1',
+  fileout = 'part_mr_small',
+/
+
+&PARTICLES
+  particles_active = 1,
+  n_particles_init = 300,
+  particle_seed_seed = 5,
+  particle_mode = 1, particle_diam = 0.05, particle_rho = 0.5, particle_rho_f = 1.0,
+  particle_added_mass = 2, particle_init_fluid = 1,
+/

@@ -87,10 +87,10 @@ Contains
                          particle_reinit_on_exit, particle_max_age, particle_restart_file, &
                          particle_restart_load, &
                          particle_mode, particle_diam, particle_rho, particle_rho_f, &
-                         particle_added_mass, particle_brownian, particle_temp_abs, &
+                         particle_added_mass, particle_stokes_drag, particle_brownian, particle_temp_abs, &
                          particle_ibm_bc, particle_ibm_tau_crit, particle_resuspend_ucrit, &
                          particle_boussinesq_coupling, particle_free_surface, particle_deposit_file, particle_deposit_freq, &
-                         sgs_particle_model, particle_langevin_C0
+                         sgs_particle_model, particle_langevin_C0, particle_init_fluid
 
     Namelist /HIT/ hit_forcing, hit_eps, hit_kf, hit_stats, ic_kp, ic_seed
 
@@ -574,6 +574,7 @@ Contains
              Write(*,'(A,E12.4)') '   particle_rho                 = ', particle_rho
              Write(*,'(A,E12.4)') '   particle_rho_f               = ', particle_rho_f
              Write(*,'(A,I2)')    '   particle_added_mass          = ', particle_added_mass
+             Write(*,'(A,I2)')    '   particle_stokes_drag         = ', particle_stokes_drag
              Write(*,'(A,I2)')    '   particle_brownian            = ', particle_brownian
              Write(*,'(A,I2)')    '   particle_free_surface        = ', particle_free_surface
           End If
@@ -828,6 +829,7 @@ Contains
     Call Mpi_bcast ( particle_rho,          1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_rho_f,        1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_added_mass,   1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_stokes_drag,  1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_brownian,     1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_temp_abs,     1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_ibm_bc, Size(particle_ibm_bc), MPI_integer, 0, MPI_COMM_WORLD, ierr )
@@ -839,6 +841,7 @@ Contains
     Call Mpi_bcast ( particle_deposit_freq, 1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( sgs_particle_model,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_langevin_C0,  1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( particle_init_fluid,   1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
 
     Call Mpi_bcast ( hit_forcing,       1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( hit_stats,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
@@ -1051,6 +1054,7 @@ Contains
     If ( particles_active < 1 ) Then
        If ( particle_mode /= 0 )              ignored = Trim(ignored)//' particle_mode'
        If ( particle_added_mass /= 0 )        ignored = Trim(ignored)//' particle_added_mass'
+       If ( particle_stokes_drag /= 0 )       ignored = Trim(ignored)//' particle_stokes_drag'
        If ( particle_brownian /= 0 )          ignored = Trim(ignored)//' particle_brownian'
        If ( sgs_particle_model /= 0 )         ignored = Trim(ignored)//' sgs_particle_model'
        If ( particle_boussinesq_coupling /= 0 ) ignored = Trim(ignored)//' particle_boussinesq_coupling'
@@ -1064,6 +1068,11 @@ Contains
          Call abort_input( 'ERROR: &PARTICLES sgs_particle_model must be 0 or 1' )
     If ( particle_mode >= 1 .And. ( particle_diam <= 0d0 .Or. particle_rho <= 0d0 .Or. particle_rho_f <= 0d0 ) ) &
          Call abort_input( 'ERROR: &PARTICLES inertial particles need particle_diam, particle_rho, particle_rho_f > 0' )
+    If ( particle_added_mass < 0 .Or. particle_added_mass > 2 ) &
+         Call abort_input( 'ERROR: &PARTICLES particle_added_mass must be 0, 1 (local added mass) or 2 (Maxey-Riley)' )
+    If ( particle_added_mass == 2 .And. particle_boussinesq_coupling == 1 ) &
+         Call abort_input( 'ERROR: &PARTICLES particle_added_mass=2 (Maxey-Riley) cannot combine with ' // &
+                           'particle_boussinesq_coupling=1' )
     If ( particle_mode == 0 .And. ( particle_added_mass /= 0 .Or. particle_brownian /= 0 ) ) &
          Call abort_input( 'ERROR: &PARTICLES particle_added_mass/particle_brownian need particle_mode=1' )
     If ( sgs_particle_model == 1 .And. sgs_model == 0 ) &

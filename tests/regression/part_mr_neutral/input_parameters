@@ -1,0 +1,63 @@
+! 34^3 forced HIT box for tests/regression/mr_neutral_check.py: a neutrally buoyant Maxey-Riley particle (beta = 1) released at the fluid
+! velocity must follow a tracer. The checker rewrites the particle block (tracer / MR / drag-only) and dt.
+
+&DOMAIN
+  nx         = 34,
+  ny         = 33,
+  nz         = 34,
+  Lx         = 6.283185307179586,
+  Ly         = 6.283185307179586,
+  Lz         = 6.283185307179586,
+  grid_type  = 1,
+  p_row      = 0,
+  p_col      = 0,
+/
+
+&PHYSICS
+  nu                   = 0.02, grav = 0.0,
+  dPdx                 = 0.0,
+  dPdz                 = 0.0,
+  sgs_model            = 0,
+  flat_wall_model_flag = 0,
+/
+
+&NUMERICS
+  dt           = 0.005,
+  nsteps       = 40,
+  nsave        = 40,
+  nmonitor     = 40,
+  cfl_adaptive = 0,
+/
+
+&BOUNDARY_CONDITIONS
+  x_bc_type = 0,
+  y_bc_type = 0,
+  z_bc_type = 0,
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 1.0,
+  ic_type      = 8,
+  noise_percent  = 0.0,
+  nstep_init     = 0,
+  restart        = 0,
+/
+
+&HIT
+  hit_forcing = 1,
+  hit_eps     = 0.5,
+  hit_kf      = 2.0,
+  hit_stats   = 1,
+  ic_kp       = 2.0,
+  ic_seed     = 3,
+/
+
+&IO
+  filein  = 'restart/part_mr_neutral.1',
+  fileout = 'part_mr_neutral',
+/
+
+&PARTICLES
+  particles_active = 1, n_particles_init = 400, particle_seed_seed = 11,
+  particle_mode = 0,
+/

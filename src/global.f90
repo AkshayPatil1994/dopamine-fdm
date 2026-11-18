@@ -624,6 +624,7 @@ Module global
   Real   (Int64) :: particle_rho_f       = 1000d0
   ! 1: local Eulerian dU/dt added-mass approximation (advance_particles)
   Integer(Int32) :: particle_added_mass  = 0
+  Integer(Int32) :: particle_stokes_drag = 0       ! 1: linear Stokes drag (no Schiller-Naumann correction)
   Integer(Int32) :: particle_brownian    = 0       ! 1: isotropic Stokes-Einstein Brownian kick
   Real   (Int64) :: particle_temp_abs    = 293d0   ! [K], particle_brownian==1 only
 
@@ -648,6 +649,7 @@ Module global
   ! length (nu_t=C_k*sqrt(k_sgs)*Delta), see compute_sgs_stats in particles.f90
   Integer(Int32) :: sgs_particle_model  = 0
   Real   (Int64) :: particle_langevin_C0 = 2.1d0   ! Kolmogorov constant
+  Integer(Int32) :: particle_init_fluid = 0        ! 1: freshly seeded inertial particles start at the local fluid velocity
 
   ! ---- Geometric PLIC VOF liquid fraction and two-fluid solver (src/vof_*.f90, docs/Two-Phase-VOF.md) ----
   ! vof_active 1: C is transported; vof_flow 0: C only advected by the flow, 1: two-fluid Navier-Stokes

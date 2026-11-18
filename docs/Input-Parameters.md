@@ -288,7 +288,8 @@ Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disa
 | `particle_restart_load` | `1` | With `restart=1`: `1` read particles, `0` seed fresh. |
 | `particle_mode` | `0` | `0` tracer; `1` inertial (Schiller–Naumann drag + gravity from `grav` in `&PHYSICS`). |
 | `particle_diam, particle_rho, particle_rho_f` | `1e-4`, `2650`, `1000` | Diameter [m], particle and fluid density [kg/m³] (inertial). |
-| `particle_added_mass` | `0` | `1` local added-mass approximation. |
+| `particle_stokes_drag` | `0` | `1` drops the Schiller-Naumann correction (linear Stokes drag, as in point-particle theory and most DNS references). |
+| `particle_added_mass` | `0` | `1` local added-mass approximation (adds $\tfrac12(\rho_f/\rho_p)\,\partial_t u$ to the acceleration); `2` Maxey-Riley without Basset and Faxén terms: $dv/dt = \beta\,Du/Dt + (u-v)/\tau + (1-\beta)g$, $\beta = 3\rho_f/(\rho_f+2\rho_p)$, $\tau = (\rho_p+\rho_f/2)d^2/(18\mu)$ (with the Schiller-Naumann correction), $Du/Dt$ from the old/new field difference plus a central-difference $(u\cdot\nabla)u$ at the particle. Use `2` for buoyant (light) particles; no `particle_boussinesq_coupling` with it. |
 | `particle_brownian` | `0` | `1` Stokes–Einstein Brownian kick. |
 | `particle_temp_abs` | `293` | Temperature [K] for Brownian motion. |
 | `particle_ibm_bc(0:15)` | `2` | Per-solid-ID IBM collision: `1` absorb, `2` reflect (restitution `min(1, τ_p/particle_ibm_tau_crit)`), `3` reflect if the relative speed exceeds `particle_resuspend_ucrit`, else absorb. |
@@ -299,6 +300,7 @@ Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disa
 | `particle_deposit_file`, `particle_deposit_freq` | `'particle_deposit_x.csv'`, `10` | Deposition-rate CSV and its write interval in monitor reports. |
 | `sgs_particle_model` | `0` | `1` simplified isotropic Langevin SGS dispersion for LES. |
 | `particle_langevin_C0` | `2.1` | Kolmogorov constant of that model. |
+| `particle_init_fluid` | `0` | `1`: freshly seeded particles start at the local fluid velocity (default: at rest). Not applied on a particle restart. |
 
 ## VOF
 

@@ -642,7 +642,7 @@ if(Python3_Interpreter_FOUND)
     # Point-particle parity (tests/regression/compare_particles.py): final particle state by ID, np=1 vs other layouts and, in a
     # GPU build with CPU_REFERENCE_EXE, CPU vs GPU at the same layout. Deterministic cases only: Brownian motion and the SGS
     # Langevin closure draw from per-rank random streams, so their results are statistically, not bitwise, layout independent.
-    set(_particle_cases part_tracer_small part_inertial_small part_bouss_small part_outflow_small part_ibm_small)
+    set(_particle_cases part_tracer_small part_inertial_small part_bouss_small part_outflow_small part_ibm_small part_mr_small)
     set(_pkind cpu)
     if(ENABLE_GPU)
         set(_pkind gpu)
@@ -722,6 +722,11 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_check.py
                 --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/vof_slosh_small --exe $<TARGET_FILE:dopamine>
                 --mpirun ${TEST_MPIRUN} --freq 15:7.8290:0.01 --rowmax 16:0.4)
+    # Maxey-Riley particles (particle_added_mass=2): a neutrally buoyant particle released at the fluid velocity follows a tracer
+    add_test(NAME mr_neutral_check
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/mr_neutral_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/part_mr_neutral --exe $<TARGET_FILE:dopamine>
+                --mpirun ${TEST_MPIRUN})
     # donor slice with P: the interleaved T/C columns of an inflow_type=2 donor must be offset past P
     add_test(NAME sem_recycle_p_check
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/recycle_p_check.py

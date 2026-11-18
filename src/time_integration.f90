@@ -192,7 +192,7 @@ Contains
     !$acc end parallel loop
     ! particles.f90's added-mass term reads Uo/Vo/Wo host-side; on a GPU build they stay device-only until
     ! synced
-    If ( particles_active >= 1 .And. particle_mode == 1 .And. particle_added_mass == 1 ) Then
+    If ( particles_active >= 1 .And. particle_mode == 1 .And. particle_added_mass >= 1 ) Then
        !$acc update host(Uo,Vo,Wo)
     End If
     Call profiler_stop(PROF_RK_UPDATE)
