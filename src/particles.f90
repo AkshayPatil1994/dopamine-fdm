@@ -66,6 +66,13 @@ Module particles
   ! about one step of travel, which near a rank seam can lie beyond the single ghost cell; without the extra
   ! plane the interpolation clamps there and the result depends on the rank layout.
   Real(Int64), Allocatable :: Upad(:,:,:), Vpad(:,:,:), Wpad(:,:,:)
+  ! Tracer mode only: the padded fields of the two previous steps (Upad1 = t^n, Upad2 = t^(n-1); Upad is t^(n+1)),
+  ! the number of such levels held, and the length of the previous step. They give the time-quadratic
+  ! reconstruction of the velocity used by the tracer RK3 stages (see interpolate_velocity_t).
+  Real(Int64), Allocatable :: Upad1(:,:,:), Vpad1(:,:,:), Wpad1(:,:,:)
+  Real(Int64), Allocatable :: Upad2(:,:,:), Vpad2(:,:,:), Wpad2(:,:,:)
+  Integer(Int32) :: n_pad_hist = 0
+  Real(Int64) :: dt_pad_prev = 0d0
   Real(Int64), Allocatable :: xpad_f(:), xpad_c(:), zpad_f(:), zpad_c(:)
   ! padded SDF for the IBM collision normal (a finite difference over +-0.5 cell, which also reaches past the
   ! ghost cell); static
@@ -322,11 +329,69 @@ Contains
     Real(Int64), Intent(In)  :: xp, yp, zp
     Real(Int64), Intent(Out) :: up, vp, wp
 
-    up = interp3(Upad, xpad_f, nx+2,  yg, nyg, zpad_c, nzg+2, xp, yp, zp)
-    vp = interp3(Vpad, xpad_c, nxg+2, y,  ny,  zpad_c, nzg+2, xp, yp, zp)
-    wp = interp3(Wpad, xpad_c, nxg+2, yg, nyg, zpad_f, nz+2,  xp, yp, zp)
+    Call interpolate_pads(Upad, Vpad, Wpad, xp, yp, zp, up, vp, wp)
 
   End Subroutine interpolate_velocity
+
+  Subroutine interpolate_pads(Ua, Va, Wa, xp, yp, zp, up, vp, wp)
+
+    Real(Int64), Intent(In)  :: Ua(:,:,:), Va(:,:,:), Wa(:,:,:)
+    Real(Int64), Intent(In)  :: xp, yp, zp
+    Real(Int64), Intent(Out) :: up, vp, wp
+
+    up = interp3(Ua, xpad_f, nx+2,  yg, nyg, zpad_c, nzg+2, xp, yp, zp)
+    vp = interp3(Va, xpad_c, nxg+2, y,  ny,  zpad_c, nzg+2, xp, yp, zp)
+    wp = interp3(Wa, xpad_c, nxg+2, yg, nyg, zpad_f, nz+2,  xp, yp, zp)
+
+  End Subroutine interpolate_pads
+
+  !> Fluid velocity at the RK3 stage time t^n + (stage-1)/2*dt (stage 1, 2, 3), reconstructed from the stored
+  !  fields: stage 1 and 3 are the t^n and t^(n+1) fields themselves, stage 2 the Lagrange interpolant through
+  !  t^(n-1), t^n, t^(n+1) (linear in t^n, t^(n+1) while there is no t^(n-1) field yet)
+  Subroutine interpolate_velocity_t(xp, yp, zp, stage, up, vp, wp)
+
+    Real(Int64), Intent(In)  :: xp, yp, zp
+    Integer(Int32), Intent(In) :: stage
+    Real(Int64), Intent(Out) :: up, vp, wp
+
+    Real(Int64) :: a(3), b(3), c(3), wm, w0, wpl
+
+    If ( stage == 3 ) Then
+       Call interpolate_pads(Upad, Vpad, Wpad, xp, yp, zp, up, vp, wp)
+       Return
+    End If
+    Call interpolate_pads(Upad1, Vpad1, Wpad1, xp, yp, zp, up, vp, wp)
+    If ( stage == 1 ) Return
+
+    Call interpolate_pads(Upad, Vpad, Wpad, xp, yp, zp, c(1), c(2), c(3))
+    If ( n_pad_hist < 2 ) Then
+       up = 0.5d0*(up + c(1));  vp = 0.5d0*(vp + c(2));  wp = 0.5d0*(wp + c(3))
+       Return
+    End If
+    Call interpolate_pads(Upad2, Vpad2, Wpad2, xp, yp, zp, a(1), a(2), a(3))
+    b = (/ up, vp, wp /)
+    wm  = -dt*dt / (4d0*dt_pad_prev*(dt_pad_prev + dt))
+    w0  = (dt + 2d0*dt_pad_prev) / (4d0*dt_pad_prev)
+    wpl = (dt + 2d0*dt_pad_prev) / (4d0*(dt + dt_pad_prev))
+    up = wm*a(1) + w0*b(1) + wpl*c(1)
+    vp = wm*a(2) + w0*b(2) + wpl*c(2)
+    wp = wm*a(3) + w0*b(3) + wpl*c(3)
+
+  End Subroutine interpolate_velocity_t
+
+  !> Shift the pad history by one level (t^(n+1) -> t^n -> t^(n-1)) after a tracer step; the buffers are moved,
+  !  not copied, and the vacated Upad/Vpad/Wpad are re-allocated by the next build_velocity_pads
+  Subroutine rotate_velocity_pads
+
+    Real(Int64), Allocatable :: Ut(:,:,:), Vt(:,:,:), Wt(:,:,:)
+
+    Call Move_Alloc(Upad2, Ut);  Call Move_Alloc(Upad1, Upad2);  Call Move_Alloc(Upad, Upad1);  Call Move_Alloc(Ut, Upad)
+    Call Move_Alloc(Vpad2, Vt);  Call Move_Alloc(Vpad1, Vpad2);  Call Move_Alloc(Vpad, Vpad1);  Call Move_Alloc(Vt, Vpad)
+    Call Move_Alloc(Wpad2, Wt);  Call Move_Alloc(Wpad1, Wpad2);  Call Move_Alloc(Wpad, Wpad1);  Call Move_Alloc(Wt, Wpad)
+    n_pad_hist = Min(n_pad_hist + 1, 2)
+    dt_pad_prev = dt
+
+  End Subroutine rotate_velocity_pads
 
   !> Advance local particle i one step with the inertial (Maxey-Riley-reduced) model dv/dt = (u_f-v)/tau_eff +
   !  a_other. With u_f, tau_eff (Schiller-Naumann drag correction) and a_other (gravity + optional added mass)
@@ -887,6 +952,15 @@ Contains
     If ( particles_active < 1 ) Return
 
     Call build_velocity_pads
+    If ( particle_mode == 0 .And. n_pad_hist == 0 ) Then
+       ! first step (or restart): no history yet, take t^n from the solver's start-of-step copy Uo/Vo/Wo
+       !$acc update host(Uo,Vo,Wo)
+       Allocate( Upad1(0:nx+1, nyg, 0:nzg+1), Vpad1(0:nxg+1, ny, 0:nzg+1), Wpad1(0:nxg+1, nyg, 0:nz+1) )
+       Call pad_field( Uo, nx,  nyg, nzg, .True.,  .False., 1, Upad1 )
+       Call pad_field( Vo, nxg, ny,  nzg, .False., .False., 1, Vpad1 )
+       Call pad_field( Wo, nxg, nyg, nz,  .False., .True.,  1, Wpad1 )
+       n_pad_hist = 1
+    End If
     If ( particle_boussinesq_coupling == 1 .And. boussinesq_flag >= 1 ) Then
        !$acc update host(Tscal)
     End If
@@ -911,9 +985,10 @@ Contains
        Else
           x0 = p_x(i);  y0 = p_y(i);  z0 = p_z(i)
 
-          Call interpolate_velocity(x0, y0, z0, k1u, k1v, k1w)
-          Call interpolate_velocity(x0 + 0.5d0*dt*k1u, y0 + 0.5d0*dt*k1v, z0 + 0.5d0*dt*k1w, k2u, k2v, k2w)
-          Call interpolate_velocity(x0 - dt*k1u + 2d0*dt*k2u, y0 - dt*k1v + 2d0*dt*k2v, z0 - dt*k1w + 2d0*dt*k2w, k3u, k3v, k3w)
+          Call interpolate_velocity_t(x0, y0, z0, 1, k1u, k1v, k1w)
+          Call interpolate_velocity_t(x0 + 0.5d0*dt*k1u, y0 + 0.5d0*dt*k1v, z0 + 0.5d0*dt*k1w, 2, k2u, k2v, k2w)
+          Call interpolate_velocity_t(x0 - dt*k1u + 2d0*dt*k2u, y0 - dt*k1v + 2d0*dt*k2v, z0 - dt*k1w + 2d0*dt*k2w, &
+               3, k3u, k3v, k3w)
 
           ! SGS fluctuation held frozen across the 3 RK evaluations (see advance_sgs_velocity)
           If ( sgs_particle_model == 1 ) Then
@@ -945,6 +1020,8 @@ Contains
           i = i + 1
        End If
     End Do
+
+    If ( particle_mode == 0 ) Call rotate_velocity_pads
 
     Call migrate_particles
 
