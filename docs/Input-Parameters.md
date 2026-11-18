@@ -286,7 +286,7 @@ Lagrangian point particles ([particles.f90](../src/particles.f90)). Omit to disa
 | `particle_max_age` | `1e30` | Maximum particle age [s]. |
 | `particle_restart_file` | `'particles_restart'` | Particle restart file. |
 | `particle_restart_load` | `1` | With `restart=1`: `1` read particles, `0` seed fresh. |
-| `particle_mode` | `0` | `0` tracer; `1` inertial (Schiller–Naumann drag + gravity from `grav` in `&PHYSICS`). |
+| `particle_mode` | `0` | `0` tracer (Kutta RK3 with the velocity quadratically interpolated in time through the last three steps: third order in dt, linear on the first step, no extra input); `1` inertial (Schiller–Naumann drag + gravity from `grav` in `&PHYSICS`; the field is frozen at the end of the step, first order in dt). |
 | `particle_diam, particle_rho, particle_rho_f` | `1e-4`, `2650`, `1000` | Diameter [m], particle and fluid density [kg/m³] (inertial). |
 | `particle_stokes_drag` | `0` | `1` drops the Schiller-Naumann correction (linear Stokes drag, as in point-particle theory and most DNS references). |
 | `particle_added_mass` | `0` | `1` local added-mass approximation (adds $\tfrac12(\rho_f/\rho_p)\,\partial_t u$ to the acceleration); `2` Maxey-Riley without Basset and Faxén terms: $dv/dt = \beta\,Du/Dt + (u-v)/\tau + (1-\beta)g$, $\beta = 3\rho_f/(\rho_f+2\rho_p)$, $\tau = (\rho_p+\rho_f/2)d^2/(18\mu)$ (with the Schiller-Naumann correction), $Du/Dt$ from the old/new field difference plus a central-difference $(u\cdot\nabla)u$ at the particle. Use `2` for buoyant (light) particles; no `particle_boussinesq_coupling` with it. |

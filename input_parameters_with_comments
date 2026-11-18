@@ -309,7 +309,8 @@
 ! Lagrangian point particles. With vof_flow=1 they are liquid-only (particle_rho_f = vof_rho_l)
 ! and reflect at the free surface. n_particles_init>0 with particles_active=0 prints a warning.
 ! bc_particle_*: -1 auto | 0 periodic | 1 exit | 2 reflect | 3 absorb.
-! particle_mode: 0 tracer | 1 inertial (Schiller-Naumann drag + gravity from grav).
+! particle_mode: 0 tracer (RK3, velocity quadratic in time: 3rd order in dt) | 1 inertial (Schiller-Naumann drag +
+! gravity from grav; field frozen over the step: 1st order in dt).
 ! particle_ibm_bc(id): 1 absorb | 2 reflect | 3 reflect above particle_resuspend_ucrit.
 !&PARTICLES
 !  particles_active = 1,
