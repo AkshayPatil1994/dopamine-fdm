@@ -108,6 +108,8 @@ directly — read those instead of `--help` output to see idiomatic library usag
 | `dopamine_post.tavg` | On-the-fly time-averaged statistics (`fields/<fileout>_tavg[Block].<step>`) | `read_tavg` |
 | `dopamine_post.inflow` | SEM/ESEM inflow tooling: half-channel mirroring, donor-plane verification | `mirror_half_channel`, `InflowDonor`/`check_donor` |
 | `dopamine_post.runlog` | Solver diagnostics parsed from a run's stdout log | `RunLog` |
+| `dopamine_post.diagnostics` | Plain-text solver series: `vof_diag.dat`, `wall_diag.dat`, `vof_gauges.dat`, `ibm_forces.csv`, `particle_count.dat`, the deposit file, `wave_series_check.out` (rows of a restarted run: the last wins) | `read_vof_diag`, `read_wall_diag`, `read_vof_gauges`, `read_ibm_forces`, `read_particle_counts`, `read_particle_deposit`, `read_wave_series_check`, `plot_vof_diag` |
+| `dopamine_post.hit` | Forced HIT statistics and spectra (below) | `read_stats`, `spectrum`, `scales` |
 | `dopamine_post.vortex` | Q-criterion vortex identification and iso-surface movies | `q_criterion`, `q_volume_fraction`, `animate_q_isosurface` |
 
 A shared internal module, `dopamine_post._core`, holds the low-level helpers every other
@@ -124,6 +126,8 @@ dissipation spectra with the true and the modified wavenumber), `scales` ($u'$, 
 `gradient_moments` (skewness and flatness of the longitudinal velocity gradients) and `pope_spectrum` (Pope 2000, eq. 6.246). The validation
 scripts in `postProcessing/validation/` use it: `hit_spectral_reference.py` (an independent pseudo-spectral solver with the same forcing, the
 reference), `plot_hit.py` and `plot_hit_particles.py` (manuscript figures, `plotstyle.py` style).
+
+Slice and line probes list their components in the meta file (`U V W P T C A`, `A` = VOF fraction, needs a solver with VOF probe output); a meta file that names a component the data does not hold (older solvers wrote the requested letters) is reconciled with a warning where possible, otherwise `ValueError`. Grids: `fields/grid.out` + `geometry.out`, plus `grid_z.out` for a stretched spanwise grid (`z_bc_type = 1`, `alpha_grid_z > 0`), are read by `_core.coords_from_grid`; `FieldSnapshot.profile` and `FieldSeries.time_average` weight the z average by cell width.
 
 ### `dopamine_post.particles`
 

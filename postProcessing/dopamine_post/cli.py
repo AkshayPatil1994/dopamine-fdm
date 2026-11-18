@@ -9,7 +9,7 @@ operations driven by `import dopamine_post as dp` instead.
 import argparse
 import sys
 
-from . import fields, ibm_surface, inflow, particles, probes, rsb, runlog, sdf, uav, vortex
+from . import diagnostics, fields, ibm_surface, inflow, particles, probes, rsb, runlog, sdf, uav, vortex
 
 
 def _slice_arg(last):
@@ -325,6 +325,19 @@ def _add_runlog(sub):
     p.set_defaults(func=_runlog_plot)
 
 
+# ── diagnostics ────────────────────────────────────────────────────────────
+
+def _diag_vof_plot(a):
+    diagnostics.plot_vof_diag(diagnostics.read_vof_diag(a.path), a.out)
+
+
+def _add_diagnostics(sub):
+    p = sub.add_parser("vof-plot", help="plot volume error, interface cells, kinetic energy, PCG iterations from vof_diag.dat")
+    p.add_argument("path", nargs="?", default="vof_diag.dat")
+    p.add_argument("--out", default="vof_diag.png")
+    p.set_defaults(func=_diag_vof_plot)
+
+
 # ── top-level dispatch ────────────────────────────────────────────────────
 
 _GROUPS = {
@@ -337,6 +350,7 @@ _GROUPS = {
     "rsb": _add_rsb,
     "inflow": _add_inflow,
     "runlog": _add_runlog,
+    "diagnostics": _add_diagnostics,
     "vortex": _add_vortex,
 }
 

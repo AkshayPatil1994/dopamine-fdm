@@ -19,6 +19,24 @@ from pathlib import Path
 import numpy as np
 
 
+def coords_from_grid(grid_path):
+    """(xm, ym, zm) cell centres from fields/grid.out + geometry.out (+ grid_z.out when z is stretched).
+
+    grid.out / grid_z.out rows: ``i  centre  upper_face  d  1/d``; geometry.out: ``nxm nym nzm`` then ``Lx Ly Lz``.
+    x is always uniform; z is uniform unless the solver wrote grid_z.out (z_bc_type = 1, alpha_grid_z > 0).
+    """
+    grid_path = Path(grid_path)
+    geo_path = grid_path.parent / "geometry.out"
+    if not geo_path.is_file():
+        raise FileNotFoundError(f"geometry.out not found alongside {grid_path}")
+    tok = geo_path.read_text().split()
+    nxm, nzm, Lx, Lz = int(tok[0]), int(tok[2]), float(tok[3]), float(tok[5])
+    ym = np.loadtxt(grid_path)[:, 1]
+    gz = grid_path.parent / "grid_z.out"
+    zm = np.loadtxt(gz)[:, 1] if gz.is_file() else (np.arange(nzm) + 0.5) * (Lz / nzm)
+    return (np.arange(nxm) + 0.5) * (Lx / nxm), ym, zm
+
+
 # ── namelist parsing ─────────────────────────────────────────────────────────
 
 def parse_input_parameters(fpath='input_parameters'):
@@ -341,7 +359,7 @@ def read_meta(path):
 COMP_ORDER = ('U', 'V', 'W', 'P', 'T', 'C', 'A')
 
 
-def comp_names(s):
+def comp_names(s, ncomp=None):
     """Ordered component name list from a meta file's `comps` string.
 
     Order must match probe_output.f90's parse_comps/write loop, which always
@@ -349,8 +367,17 @@ def comp_names(s):
     them in the &... comps string) regardless of which subset is requested.
     """
     upper = s.strip().upper()
-    names = [c for c in COMP_ORDER if c in upper]
-    return names or ['U', 'V', 'W']
+    names = [c for c in COMP_ORDER if c in upper] or ['U', 'V', 'W']
+    if ncomp is not None and len(names) != ncomp:
+        # solvers before the VOF component A wrote the requested letters, A included, but never output A
+        if 'A' in names and len(names) - 1 == ncomp:
+            warnings.warn("probe meta lists component A but the data has none (written by a solver without VOF probe "
+                          "output); dropping A")
+            names.remove('A')
+        else:
+            raise ValueError(f"probe meta lists components {''.join(names)} but ncomp = {ncomp}: "
+                             "the requested components were not all written")
+    return names
 
 
 def comp_index(comps, name):

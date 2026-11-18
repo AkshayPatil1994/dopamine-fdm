@@ -283,7 +283,12 @@ class FieldSnapshot:
         if len(remaining) != 1:
             raise ValueError("profile() must average over exactly 2 of the 3 axes")
         coord = (self.xm, self.ym, self.zm)[remaining[0]]
-        return coord, self.fields[var].mean(axis=axes)
+        a = self.fields[var]
+        if 2 in axes:                                   # weight by z cell width (stretched z grids)
+            wz = np.diff(self.z) / (self.z[-1] - self.z[0])
+            a = np.moveaxis(a, 2, -1) @ wz
+            axes = tuple(ax for ax in axes if ax != 2)
+        return coord, a.mean(axis=axes) if axes else a
 
     def plane(self, var, axis, index):
         """2-D slice of `var` at cell-centre index `index` along `axis` ('x'|'y'|'z')."""
@@ -360,7 +365,12 @@ class FieldSeries:
         s0 = FieldSnapshot.read(snapfiles[0][1], **read_kw)
         xm, ym, zm = s0.xm, s0.ym, s0.zm
         nym = ym.size
-        dx, dz = xm[1] - xm[0], zm[1] - zm[0]      # uniform x, z
+        wz = np.diff(s0.z) / (s0.z[-1] - s0.z[0])   # z cell widths: a stretched z grid needs a weighted spanwise mean
+
+        def xz(a):
+            return _xz_mean(a, wz)
+
+        dx = xm[1] - xm[0]                          # x is uniform; ym and zm (stretched when alpha_grid_z > 0) are used as coordinates
         Ly = float(s0.y[-1])
 
         acc_U = np.zeros(nym); acc_V = np.zeros(nym); acc_W = np.zeros(nym)
@@ -377,15 +387,15 @@ class FieldSeries:
             snap = s0 if fpath == snapfiles[0][1] else FieldSnapshot.read(fpath, **read_kw)
             U, V, W = snap["U"], snap["V"], snap["W"]
 
-            acc_U += _xz_mean(U); acc_V += _xz_mean(V); acc_W += _xz_mean(W)
-            acc_UU += _xz_mean(U * U); acc_VV += _xz_mean(V * V); acc_WW += _xz_mean(W * W)
-            acc_UV += _xz_mean(U * V)
+            acc_U += xz(U); acc_V += xz(V); acc_W += xz(W)
+            acc_UU += xz(U * U); acc_VV += xz(V * V); acc_WW += xz(W * W)
+            acc_UV += xz(U * V)
 
-            g = _grad_all(U, V, W, ym, dx, dz)
+            g = _grad_all(U, V, W, ym, dx, zm)
             grad_sq = (g["dU_dx"] ** 2 + g["dU_dy"] ** 2 + g["dU_dz"] ** 2 +
                       g["dV_dx"] ** 2 + g["dV_dy"] ** 2 + g["dV_dz"] ** 2 +
                       g["dW_dx"] ** 2 + g["dW_dy"] ** 2 + g["dW_dz"] ** 2)
-            acc_grad_sq += _xz_mean(grad_sq)
+            acc_grad_sq += xz(grad_sq)
 
             if sgs_model != 0 and "nu_t" in snap:
                 has_sgs = True
@@ -395,12 +405,12 @@ class FieldSeries:
                 S_23 = 0.5 * (g["dV_dz"] + g["dW_dy"])
                 two_SijSij = (2.0 * (g["dU_dx"] ** 2 + g["dV_dy"] ** 2 + g["dW_dz"] ** 2) +
                              4.0 * (S_12 ** 2 + S_13 ** 2 + S_23 ** 2))
-                acc_eps_sgs += _xz_mean(nu_t * two_SijSij)
+                acc_eps_sgs += xz(nu_t * two_SijSij)
 
             if boussinesq_flag >= 1 and "T" in snap:
                 has_T = True
                 T = snap["T"]
-                acc_T += _xz_mean(T); acc_TT += _xz_mean(T * T)
+                acc_T += xz(T); acc_TT += xz(T * T)
 
             N += 1
 
@@ -550,21 +560,21 @@ class FieldStats:
 
 # ── small numeric helpers used by time_average ────────────────────────────────
 
-def _xz_mean(arr):
-    """Average a (nxm, nym, nzm) array over axes 0 and 2 -> (nym,)."""
-    return arr.mean(axis=(0, 2))
+def _xz_mean(arr, wz):
+    """Average a (nxm, nym, nzm) array over axes 0 and 2 -> (nym,); wz are the z cell-width weights (sum 1)."""
+    return arr.mean(axis=0) @ wz
 
 
-def _grad_all(U, V, W, ym, dx, dz):
+def _grad_all(U, V, W, ym, dx, zm):
     """All nine velocity-gradient components at cell centres (central differences in
-    the interior, one-sided at boundaries; x/z uniform, y from the stretched ym)."""
+    the interior, one-sided at boundaries; x uniform, y and z from their coordinate arrays)."""
     return {
         "dU_dx": np.gradient(U, dx, axis=0), "dU_dy": np.gradient(U, ym, axis=1),
-        "dU_dz": np.gradient(U, dz, axis=2),
+        "dU_dz": np.gradient(U, zm, axis=2),
         "dV_dx": np.gradient(V, dx, axis=0), "dV_dy": np.gradient(V, ym, axis=1),
-        "dV_dz": np.gradient(V, dz, axis=2),
+        "dV_dz": np.gradient(V, zm, axis=2),
         "dW_dx": np.gradient(W, dx, axis=0), "dW_dy": np.gradient(W, ym, axis=1),
-        "dW_dz": np.gradient(W, dz, axis=2),
+        "dW_dz": np.gradient(W, zm, axis=2),
     }
 
 

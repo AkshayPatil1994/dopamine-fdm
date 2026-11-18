@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ._core import parse_input_parameters
+from ._core import coords_from_grid, parse_input_parameters
 
 # GenSDF's flood_fill_mod.f90 SENTINEL_FRAC: cells outside its geometry-focused AABB
 # are left at the raw background sentinel value (e.g. 1e10, "far fluid, never
@@ -39,35 +39,6 @@ def _nearest_index(coords, value):
     return int(np.argmin(np.abs(coords - value)))
 
 
-def coords_from_grid(grid_path):
-    """(xm, ym, zm) cell-centre coordinates from fields/grid.out + fields/geometry.out.
-
-    grid.out format (written by genGridandIC.f90)::
-
-        i  ym_i  y_face_{i+1}  dy_i  1/dy_i
-
-    geometry.out format::
-
-        nxm  nym  nzm
-        Lx   Ly   Lz
-
-    x and z grids are always uniform in fdm-dopamine.
-    """
-    grid_path = Path(grid_path)
-    geo_path = grid_path.parent / "geometry.out"
-    if not geo_path.is_file():
-        raise FileNotFoundError(f"geometry.out not found alongside {grid_path}")
-
-    tokens = geo_path.read_text().split()
-    nxm, nym, nzm = int(tokens[0]), int(tokens[1]), int(tokens[2])
-    Lx, Ly, Lz = float(tokens[3]), float(tokens[4]), float(tokens[5])
-
-    data = np.loadtxt(grid_path)
-    ym = data[:, 1]  # column 1 (0-based): cell-centre y
-
-    xm = (np.arange(nxm) + 0.5) * (Lx / nxm)
-    zm = (np.arange(nzm) + 0.5) * (Lz / nzm)
-    return xm, ym, zm
 
 
 class SDF:

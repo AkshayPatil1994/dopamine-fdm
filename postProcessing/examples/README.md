@@ -14,6 +14,7 @@ first: the snapshots are written by the solver (`nsave > 0`, `fileout = '<prefix
 | fields + particles on one physical-time axis, restart-safe (standalone, numpy only) | `particles_example.py` | `xmf_time_synced.py` (`<prefix>.xmf` + `<prefix>_particles.xmf`) |
 | `chunked_snapshot = .true.` (`<prefix>Block.<step>`) | `FieldSnapshot.from_box`, see `fields_single_snapshot.py` | `xmf_box.py` |
 | slice / line probes | `probes_example.py` | `SliceProbe.write_xmf` (same script) |
+| text diagnostics (`vof_diag.dat`, `wall_diag.dat`, `ibm_forces.csv`, `particle_count.dat`, gauges) | `diagnostics_example.py` | - |
 | IBM surface, SDF, UAV path, RSB, SEM inflow, run log, Q-criterion | `ibm_surface_example.py`, `sdf_example.py`, `uav_example.py`, `rsb_example.py`, `inflow_example.py`, `runlog_example.py`, `vortex_example.py` | `ibm_surface_example.py` writes `.vtp/.pvd` |
 
 Which optional blocks a full snapshot contains (after U, V, W, P: `C`, `nu_t`, `T`, `vof`) is taken from `<case>/input_parameters`

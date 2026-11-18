@@ -20,9 +20,13 @@ Submodules (also reachable directly, e.g. `from dopamine_post.particles import P
     tavg          on-the-fly time-averaged statistics
     inflow        SEM/ESEM inflow tooling
     runlog        run.log diagnostics
+    diagnostics   plain-text series (vof_diag, wall_diag, ibm_forces, particle_count, gauges, wave check)
+    hit           forced homogeneous isotropic turbulence statistics and spectra
 """
 from . import (
+    diagnostics,
     fields,
+    hit,
     ibm_surface,
     inflow,
     particles,
@@ -37,5 +41,5 @@ from . import (
 
 __all__ = [
     "fields", "particles", "probes", "ibm_surface", "sdf", "uav", "rsb",
-    "inflow", "runlog", "vortex", "tavg",
+    "inflow", "runlog", "vortex", "tavg", "diagnostics", "hit",
 ]

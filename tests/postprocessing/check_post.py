@@ -106,8 +106,16 @@ try:
             print(r.stdout); sys.exit(f'FAIL: {name} run failed')
         return wd
 
-    wd = tiny_case('vof_drop_small', [(r'nsteps\s*=\s*-1', 'nsteps = 4'), (r'nsave\s*=\s*\d+', 'nsave = 4')])
+    wd = tiny_case('vof_drop_small', [(r'nsteps\s*=\s*-1', 'nsteps = 4'), (r'nsave\s*=\s*\d+', 'nsave = 4'),
+                                      (r'nmonitor\s*=\s*\d+', 'nmonitor = 1'), (r'&VOF', "&STATISTICS\n  n_slices = 1, slice_freq = 2, slice_dir(1) = 'z', slice_pos(1) = 0.5, "
+                                       "slice_comps(1) = 'UVWA', slice_fileout(1) = 'slices/zA',\n/\n&VOF")])
     if wd:
+        from dopamine_post import diagnostics as dg
+        from dopamine_post.probes import SliceProbe
+        vd = dg.read_vof_diag(os.path.join(wd, 'vof_diag.dat'))
+        assert len(vd) == 32 and vd['step'].size == 4 and abs(vd['dVliq_rel']).max() < 1e-2, 'vof_diag.dat columns/rows'
+        sp = SliceProbe.read(os.path.join(wd, 'slices', 'zA.bin'))
+        assert sp.comps == ['U', 'V', 'W', 'A'] and 0 <= sp.get('A').min() and sp.get('A').max() <= 1, 'slice probe component A'
         vattrs = xmf_attrs(write_field_xmf(wd))
         assert 'vof' in vattrs, f'VOF case: the XMF has no liquid-fraction attribute ({sorted(vattrs)})'
         vs = FieldSeries(wd).latest()['vof']
@@ -122,6 +130,24 @@ try:
         topo = ET.parse(os.path.join(wd, 'paraview', 'particles.xmf')).getroot().findall('.//Topology')
         assert len(topo) == 1 and int(topo[0].get('NumberOfElements')) == 300, 'particle XMF: one saved step with n_particles_init points expected'
         assert 'Velocity' in xmf_attrs(os.path.join(wd, 'paraview', 'particles.xmf'))
+    # stretched-z grid.out/grid_z.out, legacy probe meta (requested letters incl. A, A not written), restarted-history dedupe
+    import warnings
+    from dopamine_post._core import coords_from_grid, comp_names
+    gd = os.path.join(tmp, 'gridtest'); os.makedirs(gd)
+    open(os.path.join(gd, 'geometry.out'), 'w').write('4 3 2\n 1.0 3.0 2.0\n')
+    np.savetxt(os.path.join(gd, 'grid.out'), np.c_[np.arange(1, 4), [.5, 1.5, 2.5], [1, 2, 3], np.ones(3), np.ones(3)])
+    assert np.allclose(coords_from_grid(os.path.join(gd, 'grid.out'))[2], [.5, 1.5])
+    np.savetxt(os.path.join(gd, 'grid_z.out'), np.c_[[1, 2], [.2, 1.2], [.4, 2.0], [.4, 1.6], [2.5, .625]])
+    assert np.allclose(coords_from_grid(os.path.join(gd, 'grid.out'))[2], [.2, 1.2]), 'grid_z.out ignored'
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter('always')
+        assert comp_names('UVWA', 3) == ['U', 'V', 'W']
+    try:
+        comp_names('UVWPT', 3); sys.exit('FAIL: comps/ncomp mismatch must raise')
+    except ValueError:
+        pass
+    open(os.path.join(gd, 'ibm_forces.csv'), 'w').write('step,t,Fx_ibm\n1,0.1,1\n2,0.2,2\n2,0.2,3\n')
+    assert dg.read_ibm_forces(os.path.join(gd, 'ibm_forces.csv'))['Fx_ibm'].tolist() == [1, 3], 'restart rows must keep the last'
     print('PASS: dopamine_post readers (flags autodetect incl. AMD default, wrong flags raise, box == full, tavg, backend untouched)')
 finally:
     shutil.rmtree(tmp, ignore_errors=True)

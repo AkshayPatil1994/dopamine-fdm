@@ -64,7 +64,7 @@ class LineProbe:
         meta = read_meta(meta_path)
         nc, npts, nsnaps = meta["ncomp"], meta["npts"], meta["nsnaps"]
         direction = meta.get("dir", "?").strip()
-        comps = comp_names(meta.get("comps", "UVW"))
+        comps = comp_names(meta.get("comps", "UVW"), meta.get("ncomp"))
 
         if not bin_path.is_file():
             raise FileNotFoundError(f"binary file not found: {bin_path}")
@@ -118,7 +118,7 @@ class SliceProbe:
         meta = read_meta(meta_path)
         nc, n1, n2, nsnaps = meta["ncomp"], meta["n1"], meta["n2"], meta["nsnaps"]
         direction = meta.get("dir", "z").strip().lower()[0]
-        comps = comp_names(meta.get("comps", "UVW"))
+        comps = comp_names(meta.get("comps", "UVW"), meta.get("ncomp"))
 
         if not bin_path.is_file():
             raise FileNotFoundError(f"binary file not found: {bin_path}")
@@ -333,16 +333,7 @@ def _coords_from_snap(snap_path):
     needs a sibling geometry.out) or the grid header of a full solver snapshot."""
     snap_path = Path(snap_path)
     if snap_path.name == "grid.out":
-        geo_path = snap_path.parent / "geometry.out"
-        if not geo_path.is_file():
-            raise FileNotFoundError(f"geometry.out not found alongside {snap_path}")
-        tokens = geo_path.read_text().split()
-        nxm, nym, nzm = int(tokens[0]), int(tokens[1]), int(tokens[2])
-        Lx, Lz = float(tokens[3]), float(tokens[5])
-        ym = np.loadtxt(snap_path)[:, 1]
-        xm = (np.arange(nxm) + 0.5) * (Lx / nxm)
-        zm = (np.arange(nzm) + 0.5) * (Lz / nzm)
-        return xm, ym, zm
+        return _core.coords_from_grid(snap_path)
     # Full snapshot: only the grid header is needed, so skip past it without
     # reading the (much larger) field blocks that follow.
     r = _core.BinaryReader(snap_path.read_bytes())

@@ -19,6 +19,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ._core import coords_from_grid
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # 1. mirror_half_channel -- half-channel -> full-channel SEM profile mirroring
@@ -106,41 +108,6 @@ def mirror_half_channel(input_path, output_path, h=None):
     print(f"wrote {len(full_rows)} rows spanning y=[0, {2*h:.6g}] to {output_path}")
     print(f"  (from {len(rows)} input rows spanning y=[0, {h:.6g}])")
     return full_rows
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# shared: cell-centre coordinates from fields/grid.out + geometry.out
-# (ported from snapshot_io.coords_from_grid, which check_inflow_donor.py imported)
-# ════════════════════════════════════════════════════════════════════════════
-def coords_from_grid(grid_path):
-    """(xm, ym, zm) cell-centre coordinates from fields/grid.out + fields/geometry.out.
-
-    grid.out format (written by genGridandIC.f90)::
-
-        i  ym_i  y_face_{i+1}  dy_i  1/dy_i
-
-    geometry.out format::
-
-        nxm  nym  nzm
-        Lx   Ly   Lz
-
-    x and z grids are always uniform in fdm-dopamine.
-    """
-    grid_path = Path(grid_path)
-    geo_path = grid_path.parent / "geometry.out"
-    if not geo_path.is_file():
-        raise FileNotFoundError(f"geometry.out not found alongside {grid_path}")
-
-    tokens = geo_path.read_text().split()
-    nxm, nym, nzm = int(tokens[0]), int(tokens[1]), int(tokens[2])
-    Lx, Ly, Lz = float(tokens[3]), float(tokens[4]), float(tokens[5])
-
-    data = np.loadtxt(grid_path)
-    ym = data[:, 1]  # column 1 (0-based): cell-centre y
-
-    xm = (np.arange(nxm) + 0.5) * (Lx / nxm)
-    zm = (np.arange(nzm) + 0.5) * (Lz / nzm)
-    return xm, ym, zm
 
 
 # ════════════════════════════════════════════════════════════════════════════
