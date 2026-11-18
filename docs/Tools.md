@@ -116,6 +116,15 @@ big-endian binary reader, ffmpeg movie encoding, percentile colour clipping, the
 Hermite interpolation that matches `uav_actuator.f90`'s `uav_current_center`, and the
 ParaView `.pvd` writer) — not part of the public API.
 
+### `dopamine_post.hit`
+
+Statistics of forced homogeneous isotropic turbulence (`&HIT`, `hit_stats = 1`): `read_stats` / `time_average` for `hit_stats.dat`,
+`read_velocity` (a full snapshot on the $N^3$ lattices of distinct points, in the solver's staggering), `spectrum` (shell-summed $E(k)$ and the
+dissipation spectra with the true and the modified wavenumber), `scales` ($u'$, $\epsilon$, $\eta$, $\lambda$, $Re_\lambda$, $L_{11}$),
+`gradient_moments` (skewness and flatness of the longitudinal velocity gradients) and `pope_spectrum` (Pope 2000, eq. 6.246). The validation
+scripts in `postProcessing/validation/` use it: `hit_spectral_reference.py` (an independent pseudo-spectral solver with the same forcing, the
+reference), `plot_hit.py` and `plot_hit_particles.py` (manuscript figures, `plotstyle.py` style).
+
 ### `dopamine_post.particles`
 
 Reads `fields/<fileout>_particles.<step>` (written by `src/particles.f90`, active

@@ -5,6 +5,7 @@ Module genGridAndIC
   Use global
   Use mpi
   Use synthetic_eddy_method, Only : mean_profile_U, init_inflow_profile
+  Use hit, Only : hit_generate_ic
   !Use ifport   ! Only for intel compiler
 
   Implicit None
@@ -353,6 +354,12 @@ Contains
 
 			Return  ! skip log-law/Reichardt setup, Select Case, and noise loops entirely
 
+		End If
+
+		! ---- HIT IC (ic_type==8): random solenoidal field, see hit.f90
+		If ( ic_type == 8 ) Then
+			Call hit_generate_ic(U, V, W)
+			Return
 		End If
 
 		! ---- Two-mode deterministic perturbation IC (ic_type==7): laminar-to-turbulent

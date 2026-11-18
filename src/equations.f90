@@ -10,12 +10,13 @@ Module equations
                               advection_scheme, adv_wall_layers, uav_active, &
                               rotation_active, Omega_x, y0_rot, z0_rot, &
                               y_bc_type, bc_face_ylo, bc_face_yhi, flat_wall_model_flag, tau_x, tau_z, ibm_stress_on, &
-                              z_bc_type, tau_zu, tau_zv
+                              z_bc_type, tau_zu, tau_zv, hit_forcing
   Use decomp, Only : z_periodic_partner
   Use interpolation
   Use adv_hybrid, Only : adv_add_u, adv_add_v, adv_add_w
   Use ibm_stress, Only : ovr_u, ovr_v, ovr_w, ovr_none
   Use uav_actuator, Only : apply_uav_forcing_u, apply_uav_forcing_v, apply_uav_forcing_w
+  Use hit, Only : hit_update_forcing, fU, fV, fW
   
   Implicit None
   
@@ -59,6 +60,9 @@ Contains
     Call z_periodic_partner(zwall_lo, zwall_hi, partner)
     zwall_lo = zwall_lo .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
     zwall_hi = zwall_hi .And. z_bc_type == 1 .And. flat_wall_model_flag == 1
+
+    ! HIT forcing, from this stage's velocity; compute_rhs_u runs first in every stage
+    If ( hit_forcing == 1 ) Call hit_update_forcing(U_,V_,W_)
 
     inv_dx  = 1d0 / dx
     inv_dx2 = inv_dx * inv_dx   ! used for second derivative in x: 1/dx^2
@@ -243,6 +247,12 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+    If ( hit_forcing == 1 ) Then
+       !$acc kernels present(rhs_u,fU)
+       rhs_u = rhs_u + fU(2:nx-1,2:nyg-1,2:nzg-1)
+       !$acc end kernels
+    End If
 
     ! UAV actuator disk: x-component reaction force (zero unless tilted/swirling)
     ! apply_uav_forcing_u is host-only (no OpenACC); on GPU builds rhs_u (Fu1/Fu2/Fu3) is a
@@ -439,6 +449,12 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+    If ( hit_forcing == 1 ) Then
+       !$acc kernels present(rhs_v,fV)
+       rhs_v = rhs_v + fV(2:nxg-1,2:ny-1,2:nzg-1)
+       !$acc end kernels
+    End If
 
     ! Boussinesq buoyancy: gravity acts along -y; T_face is the stretched-grid-aware cell-centre-to-v-face
     ! interpolation of Tscal (same weight_y_0/weight_y_1 used for nu_t elsewhere in this file)
@@ -690,6 +706,12 @@ Contains
        End Do
     End Do
     !$acc end parallel loop
+
+    If ( hit_forcing == 1 ) Then
+       !$acc kernels present(rhs_w,fW)
+       rhs_w = rhs_w + fW(2:nxg-1,2:nyg-1,2:nz-1)
+       !$acc end kernels
+    End If
 
     ! Rigid-body rotation about the streamwise (x) axis: Coriolis (-2*Omega_x*v) + centrifugal
     ! (Omega_x^2*(z-z0_rot)). v is interpolated onto w's (y-centre,z-face) point: plain averaging in y (faces

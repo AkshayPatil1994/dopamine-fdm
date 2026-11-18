@@ -129,6 +129,10 @@ Contains
          'ERROR: y_bc_type=0 (periodic y) requires grid_type=1 (uniform y grid)' )
     If ( ic_type == 6 .And. ( x_bc_type /= 0 .Or. y_bc_type /= 0 ) ) &
        Call abort_input( 'ERROR: ic_type=6 (Taylor-Green Vortex) requires x_bc_type=0 and y_bc_type=0 (fully periodic box)' )
+    If ( ( ic_type == 8 .Or. hit_forcing == 1 ) .And. ( x_bc_type /= 0 .Or. y_bc_type /= 0 .Or. z_bc_type /= 0 ) ) &
+       Call abort_input( 'ERROR: ic_type=8 and hit_forcing=1 (HIT) require a fully periodic box (x/y/z_bc_type=0)' )
+    If ( hit_forcing == 1 .And. ( hit_eps <= 0d0 .Or. hit_kf < 1d0 ) ) &
+       Call abort_input( 'ERROR: &HIT hit_forcing=1 requires hit_eps > 0 and hit_kf >= 1' )
     ! periodic y has no wall: skip the wall-model check so a stale flat_wall_model_flag=2 from a wall-bounded
     ! namelist does not abort
     If ( flat_wall_model_flag == 2 .And. y_bc_type /= 0 ) Then

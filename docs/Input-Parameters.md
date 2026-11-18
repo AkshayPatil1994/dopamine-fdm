@@ -44,7 +44,7 @@ Contents: [DOMAIN](#domain) · [PHYSICS](#physics) · [NUMERICS](#numerics) · [
 | `flat_wall_model_flag` | `0` | Wall model on flat y walls (and on z walls if `z_bc_type=1`): `0` no-slip DNS, `1` smooth log-law EQWM, `2` rough-z0 EQWM (y walls only; aborts with z walls). |
 | `z0_ylo, z0_yhi` | `0.0` | Momentum roughness length [m] of the bottom / top wall; mode 2 only, must be `>0` on every no-slip wall (aborts otherwise). |
 | `z0h_ylo, z0h_yhi` | `0.0` | Thermal roughness length [m]; only for `T_bc_bot/top=2`. |
-| `advection_scheme` | `0` | `0` skew-symmetric (energy-conserving, less ringing at sharp IBM gradients), `1` pure divergence-form central, `2` skew-symmetric plus upwind-biased dissipation of order `adv_order` (see Numerics, convective term; damps grid-scale ringing at sharp bodies; single phase only). |
+| `advection_scheme` | `0` | `0` skew-symmetric (less ringing at sharp IBM gradients; not strictly energy-conserving on the MAC grid, see Numerics), `1` pure divergence-form central, `2` skew-symmetric plus upwind-biased dissipation of order `adv_order` (see Numerics, convective term; damps grid-scale ringing at sharp bodies; single phase only). |
 | `wm_filter_mode` | `-1` | Temporal filter of the flat-wall EQWM input (Yang, Park & Moin 2017, PRF 2, 104601): `0` raw matching-height velocity, `1` first-order filter $u_f \leftarrow (1-\epsilon)u_f + \epsilon u$, $\epsilon = \Delta t/T_f$, $T_f$ = `wm_filter_Tf_fac`·$y_m/(\kappa u_\tau)$ (the paper's $T_i$), `-1` automatic: `1` with `flat_wall_model_flag > 0`, `z_bc_type = 0` and `vof_flow = 0`, else `0`. Not applied to IBM, VOF or z walls (explicit `1` there aborts). The filter state is written next to every full snapshot as `<snapshot>.wmf` and read back on restart (keep it with the snapshot; without it the filter re-seeds from the raw field). |
 | `wm_filter_Tf_fac` | `1.0` | Filter time scale in units of $T_i = y_m/(\kappa u_\tau)$. |
 | `adv_wall_layers` | `-1` | Cells next to a wall-modelled wall (`flat_wall_model_flag > 0`: both $y$ walls, and the $z$ walls of `z_bc_type=1`) that use the pure divergence form in every direction instead of the skew-symmetric blend. The skew-symmetric form is not momentum conserving where the gradients are under-resolved, so with a wall model the wall stress no longer balances the forcing (measured 0.70 to 0.88 of it at Re_τ 2000, first cell $y^+\approx 16$); with 6 or more layers it does. `-1` = automatic: `8` when `flat_wall_model_flag > 0` and `advection_scheme` is `0` or `2`, otherwise `0` (scheme 1 is already conservative). See Numerics §7.1. |
@@ -142,7 +142,7 @@ Ghost-cell or staircase immersed boundaries from a precomputed signed-distance f
 
 | Parameter | Default | Meaning / how to use |
 |---|---|---|
-| `ic_type` | `1` | `1` log-law + noise; `2` linear/tent + noise; `3` zero mean + noise; `4` Reichardt channel profile (u_τ=√(\|dPdx\|Ly/2)) + structured waves; `5` inverse-linear (anti-tent, `Utarget` at walls) + noise, for fast transition; `6` Taylor–Green vortex of amplitude `Utarget` (analytic; needs `x_bc_type=0`, `y_bc_type=0`); `7` deterministic two-mode perturbation on uniform `Utarget` (ε₁=`noise_percent`/100, ε₂=0.04ε₁). |
+| `ic_type` | `1` | `1` log-law + noise; `2` linear/tent + noise; `3` zero mean + noise; `4` Reichardt channel profile (u_τ=√(\|dPdx\|Ly/2)) + structured waves; `5` inverse-linear (anti-tent, `Utarget` at walls) + noise, for fast transition; `6` Taylor–Green vortex of amplitude `Utarget` (analytic; needs `x_bc_type=0`, `y_bc_type=0`); `7` deterministic two-mode perturbation on uniform `Utarget` (ε₁=`noise_percent`/100, ε₂=0.04ε₁); `8` homogeneous isotropic turbulence: random-phase, discretely divergence-free field with a Passot–Pouquet spectrum, rms velocity `Utarget` per component (needs a fully periodic box; see `&HIT`). |
 | `Utarget` | `0.0` | Target bulk or centreline velocity [m/s] (vortex amplitude for type 6). |
 | `noise_percent` | `5.0` | Noise amplitude as % of `Utarget` (types 1–3, 5; ignored for 4 and 6). |
 | `restart` | `0` | `1` hot-start from `filein`. |
@@ -251,6 +251,19 @@ Actuator disk whose thrust is spread as a reaction force over `rhs_u/v/w`. Omit 
 | `uav_swirl_frac` | `0.0` | In-plane tangential reaction force as a fraction of each marker's thrust (rotor-torque reaction; net torque only, rotation sense arbitrary). |
 
 All ranks read the path and thrust files independently (`#` and blank lines skipped).
+
+## HIT
+
+Homogeneous isotropic turbulence in a fully periodic box ([hit.f90](../src/hit.f90)); omit the group otherwise. Every periodic direction has $N = n-2$ distinct points and period $(n-2)\,\Delta$ with $\Delta = L/(n-1)$ (a face count $n = N+2$ and $L = 2\pi (N+1)/N$ give a box of side exactly $2\pi$). Use `sgs_model=0` and `advection_scheme=1`: with the divergence-form convection the kinetic-energy budget $dK/dt = \epsilon_{in} - \epsilon$ closes to 0.4 % (`hit_budget_check`), the default skew-symmetric form gave a spurious energy gain of 1–2.5 % of $\epsilon$ at $\eta/\Delta \approx 0.5$.
+
+| Parameter | Default | Meaning / how to use |
+|---|---|---|
+| `hit_forcing` | `0` | `1` band-limited deterministic forcing (Lamorgese, Caughey & Pope 2005): $\hat f = \epsilon_{in}/(2E_b)\,\hat u$ on the solenoidal modes $0 < |n| \le$ `hit_kf`, with $E_b$ the energy of those modes; it injects exactly `hit_eps` per unit mass and never touches the mean. Evaluated every Runge-Kutta stage from separable direct sums over the forced modes (no FFT; on the GPU the sums run on the device). |
+| `hit_eps` | `1.0` | Injected power $\epsilon_{in}$ [m²/s³]. |
+| `hit_kf` | `2.5` | Forcing band, in units of the fundamental wavenumber $2\pi/P$ (cubic box assumed). |
+| `hit_stats` | `0` | `1` write `hit_stats.dat` every `nmonitor` steps: `step t TKE eps u_rms lambda Re_lambda eta eta/dx L T_e`, with $\epsilon = \nu\langle \partial_j u_i \partial_j u_i\rangle$ from the nine staggered gradients. |
+| `ic_kp` | `4.0` | `ic_type=8`: peak wavenumber of the spectrum $E \propto k^4 \exp(-2k^2/k_p^2)$ (fundamental units); modes up to $2.5 k_p$ (at most $N/3$). |
+| `ic_seed` | `1` | `ic_type=8`: seed of the phases. The generator is a built-in Lehmer sequence, so the field is identical for every compiler and rank count. |
 
 ## PARTICLES
 

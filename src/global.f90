@@ -732,6 +732,11 @@ Module global
   Real(Int64), Allocatable, Dimension(:,:,:) :: Cvof_io
   ! Waves (src/waves.f90): wave_type 0=off, 1=linear, 2=stream function, 3=JONSWAP, 4=elevation time series; the inlet needs
   ! inflow_type=3. wave_current_mode: 1 zero mean volume flux (closed flume), 2 zero mean Eulerian velocity.
+  ! Homogeneous isotropic turbulence (src/hit.f90), triply periodic box: hit_forcing=1 adds band-limited
+  ! forcing on the modes |n| <= hit_kf injecting hit_eps per unit mass; ic_type=8 is a random solenoidal field
+  ! with Passot-Pouquet peak ic_kp (fundamental-wavenumber units), u_rms = Utarget; hit_stats=1 writes hit_stats.dat
+  Integer(Int32) :: hit_forcing = 0, hit_stats = 0, ic_seed = 1
+  Real   (Int64) :: hit_eps = 1d0, hit_kf = 2.5d0, ic_kp = 4d0
   ! Relaxation zones (waves2Foam weights): generation length from the inlet, absorption length at the outlet,
   ! relaxation rate [1/s] at full strength.
   Integer(Int32) :: wave_type         = 0

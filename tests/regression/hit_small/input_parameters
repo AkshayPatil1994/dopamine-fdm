@@ -1,0 +1,58 @@
+! Tiny fully periodic HIT box: random solenoidal IC (ic_type=8) plus band-limited forcing, as a parity case
+! (np1 vs np4, CPU vs GPU). The IC is built from an own random generator, so the field is the same on every compiler.
+
+&DOMAIN
+  nx         = 18,
+  ny         = 17,
+  nz         = 18,
+  Lx         = 6.283185307179586,
+  Ly         = 6.283185307179586,
+  Lz         = 6.283185307179586,
+  grid_type  = 1,
+  p_row      = 0,
+  p_col      = 0,
+/
+
+&PHYSICS
+  nu                   = 0.02,
+  dPdx                 = 0.0,
+  dPdz                 = 0.0,
+  sgs_model            = 0,
+  flat_wall_model_flag = 0,
+/
+
+&NUMERICS
+  dt           = 0.005,
+  nsteps       = 20,
+  nsave        = 20,
+  nmonitor     = 1,
+  cfl_adaptive = 0,
+/
+
+&BOUNDARY_CONDITIONS
+  x_bc_type = 0,
+  y_bc_type = 0,
+  z_bc_type = 0,
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 1.0,
+  ic_type      = 8,
+  noise_percent  = 0.0,
+  nstep_init     = 0,
+  restart        = 0,
+/
+
+&HIT
+  hit_forcing = 1,
+  hit_eps     = 0.5,
+  hit_kf      = 2.0,
+  hit_stats   = 1,
+  ic_kp       = 2.0,
+  ic_seed     = 3,
+/
+
+&IO
+  filein  = 'restart/hit_small.1',
+  fileout = 'hit_small',
+/

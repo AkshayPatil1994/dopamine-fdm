@@ -92,6 +92,8 @@ Contains
                          particle_boussinesq_coupling, particle_free_surface, particle_deposit_file, particle_deposit_freq, &
                          sgs_particle_model, particle_langevin_C0
 
+    Namelist /HIT/ hit_forcing, hit_eps, hit_kf, hit_stats, ic_kp, ic_seed
+
     Namelist /WAVES/ wave_type, wave_height, wave_period, wave_phase, wave_sf_n, wave_current_mode, wave_Hs, wave_Tp, &
                      wave_gamma, wave_nfreq, wave_seed, wave_gen_len, wave_abs_len, wave_relax_rate, wave_gauge_x, wave_ramp_time, &
                      current_type, current_U, current_z0, current_n, wave_turb, &
@@ -256,6 +258,12 @@ Contains
           End If
        Else
           Write(*,'(A)') ' INFO: no &PARTICLES found, point-particle tracking disabled'
+       End If
+
+       If ( namelist_group_present(unit_in, 'HIT') ) Then
+          Rewind(unit_in)
+          Read(unit_in, nml=HIT,                 iostat=ios)
+          If (ios /= 0) Call abort_input( 'ERROR: &HIT present but failed to parse (check variable names)' )
        End If
 
        If ( namelist_group_present(unit_in, 'WAVES') ) Then
@@ -832,6 +840,12 @@ Contains
     Call Mpi_bcast ( sgs_particle_model,    1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( particle_langevin_C0,  1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
 
+    Call Mpi_bcast ( hit_forcing,       1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( hit_stats,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( ic_seed,           1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( hit_eps,           1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( hit_kf,            1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
+    Call Mpi_bcast ( ic_kp,             1, MPI_real8,   0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_type,         1, MPI_integer, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_height,       1, MPI_real8, 0, MPI_COMM_WORLD, ierr )
     Call Mpi_bcast ( wave_period,       1, MPI_real8, 0, MPI_COMM_WORLD, ierr )

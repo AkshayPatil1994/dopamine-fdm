@@ -35,9 +35,19 @@ so this needs no extra projection); `dPdx` is not used in this mode. Requires `x
 oscillatory forcing above.
 
 The convective term $\partial(u_i u_j)/\partial x_j$ is discretised in either
-skew-symmetric form (`advection_scheme = 0`, the default — reduces aliasing error and
-better conserves kinetic energy) or pure central-difference (divergence) form
-(`advection_scheme = 1`).
+skew-symmetric form (`advection_scheme = 0`, the default — reduces aliasing error) or pure central-difference (divergence) form
+(`advection_scheme = 1`). On the periodic MAC grid only the divergence form conserves the discrete kinetic energy: in forced
+homogeneous turbulence at $\eta/\Delta\approx0.5$ the budget $\mathrm{d}K/\mathrm{d}t=\epsilon_{in}-\epsilon$ closes to 0.4 % with
+`advection_scheme = 1` (`hit_budget_check`), while the skew-symmetric form gained 1–2.5 % of $\epsilon$ in spurious energy.
+
+**Forced homogeneous turbulence** ([hit.f90](../src/hit.f90), `&HIT`, fully periodic box). Each periodic direction has $n-2$ distinct points
+and period $(n-2)\Delta$. The forcing is the deterministic band-limited form of Lamorgese, Caughey and Pope (2005): in every Runge–Kutta stage
+the Fourier coefficients $\hat u(\mathbf k)$ of the three velocity components, each taken at its own staggered positions, are formed for the
+modes $0<|\mathbf n|\le k_f$ by separable direct sums; they are projected with the modified wavenumber $2\sin(k\Delta/2)/\Delta$ (which
+makes the force discretely divergence-free on the MAC grid) and scaled to $\hat f = \epsilon_{in}\,\hat u/(2E_b)$, $E_b=\tfrac12\sum|\hat u|^2$,
+so the injected power is exactly $\epsilon_{in}$. The sums need no FFT (a few tens of modes) and run on the GPU. The initial condition
+(`ic_type = 8`) draws random-phase solenoidal modes with a Passot–Pouquet spectrum with the same modified-wavenumber projection, so its discrete
+divergence is zero, and rescales them to the requested rms velocity.
 
 **Upwind-biased dissipation (`advection_scheme = 2`).** Central schemes have no dissipation, so the sharp jump from the stream to the zeroed solid cells at a roof or wall excites grid-scale oscillations (Gibbs-like ringing) that only the SGS model damps. `advection_scheme = 2` keeps the skew-symmetric second-order central scheme and adds to every momentum flux the dissipative part of a high-order upwind-biased face value. The upwind-biased value is the central one plus a high-order difference, $\phi_f = \phi_c + s\,D$ with $s = \mathrm{sgn}(u_f)$, $D = \delta^3\phi/12$ for 3rd order and $D = -\delta^5\phi/60$ for 5th order ($\delta^3\phi=\phi_{i+2}-3\phi_{i+1}+3\phi_i-\phi_{i-1}$, with the 4th-order central $\phi_c$ resp. 6th-order central for 5th order); here only the term $\beta\,s\,D$ is added, as the conservative flux $F_d = \beta\,|u_f|\,D$ ($u_f$ the face-averaged convecting velocity), in each direction and for each of the three momentum equations (Rai and Moin, 1991, use this construction with a small coefficient). The central part is **not** raised to 4th/6th order, so $\beta = 1$ is the dissipation of UP3/UP5 on top of the second-order central scheme, not the UP3/UP5 scheme itself.
 

@@ -46,7 +46,7 @@ error measures quoted below. Animations illustrate the flow; they are not accura
 `ctest` registers 220 tests in the CPU build and 325 in the GPU build (the GPU build adds the CPU-versus-GPU comparisons). The cases in
 `tests/regression/` cover TGV, LES and DNS channels, the 4-wall duct, inflow/outflow (constant, SEM, recycled), passive scalar, Boussinesq
 temperature, sediment, UAV actuator disk, ghost-cell and staircase IBM, higher-order advection, point particles, the two-fluid solver and
-input-validation aborts. Each case is run on:
+input-validation aborts, and forced homogeneous isotropic turbulence (`hit_small`; `hit_budget_check` tests the kinetic-energy budget, the initial energy and the divergence). Each case is run on:
 
 * 1 rank and on 2 ranks, plus the explicit 4-rank `2x2` and `4x1` pencil layouts (particles also on 3 ranks);
 * a hot-start restart compared with an uninterrupted run;

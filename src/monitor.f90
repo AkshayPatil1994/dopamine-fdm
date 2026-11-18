@@ -10,6 +10,7 @@ Module monitor
   Use uav_actuator, Only : uav_current_thrust
   Use restart_output, Only : trim_restart_file
   Use wallmodel, Only : wall_diag_sums
+  Use hit, Only : hit_write_stats
 
   Implicit None
 
@@ -92,6 +93,8 @@ Contains
              Close(87)
           End If
        End If
+
+       If ( hit_stats == 1 ) Call hit_write_stats
 
        time1 = MPI_WTIME()
 

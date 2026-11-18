@@ -1,0 +1,58 @@
+! 66^3 forced HIT box for tests/regression/hit_check.py: IC energy, TKE budget dK/dt = eps_in - eps, and the forcing power.
+
+&DOMAIN
+  nx         = 66,
+  ny         = 65,
+  nz         = 66,
+  Lx         = 6.283185307179586,
+  Ly         = 6.283185307179586,
+  Lz         = 6.283185307179586,
+  grid_type  = 1,
+  p_row      = 0,
+  p_col      = 0,
+/
+
+&PHYSICS
+  nu                   = 0.02,
+  advection_scheme     = 1,       ! divergence form: the energy-conserving scheme on this MAC grid (see Numerics)
+  dPdx                 = 0.0,
+  dPdz                 = 0.0,
+  sgs_model            = 0,
+  flat_wall_model_flag = 0,
+/
+
+&NUMERICS
+  dt           = 0.01,
+  nsteps       = 100,
+  nsave        = 100,
+  nmonitor     = 5,
+  cfl_adaptive = 0,
+/
+
+&BOUNDARY_CONDITIONS
+  x_bc_type = 0,
+  y_bc_type = 0,
+  z_bc_type = 0,
+/
+
+&INITIAL_CONDITIONS
+  Utarget      = 0.8,
+  ic_type      = 8,
+  noise_percent  = 0.0,
+  nstep_init     = 0,
+  restart        = 0,
+/
+
+&HIT
+  hit_forcing = 1,
+  hit_eps     = 0.2,
+  hit_kf      = 2.5,
+  hit_stats   = 1,
+  ic_kp       = 3.0,
+  ic_seed     = 3,
+/
+
+&IO
+  filein  = 'restart/hit_budget.1',
+  fileout = 'hit_budget',
+/

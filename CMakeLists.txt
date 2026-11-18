@@ -260,6 +260,7 @@ set(SRCS
     src/uav_actuator.f90
     src/interpolation.f90
     src/sem.f90
+    src/hit.f90
     src/particles.f90
     src/boundary_conditions.f90
     src/sgs_model.f90
@@ -445,6 +446,7 @@ add_executable(dopamine-ESEM
     src/halo_pad.f90
     src/sem.f90
     src/particles.f90
+    src/hit.f90
     src/genGridandIC.f90
     src/reynolds_stress_budget.f90
     src/time_stats.f90
@@ -540,7 +542,7 @@ exec \"$real\" $os \"$@\"
     file(CHMOD "${TEST_MPIRUN}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 endif()
 if(Python3_Interpreter_FOUND)
-    foreach(case tgv_small chan_small chan_les_small chan_les_amd_small bouss_amd_small ibm_amd_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small adv_hybrid_small adv_hybrid3_small ibm_pressure1_small rsb_small tavg_small chunk_small)
+    foreach(case tgv_small chan_small chan_les_small chan_les_amd_small bouss_amd_small ibm_amd_small duct_small zwall_small sem_small sem_inflow_small sed_small bouss_small uav_small uavpath_small ibm_small ibm_wm_small ibm_stair_small ibm_stair_pressure_small adv_hybrid_small adv_hybrid3_small ibm_pressure1_small rsb_small tavg_small chunk_small hit_small)
         set(_case_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/${case})
         set(_cmp ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/compare_monitor.py
                  --case-dir ${_case_dir} --mpirun ${TEST_MPIRUN} --fields --field-tol 1e-8)
@@ -730,6 +732,11 @@ if(Python3_Interpreter_FOUND)
     set(_sc_nps 1 4)
     if(ENABLE_GPU)
         set(_sc_nps 1)
+    # HIT: IC energy, TKE budget dK/dt = eps_in - eps and divergence of the forced triply periodic box (hit_check.py)
+    add_test(NAME hit_budget_check
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/hit_check.py
+                --case-dir ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression/hit_budget --exe $<TARGET_FILE:dopamine>
+                --mpirun ${TEST_MPIRUN})
     endif()
     foreach(_np ${_sc_nps})
         add_test(NAME vof_scalar_slosh_np${_np}
