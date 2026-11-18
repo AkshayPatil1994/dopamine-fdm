@@ -217,7 +217,7 @@ Time-averaged statistics, Reynolds-stress budget and probes. Omit to disable.
 | `slice_interval` | `0.0` | Time between slice outputs when `slice_freq<0`; the first is due one interval after the start time. |
 | `slice_dir(n)` | `'z'` | Normal direction `'x'`, `'y'` or `'z'`. |
 | `slice_pos(n)` | `0.0` | Position along the normal [m]. |
-| `slice_comps(n)` | `'UVW'` | Any of `U V W P T C` concatenated (`T` needs Boussinesq, `C` needs sediment; dropped with a warning otherwise). |
+| `slice_comps(n)` | `'UVW'` | Any of `U V W P T C A` concatenated (`T` needs Boussinesq, `C` needs sediment, `A` is the VOF fraction and needs `vof_active=1`; dropped with a warning otherwise). Columns are always written in the order `U V W P T C A`; the meta `comps` lists the columns actually written. |
 | `slice_fileout(n)` | `'slice'` | Base path. Writes `.bin` (appended `(ncomp,n1,n2)` big-endian float64 per output), `_meta.txt` and `_times.bin` (exact time of each snapshot, used by `inflow_type=2`). Cell-centre values; (n1,n2) = (ny,nz) for x-normal, (nx,nz) for y-normal, (nx,ny) for z-normal. |
 | `n_lines` | `0` | Number of 1-D line probes (max 30). |
 | `line_freq` | `100` | Output interval in steps (shared). Negative: write every `line_interval` time units instead. |

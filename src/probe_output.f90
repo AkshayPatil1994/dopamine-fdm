@@ -8,6 +8,9 @@ Module probe_output
 
   Implicit None
   Private
+
+  Integer(Int32), Parameter :: NCOMP_MAX = 7
+  Character(NCOMP_MAX), Parameter :: COMP_LETTERS = 'UVWPTCA'
   Public :: init_probes, write_probes, finalize_probes
 
   ! ── per-slice resolved state (set once in init_probes) ─────────────────
@@ -15,7 +18,7 @@ Module probe_output
   Integer(Int32) :: sli_idx  (MAX_PROBES)    ! global 1-based interior cc index along normal
   Integer(Int32) :: sli_n1   (MAX_PROBES)    ! first  output dimension
   Integer(Int32) :: sli_n2   (MAX_PROBES)    ! second output dimension
-  Logical        :: sli_cmask(6,MAX_PROBES)  ! component mask: U,V,W,P,T,C
+  Logical        :: sli_cmask(NCOMP_MAX,MAX_PROBES)  ! component mask: U,V,W,P,T,C,A
   Integer(Int32) :: sli_ncomp(MAX_PROBES)    ! number of selected components
   Integer(Int32) :: sli_funit(MAX_PROBES)    ! Fortran file unit (rank 0)
   ! <file>_times.bin unit (rank 0): one Real64 sim-time per snapshot, for donor-time interpolation
@@ -29,7 +32,7 @@ Module probe_output
   Integer(Int32) :: lin_ks   (MAX_PROBES)    ! start index along line (global 1-based cc)
   Integer(Int32) :: lin_ke   (MAX_PROBES)    ! end   index along line (global 1-based cc)
   Integer(Int32) :: lin_npts (MAX_PROBES)    ! = ke - ks + 1
-  Logical        :: lin_cmask(6,MAX_PROBES)  ! component mask: U,V,W,P,T,C
+  Logical        :: lin_cmask(NCOMP_MAX,MAX_PROBES)  ! component mask: U,V,W,P,T,C,A
   Integer(Int32) :: lin_ncomp(MAX_PROBES)
   Integer(Int32) :: lin_funit(MAX_PROBES)
   Integer(Int32) :: lin_nwrit(MAX_PROBES)
@@ -96,7 +99,7 @@ Contains
         Write(meta_unit,'(A,I0)')   'n2     = ', sli_n2(n)
         Write(meta_unit,'(A,A)')    'dir    = ', Trim(dstr)
         Write(meta_unit,'(A,F16.8)') 'pos   = ', slice_pos(n)
-        Write(meta_unit,'(A,A)')    'comps  = ', Trim(cstr)
+        Write(meta_unit,'(A,A)')    'comps  = ', mask_str(sli_cmask(:,n))
         Write(meta_unit,'(A,I0)')   'nsnaps = ', sli_nwrit(n)
         Write(meta_unit,'(A,A)')    'times  = ', Trim(slice_fileout(n))//'_times.bin'
         Close(meta_unit)
@@ -155,7 +158,7 @@ Contains
         Write(meta_unit,'(A,I0)')  'ncomp  = ', lin_ncomp(n)
         Write(meta_unit,'(A,I0)')  'npts   = ', lin_npts(n)
         Write(meta_unit,'(A,A)')   'dir    = ', Trim(dstr)
-        Write(meta_unit,'(A,A)')   'comps  = ', Trim(cstr)
+        Write(meta_unit,'(A,A)')   'comps  = ', mask_str(lin_cmask(:,n))
         Write(meta_unit,'(A,I0)')  'nsnaps = ', lin_nwrit(n)
         Close(meta_unit)
 
@@ -179,6 +182,9 @@ Contains
                 ( n_slices > 0 .And. slice_freq < 0 .And. t >= slice_tnext - 1d-10 )
     line_due  = ( n_lines  > 0 .And. line_freq  > 0 .And. Mod(istep, line_freq)  == 0 ) .Or. &
                 ( n_lines  > 0 .And. line_freq  < 0 .And. t >= line_tnext  - 1d-10 )
+
+    If ( vof_active >= 1 .And. ( ( slice_due .And. Any(sli_cmask(7,1:n_slices)) ) .Or. &
+                                 ( line_due  .And. Any(lin_cmask(7,1:n_lines)) ) ) ) Call vof_sync_io_hook()
 
     If ( slice_due ) Then
       If ( slice_freq < 0 ) slice_tnext = slice_tnext + slice_interval
@@ -249,7 +255,7 @@ Contains
     lbuf = 0d0
 
     c = 0
-    Do comp = 1, 6
+    Do comp = 1, NCOMP_MAX
       If ( .Not. sli_cmask(comp,n) ) Cycle
       c = c + 1
 
@@ -340,7 +346,7 @@ Contains
     lbuf = 0d0
 
     c = 0
-    Do comp = 1, 6
+    Do comp = 1, NCOMP_MAX
       If ( .Not. lin_cmask(comp,n) ) Cycle
       c = c + 1
 
@@ -413,6 +419,7 @@ Contains
     Case (3);  cc_val = 0.5d0 * (W(ia,ja,ka-1) + W(ia,ja,ka))
     Case (5);  cc_val = Tscal(ia,ja,ka)
     Case (6);  cc_val = Cscal(ia,ja,ka)
+    Case (7);  cc_val = Cvof_io(ia,ja,ka)
     Case Default;  cc_val = P(ia,ja,ka)
     End Select
 
@@ -487,11 +494,11 @@ Contains
   End Subroutine line_extent
 
 
-  !> Build a 6-element logical mask (U,V,W,P,T,C) from str, case-insensitive; empty = all three velocities
+  !> Build the component mask (U,V,W,P,T,C,A) from str, case-insensitive; empty = all three velocities
   Subroutine parse_comps(str, mask, ncomp)
 
     Character(*),   Intent(In)  :: str
-    Logical,        Intent(Out) :: mask(6)
+    Logical,        Intent(Out) :: mask(NCOMP_MAX)
     Integer(Int32), Intent(Out) :: ncomp
 
     Character(Len(str)) :: ustr
@@ -503,26 +510,43 @@ Contains
           ustr(i:i) = Achar(Iachar(ustr(i:i)) - 32)
     End Do
 
-    mask(1) = Index(Trim(ustr), 'U') > 0
-    mask(2) = Index(Trim(ustr), 'V') > 0
-    mask(3) = Index(Trim(ustr), 'W') > 0
-    mask(4) = Index(Trim(ustr), 'P') > 0
-    mask(5) = ( Index(Trim(ustr), 'T') > 0 ) .And. ( boussinesq_flag >= 1 )
-    If ( Index(Trim(ustr), 'T') > 0 .And. boussinesq_flag < 1 ) Then
-      Write(*,'(A)') ' WARNING: probe requested component T but boussinesq_flag=0, dropping it'
+    Do i = 1, NCOMP_MAX
+      mask(i) = Index(Trim(ustr), COMP_LETTERS(i:i)) > 0
+    End Do
+    If ( mask(5) .And. boussinesq_flag < 1 ) Then
+      mask(5) = .False.
+      If (myid == 0) Write(*,'(A)') ' WARNING: probe requested component T but boussinesq_flag=0, dropping it'
     End If
-    mask(6) = ( Index(Trim(ustr), 'C') > 0 ) .And. ( sediment_flag >= 1 )
-    If ( Index(Trim(ustr), 'C') > 0 .And. sediment_flag < 1 ) Then
-      Write(*,'(A)') ' WARNING: probe requested component C but sediment_flag=0, dropping it'
+    If ( mask(6) .And. sediment_flag < 1 ) Then
+      mask(6) = .False.
+      If (myid == 0) Write(*,'(A)') ' WARNING: probe requested component C but sediment_flag=0, dropping it'
+    End If
+    If ( mask(7) .And. vof_active < 1 ) Then
+      mask(7) = .False.
+      If (myid == 0) Write(*,'(A)') ' WARNING: probe requested component A but vof_active=0, dropping it'
     End If
 
-    If ( .Not. (mask(1) .Or. mask(2) .Or. mask(3) .Or. mask(4) .Or. mask(5) .Or. mask(6)) ) Then
-      mask = [.True., .True., .True., .False., .False., .False.]   ! default: U,V,W
-    End If
+    If ( .Not. Any(mask) ) mask(1:3) = .True.   ! default: U,V,W
 
     ncomp = Count(mask)
 
   End Subroutine parse_comps
+
+
+  !> Letters of the selected components, in output order
+  Function mask_str(mask) Result(str)
+
+    Logical, Intent(In) :: mask(NCOMP_MAX)
+    Character(NCOMP_MAX) :: str
+    Integer(Int32) :: i, n
+
+    str = ' ';  n = 0
+    Do i = 1, NCOMP_MAX
+      If (mask(i)) Then;  n = n + 1;  str(n:n) = COMP_LETTERS(i:i);  End If
+    End Do
+    str = Trim(str)
+
+  End Function mask_str
 
 
   !> Whole records of rec bytes in a file
@@ -609,7 +633,7 @@ Contains
     Write(u,'(A,I0)')    'n2     = ', sli_n2(n)
     Write(u,'(A,A)')     'dir    = ', Trim(slice_dir(n))
     Write(u,'(A,F16.8)') 'pos    = ', slice_pos(n)
-    Write(u,'(A,A)')     'comps  = ', Trim(slice_comps(n))
+    Write(u,'(A,A)')     'comps  = ', mask_str(sli_cmask(:,n))
     Write(u,'(A,I0)')    'nsnaps = ', sli_nwrit(n)
     Write(u,'(A,A)')     'times  = ', Trim(slice_fileout(n))//'_times.bin'
     Close(u)
@@ -630,7 +654,7 @@ Contains
     Write(u,'(A,I0)') 'ncomp  = ', lin_ncomp(n)
     Write(u,'(A,I0)') 'npts   = ', lin_npts(n)
     Write(u,'(A,A)')  'dir    = ', Trim(line_dir(n))
-    Write(u,'(A,A)')  'comps  = ', Trim(line_comps(n))
+    Write(u,'(A,A)')  'comps  = ', mask_str(lin_cmask(:,n))
     Write(u,'(A,I0)') 'nsnaps = ', lin_nwrit(n)
     Close(u)
 

@@ -338,13 +338,24 @@ def read_meta(path):
     return meta
 
 
+COMP_ORDER = ('U', 'V', 'W', 'P', 'T', 'C', 'A')
+
+
 def comp_names(s):
     """Ordered component name list from a meta file's `comps` string.
 
     Order must match probe_output.f90's parse_comps/write loop, which always
-    emits components in fixed U,V,W,P,T,C order (not the order the user typed
+    emits components in fixed U,V,W,P,T,C,A order (not the order the user typed
     them in the &... comps string) regardless of which subset is requested.
     """
     upper = s.strip().upper()
-    names = [c for c in ('U', 'V', 'W', 'P', 'T', 'C') if c in upper]
+    names = [c for c in COMP_ORDER if c in upper]
     return names or ['U', 'V', 'W']
+
+
+def comp_index(comps, name):
+    """Column index of component `name` (aliases vof/alpha/f -> 'A') in the `comps` name list."""
+    key = {'VOF': 'A', 'ALPHA': 'A', 'F': 'A'}.get(name.upper(), name.upper())
+    if key not in comps:
+        raise KeyError(f"component {name!r} not in probe (has {''.join(comps)})")
+    return comps.index(key)

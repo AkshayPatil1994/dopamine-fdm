@@ -235,7 +235,8 @@
 ! Output files and layout: docs/Input-Parameters.md ("RSB output files").
 ! tavg_*: on-the-fly time-averaged U,V,W and Reynolds stresses (+ T/C mean, variance, fluxes), written with every field
 ! snapshot as fields/<fileout>_tavg.<step>, plus _tavgBlock.<step> for the chunk box with chunked_snapshot (docs/Input-Parameters.md, "Time-averaged statistics output").
-! Probes (up to 30 each): slice_comps/line_comps = any of U V W P T C.
+! Probes (up to 30 each): slice_comps/line_comps = any of U V W P T C A (A = VOF fraction, needs vof_active=1);
+! columns are written in the fixed order U V W P T C A, and the meta file's comps lists those actually written.
 &STATISTICS
   tavg_active = 0,
   tavg_nstart = 0,

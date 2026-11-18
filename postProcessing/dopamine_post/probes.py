@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from . import _core
-from ._core import comp_names, read_meta
+from ._core import comp_index, comp_names, read_meta
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -82,7 +82,7 @@ class LineProbe:
 
     def get(self, name):
         """One component's (nsnaps, npts) array, by name (e.g. 'U')."""
-        return self.data[:, self.comps.index(name), :]
+        return self.data[:, comp_index(self.comps, name), :]
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -139,7 +139,7 @@ class SliceProbe:
 
     def get(self, name):
         """One component's (nsnaps, n1, n2) array, by name (e.g. 'U')."""
-        return self.data[:, self.comps.index(name), :, :]
+        return self.data[:, comp_index(self.comps, name), :, :]
 
     # ── XDMF export (zero-copy byte-seek into the raw .bin, like ParticleData.write_xmf) ──
     def write_xmf(self, out=None, snap_path=None, dt=1.0, t0=0.0):
@@ -274,7 +274,7 @@ class SliceProbe:
                 + geo
             )
             for ci, cname in enumerate(comps):
-                parts.append(_hyperslab_attr(cname, ci, nc, d0, d1, d2, seek, rel_bin))
+                parts.append(_hyperslab_attr('VOF' if cname == 'A' else cname, ci, nc, d0, d1, d2, seek, rel_bin))
             parts.append('    </Grid>\n')
         parts.append('  </Grid>\n</Domain>\n</Xdmf>\n')
 
